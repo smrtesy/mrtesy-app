@@ -1,0 +1,123 @@
+{
+  "common": {
+    "appName": "smrtesy",
+    "tagline": "Smart & Easy — Personal AI Brain",
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "search": "Search",
+    "noResults": "No results",
+    "error": "Error",
+    "success": "Success"
+  },
+  "nav": {
+    "tasks": "Tasks",
+    "suggestions": "Suggestions",
+    "log": "Log",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "projects": "Projects"
+  },
+  "auth": {
+    "signInWithGoogle": "Sign in with Google",
+    "orSeparator": "or",
+    "emailPlaceholder": "Enter your email",
+    "sendMagicLink": "Send magic link",
+    "magicLinkSent": "Sent! Check your email",
+    "signOut": "Sign out"
+  },
+  "tasks": {
+    "title": "Active Tasks",
+    "new": "New Task",
+    "inbox": "Inbox",
+    "active": "Active",
+    "completed": "Completed",
+    "archived": "Archive",
+    "priority": {
+      "urgent": "Urgent",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "actions": {
+      "complete": "Done",
+      "snooze": "Snooze",
+      "archive": "Archive",
+      "quickAction": "Quick Action",
+      "aiChat": "Chat with AI",
+      "searchDocs": "Search Documents",
+      "gmailDraft": "Gmail Draft",
+      "saveDraft": "Save Draft"
+    },
+    "detail": {
+      "description": "Description",
+      "updates": "Update History",
+      "generatedContent": "Generated Content",
+      "linkedDocs": "Linked Documents",
+      "editDescription": "Click to edit"
+    },
+    "search": {
+      "placeholder": "Search tasks...",
+      "includeArchive": "Include archive",
+      "naturalLanguage": "What about the bank?"
+    },
+    "smartInput": {
+      "placeholder": "Add task in natural language...",
+      "confirmDates": "Correct?",
+      "editDates": "Edit dates"
+    }
+  },
+  "suggestions": {
+    "title": "Task Suggestions",
+    "tabs": {
+      "messages": "From Messages",
+      "scheduled": "Scheduled",
+      "projects": "Projects"
+    },
+    "approve": "Approve",
+    "dismiss": "Dismiss",
+    "postpone": "Postpone"
+  },
+  "onboarding": {
+    "welcome": "Welcome to smrtesy",
+    "step1": {
+      "title": "Connect Gmail & Calendar",
+      "description": "We'll scan your emails and calendar events"
+    },
+    "step2": {
+      "title": "Connect Google Drive",
+      "description": "We'll search for relevant documents"
+    },
+    "step3": {
+      "title": "Connect WhatsApp",
+      "description": "We'll scan WhatsApp messages"
+    },
+    "step4": {
+      "title": "Initial Scan",
+      "description": "Scanning your messages..."
+    },
+    "skip": "Skip",
+    "connect": "Connect"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "timezone": "Timezone",
+    "aiModel": "AI Model",
+    "budget": "Daily AI Budget",
+    "connections": "Connections",
+    "reconnect": "Reconnect"
+  },
+  "admin": {
+    "title": "Admin Dashboard",
+    "overview": "Overview",
+    "users": "Users",
+    "services": "Services",
+    "logs": "Logs"
+  }
+}

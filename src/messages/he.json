@@ -1,0 +1,123 @@
+{
+  "common": {
+    "appName": "smrtesy",
+    "tagline": "Smart & Easy — Personal AI Brain",
+    "loading": "טוען...",
+    "save": "שמור",
+    "cancel": "ביטול",
+    "delete": "מחק",
+    "edit": "ערוך",
+    "confirm": "אשר",
+    "back": "חזרה",
+    "next": "הבא",
+    "search": "חיפוש",
+    "noResults": "אין תוצאות",
+    "error": "שגיאה",
+    "success": "הצלחה"
+  },
+  "nav": {
+    "tasks": "משימות",
+    "suggestions": "הצעות",
+    "log": "לוג",
+    "calendar": "לוח שנה",
+    "settings": "הגדרות",
+    "projects": "פרויקטים"
+  },
+  "auth": {
+    "signInWithGoogle": "התחבר עם Google",
+    "orSeparator": "או",
+    "emailPlaceholder": "הכנס אימייל",
+    "sendMagicLink": "שלח קוד כניסה",
+    "magicLinkSent": "נשלח! בדוק את האימייל שלך",
+    "signOut": "התנתק"
+  },
+  "tasks": {
+    "title": "משימות פעילות",
+    "new": "משימה חדשה",
+    "inbox": "תיבת דואר",
+    "active": "פעילות",
+    "completed": "הושלמו",
+    "archived": "ארכיון",
+    "priority": {
+      "urgent": "דחוף",
+      "high": "גבוה",
+      "medium": "בינוני",
+      "low": "נמוך"
+    },
+    "actions": {
+      "complete": "בוצע",
+      "snooze": "נדנד",
+      "archive": "ארכיון",
+      "quickAction": "פעולה מהירה",
+      "aiChat": "צור שיחה ב-AI",
+      "searchDocs": "חפש מסמכים",
+      "gmailDraft": "טיוטת Gmail",
+      "saveDraft": "שמור טיוטא"
+    },
+    "detail": {
+      "description": "תיאור",
+      "updates": "היסטוריית עדכונים",
+      "generatedContent": "תוצאות שנוצרו",
+      "linkedDocs": "מסמכים קשורים",
+      "editDescription": "לחץ לעריכה"
+    },
+    "search": {
+      "placeholder": "חפש משימות...",
+      "includeArchive": "כלול ארכיון",
+      "naturalLanguage": "מה עם הבנק?"
+    },
+    "smartInput": {
+      "placeholder": "הוסף משימה בשפה טבעית...",
+      "confirmDates": "נכון?",
+      "editDates": "ערוך תאריכים"
+    }
+  },
+  "suggestions": {
+    "title": "הצעות משימות",
+    "tabs": {
+      "messages": "מהודעות",
+      "scheduled": "מתוזמנות",
+      "projects": "פרויקטים"
+    },
+    "approve": "אשר",
+    "dismiss": "דחה",
+    "postpone": "דחה לפעם הבאה"
+  },
+  "onboarding": {
+    "welcome": "ברוך הבא ל-smrtesy",
+    "step1": {
+      "title": "חבר Gmail ולוח שנה",
+      "description": "נסרוק את האימיילים ואירועי לוח השנה שלך"
+    },
+    "step2": {
+      "title": "חבר Google Drive",
+      "description": "נחפש מסמכים רלוונטיים"
+    },
+    "step3": {
+      "title": "חבר WhatsApp",
+      "description": "נסרוק הודעות WhatsApp"
+    },
+    "step4": {
+      "title": "סריקה ראשונית",
+      "description": "סורק את ההודעות שלך..."
+    },
+    "skip": "דלג",
+    "connect": "חבר"
+  },
+  "settings": {
+    "title": "הגדרות",
+    "language": "שפה",
+    "timezone": "אזור זמן",
+    "aiModel": "מודל AI",
+    "budget": "תקציב AI יומי",
+    "connections": "חיבורים",
+    "reconnect": "חבר מחדש"
+  },
+  "admin": {
+    "title": "ניהול מערכת",
+    "overview": "סקירה",
+    "users": "משתמשים",
+    "services": "שירותים",
+    "logs": "לוגים"
+  }
+}
