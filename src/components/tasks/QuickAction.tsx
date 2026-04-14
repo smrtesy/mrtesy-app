@@ -86,10 +86,38 @@ export function QuickAction({
 
   async function handleSave() {
     setSaving(true);
-    toast.success(t("saveDraft"));
-    setSaving(false);
-    onDone();
-    onClose();
+    try {
+      // Save edited result back to task ai_generated_content
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const { data: task } = await supabase
+        .from("tasks")
+        .select("ai_generated_content")
+        .eq("id", taskId)
+        .eq("user_id", user.id)
+        .single();
+
+      if (task) {
+        const content = task.ai_generated_content || [];
+        // Update the last entry with edited result
+        if (content.length > 0) {
+          content[content.length - 1].result = result;
+        }
+        await supabase.from("tasks").update({
+          ai_generated_content: content,
+          updated_at: new Date().toISOString(),
+        }).eq("id", taskId);
+      }
+
+      toast.success(t("saveDraft"));
+      onDone();
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleGmailDraft() {

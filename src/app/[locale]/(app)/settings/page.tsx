@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { LogOut, Mail, FolderOpen, MessageCircle, Calendar, CheckCircle2, XCircle } from "lucide-react";
+import { LogOut, Mail, FolderOpen, MessageCircle, Calendar, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 interface UserSettings {
@@ -58,8 +58,15 @@ export default function SettingsPage() {
     router.push(`/${locale}/login`);
   }
 
-  function switchLanguage() {
+  async function switchLanguage() {
     const newLocale = locale === "he" ? "en" : "he";
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase
+        .from("user_settings")
+        .update({ preferred_language: newLocale })
+        .eq("user_id", user.id);
+    }
     router.push(`/${newLocale}/settings`);
   }
 
@@ -109,17 +116,39 @@ export default function SettingsPage() {
                   <conn.icon className={`h-5 w-5 ${conn.color}`} />
                   <span className="text-sm font-medium">{conn.label}</span>
                 </div>
-                {connected ? (
-                  <Badge variant="default" className="gap-1 bg-green-500">
-                    <CheckCircle2 className="h-3 w-3" />
-                    {t("connected")}
-                  </Badge>
-                ) : (
-                  <Badge variant="secondary" className="gap-1">
-                    <XCircle className="h-3 w-3" />
-                    {t("disconnected")}
-                  </Badge>
-                )}
+                <div className="flex items-center gap-2">
+                  {connected ? (
+                    <Badge variant="default" className="gap-1 bg-green-500">
+                      <CheckCircle2 className="h-3 w-3" />
+                      {t("connected")}
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge variant="secondary" className="gap-1">
+                        <XCircle className="h-3 w-3" />
+                        {t("disconnected")}
+                      </Badge>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1"
+                        onClick={() => {
+                          const serviceMap: Record<string, string> = {
+                            gmail_connected: "gmail_calendar",
+                            drive_connected: "drive",
+                            calendar_connected: "gmail_calendar",
+                            whatsapp_connected: "",
+                          };
+                          const svc = serviceMap[conn.key];
+                          if (svc) window.location.href = `/api/auth/google?service=${svc}`;
+                        }}
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        {t("reconnect")}
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}

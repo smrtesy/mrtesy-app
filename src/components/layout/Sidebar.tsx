@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { SmartTaskInput } from "@/components/tasks/SmartTaskInput";
 
 const navItems = [
   { key: "tasks", href: "", icon: CheckSquare },
@@ -27,6 +29,7 @@ const navItems = [
 export function Sidebar({ locale }: { locale: string }) {
   const t = useTranslations("nav");
   const pathname = usePathname();
+  const [taskInputOpen, setTaskInputOpen] = useState(false);
 
   const basePath = `/${locale}`;
 
@@ -62,6 +65,13 @@ export function Sidebar({ locale }: { locale: string }) {
             </Link>
           ))}
         </nav>
+        {/* Desktop new task button */}
+        <div className="p-3 border-t">
+          <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
+            <Plus className="h-4 w-4" />
+            {t("tasks")}
+          </Button>
+        </div>
       </aside>
 
       {/* Mobile Bottom Tab Bar */}
@@ -89,9 +99,20 @@ export function Sidebar({ locale }: { locale: string }) {
       <Button
         size="icon"
         className="fixed bottom-20 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+        onClick={() => setTaskInputOpen(true)}
       >
         <Plus className="h-6 w-6" />
       </Button>
+
+      {/* Smart Task Input */}
+      <SmartTaskInput
+        open={taskInputOpen}
+        onClose={() => setTaskInputOpen(false)}
+        onCreated={() => {
+          // Trigger page refresh — TaskList will re-fetch
+          window.location.reload();
+        }}
+      />
     </>
   );
 }

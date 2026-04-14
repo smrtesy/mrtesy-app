@@ -7,7 +7,7 @@ export default async function AdminServicesPage() {
 
   const { data: syncStates } = await supabase
     .from("sync_state")
-    .select("*, user_settings!inner(display_name)")
+    .select("*")
     .order("last_synced_at", { ascending: false });
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
@@ -32,7 +32,7 @@ export default async function AdminServicesPage() {
                 <div key={s.id} className="flex items-center justify-between rounded border p-2">
                   <div>
                     <p className="text-sm font-medium">
-                      {(s as Record<string, unknown>).user_settings ? ((s as Record<string, unknown>).user_settings as Record<string, string>)?.display_name : s.user_id.slice(0, 8)}
+                      {s.user_id.slice(0, 8)}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       Last sync: {new Date(s.last_synced_at).toLocaleString()}

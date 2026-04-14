@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { TaskCard } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
 import { SmartSearch } from "./SmartSearch";
+import { QuickAction } from "./QuickAction";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -20,6 +21,12 @@ export function TaskList({ locale }: { locale: string }) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<Task[] | null>(null);
+
+  // QuickAction state
+  const [qaOpen, setQaOpen] = useState(false);
+  const [qaTaskId, setQaTaskId] = useState("");
+  const [qaLabel, setQaLabel] = useState("");
+  const [qaPrompt, setQaPrompt] = useState("");
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -82,7 +89,6 @@ export function TaskList({ locale }: { locale: string }) {
   }
 
   function handleSelect(task: Task) {
-    // Mark as seen
     if (!task.seen_at) {
       supabase
         .from("tasks")
@@ -95,8 +101,10 @@ export function TaskList({ locale }: { locale: string }) {
   }
 
   function handleQuickAction(taskId: string, action: { label: string; prompt: string }) {
-    // Will be fully implemented in Step 9
-    toast.info(`Quick Action: ${action.label}`);
+    setQaTaskId(taskId);
+    setQaLabel(action.label);
+    setQaPrompt(action.prompt);
+    setQaOpen(true);
   }
 
   const displayTasks = searchResults !== null ? searchResults : tasks;
@@ -152,6 +160,17 @@ export function TaskList({ locale }: { locale: string }) {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         onUpdate={fetchTasks}
+        onQuickAction={handleQuickAction}
+      />
+
+      {/* Quick Action Sheet */}
+      <QuickAction
+        taskId={qaTaskId}
+        actionLabel={qaLabel}
+        actionPrompt={qaPrompt}
+        open={qaOpen}
+        onClose={() => setQaOpen(false)}
+        onDone={fetchTasks}
       />
     </div>
   );
