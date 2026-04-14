@@ -4,11 +4,13 @@ import { notFound } from "next/navigation";
 const locales = ["he", "en"] as const;
 export type Locale = (typeof locales)[number];
 
-export default getRequestConfig(async ({ locale }) => {
+export default getRequestConfig(async ({ requestLocale }) => {
+  const locale = await requestLocale;
+
   if (!locale || !locales.includes(locale as Locale)) notFound();
 
   return {
-    locale: locale as string,
+    locale,
     messages: (await import(`./messages/${locale}.json`)).default,
   };
 });
