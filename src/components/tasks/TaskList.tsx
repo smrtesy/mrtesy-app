@@ -7,6 +7,7 @@ import { TaskCard } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
 import { SmartSearch } from "./SmartSearch";
 import { QuickAction } from "./QuickAction";
+import { DriveSearch } from "./DriveSearch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -27,6 +28,11 @@ export function TaskList({ locale }: { locale: string }) {
   const [qaTaskId, setQaTaskId] = useState("");
   const [qaLabel, setQaLabel] = useState("");
   const [qaPrompt, setQaPrompt] = useState("");
+
+  // DriveSearch state
+  const [dsOpen, setDsOpen] = useState(false);
+  const [dsTaskId, setDsTaskId] = useState("");
+  const [dsDescription, setDsDescription] = useState("");
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -123,6 +129,12 @@ export function TaskList({ locale }: { locale: string }) {
     setQaOpen(true);
   }
 
+  function handleDriveSearch(taskId: string, description: string) {
+    setDsTaskId(taskId);
+    setDsDescription(description);
+    setDsOpen(true);
+  }
+
   const displayTasks = searchResults !== null ? searchResults : tasks;
 
   return (
@@ -164,6 +176,7 @@ export function TaskList({ locale }: { locale: string }) {
               onComplete={handleComplete}
               onSnooze={handleSnooze}
               onQuickAction={handleQuickAction}
+              onDriveSearch={handleDriveSearch}
             />
           ))}
         </div>
@@ -186,6 +199,15 @@ export function TaskList({ locale }: { locale: string }) {
         actionPrompt={qaPrompt}
         open={qaOpen}
         onClose={() => setQaOpen(false)}
+        onDone={fetchTasks}
+      />
+
+      {/* Drive Search Sheet */}
+      <DriveSearch
+        taskId={dsTaskId}
+        taskDescription={dsDescription}
+        open={dsOpen}
+        onClose={() => setDsOpen(false)}
         onDone={fetchTasks}
       />
     </div>

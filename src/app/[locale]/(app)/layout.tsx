@@ -28,10 +28,13 @@ export default async function AppLayout({
     redirect(`/${locale}/onboarding`);
   }
 
+  const adminEmails = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const isAdmin = adminEmails.includes(user.email?.toLowerCase() || "");
+
   return (
     <div className="flex min-h-screen">
       {/* Desktop Sidebar */}
-      <Sidebar locale={locale} />
+      <Sidebar locale={locale} isAdmin={isAdmin} />
       {/* Main content */}
       <main className="flex-1 pb-20 md:pb-0 md:ms-64">
         <div className="mx-auto max-w-4xl p-4 md:p-6">

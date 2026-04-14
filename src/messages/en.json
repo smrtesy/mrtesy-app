@@ -25,7 +25,8 @@
     "log": "Log",
     "calendar": "Calendar",
     "settings": "Settings",
-    "projects": "Projects"
+    "projects": "Projects",
+    "admin": "Admin"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

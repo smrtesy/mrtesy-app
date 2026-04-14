@@ -12,6 +12,7 @@ import {
   Settings,
   FolderOpen,
   Plus,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,7 @@ const navItems = [
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
-export function Sidebar({ locale }: { locale: string }) {
+export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean }) {
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -64,6 +65,20 @@ export function Sidebar({ locale }: { locale: string }) {
               {t(item.key)}
             </Link>
           ))}
+          {isAdmin && (
+            <Link
+              href={`${basePath}/admin`}
+              className={cn(
+                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors mt-4 border-t pt-4",
+                pathname.startsWith(`${basePath}/admin`)
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              )}
+            >
+              <Shield className="h-5 w-5" />
+              {t("admin")}
+            </Link>
+          )}
         </nav>
         {/* Desktop new task button */}
         <div className="p-3 border-t">

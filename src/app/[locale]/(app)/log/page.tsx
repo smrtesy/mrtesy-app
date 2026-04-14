@@ -11,6 +11,13 @@ const sourceIcons: Record<string, string> = {
   google_calendar: "📅",
 };
 
+const statusIcons: Record<string, string> = {
+  ok: "✅",
+  skipped: "⚠️",
+  failed: "🔴",
+  duplicate: "🔄",
+};
+
 export default async function LogPage({
   params,
 }: {
@@ -32,6 +39,13 @@ export default async function LogPage({
     .order("created_at", { ascending: false })
     .limit(50);
 
+  const dateFormatter = new Intl.DateTimeFormat(locale === "he" ? "he-IL" : "en-US", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">{t("title")}</h1>
@@ -42,46 +56,91 @@ export default async function LogPage({
           <p className="text-xs mt-1">{t("entriesAppearAfter")}</p>
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-2">
           {logs.map((log) => (
-            <div key={log.id} className="flex items-start gap-2 rounded border p-3 text-sm">
-              <span className="text-base mt-0.5">
-                {sourceIcons[log.source_type || ""] || "📋"}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge
-                    variant={
-                      log.status === "failed" ? "destructive" :
-                      log.status === "skipped" ? "secondary" : "outline"
-                    }
-                    className="text-[10px]"
-                  >
-                    {log.status}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">{log.category}</span>
-                  {log.ai_classification && (
-                    <Badge variant="outline" className="text-[10px]">{log.ai_classification}</Badge>
+            <div key={log.id} className="rounded-lg border bg-card p-3 text-sm">
+              {/* Row 1: source icon + status + category + time */}
+              <div className="flex items-center gap-2">
+                <span className="text-base">
+                  {sourceIcons[log.source_type || ""] || "📋"}
+                </span>
+                <span className="text-xs">{statusIcons[log.status] || ""}</span>
+                <Badge
+                  variant={
+                    log.status === "failed" ? "destructive" :
+                    log.status === "skipped" ? "secondary" : "outline"
+                  }
+                  className="text-[10px]"
+                >
+                  {log.category}
+                </Badge>
+                {log.ai_classification && (
+                  <Badge variant="outline" className="text-[10px]">{log.ai_classification}</Badge>
+                )}
+                <span className="ms-auto text-[10px] text-muted-foreground whitespace-nowrap">
+                  {dateFormatter.format(new Date(log.created_at))}
+                </span>
+              </div>
+
+              {/* Row 2: subject + sender */}
+              {(log.subject || log.sender) && (
+                <div className="mt-1.5">
+                  {log.subject && (
+                    <p className="text-xs font-medium truncate">
+                      {log.source_url ? (
+                        <a
+                          href={log.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline hover:text-primary"
+                        >
+                          {log.subject}
+                        </a>
+                      ) : (
+                        log.subject
+                      )}
+                    </p>
+                  )}
+                  {log.sender && (
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {log.sender}
+                      {log.sender_email && log.sender_email !== log.sender && (
+                        <span className="opacity-60"> ({log.sender_email})</span>
+                      )}
+                    </p>
                   )}
                 </div>
-                {log.subject && (
-                  <p className="text-xs mt-1 truncate">{log.subject}</p>
-                )}
-                {log.sender && (
-                  <p className="text-xs text-muted-foreground truncate">{log.sender}</p>
-                )}
-                {log.error_message && (
-                  <p className="text-xs text-red-500 mt-1 truncate">{log.error_message}</p>
-                )}
-              </div>
-              <div className="text-end shrink-0">
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  {new Date(log.created_at).toLocaleTimeString()}
-                </span>
-                {isAdmin && log.ai_cost_usd && (
-                  <p className="text-[10px] text-muted-foreground">${Number(log.ai_cost_usd).toFixed(5)}</p>
-                )}
-              </div>
+              )}
+
+              {/* Row 3: classification reason / explanation */}
+              {log.classification_reason && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground/80 line-clamp-2">
+                  {log.classification_reason}
+                </p>
+              )}
+
+              {/* Row 4: task created */}
+              {log.task_title && (
+                <div className="mt-1.5 flex items-center gap-1 text-[11px] text-primary">
+                  <span>→</span>
+                  <span className="truncate">{log.task_title}</span>
+                </div>
+              )}
+
+              {/* Row 5: error */}
+              {log.error_message && (
+                <p className="mt-1.5 text-[11px] text-red-500 line-clamp-2">{log.error_message}</p>
+              )}
+
+              {/* Row 6: admin-only cost info */}
+              {isAdmin && (log.ai_cost_usd || log.ai_model_used) && (
+                <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground/60">
+                  {log.ai_model_used && <span>{log.ai_model_used}</span>}
+                  {log.ai_input_tokens && <span>{log.ai_input_tokens}+{log.ai_output_tokens} tok</span>}
+                  {log.ai_cost_usd && <span>${Number(log.ai_cost_usd).toFixed(5)}</span>}
+                  {log.processing_duration_ms && <span>{log.processing_duration_ms}ms</span>}
+                </div>
+              )}
             </div>
           ))}
         </div>

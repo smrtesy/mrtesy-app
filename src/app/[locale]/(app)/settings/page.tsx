@@ -119,7 +119,11 @@ export default function SettingsPage() {
                             whatsapp_connected: "",
                           };
                           const svc = serviceMap[conn.key];
-                          if (svc) window.location.href = `/api/auth/google?service=${svc}`;
+                          if (conn.key === "whatsapp_connected") {
+                            window.location.href = `/${locale}/onboarding/whatsapp`;
+                          } else if (svc) {
+                            window.location.href = `/api/auth/google?service=${svc}`;
+                          }
                         }}
                       >
                         <RefreshCw className="h-3 w-3" />

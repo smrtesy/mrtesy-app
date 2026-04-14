@@ -25,7 +25,8 @@
     "log": "לוג",
     "calendar": "לוח שנה",
     "settings": "הגדרות",
-    "projects": "פרויקטים"
+    "projects": "פרויקטים",
+    "admin": "ניהול"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

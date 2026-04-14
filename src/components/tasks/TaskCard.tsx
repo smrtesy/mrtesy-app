@@ -24,6 +24,7 @@ interface TaskCardProps {
   onComplete: (taskId: string) => void;
   onSnooze: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
+  onDriveSearch?: (taskId: string, description: string) => void;
 }
 
 const sourceIcons: Record<string, typeof Mail> = {
@@ -47,6 +48,7 @@ export function TaskCard({
   onComplete,
   onSnooze,
   onQuickAction,
+  onDriveSearch,
 }: TaskCardProps) {
   const t = useTranslations("tasks");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
@@ -155,7 +157,7 @@ export function TaskCard({
             className="h-10 w-10 md:h-8 md:w-8"
             onClick={(e) => {
               e.stopPropagation();
-              // Drive search — will be implemented in Step 9
+              onDriveSearch?.(task.id, task.description || title);
             }}
             title={t("actions.searchDocs")}
           >
