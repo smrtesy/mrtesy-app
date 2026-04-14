@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { SmartTaskInput } from "@/components/tasks/SmartTaskInput";
 
 const navItems = [
-  { key: "tasks", href: "", icon: CheckSquare },
+  { key: "tasks", href: "/tasks", icon: CheckSquare },
   { key: "suggestions", href: "/suggestions", icon: Bell },
   { key: "log", href: "/log", icon: FileText },
   { key: "calendar", href: "/calendar", icon: Calendar },
@@ -35,7 +35,7 @@ export function Sidebar({ locale }: { locale: string }) {
 
   function isActive(href: string) {
     const fullPath = `${basePath}${href}`;
-    if (href === "") return pathname === basePath || pathname === `${basePath}/`;
+    if (href === "/tasks") return pathname === basePath || pathname === `${basePath}/` || pathname.startsWith(`${basePath}/tasks`);
     return pathname.startsWith(fullPath);
   }
 
