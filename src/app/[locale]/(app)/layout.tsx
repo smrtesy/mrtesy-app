@@ -4,12 +4,13 @@ import { Sidebar } from "@/components/layout/Sidebar";
 
 export default async function AppLayout({
   children,
-  params: { locale },
+  params,
 }: {
   children: React.ReactNode;
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
-  const supabase = createClient();
+  const { locale } = await params;
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {

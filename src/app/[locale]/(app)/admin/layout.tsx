@@ -3,12 +3,13 @@ import { redirect } from "next/navigation";
 
 export default async function AdminLayout({
   children,
-  params: { locale },
+  params,
 }: {
   children: React.ReactNode;
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
-  const supabase = createClient();
+  const { locale } = await params;
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   const adminEmail = process.env.ADMIN_EMAIL;

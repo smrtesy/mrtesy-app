@@ -1,17 +1,10 @@
-"use client";
+export const dynamic = "force-dynamic";
 
-import { useTranslations } from "next-intl";
-import { useParams } from "next/navigation";
-import { TaskList } from "@/components/tasks/TaskList";
+import { getTranslations } from "next-intl/server";
+import { TasksPageClient } from "@/components/tasks/TasksPageClient";
 
-export default function TasksPage() {
-  const t = useTranslations("tasks");
-  const { locale } = useParams();
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">{t("title")}</h1>
-      <TaskList locale={locale as string} />
-    </div>
-  );
+export default async function TasksPage() {
+  // Server-side work forces manifest generation
+  const t = await getTranslations("tasks");
+  return <TasksPageClient title={t("title")} />;
 }

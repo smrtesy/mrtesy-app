@@ -30,7 +30,7 @@ export async function GET(request: Request) {
   );
 
   // Store nonce in httpOnly cookie for validation in callback
-  cookies().set("oauth_state_nonce", nonce, {
+  (await cookies()).set("oauth_state_nonce", nonce, {
     httpOnly: true,
     secure: true,
     sameSite: "lax",

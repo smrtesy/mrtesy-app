@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 
 export default async function AdminServicesPage() {
   const t = await getTranslations("admin");
-  const supabase = createClient();
+  const supabase = await createClient();
 
   // Parallel queries — no broken join
   const [syncResult, usersResult] = await Promise.all([

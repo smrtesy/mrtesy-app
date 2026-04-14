@@ -6,12 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 
 export default async function AdminDashboard({
-  params: { locale },
+  params,
 }: {
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
+  const { locale } = await params;
   const t = await getTranslations("admin");
-  const supabase = createClient();
+  const supabase = await createClient();
 
   const [usersResult, deadLetterResult, errorsResult, aiCostResult, syncResult] = await Promise.all([
     supabase.from("user_settings").select("user_id, onboarding_completed, gmail_connected, drive_connected, whatsapp_connected, calendar_connected"),

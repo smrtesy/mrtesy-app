@@ -9,13 +9,14 @@ import { FolderOpen, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default async function ProjectsPage({
-  params: { locale },
+  params,
 }: {
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
+  const { locale } = await params;
   const t = await getTranslations("projects");
   const tc = await getTranslations("common");
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
 

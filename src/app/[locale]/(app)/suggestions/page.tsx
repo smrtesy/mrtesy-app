@@ -3,10 +3,11 @@ import { getTranslations } from "next-intl/server";
 import { SuggestionTabs } from "@/components/suggestions/SuggestionTabs";
 
 export default async function SuggestionsPage({
-  params: { locale },
+  params,
 }: {
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
+  const { locale } = await params;
   const t = await getTranslations("suggestions");
   return (
     <div className="space-y-4">

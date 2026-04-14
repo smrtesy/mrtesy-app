@@ -17,7 +17,8 @@ export async function GET(request: Request) {
     const stateData = JSON.parse(
       Buffer.from(stateParam, "base64url").toString()
     );
-    const storedNonce = cookies().get("oauth_state_nonce")?.value;
+    const cookieStore = await cookies();
+    const storedNonce = cookieStore.get("oauth_state_nonce")?.value;
     if (!storedNonce || storedNonce !== stateData.nonce) {
       return NextResponse.redirect(
         `${origin}/he/onboarding?error=invalid_state`
@@ -25,14 +26,14 @@ export async function GET(request: Request) {
     }
     service = stateData.service;
     // Clear the nonce cookie
-    cookies().delete("oauth_state_nonce");
+    cookieStore.delete("oauth_state_nonce");
   } catch {
     return NextResponse.redirect(
       `${origin}/he/onboarding?error=invalid_state`
     );
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

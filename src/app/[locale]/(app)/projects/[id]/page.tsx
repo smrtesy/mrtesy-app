@@ -9,12 +9,13 @@ import { notFound } from "next/navigation";
 import { BuildBriefButton } from "@/components/tasks/BuildBriefButton";
 
 export default async function ProjectDetailPage({
-  params: { locale, id },
+  params,
 }: {
-  params: { locale: string; id: string };
+  params: Promise<{ locale: string; id: string }>;
 }) {
+  const { locale, id } = await params;
   const t = await getTranslations("projects");
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
 

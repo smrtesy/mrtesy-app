@@ -4,11 +4,12 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 
 export default async function AdminUsersPage({
-  params: { locale },
+  params,
 }: {
-  params: { locale: string };
+  params: Promise<{ locale: string }>;
 }) {
-  const supabase = createClient();
+  const { locale } = await params;
+  const supabase = await createClient();
 
   const { data: users } = await supabase
     .from("user_settings")
