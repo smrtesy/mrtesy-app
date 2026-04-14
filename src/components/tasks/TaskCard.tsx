@@ -9,6 +9,10 @@ import {
   FolderSearch,
   Clock,
   CheckCircle2,
+  Mail,
+  FolderOpen,
+  Calendar,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
@@ -21,6 +25,13 @@ interface TaskCardProps {
   onSnooze: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
 }
+
+const sourceIcons: Record<string, typeof Mail> = {
+  gmail: Mail,
+  whatsapp: MessageCircle,
+  google_drive: FolderOpen,
+  google_calendar: Calendar,
+};
 
 const priorityColors: Record<string, string> = {
   urgent: "bg-red-500 text-white",
@@ -41,6 +52,8 @@ export function TaskCard({
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
   const aiActions = (task.ai_actions || []).slice(0, 2);
+  const source = (task as any).source_messages as { source_type?: string; source_url?: string } | null; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const SourceIcon = sourceIcons[source?.source_type || ""] || null;
 
   return (
     <div
@@ -67,8 +80,24 @@ export function TaskCard({
         </p>
       )}
 
-      {/* Due date + Contact */}
+      {/* Due date + Contact + Source */}
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+        {SourceIcon && (
+          source?.source_url ? (
+            <a
+              href={source.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SourceIcon className="h-3 w-3" />
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          ) : (
+            <SourceIcon className="h-3 w-3" />
+          )
+        )}
         {task.due_date && (
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />

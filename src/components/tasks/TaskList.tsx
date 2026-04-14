@@ -35,13 +35,13 @@ export function TaskList({ locale }: { locale: string }) {
 
     let query = supabase
       .from("tasks")
-      .select("*")
+      .select("*, source_messages(source_type, source_url)")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(50);
 
     if (filter === "inbox") {
-      query = query.eq("status", "inbox");
+      query = query.eq("status", "inbox").eq("manually_verified", true);
     } else if (filter === "active") {
       query = query.in("status", ["inbox", "in_progress"]);
     } else if (filter === "completed") {

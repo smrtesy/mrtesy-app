@@ -9,15 +9,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { LogOut, Mail, FolderOpen, MessageCircle, Calendar, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 
 interface UserSettings {
   preferred_language: string;
   timezone: string;
-  classification_model: string;
-  summary_model: string;
-  daily_ai_budget_usd: number;
-  show_ai_costs: boolean;
   gmail_connected: boolean;
   drive_connected: boolean;
   whatsapp_connected: boolean;
@@ -68,22 +63,6 @@ export default function SettingsPage() {
         .eq("user_id", user.id);
     }
     router.push(`/${newLocale}/settings`);
-  }
-
-  async function toggleShowCosts() {
-    if (!settings) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const newVal = !settings.show_ai_costs;
-    const { error } = await supabase
-      .from("user_settings")
-      .update({ show_ai_costs: newVal })
-      .eq("user_id", user.id);
-    if (error) {
-      toast.error(error.message);
-    } else {
-      setSettings({ ...settings, show_ai_costs: newVal });
-    }
   }
 
   return (
@@ -152,45 +131,6 @@ export default function SettingsPage() {
               </div>
             );
           })}
-        </CardContent>
-      </Card>
-
-      {/* AI Settings */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("aiModel")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm">{t("classificationModel")}</span>
-            <Badge variant="outline" className="text-xs">
-              {settings?.classification_model || "claude-haiku-4-5"}
-            </Badge>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm">{t("summaryModel")}</span>
-            <Badge variant="outline" className="text-xs">
-              {settings?.summary_model || "claude-sonnet-4-6"}
-            </Badge>
-          </div>
-          <Separator />
-          <div className="flex items-center justify-between">
-            <span className="text-sm">{t("budget")}</span>
-            <Badge variant="outline" className="text-xs">
-              ${settings?.daily_ai_budget_usd?.toFixed(2) || "1.00"}
-            </Badge>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm">{t("showAiCosts")}</span>
-            <Button
-              variant={settings?.show_ai_costs ? "default" : "outline"}
-              size="sm"
-              className="min-h-[36px]"
-              onClick={toggleShowCosts}
-            >
-              {settings?.show_ai_costs ? "ON" : "OFF"}
-            </Button>
-          </div>
         </CardContent>
       </Card>
 

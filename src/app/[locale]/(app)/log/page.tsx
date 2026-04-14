@@ -22,6 +22,9 @@ export default async function LogPage({
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
 
+  const adminEmails = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const isAdmin = adminEmails.includes(user.email?.toLowerCase() || "");
+
   const { data: logs } = await supabase
     .from("log_entries")
     .select("*")
@@ -75,7 +78,7 @@ export default async function LogPage({
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                   {new Date(log.created_at).toLocaleTimeString()}
                 </span>
-                {log.ai_cost_usd && (
+                {isAdmin && log.ai_cost_usd && (
                   <p className="text-[10px] text-muted-foreground">${Number(log.ai_cost_usd).toFixed(5)}</p>
                 )}
               </div>

@@ -29,13 +29,13 @@ export async function middleware(request: NextRequest) {
     pathnameLocale === "he" || pathnameLocale === "en" ? pathnameLocale : "he";
 
   // Admin route protection
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+  const ADMIN_EMAILS = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
   const isAdminRoute = pathname.includes("/admin");
   if (isAdminRoute) {
     if (!user) {
       return NextResponse.redirect(new URL(`/${locale}/login`, request.url));
     }
-    if (ADMIN_EMAIL && user.email !== ADMIN_EMAIL) {
+    if (ADMIN_EMAILS.length > 0 && !ADMIN_EMAILS.includes(user.email?.toLowerCase() || "")) {
       return NextResponse.redirect(new URL(`/${locale}`, request.url));
     }
   }
