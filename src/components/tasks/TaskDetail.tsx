@@ -140,7 +140,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate }: TaskDetail
                       {saving ? "..." : t("detail.description")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-                      Cancel
+                      {t("detail.editDescription")}
                     </Button>
                   </div>
                 </div>
@@ -200,7 +200,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate }: TaskDetail
                     </div>
                   ))}
                   {updates.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No updates yet</p>
+                    <p className="text-xs text-muted-foreground">{t("detail.noUpdates")}</p>
                   )}
                 </div>
               )}
@@ -234,7 +234,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate }: TaskDetail
                             rel="noopener noreferrer"
                             className="mt-1 inline-flex items-center gap-1 text-blue-600 hover:underline"
                           >
-                            <ExternalLink className="h-3 w-3" /> Open Draft
+                            <ExternalLink className="h-3 w-3" /> {t("detail.openDraft")}
                           </a>
                         )}
                       </div>

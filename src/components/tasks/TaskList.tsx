@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { TaskCard } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
+import { SmartSearch } from "./SmartSearch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ export function TaskList({ locale }: { locale: string }) {
   const [filter, setFilter] = useState<string>("inbox");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<Task[] | null>(null);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -49,7 +51,7 @@ export function TaskList({ locale }: { locale: string }) {
   }, [fetchTasks]);
 
   async function handleComplete(taskId: string) {
-    await supabase
+    const { error } = await supabase
       .from("tasks")
       .update({
         status: "archived",
@@ -57,6 +59,7 @@ export function TaskList({ locale }: { locale: string }) {
         status_changed_at: new Date().toISOString(),
       })
       .eq("id", taskId);
+    if (error) { toast.error(error.message); return; }
     toast.success(t("actions.complete"));
     fetchTasks();
   }
@@ -66,13 +69,14 @@ export function TaskList({ locale }: { locale: string }) {
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(9, 0, 0, 0);
 
-    await supabase
+    const { error } = await supabase
       .from("tasks")
       .update({
         snoozed_until: tomorrow.toISOString(),
         status: "snoozed",
       })
       .eq("id", taskId);
+    if (error) { toast.error(error.message); return; }
     toast.success(t("actions.snooze"));
     fetchTasks();
   }
@@ -95,10 +99,17 @@ export function TaskList({ locale }: { locale: string }) {
     toast.info(`Quick Action: ${action.label}`);
   }
 
+  const displayTasks = searchResults !== null ? searchResults : tasks;
+
   return (
     <div className="space-y-4">
+      {/* Search */}
+      <SmartSearch
+        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
+      />
+
       {/* Filter Tabs */}
-      <Tabs value={filter} onValueChange={setFilter}>
+      <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSearchResults(null); }}>
         <TabsList>
           <TabsTrigger value="inbox">{t("inbox")}</TabsTrigger>
           <TabsTrigger value="active">{t("active")}</TabsTrigger>
@@ -113,14 +124,14 @@ export function TaskList({ locale }: { locale: string }) {
             <Skeleton key={i} className="h-32 rounded-lg" />
           ))}
         </div>
-      ) : tasks.length === 0 ? (
+      ) : displayTasks.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <p>{t("title")}</p>
-          <p className="text-sm mt-1">No tasks in this view</p>
+          <p className="text-sm mt-1">{t("noTasksInView")}</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {tasks.map((task) => (
+          {displayTasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}

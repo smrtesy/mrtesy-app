@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -8,11 +9,13 @@ export default async function CalendarPage({
 }: {
   params: { locale: string };
 }) {
+  const t = await getTranslations("calendar");
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
 
-  // Get calendar events from source_messages
+  const dateFmtLocale = locale === "he" ? "he-IL" : "en-US";
+
   const { data: events } = await supabase
     .from("source_messages")
     .select("id, subject, source_url, received_at, ai_classification, ai_extraction")
@@ -21,7 +24,6 @@ export default async function CalendarPage({
     .order("received_at", { ascending: true })
     .limit(50);
 
-  // Get tasks with due dates
   const { data: tasksWithDates } = await supabase
     .from("tasks")
     .select("id, title, title_he, due_date, priority, status")
@@ -31,7 +33,6 @@ export default async function CalendarPage({
     .order("due_date", { ascending: true })
     .limit(30);
 
-  // Group by date
   const groupedTasks: Record<string, typeof tasksWithDates> = {};
   for (const task of tasksWithDates || []) {
     const date = task.due_date!;
@@ -41,19 +42,18 @@ export default async function CalendarPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Calendar</h1>
+      <h1 className="text-2xl font-bold">{t("title")}</h1>
 
-      {/* Tasks with due dates */}
       <div>
-        <h2 className="text-lg font-semibold mb-3">Upcoming Tasks</h2>
+        <h2 className="text-lg font-semibold mb-3">{t("upcomingTasks")}</h2>
         {Object.keys(groupedTasks).length === 0 ? (
-          <p className="text-sm text-muted-foreground">No tasks with due dates</p>
+          <p className="text-sm text-muted-foreground">{t("noTasksWithDates")}</p>
         ) : (
           <div className="space-y-4">
             {Object.entries(groupedTasks).map(([date, tasks]) => (
               <div key={date}>
                 <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                  {new Date(date).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", {
+                  {new Date(date).toLocaleDateString(dateFmtLocale, {
                     weekday: "long",
                     year: "numeric",
                     month: "long",
@@ -64,7 +64,7 @@ export default async function CalendarPage({
                   {tasks!.map((task) => (
                     <Card key={task.id}>
                       <CardContent className="p-3 flex items-center justify-between">
-                        <span className="text-sm">{task.title_he || task.title}</span>
+                        <span className="text-sm">{locale === "he" && task.title_he ? task.title_he : task.title}</span>
                         <Badge variant="outline" className="text-[10px]">
                           {task.priority}
                         </Badge>
@@ -78,11 +78,10 @@ export default async function CalendarPage({
         )}
       </div>
 
-      {/* Calendar events */}
       <div>
-        <h2 className="text-lg font-semibold mb-3">Calendar Events</h2>
+        <h2 className="text-lg font-semibold mb-3">{t("calendarEvents")}</h2>
         {(!events || events.length === 0) ? (
-          <p className="text-sm text-muted-foreground">No calendar events synced yet</p>
+          <p className="text-sm text-muted-foreground">{t("noEventsSynced")}</p>
         ) : (
           <div className="space-y-1">
             {events.map((event) => (
@@ -96,7 +95,7 @@ export default async function CalendarPage({
                 <div className="flex-1 min-w-0">
                   <p className="truncate">{event.subject}</p>
                   <p className="text-xs text-muted-foreground">
-                    {new Date(event.received_at).toLocaleString(locale === "he" ? "he-IL" : "en-US")}
+                    {new Date(event.received_at).toLocaleString(dateFmtLocale)}
                   </p>
                 </div>
                 {event.ai_classification && (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { Lightbulb, CheckCircle2, X } from "lucide-react";
 import { toast } from "sonner";
 
 export function ProjectSuggestions({ locale }: { locale: string }) {
+  const t = useTranslations("suggestions");
   const supabase = createClient();
   const [suggestions, setSuggestions] = useState<any[] /* eslint-disable-line @typescript-eslint/no-explicit-any */>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +54,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
       .update({ status: "archived", manually_verified: true })
       .eq("id", task.id as string);
 
-    toast.success("Project created!");
+    toast.success(t("projectCreated"));
     fetchSuggestions();
   }
 
@@ -61,7 +63,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
       .from("tasks")
       .update({ status: "archived", manually_verified: true })
       .eq("id", taskId);
-    toast.success("Dismissed");
+    toast.success(t("dismiss"));
     fetchSuggestions();
   }
 
@@ -77,8 +79,8 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Lightbulb className="mx-auto h-8 w-8 mb-2 opacity-50" />
-        <p>No project suggestions</p>
-        <p className="text-xs mt-1">Projects are detected nightly from your message patterns</p>
+        <p>{t("noProjects")}</p>
+        <p className="text-xs mt-1">{t("projectsDetectedNightly")}</p>
       </div>
     );
   }
@@ -118,7 +120,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                   onClick={() => handleApprove(task)}
                 >
                   <CheckCircle2 className="h-4 w-4" />
-                  Create Project
+                  {t("createProject")}
                 </Button>
               </div>
             </CardContent>

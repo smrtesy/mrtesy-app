@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { Badge } from "@/components/ui/badge";
 
 const sourceIcons: Record<string, string> = {
@@ -9,10 +10,15 @@ const sourceIcons: Record<string, string> = {
   google_calendar: "📅",
 };
 
-export default async function LogPage() {
+export default async function LogPage({
+  params: { locale },
+}: {
+  params: { locale: string };
+}) {
+  const t = await getTranslations("log");
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/he/login");
+  if (!user) redirect(`/${locale}/login`);
 
   const { data: logs } = await supabase
     .from("log_entries")
@@ -23,12 +29,12 @@ export default async function LogPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Log</h1>
+      <h1 className="text-2xl font-bold">{t("title")}</h1>
 
       {(!logs || logs.length === 0) ? (
         <div className="py-12 text-center text-muted-foreground">
-          <p>No log entries yet</p>
-          <p className="text-xs mt-1">Entries will appear after messages are processed</p>
+          <p>{t("noEntries")}</p>
+          <p className="text-xs mt-1">{t("entriesAppearAfter")}</p>
         </div>
       ) : (
         <div className="space-y-1">

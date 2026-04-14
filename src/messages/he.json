@@ -13,7 +13,11 @@
     "search": "חיפוש",
     "noResults": "אין תוצאות",
     "error": "שגיאה",
-    "success": "הצלחה"
+    "success": "הצלחה",
+    "new": "חדש",
+    "never": "אף פעם",
+    "noDataYet": "אין נתונים עדיין",
+    "tasks": "משימות"
   },
   "nav": {
     "tasks": "משימות",
@@ -38,6 +42,8 @@
     "active": "פעילות",
     "completed": "הושלמו",
     "archived": "ארכיון",
+    "noTasksInView": "אין משימות בתצוגה זו",
+    "noTasksYet": "עדיין אין משימות. הן יופיעו כאן אחרי שה-AI יעבד את ההודעות שלך.",
     "priority": {
       "urgent": "דחוף",
       "high": "גבוה",
@@ -52,14 +58,17 @@
       "aiChat": "צור שיחה ב-AI",
       "searchDocs": "חפש מסמכים",
       "gmailDraft": "טיוטת Gmail",
-      "saveDraft": "שמור טיוטא"
+      "saveDraft": "שמור טיוטא",
+      "processing": "Claude מעבד..."
     },
     "detail": {
       "description": "תיאור",
       "updates": "היסטוריית עדכונים",
       "generatedContent": "תוצאות שנוצרו",
       "linkedDocs": "מסמכים קשורים",
-      "editDescription": "לחץ לעריכה"
+      "editDescription": "לחץ לעריכה",
+      "noUpdates": "אין עדכונים עדיין",
+      "openDraft": "פתח טיוטא"
     },
     "search": {
       "placeholder": "חפש משימות...",
@@ -81,7 +90,41 @@
     },
     "approve": "אשר",
     "dismiss": "דחה",
-    "postpone": "דחה לפעם הבאה"
+    "postpone": "דחה לפעם הבאה",
+    "noSuggestions": "אין הצעות חדשות",
+    "noScheduled": "אין תזכורות מתוזמנות",
+    "noProjects": "אין הצעות פרויקט",
+    "projectsDetectedNightly": "פרויקטים מזוהים אוטומטית מהודעות שלך",
+    "projectCreated": "פרויקט נוצר!",
+    "paused": "הושהה",
+    "removed": "הוסר",
+    "recurring": "חוזר",
+    "createProject": "צור פרויקט"
+  },
+  "log": {
+    "title": "לוג מקורות",
+    "noEntries": "אין רשומות לוג עדיין",
+    "entriesAppearAfter": "רשומות יופיעו אחרי עיבוד הודעות"
+  },
+  "calendar": {
+    "title": "לוח שנה",
+    "upcomingTasks": "משימות קרובות",
+    "noTasksWithDates": "אין משימות עם תאריכי יעד",
+    "calendarEvents": "אירועי לוח שנה",
+    "noEventsSynced": "אין אירועים מסונכרנים עדיין"
+  },
+  "projects": {
+    "title": "פרויקטים",
+    "noProjects": "אין פרויקטים עדיין",
+    "createOrWait": "צור ידנית או המתן לזיהוי AI",
+    "brief": "תקציר פרויקט",
+    "noBrief": "אין תקציר עדיין",
+    "buildBrief": "בנה תקציר עם Claude",
+    "purpose": "מטרה",
+    "targetAudience": "קהל יעד",
+    "status": "סטטוס",
+    "aiContext": "הקשר AI",
+    "links": "קישורים"
   },
   "onboarding": {
     "welcome": "ברוך הבא ל-smrtesy",
@@ -99,7 +142,10 @@
     },
     "step4": {
       "title": "סריקה ראשונית",
-      "description": "סורק את ההודעות שלך..."
+      "description": "סורק את ההודעות שלך...",
+      "complete": "הסריקה הושלמה!",
+      "alreadyDone": "הסריקה כבר בוצעה",
+      "enterApp": "כנס לאפליקציה"
     },
     "skip": "דלג",
     "connect": "חבר"
@@ -107,17 +153,45 @@
   "settings": {
     "title": "הגדרות",
     "language": "שפה",
+    "switchLang": "Switch to English",
     "timezone": "אזור זמן",
     "aiModel": "מודל AI",
     "budget": "תקציב AI יומי",
     "connections": "חיבורים",
-    "reconnect": "חבר מחדש"
+    "reconnect": "חבר מחדש",
+    "connected": "מחובר",
+    "disconnected": "מנותק",
+    "classificationModel": "מודל סיווג",
+    "summaryModel": "מודל סיכום",
+    "showAiCosts": "הצג עלויות AI"
   },
   "admin": {
     "title": "ניהול מערכת",
     "overview": "סקירה",
     "users": "משתמשים",
     "services": "שירותים",
-    "logs": "לוגים"
+    "logs": "לוגים",
+    "aiCostToday": "עלות AI היום",
+    "deadLetters": "הודעות תקועות",
+    "errors24h": "שגיאות (24 שע')",
+    "serviceStatus": "סטטוס שירותים",
+    "recentErrors": "שגיאות אחרונות",
+    "noUsers": "אין משתמשים עדיין",
+    "noLogs": "אין רשומות לוג",
+    "noUsersConnected": "אין משתמשים מחוברים",
+    "userDetails": "פרטי משתמש",
+    "syncState": "מצב סנכרון",
+    "stats": "סטטיסטיקות",
+    "recentLogs": "לוג אחרון",
+    "totalTasks": "סהכ משימות",
+    "plan": "תוכנית",
+    "joined": "הצטרף",
+    "failures": "כשלונות",
+    "lastSuccess": "הצלחה אחרונה",
+    "systemLogs": "לוגים מערכת",
+    "active": "פעיל",
+    "onboardingPending": "ממתין להרשמה",
+    "forceReconnect": "אלץ חיבור מחדש",
+    "notifyUser": "הודע למשתמש"
   }
 }

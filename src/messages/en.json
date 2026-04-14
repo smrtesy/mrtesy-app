@@ -13,7 +13,11 @@
     "search": "Search",
     "noResults": "No results",
     "error": "Error",
-    "success": "Success"
+    "success": "Success",
+    "new": "New",
+    "never": "Never",
+    "noDataYet": "No data yet",
+    "tasks": "tasks"
   },
   "nav": {
     "tasks": "Tasks",
@@ -38,6 +42,8 @@
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "noTasksInView": "No tasks in this view",
+    "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
       "urgent": "Urgent",
       "high": "High",
@@ -52,14 +58,17 @@
       "aiChat": "Chat with AI",
       "searchDocs": "Search Documents",
       "gmailDraft": "Gmail Draft",
-      "saveDraft": "Save Draft"
+      "saveDraft": "Save Draft",
+      "processing": "Claude is processing..."
     },
     "detail": {
       "description": "Description",
       "updates": "Update History",
       "generatedContent": "Generated Content",
       "linkedDocs": "Linked Documents",
-      "editDescription": "Click to edit"
+      "editDescription": "Click to edit",
+      "noUpdates": "No updates yet",
+      "openDraft": "Open Draft"
     },
     "search": {
       "placeholder": "Search tasks...",
@@ -81,7 +90,41 @@
     },
     "approve": "Approve",
     "dismiss": "Dismiss",
-    "postpone": "Postpone"
+    "postpone": "Postpone",
+    "noSuggestions": "No new suggestions",
+    "noScheduled": "No scheduled reminders",
+    "noProjects": "No project suggestions",
+    "projectsDetectedNightly": "Projects are detected nightly from your message patterns",
+    "projectCreated": "Project created!",
+    "paused": "Paused",
+    "removed": "Removed",
+    "recurring": "Recurring",
+    "createProject": "Create Project"
+  },
+  "log": {
+    "title": "Source Log",
+    "noEntries": "No log entries yet",
+    "entriesAppearAfter": "Entries will appear after messages are processed"
+  },
+  "calendar": {
+    "title": "Calendar",
+    "upcomingTasks": "Upcoming Tasks",
+    "noTasksWithDates": "No tasks with due dates",
+    "calendarEvents": "Calendar Events",
+    "noEventsSynced": "No calendar events synced yet"
+  },
+  "projects": {
+    "title": "Projects",
+    "noProjects": "No projects yet",
+    "createOrWait": "Create manually or wait for AI detection",
+    "brief": "Project Brief",
+    "noBrief": "No brief yet",
+    "buildBrief": "Build Brief with Claude",
+    "purpose": "Purpose",
+    "targetAudience": "Target Audience",
+    "status": "Status",
+    "aiContext": "AI Context",
+    "links": "Links"
   },
   "onboarding": {
     "welcome": "Welcome to smrtesy",
@@ -99,7 +142,10 @@
     },
     "step4": {
       "title": "Initial Scan",
-      "description": "Scanning your messages..."
+      "description": "Scanning your messages...",
+      "complete": "Scan complete!",
+      "alreadyDone": "Initial scan already completed",
+      "enterApp": "Enter App"
     },
     "skip": "Skip",
     "connect": "Connect"
@@ -107,17 +153,45 @@
   "settings": {
     "title": "Settings",
     "language": "Language",
+    "switchLang": "עבור לעברית",
     "timezone": "Timezone",
     "aiModel": "AI Model",
     "budget": "Daily AI Budget",
     "connections": "Connections",
-    "reconnect": "Reconnect"
+    "reconnect": "Reconnect",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "classificationModel": "Classification Model",
+    "summaryModel": "Summary Model",
+    "showAiCosts": "Show AI Costs"
   },
   "admin": {
     "title": "Admin Dashboard",
     "overview": "Overview",
     "users": "Users",
     "services": "Services",
-    "logs": "Logs"
+    "logs": "Logs",
+    "aiCostToday": "AI Cost Today",
+    "deadLetters": "Dead Letters",
+    "errors24h": "Errors (24h)",
+    "serviceStatus": "Service Status",
+    "recentErrors": "Recent Errors",
+    "noUsers": "No users yet",
+    "noLogs": "No log entries",
+    "noUsersConnected": "No users connected",
+    "userDetails": "User Details",
+    "syncState": "Sync State",
+    "stats": "Stats",
+    "recentLogs": "Recent Logs",
+    "totalTasks": "Total Tasks",
+    "plan": "Plan",
+    "joined": "Joined",
+    "failures": "Failures",
+    "lastSuccess": "Last Success",
+    "systemLogs": "System Logs",
+    "active": "active",
+    "onboardingPending": "onboarding pending",
+    "forceReconnect": "Force Reconnect",
+    "notifyUser": "Notify User"
   }
 }

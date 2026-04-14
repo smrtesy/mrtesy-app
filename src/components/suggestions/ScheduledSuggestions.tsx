@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { Clock, Pause, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 export function ScheduledSuggestions({ locale }: { locale: string }) {
+  const t = useTranslations("suggestions");
   const supabase = createClient();
   const [reminders, setReminders] = useState<any[] /* eslint-disable-line @typescript-eslint/no-explicit-any */>([]);
   const [loading, setLoading] = useState(true);
@@ -37,13 +39,13 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
 
   async function handlePause(id: string) {
     await supabase.from("reminders").update({ is_active: false }).eq("id", id);
-    toast.success("Paused");
+    toast.success(t("paused"));
     fetchReminders();
   }
 
   async function handleDelete(id: string) {
     await supabase.from("reminders").update({ is_active: false }).eq("id", id);
-    toast.success("Removed");
+    toast.success(t("removed"));
     fetchReminders();
   }
 
@@ -59,7 +61,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Clock className="mx-auto h-8 w-8 mb-2 opacity-50" />
-        <p>No scheduled reminders</p>
+        <p>{t("noScheduled")}</p>
       </div>
     );
   }
@@ -88,7 +90,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                       </Badge>
                     )}
                     {reminder.recurrence_rule && (
-                      <Badge variant="secondary" className="text-[10px]">Recurring</Badge>
+                      <Badge variant="secondary" className="text-[10px]">{t("recurring")}</Badge>
                     )}
                   </div>
                 </div>
@@ -96,7 +98,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-9 w-9"
+                    className="h-11 w-11 min-h-[48px] min-w-[48px]"
                     onClick={() => handlePause(reminder.id as string)}
                   >
                     <Pause className="h-4 w-4" />

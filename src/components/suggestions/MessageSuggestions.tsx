@@ -78,7 +78,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
-        <p>No new suggestions</p>
+        <p>{t("noSuggestions")}</p>
       </div>
     );
   }
