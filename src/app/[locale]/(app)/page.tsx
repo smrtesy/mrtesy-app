@@ -1,6 +1,8 @@
 import { getTranslations } from "next-intl/server";
 import { TaskList } from "@/components/tasks/TaskList";
 
+export const dynamic = "force-dynamic";
+
 export default async function TasksPage({
   params: { locale },
 }: {
