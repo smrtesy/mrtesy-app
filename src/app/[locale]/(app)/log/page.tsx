@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
-// Icons used via emoji in sourceIcons map
 
 const sourceIcons: Record<string, string> = {
   gmail: "📧",
@@ -12,11 +12,12 @@ const sourceIcons: Record<string, string> = {
 export default async function LogPage() {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/he/login");
 
   const { data: logs } = await supabase
     .from("log_entries")
     .select("*")
-    .eq("user_id", user!.id)
+    .eq("user_id", user.id)
     .order("created_at", { ascending: false })
     .limit(50);
 

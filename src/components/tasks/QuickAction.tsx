@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -31,14 +31,32 @@ export function QuickAction({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState(false);
+  const hasRun = useRef(false);
+
+  // Auto-run when sheet opens — properly in useEffect
+  useEffect(() => {
+    if (open && !hasRun.current) {
+      hasRun.current = true;
+      runAction();
+    }
+    if (!open) {
+      // Reset state when closed
+      hasRun.current = false;
+      setResult("");
+      setLoading(false);
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function runAction() {
     setLoading(true);
     setResult("");
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) throw new Error("No session");
 
       const resp = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/quick-action`,
@@ -68,8 +86,7 @@ export function QuickAction({
 
   async function handleSave() {
     setSaving(true);
-    // Result is already saved in ai_generated_content by the Edge Function
-    toast.success("Saved!");
+    toast.success(t("saveDraft"));
     setSaving(false);
     onDone();
     onClose();
@@ -78,8 +95,11 @@ export function QuickAction({
   async function handleGmailDraft() {
     setSaving(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
+      if (!session) throw new Error("No session");
 
       const resp = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-gmail-draft`,
@@ -90,7 +110,7 @@ export function QuickAction({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            to: "", // User should fill in the To field
+            to: "",
             subject: actionLabel,
             body: result,
             task_id: taskId,
@@ -101,7 +121,7 @@ export function QuickAction({
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
 
-      toast.success("Gmail draft created!");
+      toast.success(t("gmailDraft"));
       if (data.draft_url) {
         window.open(data.draft_url, "_blank");
       }
@@ -111,11 +131,6 @@ export function QuickAction({
       setSaving(false);
       onDone();
     }
-  }
-
-  // Auto-run on open
-  if (open && !loading && !result) {
-    runAction();
   }
 
   return (
@@ -129,11 +144,11 @@ export function QuickAction({
           {loading && (
             <div className="flex flex-col items-center gap-3 py-8">
               <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-              <p className="text-sm text-muted-foreground">Claude is processing...</p>
+              <p className="text-sm text-muted-foreground">{t("quickAction")}...</p>
             </div>
           )}
 
-          {result && (
+          {!loading && result && (
             <Textarea
               value={result}
               onChange={(e) => setResult(e.target.value)}
@@ -143,7 +158,7 @@ export function QuickAction({
           )}
         </div>
 
-        {result && (
+        {result && !loading && (
           <div className="sticky bottom-0 flex gap-2 border-t bg-background pt-3 pb-[env(safe-area-inset-bottom)]">
             <Button onClick={handleSave} disabled={saving} className="flex-1 min-h-[48px] gap-1">
               <Save className="h-4 w-4" />

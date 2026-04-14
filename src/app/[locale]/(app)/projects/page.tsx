@@ -16,7 +16,7 @@ export default async function ProjectsPage({
   const { data: projects } = await supabase
     .from("projects")
     .select("*, project_briefs(id, purpose, current_status)")
-    .eq("user_id", user!.id)
+    .eq("user_id", user?.id || "")
     .eq("is_active", true)
     .order("created_at", { ascending: false });
 
@@ -24,7 +24,7 @@ export default async function ProjectsPage({
   const { data: taskCounts } = await supabase
     .from("tasks")
     .select("project_id")
-    .eq("user_id", user!.id)
+    .eq("user_id", user?.id || "")
     .not("project_id", "is", null)
     .neq("status", "archived");
 

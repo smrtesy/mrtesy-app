@@ -1,13 +1,35 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const state = searchParams.get("state"); // 'gmail_calendar' | 'drive'
+  const stateParam = searchParams.get("state");
 
-  if (!code || !state) {
+  if (!code || !stateParam) {
     return NextResponse.redirect(`${origin}/he/onboarding?error=no_code`);
+  }
+
+  // Validate CSRF nonce
+  let service: string;
+  try {
+    const stateData = JSON.parse(
+      Buffer.from(stateParam, "base64url").toString()
+    );
+    const storedNonce = cookies().get("oauth_state_nonce")?.value;
+    if (!storedNonce || storedNonce !== stateData.nonce) {
+      return NextResponse.redirect(
+        `${origin}/he/onboarding?error=invalid_state`
+      );
+    }
+    service = stateData.service;
+    // Clear the nonce cookie
+    cookies().delete("oauth_state_nonce");
+  } catch {
+    return NextResponse.redirect(
+      `${origin}/he/onboarding?error=invalid_state`
+    );
   }
 
   const supabase = createClient();
@@ -18,6 +40,14 @@ export async function GET(request: Request) {
   if (!user) {
     return NextResponse.redirect(`${origin}/he/login`);
   }
+
+  // Determine locale from user settings
+  const { data: settings } = await supabase
+    .from("user_settings")
+    .select("preferred_language")
+    .eq("user_id", user.id)
+    .single();
+  const locale = settings?.preferred_language || "he";
 
   // Exchange code for tokens
   const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
@@ -33,10 +63,9 @@ export async function GET(request: Request) {
   });
 
   if (!tokenResp.ok) {
-    const err = await tokenResp.text();
-    console.error("Token exchange failed:", err);
+    console.error("Token exchange failed:", await tokenResp.text());
     return NextResponse.redirect(
-      `${origin}/he/onboarding?error=token_exchange`
+      `${origin}/${locale}/onboarding?error=token_exchange`
     );
   }
 
@@ -45,34 +74,42 @@ export async function GET(request: Request) {
     Date.now() + tokens.expires_in * 1000
   ).toISOString();
 
-  if (state === "gmail_calendar") {
+  if (service === "gmail_calendar") {
     // Save Gmail credentials
-    await supabase.from("user_credentials").upsert(
-      {
-        user_id: user.id,
-        service: "gmail",
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: expiresAt,
-        scopes: ["gmail.modify"],
-        email: user.email,
-      },
-      { onConflict: "user_id,service" }
-    );
+    const { error: gmailErr } = await supabase
+      .from("user_credentials")
+      .upsert(
+        {
+          user_id: user.id,
+          service: "gmail",
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_at: expiresAt,
+          scopes: ["gmail.modify"],
+          email: user.email,
+        },
+        { onConflict: "user_id,service" }
+      );
 
     // Save Calendar credentials (same token)
-    await supabase.from("user_credentials").upsert(
-      {
-        user_id: user.id,
-        service: "google_calendar",
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: expiresAt,
-        scopes: ["calendar"],
-        email: user.email,
-      },
-      { onConflict: "user_id,service" }
-    );
+    const { error: calErr } = await supabase
+      .from("user_credentials")
+      .upsert(
+        {
+          user_id: user.id,
+          service: "google_calendar",
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_at: expiresAt,
+          scopes: ["calendar"],
+          email: user.email,
+        },
+        { onConflict: "user_id,service" }
+      );
+
+    if (gmailErr || calErr) {
+      console.error("Credential save error:", gmailErr || calErr);
+    }
 
     // Update settings
     await supabase
@@ -84,11 +121,11 @@ export async function GET(request: Request) {
       })
       .eq("user_id", user.id);
 
-    return NextResponse.redirect(`${origin}/he/onboarding/drive`);
+    return NextResponse.redirect(`${origin}/${locale}/onboarding/drive`);
   }
 
-  if (state === "drive") {
-    await supabase.from("user_credentials").upsert(
+  if (service === "drive") {
+    const { error } = await supabase.from("user_credentials").upsert(
       {
         user_id: user.id,
         service: "google_drive",
@@ -101,13 +138,19 @@ export async function GET(request: Request) {
       { onConflict: "user_id,service" }
     );
 
+    if (error) {
+      console.error("Credential save error:", error);
+    }
+
     await supabase
       .from("user_settings")
       .update({ drive_connected: true })
       .eq("user_id", user.id);
 
-    return NextResponse.redirect(`${origin}/he/onboarding/whatsapp`);
+    return NextResponse.redirect(
+      `${origin}/${locale}/onboarding/whatsapp`
+    );
   }
 
-  return NextResponse.redirect(`${origin}/he/onboarding`);
+  return NextResponse.redirect(`${origin}/${locale}/onboarding`);
 }

@@ -3,8 +3,8 @@ export interface Task {
   title: string;
   title_he: string | null;
   description: string | null;
-  priority: string;
-  status: string;
+  priority: "urgent" | "high" | "medium" | "low";
+  status: "inbox" | "in_progress" | "snoozed" | "archived" | "completed";
   due_date: string | null;
   due_time: string | null;
   reminder_at: string | null;
@@ -47,5 +47,5 @@ export interface Task {
   updated_at: string;
   project_id: string | null;
   source_message_id: string | null;
-  task_type: string;
+  task_type: "action" | "project_suggestion" | "brief_review" | "followup";
 }

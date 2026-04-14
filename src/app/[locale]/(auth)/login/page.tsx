@@ -84,7 +84,7 @@ export default function LoginPage() {
           <span className="w-full border-t" />
         </div>
         <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-gray-50 px-2 text-muted-foreground">
+          <span className="bg-muted px-2 text-muted-foreground">
             {t("orSeparator")}
           </span>
         </div>

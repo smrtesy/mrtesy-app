@@ -1,16 +1,22 @@
 import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
-export default async function CalendarPage() {
+export default async function CalendarPage({
+  params: { locale },
+}: {
+  params: { locale: string };
+}) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect(`/${locale}/login`);
 
   // Get calendar events from source_messages
   const { data: events } = await supabase
     .from("source_messages")
     .select("id, subject, source_url, received_at, ai_classification, ai_extraction")
-    .eq("user_id", user!.id)
+    .eq("user_id", user.id)
     .eq("source_type", "google_calendar")
     .order("received_at", { ascending: true })
     .limit(50);
@@ -19,7 +25,7 @@ export default async function CalendarPage() {
   const { data: tasksWithDates } = await supabase
     .from("tasks")
     .select("id, title, title_he, due_date, priority, status")
-    .eq("user_id", user!.id)
+    .eq("user_id", user.id)
     .not("due_date", "is", null)
     .neq("status", "archived")
     .order("due_date", { ascending: true })
@@ -47,7 +53,7 @@ export default async function CalendarPage() {
             {Object.entries(groupedTasks).map(([date, tasks]) => (
               <div key={date}>
                 <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                  {new Date(date).toLocaleDateString("he-IL", {
+                  {new Date(date).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", {
                     weekday: "long",
                     year: "numeric",
                     month: "long",
@@ -90,7 +96,7 @@ export default async function CalendarPage() {
                 <div className="flex-1 min-w-0">
                   <p className="truncate">{event.subject}</p>
                   <p className="text-xs text-muted-foreground">
-                    {new Date(event.received_at).toLocaleString("he-IL")}
+                    {new Date(event.received_at).toLocaleString(locale === "he" ? "he-IL" : "en-US")}
                   </p>
                 </div>
                 {event.ai_classification && (

@@ -9,6 +9,7 @@ import {
   FileText,
   Calendar,
   Settings,
+  FolderOpen,
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ const navItems = [
   { key: "suggestions", href: "/suggestions", icon: Bell },
   { key: "log", href: "/log", icon: FileText },
   { key: "calendar", href: "/calendar", icon: Calendar },
+  { key: "projects", href: "/projects", icon: FolderOpen },
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 

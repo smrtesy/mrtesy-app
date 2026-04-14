@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MessageCircle, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
@@ -15,21 +15,37 @@ export default function OnboardingStep3() {
   const { locale } = useParams();
   const router = useRouter();
   const [copied, setCopied] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
   const supabase = createClient();
 
-  // The webhook URL the user needs to set in Dualhook
-  const webhookUrl = `https://exjnlghuzuvqedlltztz.supabase.co/functions/v1/whatsapp?user_id=USER_ID`;
+  // Build webhook URL with actual user_id (only visible to authenticated user)
+  useEffect(() => {
+    async function loadUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setWebhookUrl(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/whatsapp?user_id=${user.id}`
+        );
+      }
+    }
+    loadUser();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleConnect() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    await supabase
+    const { error } = await supabase
       .from("user_settings")
       .update({ whatsapp_connected: true })
       .eq("user_id", user.id);
 
-    toast.success("WhatsApp connected!");
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    toast.success(t("connect"));
     router.push(`/${locale}/onboarding/setup`);
   }
 
@@ -57,12 +73,12 @@ export default function OnboardingStep3() {
           <label className="text-sm font-medium">Webhook URL</label>
           <div className="flex gap-2">
             <Input value={webhookUrl} readOnly className="text-xs" dir="ltr" />
-            <Button variant="outline" size="icon" onClick={handleCopy} className="min-w-[48px]">
+            <Button variant="outline" size="icon" onClick={handleCopy} className="min-w-[48px] min-h-[48px]">
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Set this URL in your Dualhook / WhatsApp Business settings
+            {t("step3.description")}
           </p>
         </div>
         <Button onClick={handleConnect} className="w-full min-h-[48px]">
@@ -75,7 +91,7 @@ export default function OnboardingStep3() {
           <div className="h-2 w-8 rounded-full bg-blue-600" />
           <div className="h-2 w-8 rounded-full bg-blue-600" />
           <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-gray-200" />
+          <div className="h-2 w-8 rounded-full bg-muted" />
         </div>
       </CardContent>
     </Card>

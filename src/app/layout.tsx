@@ -1,9 +1,13 @@
-// Root layout — delegates to [locale]/layout.tsx
-// This file is required by Next.js but the actual layout is in [locale]/layout.tsx
+// Root layout — Next.js requires <html> and <body> here
+// The [locale]/layout.tsx overrides these with proper lang/dir attributes
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return children;
+  return (
+    <html>
+      <body>{children}</body>
+    </html>
+  );
 }

@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ExternalLink } from "lucide-react";
 import { notFound } from "next/navigation";
+import { BuildBriefButton } from "@/components/tasks/BuildBriefButton";
 
 export default async function ProjectDetailPage({
   params: { locale, id },
@@ -17,7 +17,7 @@ export default async function ProjectDetailPage({
     .from("projects")
     .select("*")
     .eq("id", id)
-    .eq("user_id", user!.id)
+    .eq("user_id", user?.id || "")
     .single();
 
   if (!project) notFound();
@@ -28,7 +28,7 @@ export default async function ProjectDetailPage({
       .from("tasks")
       .select("id, title, title_he, priority, status, due_date")
       .eq("project_id", id)
-      .eq("user_id", user!.id)
+      .eq("user_id", user?.id || "")
       .neq("status", "archived")
       .order("created_at", { ascending: false })
       .limit(20),
@@ -101,14 +101,7 @@ export default async function ProjectDetailPage({
         <Card>
           <CardContent className="py-8 text-center">
             <p className="text-sm text-muted-foreground">No brief yet</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => {
-              window.open(
-                `https://claude.ai/new?q=${encodeURIComponent(`Build a project brief for "${name}". Include: purpose, target audience, current status, key people, systems, and weekly workflow.`)}`,
-                "_blank"
-              );
-            }}>
-              Build Brief with Claude
-            </Button>
+            <BuildBriefButton projectName={name} />
           </CardContent>
         </Card>
       )}
