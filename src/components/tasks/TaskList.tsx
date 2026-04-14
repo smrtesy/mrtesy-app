@@ -55,7 +55,23 @@ export function TaskList({ locale }: { locale: string }) {
 
   useEffect(() => {
     fetchTasks();
-  }, [fetchTasks]);
+
+    // Realtime subscription for task changes
+    const channel = supabase
+      .channel("tasks-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tasks" },
+        () => {
+          fetchTasks(); // Re-fetch on any change
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchTasks, supabase]);
 
   async function handleComplete(taskId: string) {
     const { error } = await supabase

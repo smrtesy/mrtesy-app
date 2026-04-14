@@ -1,47 +1,53 @@
 import { createClient } from "@/lib/supabase/server";
+import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default async function AdminServicesPage() {
+  const t = await getTranslations("admin");
   const supabase = createClient();
 
-  const { data: syncStates } = await supabase
-    .from("sync_state")
-    .select("*")
-    .order("last_synced_at", { ascending: false });
+  // Parallel queries — no broken join
+  const [syncResult, usersResult] = await Promise.all([
+    supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
+    supabase.from("user_settings").select("user_id, display_name"),
+  ]);
+
+  const syncStates = syncResult.data || [];
+  const userMap = new Map((usersResult.data || []).map((u) => [u.user_id, u.display_name]));
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Service Status</h1>
+      <h1 className="text-2xl font-bold">{t("serviceStatus")}</h1>
 
       {services.map((service) => {
-        const states = (syncStates || []).filter((s) => s.source === service);
+        const states = syncStates.filter((s) => s.source === service);
 
         return (
           <Card key={service}>
             <CardHeader>
-              <CardTitle className="capitalize">{service.replace("_", " ")}</CardTitle>
+              <CardTitle className="capitalize">{service.replace(/_/g, " ")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {states.length === 0 && (
-                <p className="text-sm text-muted-foreground">No users connected</p>
+                <p className="text-sm text-muted-foreground">{t("noUsersConnected")}</p>
               )}
               {states.map((s) => (
                 <div key={s.id} className="flex items-center justify-between rounded border p-2">
                   <div>
                     <p className="text-sm font-medium">
-                      {s.user_id.slice(0, 8)}
+                      {userMap.get(s.user_id) || s.user_id.slice(0, 8)}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Last sync: {new Date(s.last_synced_at).toLocaleString()}
+                      {t("lastSuccess")}: {s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("noUsersConnected")}
                     </p>
                   </div>
                   <div className="text-end">
-                    {s.consecutive_failures === 0 ? (
+                    {(s.consecutive_failures || 0) === 0 ? (
                       <Badge variant="default" className="bg-green-500">OK</Badge>
-                    ) : s.consecutive_failures >= 5 ? (
+                    ) : (s.consecutive_failures || 0) >= 5 ? (
                       <Badge variant="destructive">FAILED ({s.consecutive_failures})</Badge>
                     ) : (
                       <Badge variant="secondary" className="bg-yellow-500 text-white">
