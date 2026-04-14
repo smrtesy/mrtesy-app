@@ -1,19 +1,17 @@
-import { getTranslations } from "next-intl/server";
+"use client";
+
+import { useTranslations } from "next-intl";
+import { useParams } from "next/navigation";
 import { TaskList } from "@/components/tasks/TaskList";
 
-export const dynamic = "force-dynamic";
-
-export default async function TasksPage({
-  params: { locale },
-}: {
-  params: { locale: string };
-}) {
-  const t = await getTranslations("tasks");
+export default function TasksPage() {
+  const t = useTranslations("tasks");
+  const { locale } = useParams();
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">{t("title")}</h1>
-      <TaskList locale={locale} />
+      <TaskList locale={locale as string} />
     </div>
   );
 }
