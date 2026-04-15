@@ -4,8 +4,8 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
@@ -24,6 +24,11 @@ const calendarOptions = [
   { value: 24 },
 ];
 
+interface DriveFolder {
+  id: string;
+  name: string;
+}
+
 export default function OnboardingSetup() {
   const t = useTranslations("onboarding");
   const { locale } = useParams();
@@ -35,16 +40,24 @@ export default function OnboardingSetup() {
   const [gmailDays, setGmailDays] = useState(30);
   const [calMonths, setCalMonths] = useState(12);
   const [progress, setProgress] = useState({ gmail: 0, calendar: 0, phase: "" });
-  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedFolder, setSelectedFolder] = useState<string>("");
-  const [loadingFolders, setLoadingFolders] = useState(false);
+  const [selectedFolderName, setSelectedFolderName] = useState<string>("");
+  const [driveConnected, setDriveConnected] = useState(false);
+  const [driveToken, setDriveToken] = useState<string>("");
+  // Drive search state
+  const [folderSearch, setFolderSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<DriveFolder[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const isHe = locale === "he";
 
-  // Load Drive top-level folders if connected
+  // Check if Drive is connected and get token
   useEffect(() => {
-    async function loadFolders() {
+    async function checkDrive() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data: creds } = await supabase
@@ -53,24 +66,104 @@ export default function OnboardingSetup() {
         .eq("user_id", user.id)
         .eq("service", "google_drive")
         .single();
-      if (!creds) return;
+      if (creds) {
+        setDriveConnected(true);
+        setDriveToken(creds.access_token);
+      }
+    }
+    checkDrive();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-      setLoadingFolders(true);
+  // Close search results on click outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowResults(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Drive folder search (debounced)
+  const searchDriveFolders = useCallback(async (query: string) => {
+    if (!driveToken || query.length < 2) {
+      setSearchResults([]);
+      setShowResults(false);
+      return;
+    }
+
+    // Check if input is a Google Drive folder URL
+    const urlMatch = query.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/);
+    if (urlMatch) {
+      setSearchLoading(true);
       try {
-        // Only fetch top-level folders (parent = root), not all nested folders
+        const folderId = urlMatch[1];
         const resp = await fetch(
-          "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+'root'+in+parents+and+trashed=false&fields=files(id,name)&orderBy=name&pageSize=30",
-          { headers: { Authorization: `Bearer ${creds.access_token}` } }
+          `https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name&supportsAllDrives=true`,
+          { headers: { Authorization: `Bearer ${driveToken}` } }
         );
         if (resp.ok) {
-          const data = await resp.json();
-          setDriveFolders(data.files || []);
+          const folder = await resp.json();
+          setSelectedFolder(folder.id);
+          setSelectedFolderName(folder.name);
+          setFolderSearch(folder.name);
+          setShowResults(false);
+          setSearchResults([]);
+        } else {
+          toast.error(isHe ? "תיקייה לא נמצאה" : "Folder not found");
         }
       } catch { /* ignore */ }
-      setLoadingFolders(false);
+      setSearchLoading(false);
+      return;
     }
-    loadFolders();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Regular text search
+    setSearchLoading(true);
+    try {
+      const q = encodeURIComponent(
+        `mimeType='application/vnd.google-apps.folder' and name contains '${query.replace(/'/g, "\\'")}' and trashed=false`
+      );
+      const resp = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=10&orderBy=name&corpora=allDrives&includeItemsFromAllDrives=true&supportsAllDrives=true`,
+        { headers: { Authorization: `Bearer ${driveToken}` } }
+      );
+      if (resp.ok) {
+        const data = await resp.json();
+        setSearchResults(data.files || []);
+        setShowResults(true);
+      }
+    } catch { /* ignore */ }
+    setSearchLoading(false);
+  }, [driveToken, isHe]);
+
+  // Handle search input change with debounce
+  function handleSearchChange(value: string) {
+    setFolderSearch(value);
+    // Clear selection if user is typing something different
+    if (selectedFolder && value !== selectedFolderName) {
+      setSelectedFolder("");
+      setSelectedFolderName("");
+    }
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => searchDriveFolders(value), 400);
+  }
+
+  function selectFolder(folder: DriveFolder) {
+    setSelectedFolder(folder.id);
+    setSelectedFolderName(folder.name);
+    setFolderSearch(folder.name);
+    setShowResults(false);
+    setSearchResults([]);
+  }
+
+  function clearFolder() {
+    setSelectedFolder("");
+    setSelectedFolderName("");
+    setFolderSearch("");
+    setSearchResults([]);
+    setShowResults(false);
+  }
 
   // Poll DB for progress while scanning
   useEffect(() => {
@@ -88,7 +181,7 @@ export default function OnboardingSetup() {
           .from("source_messages")
           .select("id", { count: "exact", head: true })
           .eq("user_id", user.id)
-          .eq("source_type", "gmail"),
+          .in("source_type", ["gmail", "gmail_sent"]),
         supabase
           .from("source_messages")
           .select("id", { count: "exact", head: true })
@@ -156,6 +249,8 @@ export default function OnboardingSetup() {
         throw new Error(data.error || "Scan failed");
       }
 
+      // onboarding_completed is now set by the edge function itself,
+      // but set it here too as a safety net
       await supabase
         .from("user_settings")
         .update({ onboarding_completed: true })
@@ -163,6 +258,43 @@ export default function OnboardingSetup() {
 
       setDone(true);
     } catch (e) {
+      // Even on timeout/error, check if the edge function managed to mark onboarding
+      // as complete (it may have finished the IDs phase but timed out on response)
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: settings } = await supabase
+            .from("user_settings")
+            .select("onboarding_completed, initial_scan_completed_at")
+            .eq("user_id", user.id)
+            .single();
+
+          if (settings?.onboarding_completed) {
+            // Scan actually succeeded, just response timed out
+            toast.success(isHe ? "הסריקה הושלמה!" : "Scan completed!");
+            setDone(true);
+            return;
+          }
+
+          // Edge function started but didn't complete — mark onboarding anyway
+          // since IDs may have been saved and batch-details will fill in the rest
+          if (settings?.initial_scan_completed_at === null) {
+            await supabase
+              .from("user_settings")
+              .update({
+                onboarding_completed: true,
+                initial_scan_completed_at: new Date().toISOString(),
+              })
+              .eq("user_id", user.id);
+            toast.info(isHe
+              ? "הסריקה עדיין רצה ברקע. תוכל להיכנס לאפליקציה."
+              : "Scan is still running in the background. You can enter the app.");
+            setDone(true);
+            return;
+          }
+        }
+      } catch { /* ignore recovery errors */ }
+
       toast.error((e as Error).message);
     } finally {
       setScanning(false);
@@ -218,11 +350,6 @@ export default function OnboardingSetup() {
                   </Button>
                 ))}
               </div>
-              <p className="text-xs text-muted-foreground">
-                {isHe
-                  ? `≈ ${Math.round(gmailDays * 5)} הודעות | עלות AI משוערת: ~$${(gmailDays * 5 * 0.003).toFixed(2)}`
-                  : `≈ ${Math.round(gmailDays * 5)} messages | Est. AI cost: ~$${(gmailDays * 5 * 0.003).toFixed(2)}`}
-              </p>
             </div>
 
             {/* Calendar scan range */}
@@ -253,8 +380,8 @@ export default function OnboardingSetup() {
               </p>
             </div>
 
-            {/* Drive folder selection */}
-            {driveFolders.length > 0 && (
+            {/* Drive folder search */}
+            {driveConnected && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <FolderOpen className="h-4 w-4 text-green-500" />
@@ -262,23 +389,57 @@ export default function OnboardingSetup() {
                     {isHe ? "Drive — איזו תיקייה לסרוק?" : "Drive — which folder to scan?"}
                   </label>
                 </div>
-                <select
-                  value={selectedFolder}
-                  onChange={(e) => setSelectedFolder(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2.5 text-sm bg-background min-h-[44px]"
-                  dir="auto"
-                >
-                  <option value="">📂 {isHe ? "כל הקבצים (3 חודשים אחרונים)" : "All files (last 3 months)"}</option>
-                  {driveFolders.map((f) => (
-                    <option key={f.id} value={f.id}>📁 {f.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {loadingFolders && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                {isHe ? "טוען תיקיות Drive..." : "Loading Drive folders..."}
+                <div ref={searchContainerRef} className="relative">
+                  <div className="relative">
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={folderSearch}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
+                      placeholder={isHe ? "חפש תיקייה או הדבק קישור Drive..." : "Search folder or paste Drive URL..."}
+                      className="w-full rounded-md border px-3 py-2.5 ps-9 pe-9 text-sm bg-background min-h-[44px]"
+                      dir="auto"
+                    />
+                    {searchLoading && (
+                      <Loader2 className="absolute end-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                    )}
+                    {selectedFolder && !searchLoading && (
+                      <button
+                        onClick={clearFolder}
+                        className="absolute end-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  {/* Search results dropdown */}
+                  {showResults && searchResults.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full rounded-md border bg-background shadow-lg max-h-48 overflow-auto">
+                      {searchResults.map((folder) => (
+                        <button
+                          key={folder.id}
+                          onClick={() => selectFolder(folder)}
+                          className="w-full text-start px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                        >
+                          <FolderOpen className="h-4 w-4 text-green-500 shrink-0" />
+                          <span className="truncate">{folder.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {selectedFolder && (
+                  <p className="text-xs text-green-600 flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    {isHe ? `נבחרה: ${selectedFolderName}` : `Selected: ${selectedFolderName}`}
+                  </p>
+                )}
+                {!selectedFolder && (
+                  <p className="text-xs text-muted-foreground">
+                    {isHe ? "השאר ריק לסריקת כל הקבצים (3 חודשים אחרונים)" : "Leave empty to scan all files (last 3 months)"}
+                  </p>
+                )}
               </div>
             )}
 
@@ -298,7 +459,7 @@ export default function OnboardingSetup() {
               </p>
             </div>
 
-            {/* Progress bars */}
+            {/* Progress — indeterminate bars with real count */}
             <div className="space-y-3">
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
@@ -308,10 +469,11 @@ export default function OnboardingSetup() {
                   <span className="font-mono">{progress.gmail} {isHe ? "הודעות" : "messages"}</span>
                 </div>
                 <div className="h-2 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full bg-red-500 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, (progress.gmail / Math.max(1, gmailDays * 5)) * 100)}%` }}
-                  />
+                  {progress.gmail > 0 ? (
+                    <div className="h-full bg-red-500 rounded-full w-full" />
+                  ) : (
+                    <div className="h-full bg-red-500/60 rounded-full animate-pulse w-2/3" />
+                  )}
                 </div>
               </div>
 
@@ -323,16 +485,19 @@ export default function OnboardingSetup() {
                   <span className="font-mono">{progress.calendar} {isHe ? "אירועים" : "events"}</span>
                 </div>
                 <div className="h-2 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, (progress.calendar / Math.max(1, calMonths * 20)) * 100)}%` }}
-                  />
+                  {progress.calendar > 0 ? (
+                    <div className="h-full bg-blue-500 rounded-full w-full" />
+                  ) : (
+                    <div className="h-full bg-blue-500/60 rounded-full animate-pulse w-2/3" />
+                  )}
                 </div>
               </div>
             </div>
 
             <p className="text-xs text-center text-muted-foreground">
-              {isHe ? "זה יכול לקחת עד דקה..." : "This may take up to a minute..."}
+              {isHe
+                ? "שומר הודעות... העיבוד ימשיך ברקע."
+                : "Saving messages... Processing will continue in the background."}
             </p>
           </div>
         )}
@@ -344,8 +509,8 @@ export default function OnboardingSetup() {
               <p className="font-medium">{t("step4.complete")}</p>
               {stats && (
                 <div className="text-center text-sm text-muted-foreground space-y-1">
-                  <p>📧 Gmail: {stats.gmail} {isHe ? "הודעות" : "messages"}</p>
-                  <p>📅 {isHe ? "לוח שנה" : "Calendar"}: {stats.calendar} {isHe ? "אירועים" : "events"}</p>
+                  <p>Gmail: {stats.gmail} {isHe ? "הודעות" : "messages"}</p>
+                  <p>{isHe ? "לוח שנה" : "Calendar"}: {stats.calendar} {isHe ? "אירועים" : "events"}</p>
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-2">
