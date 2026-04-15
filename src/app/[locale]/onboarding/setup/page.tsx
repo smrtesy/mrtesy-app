@@ -249,19 +249,7 @@ export default function OnboardingSetup() {
         throw new Error(data.error || "Scan failed");
       }
 
-      // Trigger Drive sync in background (don't await — it can take time)
-      if (selectedFolder || driveConnected) {
-        fetch(
-          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/drive-sync`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-              "Content-Type": "application/json",
-            },
-          }
-        ).catch(() => { /* ignore drive sync errors */ });
-      }
+      // Drive sync is triggered server-side from initial-scan edge function
 
       // onboarding_completed is now set by the edge function itself,
       // but set it here too as a safety net
@@ -536,6 +524,13 @@ export default function OnboardingSetup() {
                   ? "המערכת תעבד את ההודעות ברקע ותיצור משימות אוטומטית."
                   : "The system will process messages in the background and create tasks automatically."}
               </p>
+              {stats && stats.gmail > 1000 && (
+                <p className="text-xs text-amber-600 mt-1">
+                  {isHe
+                    ? `יש הרבה הודעות (${stats.gmail.toLocaleString()}) — העיבוד ברקע עשוי לקחת מספר שעות.`
+                    : `Large mailbox (${stats.gmail.toLocaleString()} messages) — background processing may take a few hours.`}
+                </p>
+              )}
             </div>
             <Button onClick={goToApp} className="w-full min-h-[48px]">
               {t("step4.enterApp")} →
