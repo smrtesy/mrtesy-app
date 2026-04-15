@@ -5,8 +5,8 @@ import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
-import { FolderOpen, Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { FolderOpen } from "lucide-react";
+import { NewProjectButton } from "@/components/projects/NewProjectButton";
 
 export default async function ProjectsPage({
   params,
@@ -42,11 +42,8 @@ export default async function ProjectsPage({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t("title")}</h1>
-        <Button size="sm" className="gap-1">
-          <Plus className="h-4 w-4" />
-          {tc("new")}
-        </Button>
+        <h1 className="text-2xl font-bold text-start">{t("title")}</h1>
+        <NewProjectButton locale={locale} label={tc("new")} />
       </div>
 
       {(!projects || projects.length === 0) ? (

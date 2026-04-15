@@ -38,20 +38,24 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
   }, [fetchSuggestions]);
 
   async function handleApprove(task: Record<string, unknown>) {
-    // Create project from suggestion
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    await supabase.from("projects").insert({
+    const { data: project, error } = await supabase.from("projects").insert({
       user_id: user.id,
       name: task.title as string,
       name_he: task.title_he as string,
       template_type: "personal",
-    });
+    }).select("id").single();
+
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
     await supabase
       .from("tasks")
-      .update({ status: "archived", manually_verified: true })
+      .update({ status: "archived", manually_verified: true, project_id: project.id })
       .eq("id", task.id as string);
 
     toast.success(t("projectCreated"));

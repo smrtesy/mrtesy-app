@@ -83,8 +83,16 @@ User input: "${input}"`,
           reminders: [],
         });
       }
-    } catch (e) {
-      toast.error((e as Error).message);
+    } catch {
+      // Fallback: if AI call fails, create basic task directly from input
+      setParsed({
+        title_he: input,
+        description: "",
+        due_date: null,
+        priority: "medium",
+        recurrence_rule: null,
+        reminders: [],
+      });
     } finally {
       setLoading(false);
     }
@@ -108,6 +116,7 @@ User input: "${input}"`,
         due_date: editDueDate || parsed.due_date || null,
         recurrence_rule: parsed.recurrence_rule,
         task_type: "action",
+        manually_verified: true,
         updates: [{
           id: crypto.randomUUID(),
           created_at: new Date().toISOString(),

@@ -13,6 +13,7 @@ export async function GET(request: Request) {
 
   // Validate CSRF nonce
   let service: string;
+  let redirectTo: string | null = null;
   try {
     const stateData = JSON.parse(
       Buffer.from(stateParam, "base64url").toString()
@@ -25,6 +26,7 @@ export async function GET(request: Request) {
       );
     }
     service = stateData.service;
+    redirectTo = stateData.redirect || null; // 'settings' when reconnecting
     // Clear the nonce cookie
     cookieStore.delete("oauth_state_nonce");
   } catch {
@@ -122,6 +124,10 @@ export async function GET(request: Request) {
       })
       .eq("user_id", user.id);
 
+    // If reconnecting from Settings, go back to Settings
+    if (redirectTo === "settings") {
+      return NextResponse.redirect(`${origin}/${locale}/settings`);
+    }
     return NextResponse.redirect(`${origin}/${locale}/onboarding/drive`);
   }
 
@@ -148,10 +154,16 @@ export async function GET(request: Request) {
       .update({ drive_connected: true })
       .eq("user_id", user.id);
 
+    if (redirectTo === "settings") {
+      return NextResponse.redirect(`${origin}/${locale}/settings`);
+    }
     return NextResponse.redirect(
       `${origin}/${locale}/onboarding/whatsapp`
     );
   }
 
+  if (redirectTo === "settings") {
+    return NextResponse.redirect(`${origin}/${locale}/settings`);
+  }
   return NextResponse.redirect(`${origin}/${locale}/onboarding`);
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Loader2, ExternalLink, FolderSearch } from "lucide-react";
+import { Loader2, ExternalLink, FolderSearch, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
@@ -23,11 +23,12 @@ interface DriveFile {
   mimeType: string;
 }
 
-export function DriveSearch({ taskId, taskDescription, open, onClose }: DriveSearchProps) {
+export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: DriveSearchProps) {
   const t = useTranslations("tasks.actions");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [files, setFiles] = useState<DriveFile[]>([]);
+  const [summarizing, setSummarizing] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
   async function handleSearch() {
@@ -104,6 +105,55 @@ export function DriveSearch({ taskId, taskDescription, open, onClose }: DriveSea
     setTimeout(handleSearch, 0);
   }
 
+  async function handleSummarize(file: DriveFile) {
+    setSummarizing(file.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const resp = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/quick-action`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            task_id: taskId,
+            action_label: "doc_summary",
+            prompt: `Read this document and provide a brief summary (2-3 sentences in Hebrew) of what it contains. Document name: "${file.name}" (${file.mimeType}). URL: ${file.webViewLink}`,
+          }),
+        }
+      );
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+
+      // Save summary to linked_drive_docs
+      const { data: task } = await supabase
+        .from("tasks")
+        .select("linked_drive_docs")
+        .eq("id", taskId)
+        .single();
+
+      const docs = (task?.linked_drive_docs || []).map((d: { url: string; name: string; summary?: string }) =>
+        d.url === file.webViewLink ? { ...d, summary: data.result } : d
+      );
+
+      await supabase.from("tasks").update({
+        linked_drive_docs: docs,
+        updated_at: new Date().toISOString(),
+      }).eq("id", taskId);
+
+      toast.success("Summary generated");
+      onDone();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSummarizing(null);
+    }
+  }
+
   function handleClose() {
     setFiles([]);
     setSearched(false);
@@ -149,7 +199,21 @@ export function DriveSearch({ taskId, taskDescription, open, onClose }: DriveSea
                     <p className="text-sm font-medium truncate">{file.name}</p>
                     <p className="text-xs text-muted-foreground">{file.mimeType}</p>
                   </div>
-                  <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={(e) => { e.preventDefault(); handleSummarize(file); }}
+                      disabled={summarizing === file.id}
+                      className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-primary"
+                      title="Generate AI summary"
+                    >
+                      {summarizing === file.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                  </div>
                 </a>
               ))}
             </div>

@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Mail, MessageCircle, FolderOpen, Calendar } from "lucide-react";
+import { CheckCircle2, X, Bell, Mail, MessageCircle, FolderOpen, Calendar, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 const sourceIcons: Record<string, typeof Mail> = {
@@ -33,7 +33,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     // Get tasks created from AI that haven't been seen/verified
     const { data } = await supabase
       .from("tasks")
-      .select("*, source_messages(source_type, sender, subject)")
+      .select("*, source_messages(source_type, sender, subject, source_url)")
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -41,7 +41,12 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       .order("created_at", { ascending: false })
       .limit(20);
 
-    setSuggestions(data || []);
+    // Sort by priority: urgent > high > medium > low
+    const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    const sorted = (data || []).sort(
+      (a: any, b: any) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2) // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    setSuggestions(sorted);
     setLoading(false);
   }, [supabase]);
 
@@ -120,6 +125,16 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 </div>
               </div>
               <div className="flex gap-2 mt-3 justify-end">
+                {source?.source_url && (
+                  <a
+                    href={source.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 h-9 px-2 text-xs text-muted-foreground hover:text-primary"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -127,7 +142,6 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                   onClick={() => handleDismiss(task.id as string)}
                 >
                   <X className="h-4 w-4" />
-                  <span className="hidden sm:inline">{t("dismiss")}</span>
                 </Button>
                 <Button
                   size="sm"

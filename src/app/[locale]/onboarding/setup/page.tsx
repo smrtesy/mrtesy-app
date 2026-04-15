@@ -4,7 +4,7 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info } from "lucide-react";
+import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
@@ -35,9 +35,41 @@ export default function OnboardingSetup() {
   const [gmailDays, setGmailDays] = useState(30);
   const [calMonths, setCalMonths] = useState(12);
   const [progress, setProgress] = useState({ gmail: 0, calendar: 0, phase: "" });
+  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedFolder, setSelectedFolder] = useState<string>("");
+  const [loadingFolders, setLoadingFolders] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
 
   const isHe = locale === "he";
+
+  // Load Drive folders if connected
+  useEffect(() => {
+    async function loadFolders() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: creds } = await supabase
+        .from("user_credentials")
+        .select("access_token")
+        .eq("user_id", user.id)
+        .eq("service", "google_drive")
+        .single();
+      if (!creds) return;
+
+      setLoadingFolders(true);
+      try {
+        const resp = await fetch(
+          "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+trashed=false&fields=files(id,name)&orderBy=name&pageSize=50",
+          { headers: { Authorization: `Bearer ${creds.access_token}` } }
+        );
+        if (resp.ok) {
+          const data = await resp.json();
+          setDriveFolders(data.files || []);
+        }
+      } catch { /* ignore */ }
+      setLoadingFolders(false);
+    }
+    loadFolders();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll DB for progress while scanning
   useEffect(() => {
@@ -85,13 +117,17 @@ export default function OnboardingSetup() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Save scan preferences
+      // Save scan preferences (including Drive folder if selected)
+      const updateData: Record<string, unknown> = {
+        initial_scan_days_back: gmailDays,
+        calendar_initial_scan_months: calMonths,
+      };
+      if (selectedFolder) {
+        updateData.drive_folder_id = selectedFolder;
+      }
       await supabase
         .from("user_settings")
-        .update({
-          initial_scan_days_back: gmailDays,
-          calendar_initial_scan_months: calMonths,
-        })
+        .update(updateData)
         .eq("user_id", user.id);
 
       const { data: { session } } = await supabase.auth.getSession();
@@ -154,8 +190,8 @@ export default function OnboardingSetup() {
                 <Info className="h-4 w-4 shrink-0 mt-0.5" />
                 <p>
                   {isHe
-                    ? "הסריקה הראשונית שומרת מזהים (IDs) בלבד — לא את תוכן ההודעות. המערכת תעבד את ההודעות ברקע כל 2 דקות ותיצור משימות חכמות אוטומטית."
-                    : "The initial scan saves only message IDs — not content. The system processes messages every 2 minutes in the background and creates smart tasks automatically."}
+                    ? "הסריקה הראשונית שואבת את כל ההודעות והאירועים, מסווגת אותם עם AI ויוצרת משימות חכמות אוטומטית. התהליך עשוי לקחת מספר דקות."
+                    : "The initial scan fetches all messages and events, classifies them with AI, and creates smart tasks automatically. This may take a few minutes."}
                 </p>
               </div>
             </div>
@@ -211,10 +247,38 @@ export default function OnboardingSetup() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {isHe
-                  ? `אירועים מ-${calMonths} חודשים אחורה ו-${calMonths} חודשים קדימה`
-                  : `Events from ${calMonths} months back and ${calMonths} months forward`}
+                  ? `אירועים עתידיים — עד ${calMonths} חודשים קדימה`
+                  : `Future events — up to ${calMonths} months ahead`}
               </p>
             </div>
+
+            {/* Drive folder selection */}
+            {driveFolders.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-green-500" />
+                  <label className="text-sm font-medium">
+                    {isHe ? "Drive — איזו תיקייה לסרוק?" : "Drive — which folder to scan?"}
+                  </label>
+                </div>
+                <select
+                  value={selectedFolder}
+                  onChange={(e) => setSelectedFolder(e.target.value)}
+                  className="w-full rounded border px-3 py-2 text-sm bg-background"
+                >
+                  <option value="">{isHe ? "כל הקבצים (3 חודשים אחרונים)" : "All files (last 3 months)"}</option>
+                  {driveFolders.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {loadingFolders && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {isHe ? "טוען תיקיות Drive..." : "Loading Drive folders..."}
+              </div>
+            )}
 
             <Button onClick={startScan} className="w-full min-h-[48px] mt-2">
               <Rocket className="h-4 w-4 me-2" />

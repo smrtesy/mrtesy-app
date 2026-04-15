@@ -47,7 +47,8 @@ export function TaskList({ locale }: { locale: string }) {
       .limit(50);
 
     if (filter === "inbox") {
-      query = query.eq("status", "inbox");
+      // Only show manually verified tasks (not pending suggestions)
+      query = query.eq("status", "inbox").eq("manually_verified", true);
     } else if (filter === "active") {
       query = query.eq("status", "in_progress");
     } else if (filter === "completed") {
@@ -55,7 +56,12 @@ export function TaskList({ locale }: { locale: string }) {
     }
 
     const { data } = await query;
-    setTasks((data as Task[]) || []);
+    // Sort by priority: urgent > high > medium > low
+    const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    const sorted = ((data as Task[]) || []).sort(
+      (a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
+    );
+    setTasks(sorted);
     setLoading(false);
   }, [filter, supabase]);
 

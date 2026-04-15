@@ -53,6 +53,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
 
   const [saving, setSaving] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
+  const [newUpdate, setNewUpdate] = useState("");
+  const [addingUpdate, setAddingUpdate] = useState(false);
   const [showGenerated, setShowGenerated] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
 
@@ -161,6 +163,34 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
     toast.success(t("actions.snooze"));
     onClose();
     onUpdate();
+  }
+
+  async function handleAddUpdate() {
+    if (!task || !newUpdate.trim()) return;
+    setAddingUpdate(true);
+    const currentUpdates = task.updates || [];
+    const updatedList = [
+      ...currentUpdates,
+      {
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        type: "note",
+        actor: "user",
+        content: newUpdate.trim(),
+      },
+    ];
+    const { error } = await supabase
+      .from("tasks")
+      .update({ updates: updatedList, updated_at: new Date().toISOString() })
+      .eq("id", task.id);
+    setAddingUpdate(false);
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success(locale === "he" ? "עדכון נוסף" : "Update added");
+      setNewUpdate("");
+      onUpdate();
+    }
   }
 
   return (
@@ -298,6 +328,24 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
               </button>
               {showUpdates && (
                 <div className="space-y-2 mt-1">
+                  {/* Add new update */}
+                  <div className="flex gap-2">
+                    <Textarea
+                      value={newUpdate}
+                      onChange={(e) => setNewUpdate(e.target.value)}
+                      placeholder={locale === "he" ? "הוסף עדכון..." : "Add update..."}
+                      className="min-h-[60px] text-xs"
+                      dir="auto"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleAddUpdate}
+                      disabled={addingUpdate || !newUpdate.trim()}
+                      className="shrink-0 h-auto"
+                    >
+                      <Save className="h-3 w-3" />
+                    </Button>
+                  </div>
                   {updates.map((update, i) => (
                     <div
                       key={update.id}

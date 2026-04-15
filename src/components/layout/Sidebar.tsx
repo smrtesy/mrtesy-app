@@ -90,21 +90,21 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
       </aside>
 
       {/* Mobile Bottom Tab Bar */}
-      <nav className="fixed bottom-0 inset-x-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
-        <div className="flex items-center justify-around px-2 py-1">
+      <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
+        <div className="flex items-center justify-around px-1 py-1">
           {navItems.map((item) => (
             <Link
               key={item.key}
               href={`${basePath}${item.href}`}
               className={cn(
-                "flex min-h-[48px] min-w-[48px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 text-xs",
+                "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
                 isActive(item.href)
                   ? "text-primary"
                   : "text-muted-foreground"
               )}
             >
-              <item.icon className="h-5 w-5" />
-              <span>{t(item.key)}</span>
+              <item.icon className="h-5 w-5 shrink-0" />
+              <span className="truncate max-w-full">{t(item.key)}</span>
             </Link>
           ))}
         </div>

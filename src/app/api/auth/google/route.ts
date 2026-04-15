@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const service = searchParams.get("service"); // 'gmail_calendar' | 'drive'
+  const redirect = searchParams.get("redirect"); // 'settings' when reconnecting
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google/callback`;
@@ -25,7 +26,9 @@ export async function GET(request: Request) {
 
   // Generate CSRF nonce and encode service + nonce in state
   const nonce = crypto.randomUUID();
-  const state = Buffer.from(JSON.stringify({ service, nonce })).toString(
+  const statePayload: Record<string, string> = { service, nonce };
+  if (redirect) statePayload.redirect = redirect;
+  const state = Buffer.from(JSON.stringify(statePayload)).toString(
     "base64url"
   );
 
