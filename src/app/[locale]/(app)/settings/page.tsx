@@ -10,15 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { LogOut, Mail, FolderOpen, MessageCircle, Calendar, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 
-interface UserSettings {
-  preferred_language: string;
-  timezone: string;
-  gmail_connected: boolean;
-  drive_connected: boolean;
-  whatsapp_connected: boolean;
-  calendar_connected: boolean;
-}
-
 interface ConnectionStatus {
   gmail: boolean;
   drive: boolean;
@@ -39,7 +30,6 @@ export default function SettingsPage() {
   const { locale } = useParams();
   const router = useRouter();
   const supabase = createClient();
-  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>({
     gmail: false, drive: false, calendar: false, whatsapp: false,
   });
@@ -53,8 +43,6 @@ export default function SettingsPage() {
         .select("*")
         .eq("user_id", user.id)
         .single();
-      if (data) setSettings(data as UserSettings);
-
       // Check actual credentials for real connection status
       const { data: creds } = await supabase
         .from("user_credentials")
