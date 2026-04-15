@@ -249,6 +249,20 @@ export default function OnboardingSetup() {
         throw new Error(data.error || "Scan failed");
       }
 
+      // Trigger Drive sync in background (don't await — it can take time)
+      if (selectedFolder || driveConnected) {
+        fetch(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/drive-sync`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        ).catch(() => { /* ignore drive sync errors */ });
+      }
+
       // onboarding_completed is now set by the edge function itself,
       // but set it here too as a safety net
       await supabase
