@@ -195,9 +195,9 @@ User input: "${input}"`,
             <div className="space-y-3">
               {/* Parsed result preview */}
               <div className="rounded-lg border p-3 space-y-2">
-                <h4 className="font-medium">{parsed.title_he}</h4>
+                <h4 className="font-medium" dir="auto">{parsed.title_he}</h4>
                 {parsed.description && (
-                  <p className="text-sm text-muted-foreground">{parsed.description}</p>
+                  <p className="text-sm text-muted-foreground" dir="auto">{parsed.description}</p>
                 )}
                 <div className="flex gap-2 flex-wrap">
                   <Badge variant="outline">{parsed.priority}</Badge>

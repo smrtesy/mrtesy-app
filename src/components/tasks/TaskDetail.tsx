@@ -201,7 +201,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
       >
         <SheetHeader className="sticky top-0 z-10 bg-background border-b px-4 py-3">
           <div className="flex items-center justify-between">
-            <SheetTitle className="text-start text-base flex-1">{title}</SheetTitle>
+            <SheetTitle className="text-start text-base flex-1" dir="auto">{title}</SheetTitle>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={startFieldEdit}>
               <Pencil className="h-4 w-4" />
             </Button>
@@ -285,6 +285,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
               ) : (
                 <div
                   className="cursor-pointer rounded border p-3 text-sm hover:bg-accent/50 min-h-[60px]"
+                  dir="auto"
                   onClick={() => {
                     setDescription(task.description || "");
                     setEditingDesc(true);
@@ -358,7 +359,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                         <Badge variant="outline" className="text-[10px]">{update.type}</Badge>
                         <span>{new Date(update.created_at).toLocaleString()}</span>
                       </div>
-                      <p>{update.content}</p>
+                      <p dir="auto">{update.content}</p>
                     </div>
                   ))}
                   {updates.length === 0 && (
@@ -388,7 +389,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                             {new Date(item.created_at).toLocaleString()}
                           </span>
                         </div>
-                        {item.result && <p className="whitespace-pre-wrap">{item.result}</p>}
+                        {item.result && <p className="whitespace-pre-wrap" dir="auto">{item.result}</p>}
                         {item.draft_url && (
                           <a
                             href={item.draft_url}
@@ -427,7 +428,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                         className="flex items-center gap-2 rounded border p-2 text-xs hover:bg-accent"
                       >
                         <FolderSearch className="h-4 w-4 text-blue-500" />
-                        <span className="flex-1 truncate">{doc.name}</span>
+                        <span className="flex-1 truncate" dir="auto">{doc.name}</span>
                         <ExternalLink className="h-3 w-3 text-muted-foreground" />
                       </a>
                     ))}

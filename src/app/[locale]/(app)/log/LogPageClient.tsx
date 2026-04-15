@@ -174,9 +174,9 @@ export function LogPageClient({ locale }: { locale: string }) {
                 {/* Row 2: subject + sender + source link */}
                 <div className="mt-1.5 flex items-start gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{displayTitle}</p>
+                    <p className="text-xs font-medium truncate" dir="auto">{displayTitle}</p>
                     {log.sender && log.sender !== displayTitle && (
-                      <p className="text-[11px] text-muted-foreground truncate">
+                      <p className="text-[11px] text-muted-foreground truncate" dir="auto">
                         {log.sender}
                         {log.sender_email && log.sender_email !== log.sender && (
                           <span className="opacity-60"> ({log.sender_email})</span>
@@ -202,7 +202,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
                 {/* Row 3: classification reason (collapsed = 2 lines, expanded = full) */}
                 {log.classification_reason && (
-                  <p className={`mt-1.5 text-[11px] text-muted-foreground/80 ${isExpanded ? "" : "line-clamp-2"}`}>
+                  <p className={`mt-1.5 text-[11px] text-muted-foreground/80 ${isExpanded ? "" : "line-clamp-2"}`} dir="auto">
                     {log.classification_reason}
                   </p>
                 )}
@@ -211,7 +211,7 @@ export function LogPageClient({ locale }: { locale: string }) {
                 {log.task_title && (
                   <div className="mt-1.5 flex items-center gap-1 text-[11px] text-primary">
                     <span>→</span>
-                    <span className="truncate">{log.task_title}</span>
+                    <span className="truncate" dir="auto">{log.task_title}</span>
                   </div>
                 )}
 

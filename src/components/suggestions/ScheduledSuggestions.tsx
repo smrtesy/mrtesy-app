@@ -82,7 +82,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-sm truncate">{title}</h4>
+                  <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>
                   <div className="flex items-center gap-2 mt-1">
                     {remindAt && (
                       <Badge variant={isPast ? "destructive" : "outline"} className="text-[10px]">

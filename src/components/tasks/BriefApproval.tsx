@@ -70,7 +70,7 @@ export function BriefApproval({ taskId, projectId, projectName, brief, onApprove
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2">
           <AlertCircle className="h-4 w-4 text-blue-500" />
-          {t("brief")} — {projectName}
+          {t("brief")} — <span dir="auto">{projectName}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -90,7 +90,7 @@ export function BriefApproval({ taskId, projectId, projectName, brief, onApprove
 
         {/* Brief preview */}
         {brief.purpose && (
-          <p className="text-xs text-muted-foreground border-s-2 border-blue-300 ps-2">
+          <p className="text-xs text-muted-foreground border-s-2 border-blue-300 ps-2" dir="auto">
             {brief.purpose}
           </p>
         )}

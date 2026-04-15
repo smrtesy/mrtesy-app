@@ -67,7 +67,7 @@ export function TaskCard({
     >
       {/* Title + Priority */}
       <div className="flex items-start justify-between gap-2">
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1">
+        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir="auto">
           {title}
         </h3>
         <Badge className={cn("text-[10px] shrink-0", priorityColors[task.priority])}>
@@ -77,7 +77,7 @@ export function TaskCard({
 
       {/* Description preview */}
       {task.description && (
-        <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2">
+        <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir="auto">
           {task.description}
         </p>
       )}
@@ -107,7 +107,7 @@ export function TaskCard({
           </span>
         )}
         {task.related_contact && (
-          <span className="truncate">{task.related_contact}</span>
+          <span className="truncate" dir="auto">{task.related_contact}</span>
         )}
       </div>
 

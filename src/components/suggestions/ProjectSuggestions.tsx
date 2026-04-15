@@ -101,9 +101,9 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                   <Lightbulb className="h-4 w-4 text-yellow-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-sm">{title}</h4>
+                  <h4 className="font-medium text-sm" dir="auto">{title}</h4>
                   {task.description && (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir="auto">
                       {task.description}
                     </p>
                   )}

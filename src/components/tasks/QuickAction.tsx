@@ -165,7 +165,7 @@ export function QuickAction({
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="bottom" className="h-[70vh] sm:h-auto sm:max-h-[60vh] flex flex-col">
         <SheetHeader>
-          <SheetTitle className="text-start">{actionLabel}</SheetTitle>
+          <SheetTitle className="text-start" dir="auto">{actionLabel}</SheetTitle>
         </SheetHeader>
 
         <div className="flex-1 overflow-auto py-4">

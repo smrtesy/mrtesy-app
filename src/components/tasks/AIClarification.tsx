@@ -85,7 +85,7 @@ export function AIClarification({ taskId, questions, onAnswered }: AIClarificati
           <div className="flex items-start gap-2">
             <MessageSquareWarning className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-blue-700">{q.question}</p>
+              <p className="font-medium text-blue-700" dir="auto">{q.question}</p>
               <div className="flex gap-1.5 mt-1.5">
                 <Input
                   value={answers[q.id] || ""}

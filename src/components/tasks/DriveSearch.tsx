@@ -196,7 +196,7 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
                 >
                   <FolderSearch className="h-5 w-5 text-blue-500 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{file.name}</p>
+                    <p className="text-sm font-medium truncate" dir="auto">{file.name}</p>
                     <p className="text-xs text-muted-foreground">{file.mimeType}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
