@@ -17,15 +17,15 @@ export function SuggestionTabs({ locale }: { locale: string }) {
       <TabsList className="w-full">
         <TabsTrigger value="messages" className="flex-1 gap-1">
           <Bell className="h-4 w-4" />
-          <span className="hidden sm:inline">{t("tabs.messages")}</span>
+          <span className="text-xs sm:text-sm">{t("tabs.messages")}</span>
         </TabsTrigger>
         <TabsTrigger value="scheduled" className="flex-1 gap-1">
           <Calendar className="h-4 w-4" />
-          <span className="hidden sm:inline">{t("tabs.scheduled")}</span>
+          <span className="text-xs sm:text-sm">{t("tabs.scheduled")}</span>
         </TabsTrigger>
         <TabsTrigger value="projects" className="flex-1 gap-1">
           <Lightbulb className="h-4 w-4" />
-          <span className="hidden sm:inline">{t("tabs.projects")}</span>
+          <span className="text-xs sm:text-sm">{t("tabs.projects")}</span>
         </TabsTrigger>
       </TabsList>
 

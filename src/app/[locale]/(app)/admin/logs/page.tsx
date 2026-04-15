@@ -71,7 +71,7 @@ export default function AdminLogsPage() {
               onClick={() => setLevel(l)}
               className={`px-3 py-1.5 text-xs font-medium ${level === l ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
             >
-              {l === "all" ? "All" : l.charAt(0).toUpperCase() + l.slice(1)}
+              {t(`filter${l.charAt(0).toUpperCase() + l.slice(1)}`)}
             </button>
           ))}
         </div>
@@ -82,7 +82,7 @@ export default function AdminLogsPage() {
               onClick={() => setTimeRange(tr)}
               className={`px-3 py-1.5 text-xs font-medium ${timeRange === tr ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
             >
-              {tr === "today" ? "Today" : tr === "7d" ? "7 Days" : "30 Days"}
+              {t(`filter${tr === "today" ? "Today" : tr === "7d" ? "7d" : "30d"}`)}
             </button>
           ))}
         </div>
@@ -111,8 +111,10 @@ export default function AdminLogsPage() {
                   <Badge variant="outline" className="text-[10px]">{log.status}</Badge>
                 </div>
                 {log.subject && <p className="text-xs text-muted-foreground truncate">{log.subject}</p>}
+                {log.ai_response && <p className="text-xs text-muted-foreground truncate">{log.ai_response.substring(0, 120)}</p>}
                 {log.error_message && <p className="text-xs text-red-500 truncate">{log.error_message}</p>}
                 {log.ai_cost_usd && <span className="text-xs text-muted-foreground">${Number(log.ai_cost_usd).toFixed(6)}</span>}
+                {log.source_message_id && <span className="text-xs text-muted-foreground ms-2">msg: {log.source_message_id.substring(0, 8)}</span>}
               </div>
               <span className="text-xs text-muted-foreground whitespace-nowrap">
                 {new Date(log.created_at).toLocaleString()}

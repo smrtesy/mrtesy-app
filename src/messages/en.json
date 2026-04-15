@@ -193,6 +193,13 @@
     "active": "active",
     "onboardingPending": "onboarding pending",
     "forceReconnect": "Force Reconnect",
-    "notifyUser": "Notify User"
+    "notifyUser": "Notify User",
+    "filterAll": "All",
+    "filterError": "Error",
+    "filterWarning": "Warning",
+    "filterInfo": "Info",
+    "filterToday": "Today",
+    "filter7d": "7 Days",
+    "filter30d": "30 Days"
   }
 }

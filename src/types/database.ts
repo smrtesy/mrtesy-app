@@ -184,6 +184,41 @@ export type Database = {
           [key: string]: unknown
         }
       }
+      task_activities: {
+        Row: {
+          id: string
+          task_id: string
+          user_id: string
+          activity_type: string
+          old_value: string | null
+          new_value: string | null
+          note: string | null
+          actor: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          task_id: string
+          user_id: string
+          activity_type: string
+          old_value?: string | null
+          new_value?: string | null
+          note?: string | null
+          actor?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          task_id?: string
+          user_id?: string
+          activity_type?: string
+          old_value?: string | null
+          new_value?: string | null
+          note?: string | null
+          actor?: string | null
+          created_at?: string | null
+        }
+      }
       tasks: {
         Row: {
           ai_actions: Json | null

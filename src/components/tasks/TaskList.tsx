@@ -47,9 +47,9 @@ export function TaskList({ locale }: { locale: string }) {
       .limit(50);
 
     if (filter === "inbox") {
-      query = query.eq("status", "inbox").eq("manually_verified", true);
+      query = query.eq("status", "inbox");
     } else if (filter === "active") {
-      query = query.in("status", ["inbox", "in_progress"]);
+      query = query.eq("status", "in_progress");
     } else if (filter === "completed") {
       query = query.eq("status", "archived");
     }

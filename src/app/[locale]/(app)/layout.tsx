@@ -10,26 +10,32 @@ export default async function AppLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
+  const devBypass =
+    process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === "true" &&
+    process.env.NODE_ENV === "development";
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) {
+  if (!user && !devBypass) {
     redirect(`/${locale}/login`);
   }
 
-  // Check onboarding
-  const { data: settings } = await supabase
-    .from("user_settings")
-    .select("onboarding_completed")
-    .eq("user_id", user.id)
-    .single();
+  // Check onboarding (skip in dev bypass)
+  if (user && !devBypass) {
+    const { data: settings } = await supabase
+      .from("user_settings")
+      .select("onboarding_completed")
+      .eq("user_id", user.id)
+      .single();
 
-  if (!settings?.onboarding_completed) {
-    redirect(`/${locale}/onboarding`);
+    if (!settings?.onboarding_completed) {
+      redirect(`/${locale}/onboarding`);
+    }
   }
 
   const adminEmails = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const isAdmin = adminEmails.includes(user.email?.toLowerCase() || "");
+  const isAdmin = devBypass || adminEmails.includes(user?.email?.toLowerCase() || "");
 
   return (
     <div className="flex min-h-screen">

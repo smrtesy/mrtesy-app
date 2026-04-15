@@ -193,6 +193,13 @@
     "active": "פעיל",
     "onboardingPending": "ממתין להרשמה",
     "forceReconnect": "אלץ חיבור מחדש",
-    "notifyUser": "הודע למשתמש"
+    "notifyUser": "הודע למשתמש",
+    "filterAll": "הכל",
+    "filterError": "שגיאה",
+    "filterWarning": "אזהרה",
+    "filterInfo": "מידע",
+    "filterToday": "היום",
+    "filter7d": "7 ימים",
+    "filter30d": "30 יום"
   }
 }

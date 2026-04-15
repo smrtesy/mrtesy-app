@@ -23,6 +23,18 @@ export async function middleware(request: NextRequest) {
   // Update Supabase session
   const { user, response } = await updateSession(request);
 
+  // Dev auth bypass — skip all auth redirects on localhost
+  const devBypass =
+    process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === "true" &&
+    process.env.NODE_ENV === "development";
+  if (devBypass && !user) {
+    const intlResponse = intlMiddleware(request);
+    response.cookies.getAll().forEach((cookie) => {
+      intlResponse.cookies.set(cookie.name, cookie.value, { ...cookie });
+    });
+    return intlResponse;
+  }
+
   // Extract locale from path
   const pathnameLocale = pathname.split("/")[1];
   const locale =

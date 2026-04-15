@@ -12,6 +12,7 @@ export default async function CalendarPage({
 }) {
   const { locale } = await params;
   const t = await getTranslations("calendar");
+  const tTasks = await getTranslations("tasks");
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
@@ -35,12 +36,16 @@ export default async function CalendarPage({
     .order("due_date", { ascending: true })
     .limit(30);
 
+  const today = new Date().toISOString().split("T")[0];
   const groupedTasks: Record<string, typeof tasksWithDates> = {};
   for (const task of tasksWithDates || []) {
     const date = task.due_date!;
     if (!groupedTasks[date]) groupedTasks[date] = [];
     groupedTasks[date]!.push(task);
   }
+  const sortedDates = Object.keys(groupedTasks).sort();
+  const futureDates = sortedDates.filter((d) => d >= today);
+  const pastDates = sortedDates.filter((d) => d < today);
 
   return (
     <div className="space-y-6">
@@ -52,30 +57,43 @@ export default async function CalendarPage({
           <p className="text-sm text-muted-foreground">{t("noTasksWithDates")}</p>
         ) : (
           <div className="space-y-4">
-            {Object.entries(groupedTasks).map(([date, tasks]) => (
-              <div key={date}>
-                <h3 className="text-sm font-medium text-muted-foreground mb-2">
-                  {new Date(date).toLocaleDateString(dateFmtLocale, {
-                    weekday: "long",
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                  })}
-                </h3>
-                <div className="space-y-1">
-                  {tasks!.map((task) => (
-                    <Card key={task.id}>
-                      <CardContent className="p-3 flex items-center justify-between">
-                        <span className="text-sm">{locale === "he" && task.title_he ? task.title_he : task.title}</span>
-                        <Badge variant="outline" className="text-[10px]">
-                          {task.priority}
-                        </Badge>
-                      </CardContent>
-                    </Card>
-                  ))}
+            {[...futureDates, ...(pastDates.length > 0 ? ["__past__"] : []), ...pastDates].map((date) => {
+              if (date === "__past__") {
+                return (
+                  <div key="sep" className="flex items-center gap-3 py-2">
+                    <div className="flex-1 border-t" />
+                    <span className="text-xs text-muted-foreground">{locale === "he" ? "עבר" : "Past"}</span>
+                    <div className="flex-1 border-t" />
+                  </div>
+                );
+              }
+              const tasks = groupedTasks[date];
+              const isPast = date < today;
+              return (
+                <div key={date} className={isPast ? "opacity-60" : ""}>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-2">
+                    {new Date(date).toLocaleDateString(dateFmtLocale, {
+                      weekday: "long",
+                      year: "numeric",
+                      month: "long",
+                      day: "numeric",
+                    })}
+                  </h3>
+                  <div className="space-y-1">
+                    {tasks!.map((task) => (
+                      <Card key={task.id}>
+                        <CardContent className="p-3 flex items-center justify-between">
+                          <span className="text-sm">{locale === "he" && task.title_he ? task.title_he : task.title}</span>
+                          <Badge variant="outline" className="text-[10px]">
+                            {tTasks(`priority.${task.priority}`)}
+                          </Badge>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

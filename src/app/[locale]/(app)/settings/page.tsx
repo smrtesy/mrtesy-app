@@ -19,11 +19,18 @@ interface UserSettings {
   calendar_connected: boolean;
 }
 
+interface ConnectionStatus {
+  gmail: boolean;
+  drive: boolean;
+  calendar: boolean;
+  whatsapp: boolean;
+}
+
 const connections = [
-  { key: "gmail_connected", label: "Gmail", icon: Mail, color: "text-red-500" },
-  { key: "drive_connected", label: "Google Drive", icon: FolderOpen, color: "text-green-500" },
-  { key: "calendar_connected", label: "Calendar", icon: Calendar, color: "text-blue-500" },
-  { key: "whatsapp_connected", label: "WhatsApp", icon: MessageCircle, color: "text-emerald-500" },
+  { key: "gmail" as keyof ConnectionStatus, label: "Gmail", icon: Mail, color: "text-red-500", settingsKey: "gmail_connected" },
+  { key: "drive" as keyof ConnectionStatus, label: "Google Drive", icon: FolderOpen, color: "text-green-500", settingsKey: "drive_connected" },
+  { key: "calendar" as keyof ConnectionStatus, label: "Calendar", icon: Calendar, color: "text-blue-500", settingsKey: "calendar_connected" },
+  { key: "whatsapp" as keyof ConnectionStatus, label: "WhatsApp", icon: MessageCircle, color: "text-emerald-500", settingsKey: "whatsapp_connected" },
 ] as const;
 
 export default function SettingsPage() {
@@ -33,6 +40,9 @@ export default function SettingsPage() {
   const router = useRouter();
   const supabase = createClient();
   const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>({
+    gmail: false, drive: false, calendar: false, whatsapp: false,
+  });
 
   useEffect(() => {
     async function load() {
@@ -44,6 +54,20 @@ export default function SettingsPage() {
         .eq("user_id", user.id)
         .single();
       if (data) setSettings(data as UserSettings);
+
+      // Check actual credentials for real connection status
+      const { data: creds } = await supabase
+        .from("user_credentials")
+        .select("service_type")
+        .eq("user_id", user.id);
+
+      const serviceTypes = (creds || []).map((c: { service_type: string }) => c.service_type);
+      setConnStatus({
+        gmail: serviceTypes.includes("gmail_calendar"),
+        drive: serviceTypes.includes("drive"),
+        calendar: serviceTypes.includes("gmail_calendar"), // calendar uses same OAuth as gmail
+        whatsapp: data?.whatsapp_connected ?? false, // WhatsApp uses settings flag (webhook-based)
+      });
     }
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -88,7 +112,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           {connections.map((conn) => {
-            const connected = settings?.[conn.key] ?? false;
+            const connected = connStatus[conn.key];
             return (
               <div key={conn.key} className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -113,13 +137,13 @@ export default function SettingsPage() {
                         className="h-8 gap-1"
                         onClick={() => {
                           const serviceMap: Record<string, string> = {
-                            gmail_connected: "gmail_calendar",
-                            drive_connected: "drive",
-                            calendar_connected: "gmail_calendar",
-                            whatsapp_connected: "",
+                            gmail: "gmail_calendar",
+                            drive: "drive",
+                            calendar: "gmail_calendar",
+                            whatsapp: "",
                           };
                           const svc = serviceMap[conn.key];
-                          if (conn.key === "whatsapp_connected") {
+                          if (conn.key === "whatsapp") {
                             window.location.href = `/${locale}/onboarding/whatsapp`;
                           } else if (svc) {
                             window.location.href = `/api/auth/google?service=${svc}`;

@@ -19,6 +19,7 @@ const sourceIcons: Record<string, typeof Mail> = {
 
 export function MessageSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
+  const tTasks = useTranslations("tasks");
   const supabase = createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -112,7 +113,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                     )}
                     {task.priority && (
                       <Badge variant="secondary" className="text-[10px]">
-                        {task.priority}
+                        {tTasks(`priority.${task.priority}`)}
                       </Badge>
                     )}
                   </div>
