@@ -109,15 +109,18 @@ export default function SettingsPage() {
       await supabase.from("source_messages").delete().eq("user_id", uid);
       await supabase.from("sync_state").delete().eq("user_id", uid);
 
-      // Reset scan flags
+      // Reset scan + onboarding flags
       await supabase.from("user_settings").update({
         initial_scan_started_at: null,
         initial_scan_completed_at: null,
         initial_setup_completed: false,
+        onboarding_completed: false,
       }).eq("user_id", uid);
 
-      toast.success(locale === "he" ? "כל הנתונים נמחקו בהצלחה" : "All data deleted successfully");
+      toast.success(locale === "he" ? "כל הנתונים נמחקו. מעביר לאונבורדינג..." : "All data deleted. Redirecting to onboarding...");
       setResetConfirm(false);
+      // Redirect to onboarding after reset
+      setTimeout(() => { window.location.href = `/${locale}/onboarding`; }, 1500);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -131,31 +134,16 @@ export default function SettingsPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Reset initial scan flag so it can run again
+      // Reset onboarding + scan flags → redirect to onboarding
       await supabase.from("user_settings").update({
+        onboarding_completed: false,
         initial_scan_started_at: null,
         initial_scan_completed_at: null,
+        initial_setup_completed: false,
       }).eq("user_id", user.id);
 
-      // Call initial-scan edge function
-      const { data: { session } } = await supabase.auth.getSession();
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/initial-scan`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session?.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      const result = await resp.json();
-      if (result.error) throw new Error(result.error);
-      toast.success(
-        locale === "he"
-          ? `סנכרון הושלם: ${result.gmail_messages || 0} אימיילים, ${result.calendar_events || 0} אירועים`
-          : `Sync complete: ${result.gmail_messages || 0} emails, ${result.calendar_events || 0} events`
-      );
+      // Redirect to onboarding step 1
+      window.location.href = `/${locale}/onboarding`;
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
