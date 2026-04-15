@@ -459,21 +459,26 @@ export default function OnboardingSetup() {
               </p>
             </div>
 
-            {/* Progress — indeterminate bars with real count */}
+            {/* Progress — shimmer bars with real count */}
+            <style>{`
+              @keyframes shimmer {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(200%); }
+              }
+            `}</style>
             <div className="space-y-3">
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1">
                     <Mail className="h-3 w-3 text-red-500" /> Gmail
                   </span>
-                  <span className="font-mono">{progress.gmail} {isHe ? "הודעות" : "messages"}</span>
+                  <span className="font-mono">{progress.gmail.toLocaleString()} {isHe ? "הודעות" : "messages"}</span>
                 </div>
-                <div className="h-2 rounded-full bg-muted overflow-hidden">
-                  {progress.gmail > 0 ? (
-                    <div className="h-full bg-red-500 rounded-full w-full" />
-                  ) : (
-                    <div className="h-full bg-red-500/60 rounded-full animate-pulse w-2/3" />
-                  )}
+                <div className="h-2 rounded-full bg-red-100 overflow-hidden relative">
+                  <div
+                    className="absolute inset-0 bg-red-400/40 rounded-full"
+                    style={{ animation: "shimmer 1.5s ease-in-out infinite" }}
+                  />
                 </div>
               </div>
 
@@ -482,14 +487,13 @@ export default function OnboardingSetup() {
                   <span className="flex items-center gap-1">
                     <Calendar className="h-3 w-3 text-blue-500" /> {isHe ? "לוח שנה" : "Calendar"}
                   </span>
-                  <span className="font-mono">{progress.calendar} {isHe ? "אירועים" : "events"}</span>
+                  <span className="font-mono">{progress.calendar.toLocaleString()} {isHe ? "אירועים" : "events"}</span>
                 </div>
-                <div className="h-2 rounded-full bg-muted overflow-hidden">
-                  {progress.calendar > 0 ? (
-                    <div className="h-full bg-blue-500 rounded-full w-full" />
-                  ) : (
-                    <div className="h-full bg-blue-500/60 rounded-full animate-pulse w-2/3" />
-                  )}
+                <div className="h-2 rounded-full bg-blue-100 overflow-hidden relative">
+                  <div
+                    className="absolute inset-0 bg-blue-400/40 rounded-full"
+                    style={{ animation: "shimmer 1.5s ease-in-out infinite 0.3s" }}
+                  />
                 </div>
               </div>
             </div>
