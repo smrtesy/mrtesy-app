@@ -42,7 +42,7 @@ export default function OnboardingSetup() {
 
   const isHe = locale === "he";
 
-  // Load Drive folders if connected
+  // Load Drive top-level folders if connected
   useEffect(() => {
     async function loadFolders() {
       const { data: { user } } = await supabase.auth.getUser();
@@ -57,8 +57,9 @@ export default function OnboardingSetup() {
 
       setLoadingFolders(true);
       try {
+        // Only fetch top-level folders (parent = root), not all nested folders
         const resp = await fetch(
-          "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+trashed=false&fields=files(id,name)&orderBy=name&pageSize=50",
+          "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+'root'+in+parents+and+trashed=false&fields=files(id,name)&orderBy=name&pageSize=30",
           { headers: { Authorization: `Bearer ${creds.access_token}` } }
         );
         if (resp.ok) {
@@ -264,11 +265,12 @@ export default function OnboardingSetup() {
                 <select
                   value={selectedFolder}
                   onChange={(e) => setSelectedFolder(e.target.value)}
-                  className="w-full rounded border px-3 py-2 text-sm bg-background"
+                  className="w-full rounded-md border px-3 py-2.5 text-sm bg-background min-h-[44px]"
+                  dir="auto"
                 >
-                  <option value="">{isHe ? "כל הקבצים (3 חודשים אחרונים)" : "All files (last 3 months)"}</option>
+                  <option value="">📂 {isHe ? "כל הקבצים (3 חודשים אחרונים)" : "All files (last 3 months)"}</option>
                   {driveFolders.map((f) => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
+                    <option key={f.id} value={f.id}>📁 {f.name}</option>
                   ))}
                 </select>
               </div>
