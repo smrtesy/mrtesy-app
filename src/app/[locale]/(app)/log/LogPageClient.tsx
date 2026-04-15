@@ -40,6 +40,7 @@ interface LogEntry {
   sender: string | null;
   sender_email: string | null;
   source_url: string | null;
+  recipient: string | null;
   classification_reason: string | null;
   task_title: string | null;
   error_message: string | null;
@@ -74,7 +75,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     let query = supabase
       .from("log_entries")
-      .select("*")
+      .select("*, source_messages!log_source_msg_fk(recipient)")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(100);
@@ -84,7 +85,11 @@ export function LogPageClient({ locale }: { locale: string }) {
     }
 
     const { data } = await query;
-    setLogs((data as LogEntry[]) || []);
+    const mapped = (data || []).map((row: any) => ({
+      ...row,
+      recipient: row.source_messages?.recipient || null,
+    }));
+    setLogs(mapped as LogEntry[]);
     setLoading(false);
 
     // Check admin
@@ -175,6 +180,9 @@ export function LogPageClient({ locale }: { locale: string }) {
                         {log.sender}
                         {log.sender_email && log.sender_email !== log.sender && (
                           <span className="opacity-60"> ({log.sender_email})</span>
+                        )}
+                        {log.recipient && (
+                          <span className="opacity-60"> → {log.recipient}</span>
                         )}
                       </p>
                     )}
