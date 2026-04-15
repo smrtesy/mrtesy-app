@@ -104,7 +104,10 @@ export default function SettingsPage() {
       // Delete in correct order (foreign keys)
       await supabase.from("task_activities").delete().eq("user_id", uid);
       await supabase.from("reminders").delete().eq("user_id", uid);
+      await supabase.from("project_briefs").delete().eq("user_id", uid);
       await supabase.from("tasks").delete().eq("user_id", uid);
+      await supabase.from("projects").delete().eq("user_id", uid);
+      await supabase.from("contacts").delete().eq("user_id", uid);
       await supabase.from("log_entries").delete().eq("user_id", uid);
       await supabase.from("source_messages").delete().eq("user_id", uid);
       await supabase.from("sync_state").delete().eq("user_id", uid);
