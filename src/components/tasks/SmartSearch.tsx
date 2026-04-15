@@ -88,8 +88,7 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
           value={query}
           onChange={(e) => handleChange(e.target.value)}
           placeholder={t("placeholder")}
-          className="ps-10 min-h-[48px]"
-          dir="auto"
+          className="ps-10 min-h-[48px] text-start"
         />
       </div>
       <label className="flex items-center gap-2 text-xs text-muted-foreground">

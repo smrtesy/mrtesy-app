@@ -151,7 +151,7 @@ export function TaskList({ locale }: { locale: string }) {
       />
 
       {/* Filter Tabs */}
-      <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSearchResults(null); }}>
+      <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSearchResults(null); }} dir={locale === "he" ? "rtl" : "ltr"}>
         <TabsList>
           <TabsTrigger value="inbox">{t("inbox")}</TabsTrigger>
           <TabsTrigger value="active">{t("active")}</TabsTrigger>

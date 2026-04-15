@@ -13,7 +13,7 @@ export function SuggestionTabs({ locale }: { locale: string }) {
   const [activeTab, setActiveTab] = useState("messages");
 
   return (
-    <Tabs value={activeTab} onValueChange={setActiveTab}>
+    <Tabs value={activeTab} onValueChange={setActiveTab} dir={locale === "he" ? "rtl" : "ltr"}>
       <TabsList className="w-full">
         <TabsTrigger value="messages" className="flex-1 gap-1">
           <Bell className="h-4 w-4" />
