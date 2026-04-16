@@ -40,6 +40,7 @@ interface LogEntry {
   sender: string | null;
   sender_email: string | null;
   source_url: string | null;
+  source_id: string | null;
   recipient: string | null;
   classification_reason: string | null;
   task_title: string | null;
@@ -75,7 +76,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     let query = supabase
       .from("log_entries")
-      .select("*, source_messages!log_source_msg_fk(recipient)")
+      .select("*, source_messages!log_source_msg_fk(recipient, source_url, source_id)")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(100);
@@ -85,10 +86,23 @@ export function LogPageClient({ locale }: { locale: string }) {
     }
 
     const { data } = await query;
-    const mapped = (data || []).map((row: any) => ({
-      ...row,
-      recipient: row.source_messages?.recipient || null,
-    }));
+    const mapped = (data || []).map((row: any) => {
+      // Build source URL: prefer source_messages.source_url, fallback to Gmail URL from source_id
+      const smUrl = row.source_messages?.source_url || null;
+      const smSourceId = row.source_messages?.source_id || row.source_id || null;
+      let resolvedUrl = row.source_url || smUrl;
+      if (!resolvedUrl && smSourceId) {
+        if (row.source_type === "gmail" || row.source_type === "gmail_sent") {
+          resolvedUrl = `https://mail.google.com/mail/u/0/#all/${smSourceId}`;
+        }
+      }
+      return {
+        ...row,
+        source_url: resolvedUrl,
+        source_id: smSourceId,
+        recipient: row.source_messages?.recipient || null,
+      };
+    });
     setLogs(mapped as LogEntry[]);
     setLoading(false);
 
