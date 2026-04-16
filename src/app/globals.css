@@ -56,4 +56,10 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* dir="auto" sets direction per content language,
+     but text-align is inherited from RTL parent as "right".
+     Force text-align: start so it re-computes against the element's own direction. */
+  [dir="auto"] {
+    text-align: start;
+  }
 }

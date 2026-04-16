@@ -104,8 +104,8 @@
   },
   "log": {
     "title": "לוג מקורות",
-    "noEntries": "אין רשומות לוג עדיין",
-    "entriesAppearAfter": "רשומות יופיעו אחרי עיבוד הודעות"
+    "noEntries": "אין הודעות עדיין",
+    "entriesAppearAfter": "הודעות יופיעו אחרי סנכרון מקורות"
   },
   "calendar": {
     "title": "לוח שנה",

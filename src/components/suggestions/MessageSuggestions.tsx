@@ -33,7 +33,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     // Get tasks created from AI that haven't been seen/verified
     const { data } = await supabase
       .from("tasks")
-      .select("*, source_messages(source_type, sender, subject, source_url)")
+      .select("*, source_messages(source_type, sender, subject, source_url, received_at)")
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -95,6 +95,9 @@ export function MessageSuggestions({ locale }: { locale: string }) {
         const source = task.source_messages as any | null /* eslint-disable-line @typescript-eslint/no-explicit-any */;
         const Icon = sourceIcons[source?.source_type || "gmail"] || Mail;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
+        const eventDate = source?.source_type === "google_calendar" && source?.received_at
+          ? new Date(source.received_at).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
+          : null;
 
         return (
           <Card key={task.id}>
@@ -104,7 +107,14 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                   <Icon className="h-4 w-4 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                    {eventDate && (
+                      <Badge variant="outline" className="text-[10px] bg-blue-50 shrink-0">
+                        {eventDate}
+                      </Badge>
+                    )}
+                  </div>
                   {task.description ? (
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir="auto">
                       {task.description}

@@ -104,8 +104,8 @@
   },
   "log": {
     "title": "Source Log",
-    "noEntries": "No log entries yet",
-    "entriesAppearAfter": "Entries will appear after messages are processed"
+    "noEntries": "No messages yet",
+    "entriesAppearAfter": "Messages will appear after sources are synced"
   },
   "calendar": {
     "title": "Calendar",
