@@ -11,13 +11,25 @@
 | Rules & Memory | https://www.notion.so/8016d1d19acf41e5942bbd6fe6261663 | 32c83672-e661-4cf4-9710-e24e59d9bf62 |
 | Processing Log | https://www.notion.so/19d2f60f900d4a37861cf5a3c8b15a72 | 4270177a-0324-4a2d-93d4-700b09b40b15 |
 
-## SOURCES
+## CRITICAL — עבד את כל המקורות
+
+חובה לעבד את כל שלושת המקורות בכל ריצה. אל תסיים לפני שעברת על כולם:
+1. Gmail — תמיד ראשון
+2. WhatsApp — תמיד שני, גם אם Gmail החזיר הרבה תוצאות
+3. Google Drive — תמיד שלישי
+4. Google Calendar — תמיד רביעי
+
+אל תעצור אחרי מקור אחד. כמות התוצאות מ-Gmail לא משפיעה על החובה לעבד את שאר המקורות.
+
+---
+
+
 
 | Source | Location |
 |---|---|
 | Gmail | חשבונות chanoch@maor.org + chanoch@kinus.info |
 | WhatsApp | https://docs.google.com/spreadsheets/d/1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI — לשונית: Messages |
-| Google Drive | https://drive.google.com/drive/u/1/folders/1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1 |
+| Google Drive | Folder ID: `1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1` — חובה לחפש עם: `'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents` בכל search query |
 | Google Calendar | לוח ראשי בלבד: chanoch770@gmail.com |
 
 ---
@@ -53,7 +65,14 @@
 | Google Drive | חודש אחרון | 24 שעות אחורה | 10 דקות אחורה |
 | Google Calendar | חודש קדימה | חודש קדימה (תמיד) | חודש קדימה (תמיד) |
 
-### קריאת WhatsApp
+### קריאת Google Drive
+חובה להשתמש בפילטר תיקייה בכל search query:
+```
+'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents and modifiedTime > '{timestamp}' and mimeType != 'application/vnd.google-apps.folder'
+```
+אל תחפש בכל Drive — רק בתיקייה הספציפית הזו.
+
+
 עמודות רלוונטיות: Timestamp, Direction, Message ID, From Phone, From Name,
 Chat Type, Group Name, Message Type, Text Content, Reply To.
 
@@ -289,7 +308,7 @@ Created By: claude
 | AI מחזיר JSON שבור | צור משימה עם טקסט גולמי כ-Description, subject ככותרת |
 | Drive document | קרא metadata + 200 תווים ראשונים בלבד |
 | יותר מ-100 פריטים בריצה | עבד לפי עדיפות: Calendar → WhatsApp → Gmail דחוף → Gmail רגיל → Drive |
-| ONBOARDING — יותר מ-50 הצעות | עצור. העדף פריטים חדשים ודחופים |
+| ONBOARDING — כמות הצעות | אין הגבלה. צור הצעה לכל פריט ACTIONABLE שמוצאים. המשתמש מסנן דרך your_approval. |
 | Reply To קיים אך לא נמצא | המשך עם מה שיש, ציין "context not found" ב-Reply To Context |
 
 ---
