@@ -10,6 +10,7 @@
 | Contacts | https://www.notion.so/1acf390f98d0429cb91597ba135ef9a5 | 30c798d8-a5bc-41ac-9b10-7dab8c9acf21 |
 | Rules & Memory | https://www.notion.so/8016d1d19acf41e5942bbd6fe6261663 | 32c83672-e661-4cf4-9710-e24e59d9bf62 |
 | Processing Log | https://www.notion.so/19d2f60f900d4a37861cf5a3c8b15a72 | 4270177a-0324-4a2d-93d4-700b09b40b15 |
+| Run Sessions | https://www.notion.so/3dcd7ce16fdc4832adbe9e0e707d00eb | 8749e44b-4711-40a2-a736-173b8823da93 |
 
 ## CRITICAL — כתיבה ל-Notion בחלקים קטנים
 
@@ -28,15 +29,85 @@
 - אם עדיין נכשל — עבור ל-WhatsApp ו-Drive, חזור ל-Gmail בסוף
 - רשום ב-Processing Log: "Gmail temporarily unavailable, retried X times"
 
+## CRITICAL — עבד את כל המקורות
 
-
-חובה לעבד את כל שלושת המקורות בכל ריצה. אל תסיים לפני שעברת על כולם:
+חובה לעבד את כל ארבעת המקורות בכל ריצה. אל תסיים לפני שעברת על כולם:
 1. Gmail — תמיד ראשון
 2. WhatsApp — תמיד שני, גם אם Gmail החזיר הרבה תוצאות
 3. Google Drive — תמיד שלישי
 4. Google Calendar — תמיד רביעי
 
 אל תעצור אחרי מקור אחד. כמות התוצאות מ-Gmail לא משפיעה על החובה לעבד את שאר המקורות.
+
+## CRITICAL — אסור BULK PROCESSING בשום אופן
+
+**אסור בתכלית האיסור** לקבץ כמה הודעות/קבצים לשורת לוג אחת שמסכמת את כולם.
+
+דוגמאות לדברים **אסורים** שנעשו בעבר:
+- ❌ שורת לוג אחת: "152 הודעות WhatsApp — בדיקות של הבוט"
+- ❌ שורת לוג אחת: "20 קבצי Drive — node_modules"
+- ❌ שורת לוג אחת: "אין קבצים חדשים בתיקייה"
+
+**הכלל:** כל הודעה, כל קובץ, כל אירוע — שורת לוג נפרדת משלו.
+
+אם יש 152 הודעות WhatsApp → יהיו 152 שורות לוג.
+אם יש 30 קבצים ב-Drive → יהיו 30 שורות לוג.
+בלי יוצאים מן הכלל.
+
+גם אם הודעה נראית כמו "בדיקה" או "לא רלוונטית" — שורת לוג נפרדת עם classification=SKIP או INFORMATIONAL וסיבה ספציפית להודעה **הזו**.
+
+## CRITICAL — אם פריט לא בלוג, סרוק אותו שוב
+
+לפני סיום הריצה, חובה לבצע בדיקת שלמות:
+
+1. קרא את כל Source ID הקיימים ב-Processing Log (מכל הריצות הקודמות) לזיכרון
+2. לכל פריט שמצאת מהמקורות (Gmail / WhatsApp / Drive / Calendar):
+   - בדוק אם ה-Source ID שלו קיים ברשימה מ-Processing Log
+   - אם **לא קיים** → זו הוכחה שאף פעם לא עובד (ריצה נכשלה / bulk skip / bug)
+   - **חובה לעבד אותו עכשיו**, גם אם הוא מחוץ לחלון הזמן הרגיל
+   - צור שורת לוג אישית + משימה אם actionable
+
+זה מתקן ריצות שנכשלו באמצע ומונע מפריטים "ליפול בין הכיסאות".
+
+## CRITICAL — Drive: רק בתיקייה הספציפית
+
+בכל search query ל-Drive — **חובה** להכליל את הפילטר:
+```
+'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents
+```
+
+**אסור** לחפש ב-"שאר ה-Drive". אל תזכיר node_modules, repos, או כל קובץ שלא בתיקייה הזו בלוג.
+
+אם Drive search מחזיר קבצים שלא בתיקייה הזו — זה באג בקוד שלך. תקן את ה-query והרץ שוב.
+
+## CRITICAL — Run Sessions: תיעוד מלא של כל ריצה
+
+בתחילת **כל ריצה** — צור דף חדש ב-Run Sessions עם:
+- Run Title: "ריצה {RUN_TYPE} — {תאריך} {שעה}"
+- Run Type: ONBOARDING / MORNING / INCREMENTAL
+- Status: running
+- Started At: עכשיו
+- Model Used: השם של המודל שבשימוש (Opus 4.7, Sonnet 4.6 וכו' — אם ידוע)
+
+שמור את ה-Run Session ID לזיכרון.
+
+במהלך הריצה — ספור תוך כדי:
+- כמה פריטים עובדו מכל מקור
+- כמה משימות נוצרו / עודכנו
+- כמה כללים נוספו, פרויקטים, אנשי קשר
+- שגיאות (לוג מפורט)
+
+בסוף הריצה — עדכן את ה-Run Session הזה עם:
+- Status: completed / partial / failed
+- Ended At: עכשיו
+- Duration Minutes: חישוב
+- כל ה-counts
+- Summary: סיכום מילולי של הריצה — מה נעשה, מה לא, המלצות
+- Errors Log: אם היו שגיאות
+
+**אם הריצה נכשלת באמצע** — עדכן Status=failed עם פירוט השגיאה ב-Errors Log לפני שאתה עוצר.
+
+**Tokens Estimate:** הערכה מקורבת — גודל כולל של טקסט שנקרא + נכתב בתווים / 4 (בערך).
 
 ---
 
