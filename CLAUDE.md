@@ -16,9 +16,9 @@
 | Source | Location |
 |---|---|
 | Gmail | חשבונות chanoch@maor.org + chanoch@kinus.info |
-| WhatsApp | https://docs.google.com/spreadsheets/d/1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI |
+| WhatsApp | https://docs.google.com/spreadsheets/d/1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI — לשונית: Messages |
 | Google Drive | https://drive.google.com/drive/u/1/folders/1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1 |
-| Google Calendar | כל הלוחות המחוברים |
+| Google Calendar | לוח ראשי בלבד: chanoch770@gmail.com |
 
 ---
 
