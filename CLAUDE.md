@@ -21,12 +21,12 @@
 
 | Database | URL | Collection ID |
 |---|---|---|
-| Tasks | https://www.notion.so/4c22b2f7dbf949faa64b837c1d9f5b57 | 5b0fc954-7feb-41a0-aec7-88b0e35d0557 |
-| Projects | https://www.notion.so/3a9c96d4197e4c8cb00c3d647f09f5e7 | dfacfb1b-ddb4-4205-90fa-5aed43d42dce |
-| Contacts | https://www.notion.so/bafc4f1690e547aca2b1a45797216f35 | 33f9b8eb-49a5-46f2-8a81-250d8c3724b3 |
-| Rules & Memory | https://www.notion.so/08f2f03c7c41445d93a95c48286f9665 | f32910f6-c560-4c5d-8c28-c9e9ea304567 |
-| Processing Log | https://www.notion.so/017deb69c7504b1ab19b723fe15e22c4 | b427fa45-83a1-42a8-aefc-2726e505e781 |
-| Run Sessions | https://www.notion.so/396091e349094b75919f7c480faeed4a | 9f165f2c-99c3-4f26-b1bc-f66b8b7fa249 |
+| Tasks | https://www.notion.so/cfc0361aff49434bb591c7cfea22beba | c27f9c8e-c493-41eb-809a-edc70b79044e |
+| Projects | https://www.notion.so/2914ed2ebe9f480bb59f06c0143677b2 | c29e51b4-1c43-4465-b5ce-e924762a3a0b |
+| Contacts | https://www.notion.so/a52d6e1b342a460494df31848f12f20c | b6fb96bb-7bfb-4644-9b9c-d157c703163e |
+| Rules & Memory | https://www.notion.so/dc610a5a65584f61af0f06bff93542a1 | e81b85f8-a3d4-48aa-bed9-524053a75859 |
+| Processing Log | https://www.notion.so/ce8a4b94f07e4cb18d1f16166f76a791 | c786a5ed-032d-4d3b-a391-fb2185e037c9 |
+| Run Sessions | https://www.notion.so/79b36cb189624ea8aa8e494c1fb03323 | 5134088d-b340-4506-ac5f-dbd5440be5f4 |
 
 ---
 
