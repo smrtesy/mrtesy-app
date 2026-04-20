@@ -1,416 +1,294 @@
 # Info & Task Manager — CLAUDE.md
 # קרא קובץ זה בתחילת כל session לפני כל פעולה אחרת
 
+---
+
+## אדריכלות המערכת
+
+המערכת מחולקת ל-2 חלקים בלתי תלויים:
+
+**PART 1 — COLLECTOR + TRIAGE** (איסוף + סינון ראשוני)
+שולף מכל המקורות, מסנן ספאם/כללים, כותב ל-Processing Log.
+
+**PART 2 — DEEP CLASSIFIER** (סיווג מעמיק)
+קורא מ-Processing Log פריטים עם `Triage Status = pending_deep_classify`, מסווג עם AI, יוצר משימות.
+
+**זהה את סוג הריצה מה-prompt** (PART 1 או PART 2). אל תבצע את שני החלקים באותה ריצה.
+
+---
+
 ## NOTION DATABASES
 
 | Database | URL | Collection ID |
 |---|---|---|
-| Tasks | https://www.notion.so/e18b0946aaa84424a5b7e9d427c7e354 | 6c865ef1-a3b6-4801-a618-ecc7c7632c0f |
-| Projects | https://www.notion.so/6f9fad8245c049909cea499128ef6244 | 020c0d5e-b29c-4c42-a63c-e44f47880c08 |
-| Contacts | https://www.notion.so/1acf390f98d0429cb91597ba135ef9a5 | 30c798d8-a5bc-41ac-9b10-7dab8c9acf21 |
-| Rules & Memory | https://www.notion.so/8016d1d19acf41e5942bbd6fe6261663 | 32c83672-e661-4cf4-9710-e24e59d9bf62 |
-| Processing Log | https://www.notion.so/19d2f60f900d4a37861cf5a3c8b15a72 | 4270177a-0324-4a2d-93d4-700b09b40b15 |
-| Run Sessions | https://www.notion.so/3dcd7ce16fdc4832adbe9e0e707d00eb | 8749e44b-4711-40a2-a736-173b8823da93 |
-
-## CRITICAL — כתיבה ל-Notion בחלקים קטנים
-
-אל תיצור יותר מ-5 דפים בקריאת Notion אחת.
-אחרי כל 5 דפים — המשך לבאחים הבאים.
-אל תצבור את כל המשימות ותכתוב הכל בסוף — כתוב תוך כדי עיבוד.
-
-סדר עבודה נכון:
-1. עבד 5 הודעות → כתוב 5 דפים → המשך ל-5 הבאות
-2. אל תחכה לסוף הריצה כדי לכתוב
-
-## CRITICAL — התמודדות עם שגיאות MCP
-
-אם Gmail מחזיר 502 או timeout:
-- המתן 5 שניות ונסה שוב עד 3 פעמים
-- אם עדיין נכשל — עבור ל-WhatsApp ו-Drive, חזור ל-Gmail בסוף
-- רשום ב-Processing Log: "Gmail temporarily unavailable, retried X times"
-
-## CRITICAL — עבד את כל המקורות
-
-חובה לעבד את כל ארבעת המקורות בכל ריצה. אל תסיים לפני שעברת על כולם:
-1. Gmail — תמיד ראשון
-2. WhatsApp — תמיד שני, גם אם Gmail החזיר הרבה תוצאות
-3. Google Drive — תמיד שלישי
-4. Google Calendar — תמיד רביעי
-
-אל תעצור אחרי מקור אחד. כמות התוצאות מ-Gmail לא משפיעה על החובה לעבד את שאר המקורות.
-
-## CRITICAL — אסור BULK PROCESSING בשום אופן
-
-**אסור בתכלית האיסור** לקבץ כמה הודעות/קבצים לשורת לוג אחת שמסכמת את כולם.
-
-דוגמאות לדברים **אסורים** שנעשו בעבר:
-- ❌ שורת לוג אחת: "152 הודעות WhatsApp — בדיקות של הבוט"
-- ❌ שורת לוג אחת: "20 קבצי Drive — node_modules"
-- ❌ שורת לוג אחת: "אין קבצים חדשים בתיקייה"
-
-**הכלל:** כל הודעה, כל קובץ, כל אירוע — שורת לוג נפרדת משלו.
-
-אם יש 152 הודעות WhatsApp → יהיו 152 שורות לוג.
-אם יש 30 קבצים ב-Drive → יהיו 30 שורות לוג.
-בלי יוצאים מן הכלל.
-
-גם אם הודעה נראית כמו "בדיקה" או "לא רלוונטית" — שורת לוג נפרדת עם classification=SKIP או INFORMATIONAL וסיבה ספציפית להודעה **הזו**.
-
-## CRITICAL — אם פריט לא בלוג, סרוק אותו שוב
-
-לפני סיום הריצה, חובה לבצע בדיקת שלמות:
-
-1. קרא את כל Source ID הקיימים ב-Processing Log (מכל הריצות הקודמות) לזיכרון
-2. לכל פריט שמצאת מהמקורות (Gmail / WhatsApp / Drive / Calendar):
-   - בדוק אם ה-Source ID שלו קיים ברשימה מ-Processing Log
-   - אם **לא קיים** → זו הוכחה שאף פעם לא עובד (ריצה נכשלה / bulk skip / bug)
-   - **חובה לעבד אותו עכשיו**, גם אם הוא מחוץ לחלון הזמן הרגיל
-   - צור שורת לוג אישית + משימה אם actionable
-
-זה מתקן ריצות שנכשלו באמצע ומונע מפריטים "ליפול בין הכיסאות".
-
-## CRITICAL — Drive: רק בתיקייה הספציפית
-
-בכל search query ל-Drive — **חובה** להכליל את הפילטר:
-```
-'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents
-```
-
-**אסור** לחפש ב-"שאר ה-Drive". אל תזכיר node_modules, repos, או כל קובץ שלא בתיקייה הזו בלוג.
-
-אם Drive search מחזיר קבצים שלא בתיקייה הזו — זה באג בקוד שלך. תקן את ה-query והרץ שוב.
-
-## CRITICAL — Run Sessions: תיעוד מלא של כל ריצה
-
-בתחילת **כל ריצה** — צור דף חדש ב-Run Sessions עם:
-- Run Title: "ריצה {RUN_TYPE} — {תאריך} {שעה}"
-- Run Type: ONBOARDING / MORNING / INCREMENTAL
-- Status: running
-- Started At: עכשיו
-- Model Used: השם של המודל שבשימוש (Opus 4.7, Sonnet 4.6 וכו' — אם ידוע)
-
-שמור את ה-Run Session ID לזיכרון.
-
-במהלך הריצה — ספור תוך כדי:
-- כמה פריטים עובדו מכל מקור
-- כמה משימות נוצרו / עודכנו
-- כמה כללים נוספו, פרויקטים, אנשי קשר
-- שגיאות (לוג מפורט)
-
-בסוף הריצה — עדכן את ה-Run Session הזה עם:
-- Status: completed / partial / failed
-- Ended At: עכשיו
-- Duration Minutes: חישוב
-- כל ה-counts
-- Summary: סיכום מילולי של הריצה — מה נעשה, מה לא, המלצות
-- Errors Log: אם היו שגיאות
-
-**אם הריצה נכשלת באמצע** — עדכן Status=failed עם פירוט השגיאה ב-Errors Log לפני שאתה עוצר.
-
-**Tokens Estimate:** הערכה מקורבת — גודל כולל של טקסט שנקרא + נכתב בתווים / 4 (בערך).
+| Tasks | https://www.notion.so/4c22b2f7dbf949faa64b837c1d9f5b57 | 5b0fc954-7feb-41a0-aec7-88b0e35d0557 |
+| Projects | https://www.notion.so/3a9c96d4197e4c8cb00c3d647f09f5e7 | dfacfb1b-ddb4-4205-90fa-5aed43d42dce |
+| Contacts | https://www.notion.so/bafc4f1690e547aca2b1a45797216f35 | 33f9b8eb-49a5-46f2-8a81-250d8c3724b3 |
+| Rules & Memory | https://www.notion.so/08f2f03c7c41445d93a95c48286f9665 | f32910f6-c560-4c5d-8c28-c9e9ea304567 |
+| Processing Log | https://www.notion.so/017deb69c7504b1ab19b723fe15e22c4 | b427fa45-83a1-42a8-aefc-2726e505e781 |
+| Run Sessions | https://www.notion.so/396091e349094b75919f7c480faeed4a | 9f165f2c-99c3-4f26-b1bc-f66b8b7fa249 |
 
 ---
 
-
+## SOURCES
 
 | Source | Location |
 |---|---|
 | Gmail | חשבונות chanoch@maor.org + chanoch@kinus.info |
 | WhatsApp | https://docs.google.com/spreadsheets/d/1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI — לשונית: Messages |
-| Google Drive | Folder ID: `1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1` — חובה לחפש עם: `'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents` בכל search query |
+| Google Drive | Folder ID: `1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1` — חובה `'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents` בכל query |
 | Google Calendar | לוח ראשי בלבד: chanoch770@gmail.com |
 
 ---
 
-## STEP 0 — STARTUP (כל ריצה מתחילה כאן)
+## GLOBAL RULES — חלות על שני ה-Parts
 
-### 0.1 זהה סוג ריצה
+### 1. Run Sessions — תיעוד כל ריצה
+
+בתחילת **כל ריצה** — צור דף ב-Run Sessions:
+- Run Title: "PART1 Collector" / "PART2 Classifier" + תאריך ושעה
+- Run Type: ONBOARDING / MORNING / INCREMENTAL
+- Status: running
+- Started At: עכשיו
+- Model Used: Opus 4.7 / Sonnet / Haiku (לפי מה שידוע)
+
+שמור Run Session page ID לזיכרון.
+
+בסוף הריצה — עדכן:
+- Status: completed / partial / failed
+- Ended At: עכשיו
+- Duration Minutes, כל ה-counts, Summary, Errors Log
+
+### 2. כתיבה ל-Notion בחלקים קטנים
+
+אל תיצור יותר מ-5 דפים בקריאה אחת. כתוב תוך כדי עיבוד, לא בסוף.
+
+### 3. שגיאות MCP
+
+אם כלי MCP מחזיר 502/timeout:
+- המתן 5 שניות, נסה שוב עד 3 פעמים
+- אם עדיין נכשל — רשום ב-Errors Log של Run Session, המשך למשאבים אחרים
+
+### 4. אסור BULK PROCESSING
+
+כל פריט = שורת לוג אישית משלו. אסור לקבץ "152 הודעות — בדיקות" לשורה אחת.
+גם SKIPPED_SPAM — שורה אישית לכל פריט.
+
+### 5. Drive — רק בתיקייה הספציפית
+
 ```
-אם Tasks database ריק → RUN_TYPE = ONBOARDING
-אחרת קרא מה-prompt: MORNING_RUN או INCREMENTAL_RUN
+'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents and ...
 ```
 
-### 0.2 טען Rules & Memory
-קרא את כל הדפים מ-Rules & Memory שבהם Active = TRUE.
-טען לזיכרון — תשתמש בהם בשלב הסיווג לפני כל קריאה ל-AI.
-
-### 0.3 קרא אישורים ממתינים
-קרא דפים מ-Tasks שבהם "Your Approval" מלא (approve / reject / snooze / edit).
-טפל בהם לפי STEP 5 לפני שמתחיל לעבד הודעות חדשות.
-
-### 0.4 קרא פידבק ממתין מ-Processing Log (ריצת בוקר בלבד)
-קרא דפים מ-Processing Log שבהם "Your Feedback" מלא ו-"Feedback Processed" = FALSE.
-המר כל פידבק לכלל חדש ב-Rules & Memory, סמן Feedback Processed = TRUE.
+אסור לחפש ב"שאר Drive". אם מקבלים תוצאות מחוץ לתיקייה — יש באג ב-query.
 
 ---
 
-## STEP 1 — חלון זמן לפי סוג ריצה
+# PART 1 — COLLECTOR + TRIAGE
 
-| מקור | ONBOARDING | MORNING_RUN | INCREMENTAL_RUN |
-|---|---|---|---|
-| Gmail | 45 יום אחורה | 24 שעות אחורה | 10 דקות אחורה |
-| WhatsApp | 45 יום אחורה | 24 שעות אחורה | 10 דקות אחורה |
-| Google Drive | חודש אחרון | 24 שעות אחורה | 10 דקות אחורה |
-| Google Calendar | חודש קדימה | חודש קדימה (תמיד) | חודש קדימה (תמיד) |
+## מתי לרוץ: `prompt contains "PART1"`
 
-### קריאת Google Drive
-חובה להשתמש בפילטר תיקייה בכל search query:
-```
-'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents and modifiedTime > '{timestamp}' and mimeType != 'application/vnd.google-apps.folder'
-```
-אל תחפש בכל Drive — רק בתיקייה הספציפית הזו.
+## STEP 1.0 — STARTUP
 
+1. צור Run Session חדש (ראה GLOBAL RULES #1)
+2. טען את כל הכללים מ-Rules & Memory שבהם `Active = TRUE`
+3. טען לזיכרון את כל `Source ID` הקיימים ב-Processing Log (מניעת כפילויות)
 
-עמודות רלוונטיות: Timestamp, Direction, Message ID, From Phone, From Name,
-Chat Type, Group Name, Message Type, Text Content, Reply To.
+## STEP 1.1 — חלון זמן
 
-**חשוב:**
-- עבד גם incoming וגם outgoing
-- כאשר Reply To מלא — חפש את ההודעה המקורית לפי Message ID וקרא את שניהם יחד
-- Message Type = reaction → SKIP ללא לוג
+| מקור | ONBOARDING (Tasks DB ריק) | ריצה רגילה |
+|---|---|---|
+| Gmail | 45 יום אחורה | שעה אחרונה |
+| WhatsApp | 45 יום אחורה | שעה אחרונה |
+| Drive | חודש אחורה | שעה אחרונה |
+| Calendar | חודש קדימה | חודש קדימה (תמיד) |
 
-### הודעות יוצאות (Direction = outgoing)
-אל תדלג. הן מעדכנות סטטוס משימות קיימות:
-- שלחת תשובה → Tasks: inbox → in_progress
-- שלחת תשובה סופית → Tasks: → done  
-- שלחת שאלה שמחכה לתגובה → Tasks: → waiting
+## STEP 1.2 — איסוף
+
+סדר איסוף חובה:
+1. Gmail → 2. WhatsApp → 3. Drive → 4. Calendar
+
+**חובה לעבור על כל 4** גם אם מקור מסוים החזיר הרבה תוצאות.
+
+WhatsApp: גם incoming וגם outgoing. reaction → דלג ללא לוג.
+Drive: רק בתיקייה (ראה Global Rule #5).
+
+## STEP 1.3 — TRIAGE (סינון לכל פריט)
+
+לכל פריט שנאסף — החלט אחד מארבעה:
+
+### (א) SKIPPED_HARD_RULE — כלל קשה
+תנאים שמפעילים:
+- recipient = office@maor.org
+- sender = outbox@maor.org
+- Rules & Memory → rule_type=skip שמתאים לפריט
+
+→ **לא נכנס ללוג כלל**. התעלם.
+
+### (ב) SKIPPED_SPAM — ספאם/מרקטינג ברור
+תנאים שמפעילים (לפחות אחד):
+- sender מכיל noreply/no-reply
+- subject או body מכיל unsubscribe link
+- newsletter / marketing blast ברור
+- promotion / sale / discount בלי קשר אישי
+
+→ **כן נכנס ללוג** עם:
+- Subject or Summary: כותרת המייל / סיכום קצר
+- From, Source, Source Link, Date Received
+- Triage Status: `skipped_spam`
+- Classification: `SKIPPED_SPAM`
+- Classification Reason: הסיבה לזיהוי
+- **אל תשמור Raw Content** (חסכון)
+
+### (ג) pending_deep_classify — ממתין לסיווג מעמיק
+כל פריט שלא הוסר בשלב (א) או (ב).
+
+→ **נכנס ללוג** עם:
+- כל השדות למעלה
+- Triage Status: `pending_deep_classify`
+- Classification: `pending_classify`
+- **Raw Content: שמור את התוכן המלא** (עד 3000 אותיות)
+- Attachments Info: רשימה עם שמות קבצים אם יש
+
+### (ד) Calendar reminders
+אירועים מחר → Triage Status: `pending_deep_classify` עם Raw Content שכולל תיאור + משתתפים.
+
+## STEP 1.4 — כתיבה ל-Processing Log
+
+לכל פריט (חוץ מ-(א)) — צור דף ב-Processing Log עם השדות למעלה.
+
+**חובה:** כתוב כל 5 פריטים, לא לצבור.
+
+## STEP 1.5 — סיום Run Session
+
+עדכן את ה-Run Session עם:
+- Gmail Processed, WhatsApp Processed, Drive Processed, Calendar Processed
+- Skipped Count (סך SKIPPED_SPAM + SKIPPED_HARD_RULE)
+- Total Items (לא כולל skipped_hard_rule)
+- Summary: "PART1 — נאסף X פריטים, נסונן Y ספאם, ממתינים לסיווג Z"
+- Status: completed
 
 ---
 
-## STEP 2 — סיווג
+# PART 2 — DEEP CLASSIFIER
 
-### כללים קשיחים (לפני AI)
+## מתי לרוץ: `prompt contains "PART2"`
 
-| תנאי | פעולה |
-|---|---|
-| recipient = office@maor.org | SKIP — ללא לוג |
-| sender = outbox@maor.org | SKIP — ללא לוג |
-| WhatsApp message_type = reaction | SKIP — ללא לוג |
-| אירוע Calendar שתאריכו עבר | SKIP |
+## STEP 2.0 — STARTUP
 
-### כללים דינמיים
-בדוק כל פריט מול הכללים שטענת ב-STEP 0.2. אם כלל מתאים — פעל לפיו ללא AI.
+1. צור Run Session חדש
+2. טען את כל הכללים מ-Rules & Memory (Active = TRUE)
+3. טען את כל ה-Projects הקיימים לזיכרון (לזיהוי קשר)
+4. טען את כל ה-Contacts הקיימים לזיכרון
+5. קרא מ-Tasks את כל הדפים עם `Your Approval` ממולא — עבד לפי STEP 2.5
 
-### סיווג AI — system prompt
+## STEP 2.1 — קריאת פריטים ממתינים
+
+שלוף מ-Processing Log את כל הדפים עם `Triage Status = pending_deep_classify`.
+
+אם אין כאלה → סיים את הריצה ב-Summary "אין פריטים חדשים לסיווג".
+
+## STEP 2.2 — סיווג עם AI
+
+לכל פריט — הפעל AI classifier:
+
 ```
-You are a message classifier for a personal task management system.
-Classify each message as exactly one of:
-  ACTIONABLE — requires a real action or decision from the user
-  INFORMATIONAL — useful to know, no action needed
-  SKIP — irrelevant, spam, pure automation noise
+SYSTEM: You are a message classifier.
+Classify as ACTIONABLE / INFORMATIONAL.
+
+ACTIONABLE: requires a real action or decision from the user
+INFORMATIONAL: useful to know, no action needed
 
 Rules:
 - Failed payments, overdue notices, legal docs, requests → ACTIONABLE
-- Payment confirmations (successful), receipts, summaries → INFORMATIONAL
-- maor.org domain emails → classify by content, never SKIP, assign category=maor
-- Outgoing messages → classify by content, focus on status change of open task
-- Newsletter / marketing / unsubscribe patterns → INFORMATIONAL (not SKIP)
+- Payment confirmations, receipts, summaries → INFORMATIONAL
+- maor.org domain emails → classify by content, category=maor
+- Outgoing messages → focus on status change of open task
 
-Respond with exactly: CLASSIFICATION | reason in Hebrew (1 sentence)
+Respond with: CLASSIFICATION | reason in Hebrew | category (maor|personal)
 ```
 
-### סיווג AI — user message template
-```
-Source: {gmail | whatsapp | drive | calendar}
-Direction: {incoming | outgoing}
-From: {sender}
-To: {recipient}
-Date: {date}
-Subject: {subject if gmail}
-Chat: {group name or 'private' if whatsapp}
-Reply to context: {quoted message or 'none'}
+USER message: כל השדות מ-Processing Log + Raw Content.
 
-Content:
-{full text — max 3,000 chars}
-```
-
----
-
-## STEP 3 — טיפול לפי סיווג
-
-### SKIP
-אל תיצור שום רשומה. המשך לפריט הבא.
+## STEP 2.3 — עיבוד לפי סיווג
 
 ### INFORMATIONAL
-כתוב שורה ל-Processing Log בלבד (ראה STEP 4.1). אל תיצור משימה.
+עדכן את דף ה-log:
+- Classification: `INFORMATIONAL`
+- Classification Reason: הסיבה מה-AI
+- Triage Status: `classified`
+- Action Taken: `logged_only`
 
-### ACTIONABLE — זיהוי פרויקט
-```
-SYSTEM: You have these active projects:
-{project_id}: {name} — {description_short}
-...
-Does this message belong to one of them?
-Respond with ONLY the project page URL or 'none'.
-```
+אל תיצור משימה.
 
-קטגוריה: שולח/פרויקט קשור ל-maor.org → category=maor. כל השאר → category=personal.
+### ACTIONABLE
+1. **זיהוי פרויקט** (אם יש הקשר):
+   ```
+   SYSTEM: Given these active projects: {list}, does this message belong?
+   Respond with project ID or 'none'.
+   ```
 
-### ACTIONABLE — יצירת משימה
-```
-SYSTEM:
-You are a task extraction AI. Return a valid JSON array only. No markdown.
+2. **חילוץ פרטי משימה:**
+   ```
+   SYSTEM: Extract task as JSON.
+   {title_he, description, priority, due_date, tags, ai_actions}
+   Priority:
+     urgent: deadline today/tomorrow, legal, blocked account
+     high: deadline within 7 days, payment failure
+     medium: within 30 days
+     low: no deadline
+   ```
 
-For each actionable item:
-{
-  "title_he": "כותרת קצרה בעברית — עד 80 תווים",
-  "description": "כל הפרטים: מספרי חשבון, סכומים, דדליינים, שמות, הוראות, קישורים. הכל.",
-  "priority": "urgent | high | medium | low",
-  "due_date": "YYYY-MM-DD or null",
-  "is_overdue": true | false,
-  "tags": ["tag1", "tag2"],
-  "ai_actions": ["פעולה מוצעת 1", "פעולה מוצעת 2"],
-  "contact_name": "string or null",
-  "contact_email": "string or null"
-}
+3. **מניעת כפילות:** חפש ב-Tasks לפי Source ID. אם קיים — עדכן במקום ליצור.
 
-Priority rules:
-  urgent: deadline today/tomorrow, legal threat, blocked account, foreclosure risk
-  high: deadline within 7 days, payment failure
-  medium: deadline within 30 days
-  low: no deadline, soft follow-up
+4. **צור/עדכן משימה ב-Tasks:**
+   - Title, Status=pending_approval, Priority, Due Date
+   - Source, Source ID, Source Link, Reply To Context
+   - Description, Category, Tags, AI Actions
+   - Update Log: "[DD/MM HH:MM] נוצרה מ-{source}"
 
-One message may produce multiple tasks.
-If project context provided — use it to enrich the description.
-Respond with ONLY the JSON array.
-```
+5. **עדכן Contacts** אם שולח חדש.
 
-```
-USER:
-From: {sender}  To: {recipient}  Date: {date}
-Source: {source}  Source Link: {direct_link}
-Reply to context: {context or 'none'}
-Project: {project_name if found}
-Project context: {description, key_dates if found}
+6. **עדכן Projects** אם שייך לפרויקט — Key Dates, Description.
 
-{full content — max 4,000 chars}
-```
+7. **עדכן את דף ה-log:**
+   - Classification: `ACTIONABLE`
+   - Triage Status: `classified`
+   - Action Taken: `task_created`
+   - Task ID: ה-ID של המשימה שנוצרה
 
----
+## STEP 2.4 — בדיקת שלמות
 
-## STEP 4 — כתיבה ל-Notion
+לפני סיום, בדוק:
+- כל דף ב-Processing Log עם `pending_deep_classify` עובד? אם לא — יש באג, רשום ב-Errors Log
+- פריטים שנכשל ב-AI classifier — השאר `pending_classify`, נסה שוב בריצה הבאה
 
-### 4.1 Processing Log — כל פריט שעובד (גם INFORMATIONAL)
-
-כתוב דף חדש ל-Processing Log עם:
-```
-Subject or Summary: נושא המייל או סיכום קצר
-Classification: ACTIONABLE / INFORMATIONAL / SKIP
-Classification Reason: סיבה בעברית
-Source: gmail / whatsapp / drive / calendar
-Direction: incoming / outgoing
-From: שולח
-date:Date Received:start: YYYY-MM-DD
-Source Link: קישור ישיר למקור
-Reply To Context: הקשר thread אם קיים
-Action Taken: task_created / status_updated / logged_only / skipped
-Task ID: אם נוצרה משימה
-Your Feedback: (ריק — אתה כותב)
-Feedback Processed: __NO__
-```
-
-### 4.2 Tasks — מניעת כפילויות
-לפני כתיבה — חפש ב-Tasks לפי Source ID. אם קיים — עדכן דף קיים, אל תיצור חדש.
-
-כתוב דף חדש ל-Tasks עם:
-```
-Title: כותרת
-Status: pending_approval
-Priority: urgent / high / medium / low
-date:Due Date:start: YYYY-MM-DD (אם קיים)
-Source: gmail / whatsapp / drive / calendar
-Source ID: Message ID / file ID
-Source Link: קישור ישיר
-Reply To Context: הקשר thread
-Description: כל הפרטים המלאים
-Tags: [רשימה]
-Category: maor / personal
-AI Actions: פעולות מוצעות
-Update Log: [DD/MM HH:MM] נוצרה מ-{source}
-```
-
-### 4.3 Contacts — אוטומטי
-לכל שולח חדש שלא קיים ב-Contacts — צור דף חדש. בדוק לפי Email לפני יצירה.
-
----
-
-## STEP 5 — עיבוד אישורים (STEP 0.3)
+## STEP 2.5 — עיבוד אישורים מ-Tasks
 
 | Your Approval | פעולה |
 |---|---|
-| approve | Status → inbox. נקה Your Approval. כתוב ב-Update Log. |
-| reject | אם יש Your Feedback → הוסף כלל ל-Rules & Memory. Status → cancelled. |
-| snooze | Status → snoozed. Due Date → מחר. נקה Your Approval. |
-| edit | השאר pending_approval. כתוב ב-Update Log: "ממתין לעריכה ידנית". |
+| approve | Status → inbox. נקה Your Approval. |
+| reject | אם יש Your Feedback → הוסף כלל ב-Rules & Memory. Status → cancelled. |
+| snooze | Status → snoozed. Due Date → מחר. |
+| edit | השאר pending_approval. Update Log: "ממתין לעריכה". |
 
----
+## STEP 2.6 — עיבוד פידבק מ-Processing Log
 
-## STEP 6 — Calendar
+קרא דפים מ-Processing Log שבהם `Your Feedback` מלא ו-`Feedback Processed = FALSE`:
+- המר כל פידבק לכלל חדש ב-Rules & Memory
+- סמן Feedback Processed = TRUE
 
-| מצב | פעולה |
-|---|---|
-| אירוע מחר — זוהה לראשונה | צור Tasks עם Status=calendar_reminder, Priority=medium |
-| Your Approval = saw | Status → snoozed, Due Date → יום האירוע. יחזור ביום האירוע. |
-| Your Approval = approve | Status → inbox — הפך למשימה רגילה |
-| יום האירוע עצמו | אם Status=snoozed → החזר ל-pending_approval |
-| אירוע 2-30 יום קדימה | עדכן Projects בלבד, אל תיצור משימה |
+**מקרה מיוחד — פידבק "זה לא ספאם":**
+אם פריט שהיה SKIPPED_SPAM מקבל פידבק "זה לא ספאם":
+1. הוסף כלל ב-Rules & Memory: "sender X / pattern Y → classify" (לא SKIP)
+2. שנה את ה-log: Triage Status → `pending_deep_classify`, Classification → `pending_classify`
+3. הפריט יסווג בריצה הבאה
 
----
+## STEP 2.7 — סיום Run Session
 
-## STEP 7 — Projects & Contacts
-
-**Projects:**
-- 2+ הודעות לנושא ללא פרויקט קיים → הצע פרויקט חדש עם Status=proposed
-- עדכן Key Dates ו-Description כשמגיע מידע חדש
-- ONBOARDING בלבד: לאחר כל העיבוד, הצע פרויקטים על בסיס קבוצות נושאים
-
-**Contacts:**
-- צור contact חדש לכל שולח שלא קיים
-- בדוק לפי Email לפני יצירה — אל תשכפל
-- צבור Account Numbers שמופיעים בהודעות
-
----
-
-## STEP 8 — Rules & Memory
-
-כתוב כלל חדש כאשר:
-- המשתמש כתב Your Feedback על reject
-- המשתמש כתב Your Feedback ב-Processing Log
-
-מבנה כלל חדש:
-```
-Trigger: sender= / subject_contains= / domain= / direction=outgoing+keyword=
-Rule Type: skip / classify / assign_project / assign_contact / tag / priority
-Action: מה לעשות
-Reason: הסבר קצר
-Active: TRUE
-Created By: claude
-```
-
----
-
-## GUARDRAILS
-
-| מצב | טיפול |
-|---|---|
-| Source ID כבר קיים ב-Tasks | עדכן דף קיים — אל תיצור כפילות |
-| AI מחזיר JSON שבור | צור משימה עם טקסט גולמי כ-Description, subject ככותרת |
-| Drive document | קרא metadata + 200 תווים ראשונים בלבד |
-| יותר מ-100 פריטים בריצה | עבד לפי עדיפות: Calendar → WhatsApp → Gmail דחוף → Gmail רגיל → Drive |
-| ONBOARDING — כמות הצעות | אין הגבלה. צור הצעה לכל פריט ACTIONABLE שמוצאים. המשתמש מסנן דרך your_approval. |
-| Reply To קיים אך לא נמצא | המשך עם מה שיש, ציין "context not found" ב-Reply To Context |
-
----
-
-## סדר פעולות — סיכום
-
-```
-STEP 0 → טען Rules, קרא אישורים, זהה סוג ריצה
-STEP 1 → אסוף פריטים לפי חלון זמן
-STEP 2 → סווג כל פריט
-STEP 3 → INFORMATIONAL=לוג בלבד | ACTIONABLE=פרויקט+משימה
-STEP 4 → כתוב ל-Processing Log + Tasks
-STEP 5 → עבד אישורים ממתינים
-STEP 6 → טפל ב-Calendar
-STEP 7 → עדכן Projects ו-Contacts
-STEP 8 → כתוב כללים חדשים מפידבק
-```
+עדכן:
+- Tasks Created, Tasks Updated
+- Actionable Count, Informational Count
+- Rules Added, Projects Created, Contacts Created
+- Summary: "PART2 — סווגו X פריטים, נוצרו Y משימות"
+- Status: completed
