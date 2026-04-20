@@ -84,6 +84,11 @@ parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= '2026-03-20T0
 - MCP של Google Drive משתמש ב-`parentId =` (לא `in parents`)
 - **חובה להוסיף `Z` בסוף התאריך** (ISO 8601 UTC format) — אחרת זורק Invalid date string format
 - Format נכון: `'2026-03-20T00:00:00Z'` — לא `'2026-03-20T00:00:00'`
+- **חובה להגביל pageSize ל-10 לכל היותר** (`pageSize: 10`) — אחרת התוצאה גדולה מדי לקריאה
+- **חובה להוסיף `excludeContentSnippets: true`** — חוסך tokens משמעותית
+- אם יש יותר מ-10 תוצאות — השתמש ב-`pageToken` להמשך בקריאה הבאה
+
+**אסור** לקרוא יותר מ-10 קבצים ב-batch אחד — גם אם יש בתיקייה יותר.
 
 אסור לחפש ב"שאר Drive". אם מקבלים תוצאות מחוץ לתיקייה — יש באג ב-query.
 
