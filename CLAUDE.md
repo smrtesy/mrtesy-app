@@ -36,7 +36,7 @@
 |---|---|
 | Gmail | חשבונות chanoch@maor.org + chanoch@kinus.info |
 | WhatsApp | https://docs.google.com/spreadsheets/d/1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI — לשונית: Messages |
-| Google Drive | Folder ID: `1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1` — חובה `'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents` בכל query |
+| Google Drive | Folder ID: `1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1` — חובה `parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1'` בכל query |
 | Google Calendar | לוח ראשי בלבד: chanoch770@gmail.com |
 
 ---
@@ -77,10 +77,28 @@
 ### 5. Drive — רק בתיקייה הספציפית
 
 ```
-'1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' in parents and ...
+parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= '2026-03-20T00:00:00Z'
 ```
 
+**הערות חשובות:**
+- MCP של Google Drive משתמש ב-`parentId =` (לא `in parents`)
+- **חובה להוסיף `Z` בסוף התאריך** (ISO 8601 UTC format) — אחרת זורק Invalid date string format
+- Format נכון: `'2026-03-20T00:00:00Z'` — לא `'2026-03-20T00:00:00'`
+
 אסור לחפש ב"שאר Drive". אם מקבלים תוצאות מחוץ לתיקייה — יש באג ב-query.
+
+### 6. Drive — קריאת קבצים
+
+**אסור לקרוא את התוכן המלא של קבצים גדולים.** יש מגבלה של 25,000 tokens לקריאה.
+
+**מה לעשות:**
+- השתמש ב-`get_file_metadata` תחילה כדי לקבל שם, גודל, contentSnippet
+- ה-`contentSnippet` מחזיר אוטומטית 200 תווים ראשונים — בדרך כלל זה מספיק לסיווג
+- אם צריך יותר תוכן — השתמש ב-`read_file_content` עם **offset ו-limit** לקרוא רק חלק
+- לקבצים גדולים (spreadsheets עם אלפי שורות, PDFs ארוכים) — קרא רק 500-1000 תווים ראשונים
+- שמור ב-`Raw Content` ב-Processing Log רק **1000 תווים ראשונים** של תוכן הקובץ, לא יותר
+
+**למה זה חשוב:** קריאה של קובץ עצום (כמו spreadsheet עם אלפי שורות) תגרום ל-ERROR ותעצור את הריצה.
 
 ---
 
@@ -108,9 +126,23 @@
 סדר איסוף חובה:
 1. Gmail → 2. WhatsApp → 3. Drive → 4. Calendar
 
+**Gmail query — חובה להחריג drafts:**
+הוסף `-in:drafts` לכל Gmail query. למשל:
+```
+after:2026/03/06 -to:office@maor.org -from:outbox@maor.org -in:drafts
+```
+
 **חובה לעבור על כל 4** גם אם מקור מסוים החזיר הרבה תוצאות.
 
 WhatsApp: גם incoming וגם outgoing. reaction → דלג ללא לוג.
+
+**WhatsApp — חשוב מאוד (הקובץ ענק):**
+- ה-Sheet מכיל את **כל ההיסטוריה** (יכול להגיע ל-300K+ תווים)
+- **אסור** לנסות לקרוא את כל ה-Sheet בבת אחת עם `read_file_content`
+- **הפתרון:** קרא רק את הסוף (השורות האחרונות) דרך `download_file_content` עם `exportMimeType='text/csv'`, ואז חתוך רק את השורות שבטווח הזמן
+- אם זה לא עובד — השתמש ב-Google Sheets API אם זמין
+- אם גם זה לא עובד — כתוב שורת errors ב-Run Session ודלג על WhatsApp בריצה הזו
+
 Drive: רק בתיקייה (ראה Global Rule #5).
 
 ## STEP 1.3 — TRIAGE (סינון לכל פריט)
