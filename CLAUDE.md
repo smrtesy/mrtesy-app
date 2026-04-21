@@ -89,6 +89,40 @@ parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= '2026-03-20T0
 
 **חובה** `download_file_content` עם `exportMimeType='text/csv'` (לא `read_file_content` — הקובץ ענק, 300K+ תווים).
 
+### 7. 🚨 EFFICIENCY RULES — חובה
+
+הריצה הקודמת כשלה כי בוצעו קריאות מיותרות לפני שהתחילה עבודה אמיתית. חובה להימנע מזה:
+
+**אל תעשה את הדברים הבאים:**
+
+1. **אל תטען schemas** — כל ה-database IDs וה-collection IDs כבר נמצאים ב-CLAUDE.md למעלה. אין צורך ב-`notion-fetch` על schema.
+2. **אל תחפש אותו דבר כמה פעמים** — אם חיפוש אחד לא הניב תוצאות, נסה ניסוח אחד נוסף בלבד. אחרי זה עצור.
+3. **אל תטען Rules & Memory פעמיים** — טען פעם אחת בתחילת הריצה, שמור במשתנה, השתמש שוב.
+4. **אל תקרא פריטי log אחד-אחד** — השתמש ב-`notion-search` עם פילטר שמחזיר רשימה מלאה ב-query אחד.
+5. **אל תטען Projects/Contacts באופן מלא בהתחלה** — רק חפש ספציפית כשאתה באמת צריך לשייך פריט לפרויקט קיים.
+
+**עשה:**
+
+1. **טען Rules & Memory פעם אחת** בתחילת הריצה (כולל writing_style).
+2. **שלוף את כל הפריטים הממתינים ב-query אחד.**
+3. **לכל פריט — טפל בו על פי ה-Raw Content שכבר קיים**, בלי קריאות נוספות.
+
+### 8. 🔁 CHECKPOINT STRATEGY
+
+אחרי **כל משימה שנוצרת**:
+1. עדכן מיידית את פריט ה-log: `Triage Status = classified`, `Task ID = <id>`
+2. כל 3-5 משימות — עדכן Run Session עם counts נוכחיים
+3. זה מבטיח שאם הריצה קורסת באמצע, לא נאבד את מה שכבר עובד — הריצה הבאה תמשיך מאיפה שעצרנו.
+
+### 9. ⏭️ SKIP WHAT'S ALREADY DONE
+
+- **STEP 3.FIRST (לימוד סגנון):** בדוק ב-Rules & Memory אם `Category=writing_style_he` וגם `Category=writing_style_en` קיימים. אם שניהם קיימים — **דלג על כל STEP 3.FIRST**.
+- **לפני יצירת משימה:** חפש ב-Tasks לפי Source ID — אם קיימת, עדכן במקום ליצור חדשה.
+
+### 10. ללא הגבלת כמות פריטים
+
+**אל תפסיק אחרי X פריטים.** המטרה היא לטפל בכל הפריטים הממתינים ב-log. אם בכל זאת הריצה נעצרת באמצע מסיבה כלשהי — ה-checkpoints ידאגו שהפריטים שטופלו נשמרו, וה-Classifier הבא ימשיך את היתרה.
+
 ---
 
 # PART 1 — EMAIL + DRIVE COLLECTOR
@@ -109,6 +143,7 @@ parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= '2026-03-20T0
 |---|---|---|
 | Gmail | 3 ימים בכל ריצה עד 30 יום | מאז הריצה האחרונה |
 | Drive | 30 יום | שעה אחרונה |
+| Calendar | 7 ימים קדימה + 3 ימים אחורה | 7 ימים קדימה + 3 ימים אחורה |
 
 **ONBOARDING של Gmail — חלון מתקדם:**
 1. בדוק ב-Processing Log מה התאריך הישן ביותר עם `Source = gmail`
@@ -135,6 +170,33 @@ parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= 'YYYY-MM-DDTH
 
 - `pageSize: 10`, `excludeContentSnippets: true`
 - לכל PDF: `read_file_content` לקבלת תוכן מלא
+
+### Google Calendar
+
+**טווח:** 7 ימים קדימה + 3 ימים אחורה (לפולו-אפ אחרי פגישות).
+
+**חשבון:** chanoch770@gmail.com (primary calendar).
+
+**סינון:**
+- ✅ **כלול** אירועים עם `attendees` (פגישות עם אחרים)
+- ✅ **כלול** אירועים עם כותרת שנשמעת כמשימה ("Call X", "Deadline Y", "Pay Z")
+- ❌ **דלג** אירועים חוזרים — רק מופע ראשון כל תקופה (השתמש ב-recurringEventId לזיהוי)
+- ❌ **דלג** אירועים מסומנים `private`
+- ❌ **דלג** על כללי skip מ-Rules & Memory (לדוגמה "שבת", "חופש")
+
+**לוגיקה:**
+- **אירוע עתידי עם attendees** → `pending_deep_classify` עם Raw Content הכולל:
+  - כותרת, מיקום, שעות התחלה/סיום
+  - רשימת משתתפים (שמות + אימיילים)
+  - description של האירוע
+  - Reply To Context: "מחר ב-10:00 | 3 משתתפים"
+- **אירוע שעבר (3 ימים אחורה) עם attendees** → `pending_deep_classify` עם תגית "follow-up"
+  - ה-classifier יציע משימה: "פולו-אפ אחרי פגישה עם X"
+- **תזכורת פרטית עם כותרת task-like** (לדוגמה "Pay rent") → `pending_deep_classify`
+
+**זיהוי אירועים שכבר ב-log:**
+- לפני הוספה — חפש `Source ID = <eventId>` ב-Processing Log
+- אם קיים → דלג (תזכורת שהזנחת או כבר סווגה)
 
 ## STEP 1.3 — TRIAGE
 
@@ -166,8 +228,9 @@ parentId = '1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1' and modifiedTime >= 'YYYY-MM-DDTH
 - **Raw Content מלא** (עד 3000 תווים)
 - Attachments Info אם יש
 
-### (ד) Calendar reminders
-אירועים מחר → `pending_deep_classify` עם Raw Content.
+### (ד) Calendar events
+- אירועים עם attendees → `pending_deep_classify` עם Raw Content
+- הסבר ב-Classification Reason: "calendar event, meeting/follow-up candidate"
 
 ## STEP 1.4 — כתיבה ל-Processing Log
 
@@ -309,58 +372,78 @@ Contact Person: [שם + מספר]
 
 **מתי לרוץ:** `prompt contains "PART3"`
 
-## STEP 3.0 — STARTUP
+## STEP 3.0 — STARTUP (חסכני!)
+
+**קריאה אחת בלבד בהתחלה:**
 
 1. צור Run Session עם Run Type = CLASSIFIER
-2. טען מ-Rules & Memory:
-   - כל הכללים (Active = TRUE)
-   - **writing_style_he** ו-**writing_style_en** — לשימוש עתידי בפעולות
-3. טען את כל Projects הקיימים
-4. טען את כל Contacts הקיימים
-5. **אם זו ריצה ראשונה** (אין writing_style ב-Rules):
-   - הפעל את STEP 3.FIRST (לימוד סגנון) **לפני** הסיווג
+2. טען Rules & Memory ב-query אחד:
+   - `notion-fetch` על Rules & Memory data source
+   - שמור את התוצאה במשתנה — כולל skip rules, writing_style_he, writing_style_en
+   - **אל תחזור לחפש שוב באמצע הריצה** — יש לך את הכל
 
-## STEP 3.FIRST — לימוד סגנון (פעם אחת)
+**בדיקה אם צריך STEP 3.FIRST:**
+- אם `writing_style_he` וגם `writing_style_en` קיימים ב-Rules → **דלג על STEP 3.FIRST לחלוטין**
+- המצב הנוכחי: שניהם כבר קיימים (נלמדו ב-21/4/2026). **אין צורך ב-STEP 3.FIRST.**
 
-1. חפש ב-Gmail: 20 אימיילים יוצאים אחרונים בעברית
-2. חפש: 20 אימיילים יוצאים אחרונים באנגלית
-3. לכל שפה, הפעל AI:
-```
-SYSTEM: Analyze the writing style in these 20 emails by Chanoch.
-Output a comprehensive style profile:
-- Average length
-- Greeting patterns
-- Closing patterns  
-- Formality level
-- Common phrases
-- Tone (formal/friendly/direct)
-- Common expressions
-- Typical structure
+**אל תעשה:**
+- ❌ אל תטען schemas של databases — הם ב-CLAUDE.md
+- ❌ אל תטען Projects/Contacts באופן מלא — רק חפש ספציפית כשנדרש שיוך
+- ❌ אל תחפש שוב Rules & Memory באמצע — כבר טענת בהתחלה
 
-Output: Hebrew bullet list, ~200 words.
-```
-4. שמור כל פרופיל ב-Rules & Memory:
-   - Trigger: "writing style reference"
-   - Rule Type: classify
-   - Category: writing_style_he / writing_style_en
-   - Action: [הפרופיל המלא]
-   - Created By: claude
+## STEP 3.FIRST — לימוד סגנון (🔕 בד"כ לא רץ)
 
-## STEP 3.1 — קריאת פריטים ממתינים
+**בדוק ב-Rules & Memory (מהטעינה ב-STEP 3.0) — אם `writing_style_he` וגם `writing_style_en` קיימים, דלג לגמרי.**
 
-שלוף מ-Processing Log כל הדפים עם `Triage Status = pending_deep_classify`.
+רק אם חסר אחד מהם:
+1. `search_threads` עם query `from:chanoch@maor.org שלום` (עברית) או `from:chanoch@maor.org Thank you` (אנגלית) — 10 תוצאות
+2. השתמש ב-snippets מ-search_threads (אל תקרא גוף מלא)
+3. AI מייצר פרופיל (~150 מילים)
+4. שמור ב-Rules & Memory
+5. **סיים את הריצה** — סמן Run Session `completed, writing_style learned, classification deferred`
 
-**אם יש יותר מ-30 — טפל ב-30 הדחופים ביותר (לפי Date Received)**, השאר ל-ריצה הבאה.
+## STEP 3.1 — שליפת פריטים ממתינים (query אחד!)
 
-## STEP 3.2 — טעינת הקשר לפני סיווג
+**חובה — query אחד בלבד:**
 
-**לפני סיווג כל פריט:**
+השתמש ב-`notion-search` על Processing Log data source עם:
+- data_source_url: `collection://d47bac97-2e3f-44d5-9b4b-d93405035c7a`
+- query: "pending_deep_classify"
 
-1. חפש ב-Processing Log הודעות מאותו `From` ב-14 יום אחרונים
-2. חפש ב-Tasks משימות פתוחות (Status ≠ done/cancelled) מאותו `From`
-3. אם קיים שרשור פעיל — **עדכן משימה קיימת** במקום ליצור חדשה
+זה מחזיר את כל הפריטים עם `Triage Status = pending_deep_classify` **ב-response אחד עם ה-Raw Content**.
 
-## STEP 3.3 — סיווג עם AI
+**אין צורך ב:**
+- ❌ 5 ניסיונות חיפוש בניסוחים שונים
+- ❌ `notion-fetch` נפרד לכל פריט
+- ❌ הגבלת מספר פריטים — טפל בכולם
+
+**סדר טיפול:** FIFO — הישן ביותר ראשון (לפי Date Received).
+
+## STEP 3.2 — טיפול בכל פריט (loop)
+
+**לכל פריט ברשימה (מ-STEP 3.1):**
+
+1. **בדיקת כפילות** (חיפוש קצר):
+   - אם יש `Source ID`, חפש ב-Tasks לפי Source ID
+   - אם קיים — עדכן את המשימה הקיימת (אל תיצור חדשה)
+   
+2. **סיווג עם AI** — השתמש ב-Raw Content שכבר יש לך (מ-STEP 3.1)
+
+3. **צור/עדכן משימה** ב-Tasks
+
+4. **עדכן מיידית את פריט ה-log:**
+   - Triage Status = classified
+   - Task ID = ה-ID החדש
+   - Classification = ACTIONABLE / INFORMATIONAL
+
+5. **כל 3-5 משימות** — עדכן Run Session עם counts (checkpoint).
+
+**אל תעשה באמצע ה-loop:**
+- ❌ חיפוש היסטוריה של 14 יום
+- ❌ טעינת Rules & Memory מחדש
+- ❌ fetch של schemas
+
+## STEP 3.3 — פורמט ה-AI prompt לסיווג
 
 ```
 SYSTEM: You are classifier+task builder for Chanoch Chaskind.
@@ -411,45 +494,35 @@ Financial: financial_advisor, call_preparation,
 
 USER message: כל השדות מ-Processing Log + Raw Content + context מ-STEP 3.2.
 
-## STEP 3.4 — עיבוד לפי סיווג
+## STEP 3.4 — עיבוד לפי סיווג (עם CHECKPOINTS)
+
+**🔁 אחרי כל פריט — עדכן את ה-log מיידית.**
 
 ### INFORMATIONAL
-עדכן ב-log:
-- Classification: `INFORMATIONAL`
-- Triage Status: `classified`
-- Action Taken: `logged_only`
-
-אל תיצור משימה.
+1. עדכן ב-log:
+   - Classification: `INFORMATIONAL`
+   - Triage Status: `classified`
+   - Action Taken: `logged_only`
+2. ✅ **Checkpoint:** הפריט הושלם, עובר לבא.
 
 ### ACTIONABLE
-1. **מניעת כפילויות:** חפש ב-Tasks לפי Source ID
-   - קיים → **עדכן** את הקיים
-   - לא קיים → **צור חדש**
-
-2. **זיהוי פרויקט** (אופציונלי):
-   ```
-   SYSTEM: Given these projects: [list], does message belong?
-   Respond: project_id | none
-   ```
-
-3. **צור/עדכן Task:**
-   - Title, Status=pending_approval, Priority, Due Date
-   - Source, Source ID, Source Link, Reply To Context
-   - Description (עשיר!), Category, Tags
-   - **Contact Person** (שם + טלפון + אימייל)
-   - **AI Actions Catalog** (JSON עם 2-3 פעולות)
-   - **Linked Sources** (IDs של פריטי log קשורים)
-   - **Action Status: idle** (ברירת מחדל)
-   - Update Log: "[DD/MM HH:MM] נוצרה מ-{source}"
-
-4. **עדכן Contacts** אם שולח חדש.
-5. **עדכן Projects** אם שייך — Key Dates, Description.
-
-6. **עדכן log:**
+1. **מניעת כפילויות:** חפש ב-Tasks לפי `Source ID` — עדכן אם קיים
+2. **צור Task** (עם כל השדות — Title, Description, Priority, Due Date, Category, Tags, Contact Person, AI Actions Catalog, Source ID, Source Link, Status=pending_approval, Action Status=idle, Update Log)
+3. **עדכן log מיידית** (זה ה-checkpoint):
    - Classification: `ACTIONABLE`
    - Triage Status: `classified`
    - Action Taken: `task_created`
-   - Task ID: ה-ID של המשימה
+   - Task ID: ה-ID של המשימה החדשה
+4. **אחרי כל 2 משימות** — עדכן Run Session: `Tasks Created += 2`, זה מבטיח שאם נתקעים — יודעים כמה הספקנו
+
+**⏭️ דלג על:**
+- יצירת Projects / Contacts אוטומטית — זה לריצה נפרדת בעתיד
+- חיפוש "Linked Sources" עמוק — אופציונלי, רק אם יש זיהוי ברור (אותו Source ID prefix)
+
+## STEP 3.5 — זיהוי מסמכים קשורים (אופציונלי — דלג אם חורגים מ-budget)
+
+אם משימה חדשה מאימייל, חפש ב-log פריטי Drive מאותו שולח/נושא (קריאה אחת!).
+אם נמצאו — עדכן `Linked Sources` ב-Task.
 
 ## STEP 3.5 — זיהוי מסמכים קשורים
 
@@ -485,10 +558,22 @@ USER message: כל השדות מ-Processing Log + Raw Content + context מ-STEP 
 
 ## STEP 3.8 — סיום
 
-עדכן Run Session:
-- Tasks Created, Tasks Updated
-- Actionable Count, Informational Count
-- Rules Added, Projects Created, Contacts Created
+עדכן Run Session **חובה** (גם אם לא הספקת הכל):
+
+| שדה | ערך |
+|---|---|
+| Status | `completed` אם סיימת את כל ה-pending, `partial` אם נותרו, `failed` אם קרס |
+| Ended At | עכשיו |
+| Duration Minutes | חישוב מ-Started At |
+| Tasks Created | סך משימות חדשות |
+| Tasks Updated | סך משימות מעודכנות |
+| Actionable Count | סך ACTIONABLE שסווגו |
+| Informational Count | סך INFORMATIONAL |
+| Rules Added | סך כללים חדשים |
+| Summary | "טופלו X מתוך Y. נותרו Z ל-ריצה הבאה." |
+| Errors Log | כל timeout/שגיאה |
+
+**🚨 זה הצעד הכי חשוב — גם אם נגמרים טוקנים, חייב לסגור את ה-Run Session. אל תישאר `running` לנצח.**
 
 ---
 
