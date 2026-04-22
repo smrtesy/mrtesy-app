@@ -153,8 +153,11 @@ export type Database = {
           message: string | null
           message_he: string | null
           next_occurrence: string | null
+          paused_until: string | null
           remind_at: string
           recurrence_rule: string | null
+          sent_at: string | null
+          source: string | null
           task_id: string | null
           title_he: string | null
           user_id: string | null
@@ -169,16 +172,31 @@ export type Database = {
       source_messages: {
         Row: {
           ai_classification: string | null
+          ai_extraction: Json | null
           body_text: string | null
           created_at: string | null
           dead_letter: boolean | null
+          detailed_summary: string | null
+          has_attachments: boolean | null
           id: string
+          is_customer_inquiry: boolean | null
+          language: string | null
+          needs_project_check: boolean | null
+          processed_at: string | null
+          processing_lock_at: string | null
           processing_status: string | null
           received_at: string | null
+          recipient: string | null
+          retry_count: number | null
+          scan_run_id: string | null
           sender: string | null
           sender_email: string | null
+          sender_phone: string | null
+          skip_reason: string | null
+          source_account: string | null
           source_id: string
           source_type: string
+          source_url: string | null
           subject: string | null
           user_id: string | null
         }
@@ -197,6 +215,7 @@ export type Database = {
           last_error: string | null
           last_synced_at: string | null
           messages_synced_total: number | null
+          retry_count: number | null
           source: string
           user_id: string
         }
@@ -245,23 +264,34 @@ export type Database = {
       tasks: {
         Row: {
           ai_actions: Json | null
+          ai_confidence: number | null
           ai_generated_content: Json | null
+          ai_model_used: string | null
           completed_at: string | null
+          contact_id: string | null
           created_at: string | null
           description: string | null
           due_date: string | null
+          due_time: string | null
           id: string
+          last_interaction_at: string | null
+          last_updated_reason: string | null
           linked_drive_docs: Json | null
           manually_verified: boolean | null
+          organization_id: string | null
           priority: string | null
           project_id: string | null
+          recurrence_rule: string | null
           related_contact: string | null
           related_contact_email: string | null
+          related_contact_phone: string | null
+          reminder_at: string | null
           seen_at: string | null
           snooze_count: number | null
           snoozed_until: string | null
           source_message_id: string | null
           status: string | null
+          status_changed_at: string | null
           tags: string[] | null
           task_type: string | null
           title: string
@@ -297,19 +327,31 @@ export type Database = {
       }
       user_settings: {
         Row: {
+          ai_clarification_prefs: Json | null
+          calendar_allday_tasks: boolean | null
           calendar_connected: boolean | null
+          calendar_event_filter: string | null
+          calendar_holidays_tasks: boolean | null
+          calendar_initial_scan_months: number | null
           classification_model: string | null
           created_at: string | null
           daily_ai_budget_usd: number | null
+          default_reminder_timing: string | null
           display_name: string | null
           drive_connected: boolean | null
+          drive_folder_id: string | null
           gmail_connected: boolean | null
           id: string
+          initial_scan_completed_at: string | null
+          initial_scan_days_back: number | null
+          initial_scan_started_at: string | null
+          initial_setup_completed: boolean | null
           my_emails: string[] | null
           office_addresses: string[] | null
           onboarding_completed: boolean | null
           plan: string | null
           preferred_language: string | null
+          reminder_channels: string[] | null
           show_ai_costs: boolean | null
           skip_recipients: string[] | null
           skip_senders: string[] | null
