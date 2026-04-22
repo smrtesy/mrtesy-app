@@ -101,15 +101,38 @@ export type Database = {
           [key: string]: unknown
         }
       }
+      project_credentials: {
+        Row: {
+          api_key_encrypted: string | null
+          created_at: string | null
+          id: string
+          notes: string | null
+          password_encrypted: string | null
+          project_id: string | null
+          system_name: string
+          url: string | null
+          user_id: string | null
+          username: string | null
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
       projects: {
         Row: {
           color: string | null
           created_at: string | null
+          gcal_calendar_id: string | null
+          gmail_label_id: string | null
           id: string
           is_active: boolean | null
           name: string
           name_he: string | null
           organization_id: string | null
+          parent_id: string | null
           template_type: string | null
           user_id: string | null
         }
