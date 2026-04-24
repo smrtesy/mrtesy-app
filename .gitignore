@@ -39,3 +39,6 @@ next-env.d.ts
 server/node_modules
 server/dist
 server/.env
+
+# supabase cli temp files
+supabase/.temp/
