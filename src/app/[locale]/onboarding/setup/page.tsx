@@ -227,29 +227,31 @@ export default function OnboardingSetup() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("No session");
 
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/initial-scan`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
+      const resp = await fetch(`${backendUrl}/api/sync/part1`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ gmail_days: gmailDays, drive_hours: 24 }),
+      });
 
       const data = await resp.json();
 
-      if (data.skipped) {
-        toast.info(t("step4.alreadyDone"));
-      } else if (data.success) {
-        setStats({ gmail: data.gmail_ids || 0, calendar: data.calendar_events || 0 });
-        toast.success(t("step4.complete"));
-      } else {
-        throw new Error(data.error || "Scan failed");
+      if (!resp.ok) {
+        throw new Error(data.error ?? "Scan failed");
       }
 
-      // Drive sync is triggered server-side from initial-scan edge function
+      // Fetch stats from run_session
+      const { data: runSession } = await supabase
+        .from("run_sessions")
+        .select("items_processed")
+        .eq("id", data.session_id)
+        .single();
+
+      setStats({ gmail: runSession?.items_processed ?? 0, calendar: 0 });
+      toast.success(t("step4.complete"));
 
       // onboarding_completed is now set by the edge function itself,
       // but set it here too as a safety net

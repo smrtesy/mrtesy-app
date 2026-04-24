@@ -5,74 +5,72 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, Copy, Check, ExternalLink, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
-import { useState, useEffect } from "react";
+import { MessageCircle, CheckCircle2, AlertCircle, Loader2, ExternalLink } from "lucide-react";
+import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
-export default function OnboardingStep3() {
+const DEFAULT_SHEET_ID = "1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
+
+export default function OnboardingWhatsApp() {
   const t = useTranslations("onboarding");
   const { locale } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirect");
-  const [copied, setCopied] = useState(false);
-  const [webhookUrl, setWebhookUrl] = useState("");
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
   const supabase = createClient();
   const isHe = locale === "he";
 
-  useEffect(() => {
-    async function loadUser() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setWebhookUrl(
-          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/whatsapp?user_id=${user.id}`
-        );
-      }
-    }
-    loadUser();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [sheetId, setSheetId] = useState(DEFAULT_SHEET_ID);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
+  const [rowCount, setRowCount] = useState<number | null>(null);
 
-  async function handleTestWebhook() {
+  async function handleTest() {
     setTesting(true);
     setTestResult(null);
-    try {
-      // Check if any whatsapp messages exist in DB (proves webhook works)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+    setRowCount(null);
 
-      // Count whatsapp messages
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      // Trigger a test PART 2 run with the sheet ID
+      const res = await fetch(`${BACKEND_URL}/api/sync/part2`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ lookback_hours: 168, force: true }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+
+      // Check if any whatsapp source_messages were created
+      const { data: { user } } = await supabase.auth.getUser();
+      await new Promise((r) => setTimeout(r, 3000)); // give server time to process
+
       const { count } = await supabase
         .from("source_messages")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", user!.id)
         .eq("source_type", "whatsapp");
 
-      if (count && count > 0) {
-        setTestResult("success");
-        toast.success(isHe ? `ה-webhook עובד! ${count} הודעות התקבלו` : `Webhook works! ${count} messages received`);
-      } else {
-        // No messages yet - try a direct fetch to verify the endpoint responds
-        try {
-          const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-          if (resp.ok) {
-            setTestResult("success");
-            toast.success(isHe ? "ה-webhook מגיב. שלח הודעת WhatsApp לבדיקה." : "Webhook responds. Send a WhatsApp message to test.");
-          } else {
-            setTestResult("error");
-            toast.error(isHe ? `שגיאה: ${resp.status}` : `Error: ${resp.status}`);
-          }
-        } catch {
-          // CORS block is expected - webhook still works, just can't test from browser
-          setTestResult("success");
-          toast.success(isHe ? "ה-webhook מוגדר. שלח הודעת WhatsApp כדי לאמת." : "Webhook configured. Send a WhatsApp message to verify.");
-        }
-      }
-    } catch {
+      setRowCount(count ?? 0);
+      setTestResult("success");
+      toast.success(
+        isHe
+          ? `גישה לSheet הצליחה! ${count ?? 0} הודעות זוהו`
+          : `Sheet access successful! ${count ?? 0} messages found`,
+      );
+    } catch (e) {
       setTestResult("error");
-      toast.error(isHe ? "שגיאת אימות" : "Auth error");
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setTesting(false);
     }
@@ -82,24 +80,13 @@ export default function OnboardingStep3() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { error } = await supabase
+    await supabase
       .from("user_settings")
       .update({ whatsapp_connected: true })
       .eq("user_id", user.id);
 
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    toast.success(t("connect"));
+    toast.success(isHe ? "WhatsApp חובר בהצלחה" : "WhatsApp connected");
     router.push(redirectTo === "settings" ? `/${locale}/settings` : `/${locale}/onboarding/setup`);
-  }
-
-  function handleCopy() {
-    navigator.clipboard.writeText(webhookUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   }
 
   function handleSkip() {
@@ -112,52 +99,58 @@ export default function OnboardingStep3() {
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
           <MessageCircle className="h-8 w-8 text-emerald-600" />
         </div>
-        <CardTitle>{t("step3.title")}</CardTitle>
-        <CardDescription>{t("step3.description")}</CardDescription>
+        <CardTitle>{isHe ? "חיבור WhatsApp" : "WhatsApp Connection"}</CardTitle>
+        <CardDescription>
+          {isHe
+            ? "המערכת קוראת הודעות WhatsApp מ-Google Sheet שמעודכן על ידי Dualhook"
+            : "The system reads WhatsApp messages from a Google Sheet updated by Dualhook"}
+        </CardDescription>
       </CardHeader>
+
       <CardContent className="space-y-4">
-        {/* Setup Instructions */}
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs space-y-2">
-          <p className="font-medium text-amber-800">
-            {isHe ? "הוראות הגדרה:" : "Setup instructions:"}
-          </p>
-          <ol className="list-decimal list-inside space-y-1.5 text-amber-700" dir={isHe ? "rtl" : "ltr"}>
-            <li>{isHe ? "העתק את ה-Webhook URL למטה" : "Copy the Webhook URL below"}</li>
+        {/* How it works */}
+        <div className="rounded-lg border bg-muted/50 p-3 text-xs space-y-1.5" dir={isHe ? "rtl" : "ltr"}>
+          <p className="font-medium">{isHe ? "איך זה עובד:" : "How it works:"}</p>
+          <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
             <li>
-              {isHe ? "פתח את " : "Open "}
+              {isHe ? "Dualhook מעתיק הודעות WhatsApp ל-" : "Dualhook copies WhatsApp messages to "}
               <a
-                href="https://app.dualhook.com"
+                href={`https://docs.google.com/spreadsheets/d/${DEFAULT_SHEET_ID}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline font-medium inline-flex items-center gap-0.5"
+                className="underline inline-flex items-center gap-0.5"
               >
-                Dualhook <ExternalLink className="h-2.5 w-2.5 inline" />
+                Google Sheet <ExternalLink className="h-2.5 w-2.5" />
               </a>
-              {isHe ? " → Webhook Override → הדבק את ה-URL בשדה Webhook URL" : " → Webhook Override → paste URL in Webhook URL field"}
             </li>
-            <li>{isHe ? "לחץ Save Changes ב-Dualhook, ואז Test Connection" : "Click Save Changes in Dualhook, then Test Connection"}</li>
-            <li>{isHe ? "חזור לכאן ולחץ 'בדוק חיבור' לוודא שעובד" : "Come back here and click 'Test Connection' to verify"}</li>
-            <li>{isHe ? "לחץ 'חיבור' לסיום" : "Click 'Connect' to finish"}</li>
+            <li>{isHe ? "השרת קורא מה-Sheet כל כמה שעות" : "The server reads from the Sheet every few hours"}</li>
+            <li>{isHe ? "AI מנתח את השיחות ויוצר משימות" : "AI analyzes conversations and creates tasks"}</li>
           </ol>
         </div>
 
-        {/* Webhook URL */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Webhook URL</label>
-          <div className="flex gap-2">
-            <Input value={webhookUrl} readOnly className="text-xs font-mono" dir="ltr" />
-            <Button variant="outline" size="icon" onClick={handleCopy} className="min-w-[48px] min-h-[48px] shrink-0">
-              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
+        {/* Sheet ID field */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">
+            {isHe ? "Google Sheet ID" : "Google Sheet ID"}
+          </label>
+          <Input
+            value={sheetId}
+            onChange={(e) => setSheetId(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="Sheet ID..."
+          />
+          <p className="text-xs text-muted-foreground">
+            {isHe ? "ה-ID מתוך קישור ה-Sheet (ברירת מחדל: ה-Sheet הנוכחי)" : "ID from the Sheet URL (default: current Sheet)"}
+          </p>
         </div>
 
-        {/* Test Connection */}
+        {/* Test button */}
         <Button
           variant="outline"
-          onClick={handleTestWebhook}
-          disabled={testing || !webhookUrl}
           className="w-full min-h-[48px] gap-2"
+          onClick={handleTest}
+          disabled={testing || !sheetId}
         >
           {testing ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -168,23 +161,40 @@ export default function OnboardingStep3() {
           ) : (
             <MessageCircle className="h-4 w-4" />
           )}
-          {isHe ? "בדוק חיבור" : "Test Connection"}
+          {testing
+            ? (isHe ? "בודק גישה…" : "Testing access…")
+            : (isHe ? "בדוק גישה ל-Sheet" : "Test Sheet Access")}
         </Button>
 
-        {/* Connect */}
+        {testResult === "success" && rowCount !== null && (
+          <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700 text-center">
+            {isHe
+              ? `✓ גישה לSheet מאושרת — ${rowCount} הודעות נמצאו`
+              : `✓ Sheet access confirmed — ${rowCount} messages found`}
+          </div>
+        )}
+
+        {testResult === "error" && (
+          <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700" dir={isHe ? "rtl" : "ltr"}>
+            {isHe
+              ? "שגיאה בגישה ל-Sheet. ודא שחיבור Google מאושר ושה-Sheet משותף נכון."
+              : "Sheet access failed. Make sure Google is connected and the Sheet is properly shared."}
+          </div>
+        )}
+
+        {/* Connect / Skip */}
         <Button onClick={handleConnect} className="w-full min-h-[48px]">
-          {t("connect")}
+          {isHe ? "אשר חיבור" : "Confirm Connection"}
         </Button>
         <Button onClick={handleSkip} variant="ghost" className="w-full min-h-[48px]">
           {t("skip")}
         </Button>
 
-        {/* Progress */}
+        {/* Progress dots */}
         <div className="flex justify-center gap-2 pt-2">
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-muted" />
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className={`h-2 w-8 rounded-full ${i < 3 ? "bg-blue-600" : "bg-muted"}`} />
+          ))}
         </div>
       </CardContent>
     </Card>

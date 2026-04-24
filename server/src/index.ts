@@ -4,6 +4,8 @@ import cors from "cors";
 import cron from "node-cron";
 import { db } from "./db";
 import syncRouter from "./routes/sync";
+import actionsRouter from "./routes/actions";
+import { runPart1 } from "./parts/part1-collector";
 import { runPart2 } from "./parts/part2-whatsapp";
 import { runPart3 } from "./parts/part3-classifier";
 
@@ -25,6 +27,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/sync", syncRouter);
+app.use("/api/actions", actionsRouter);
 
 // ── Cron Scheduler ────────────────────────────────────────────────────────────
 // Reads sync_schedules table to decide which users/parts to run automatically.
@@ -44,7 +47,9 @@ async function runScheduledJobs() {
 
   for (const schedule of schedules) {
     try {
-      if (schedule.part === "part2") {
+      if (schedule.part === "part1") {
+        await runPart1({ userId: schedule.user_id });
+      } else if (schedule.part === "part2") {
         await runPart2({ userId: schedule.user_id });
       } else if (schedule.part === "part3") {
         await runPart3({ userId: schedule.user_id });

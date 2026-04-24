@@ -41,11 +41,28 @@ interface SyncSchedule {
 
 const PARTS = [
   {
+    key: "part0",
+    label: "PART 0 — Style Learning",
+    description: "Learn writing style from sent emails (manual only, run once)",
+    icon: Zap,
+    color: "text-purple-500",
+    manualOnly: true,
+  },
+  {
+    key: "part1",
+    label: "PART 1 — Email + Drive + Calendar",
+    description: "Collect new emails, Drive documents, and calendar events",
+    icon: FileSearch,
+    color: "text-orange-500",
+    manualOnly: false,
+  },
+  {
     key: "part2",
     label: "PART 2 — WhatsApp",
     description: "Read new messages from Google Sheet and create tasks",
     icon: MessageSquare,
     color: "text-emerald-500",
+    manualOnly: false,
   },
   {
     key: "part3",
@@ -53,6 +70,7 @@ const PARTS = [
     description: "Classify pending source messages into tasks with Claude AI",
     icon: FileSearch,
     color: "text-blue-500",
+    manualOnly: false,
   },
 ] as const;
 
@@ -111,7 +129,7 @@ export default function AdminSyncPage() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  async function triggerPart(part: "part2" | "part3") {
+  async function triggerPart(part: "part0" | "part1" | "part2" | "part3") {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { toast.error("Not authenticated"); return; }
 
@@ -123,7 +141,11 @@ export default function AdminSyncPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify(part === "part2" ? { lookback_hours: 48 } : { limit: 50 }),
+        body: JSON.stringify(
+          part === "part0" ? { language: "he" } :
+          part === "part2" ? { lookback_hours: 48 } :
+          part === "part3" ? { limit: 50 } : {}
+        ),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Unknown error");
@@ -221,7 +243,7 @@ export default function AdminSyncPage() {
                     size="sm"
                     className="flex-1"
                     disabled={isRunning}
-                    onClick={() => triggerPart(part.key as "part2" | "part3")}
+                    onClick={() => triggerPart(part.key as "part0" | "part1" | "part2" | "part3")}
                   >
                     {isRunning ? (
                       <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
@@ -231,18 +253,20 @@ export default function AdminSyncPage() {
                     {isRunning ? "Running…" : "Run Now"}
                   </Button>
 
-                  <Button
-                    size="sm"
-                    variant={sched?.is_auto ? "default" : "outline"}
-                    className="gap-1"
-                    onClick={() => toggleAuto(part.key, sched?.is_auto ?? false)}
-                  >
-                    {sched?.is_auto ? (
-                      <><CheckCircle2 className="h-4 w-4" /> Auto</>
-                    ) : (
-                      <><Clock className="h-4 w-4" /> Manual</>
-                    )}
-                  </Button>
+                  {!part.manualOnly && (
+                    <Button
+                      size="sm"
+                      variant={sched?.is_auto ? "default" : "outline"}
+                      className="gap-1"
+                      onClick={() => toggleAuto(part.key, sched?.is_auto ?? false)}
+                    >
+                      {sched?.is_auto ? (
+                        <><CheckCircle2 className="h-4 w-4" /> Auto</>
+                      ) : (
+                        <><Clock className="h-4 w-4" /> Manual</>
+                      )}
+                    </Button>
+                  )}
                 </div>
 
                 {sched?.last_run_at && (

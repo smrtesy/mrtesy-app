@@ -22,12 +22,23 @@ interface Credentials {
  * Automatically refreshes the access token if it has expired and persists
  * the new token back to user_credentials.
  */
+// Service name mapping: our internal names → DB column values
+const SERVICE_MAP: Record<string, string> = {
+  gmail_calendar: "gmail",    // gmail + calendar share the same OAuth token
+  gmail:          "gmail",
+  calendar:       "google_calendar",
+  google_calendar: "google_calendar",
+  drive:          "google_drive",
+  google_drive:   "google_drive",
+};
+
 export async function getOAuthClient(userId: string, service: string) {
+  const dbService = SERVICE_MAP[service] ?? service;
   const { data: cred, error } = await db
     .from("user_credentials")
     .select("*")
     .eq("user_id", userId)
-    .eq("service", service)
+    .eq("service", dbService)
     .single();
 
   if (error || !cred) {

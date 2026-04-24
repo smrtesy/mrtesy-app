@@ -59,7 +59,7 @@ export function QuickAction({
       if (!session) throw new Error("No session");
 
       const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/quick-action`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/actions/execute`,
         {
           method: "POST",
           headers: {
@@ -68,8 +68,7 @@ export function QuickAction({
           },
           body: JSON.stringify({
             task_id: taskId,
-            action_label: actionLabel,
-            prompt: actionPrompt,
+            action_type: actionLabel,
           }),
         }
       );
@@ -130,7 +129,7 @@ export function QuickAction({
       if (!session) throw new Error("No session");
 
       const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-gmail-draft`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/actions/execute`,
         {
           method: "POST",
           headers: {
@@ -138,10 +137,8 @@ export function QuickAction({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            to: "",
-            subject: actionLabel,
-            body: result,
             task_id: taskId,
+            action_type: "draft_reply_he",
           }),
         }
       );

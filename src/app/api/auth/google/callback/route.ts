@@ -88,7 +88,7 @@ export async function GET(request: Request) {
           access_token: tokens.access_token,
           refresh_token: tokens.refresh_token,
           expires_at: expiresAt,
-          scopes: ["gmail.modify"],
+          scopes: ["gmail.modify", "spreadsheets.readonly"],
           email: user.email,
         },
         { onConflict: "user_id,service" }
