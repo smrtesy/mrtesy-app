@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   switch (service) {
     case "gmail_calendar":
       scopes =
-        "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar";
+        "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets.readonly";
       break;
     case "drive":
       scopes = "https://www.googleapis.com/auth/drive.readonly";

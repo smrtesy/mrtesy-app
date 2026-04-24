@@ -55,10 +55,10 @@ export default function SettingsPage() {
         .single();
       const { data: creds } = await supabase
         .from("user_credentials")
-        .select("service_type")
+        .select("service")
         .eq("user_id", user.id);
 
-      const serviceTypes = (creds || []).map((c: { service_type: string }) => c.service_type);
+      const serviceTypes = (creds || []).map((c: { service: string }) => c.service);
       setConnStatus({
         gmail: serviceTypes.includes("gmail_calendar") || data?.gmail_connected,
         drive: serviceTypes.includes("drive") || data?.drive_connected,

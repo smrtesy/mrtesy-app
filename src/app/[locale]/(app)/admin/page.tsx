@@ -159,7 +159,10 @@ export default async function AdminDashboard({
         </Card>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
+        <Link href={`${basePath}/sync`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">Sync Control</Link>
+        <Link href={`${basePath}/rules`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">Filter Rules</Link>
+        <Link href={`${basePath}/prompts`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">AI Prompts</Link>
         <Link href={`${basePath}/users`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("users")}</Link>
         <Link href={`${basePath}/services`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("services")}</Link>
         <Link href={`${basePath}/logs`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("logs")}</Link>

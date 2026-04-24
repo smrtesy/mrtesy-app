@@ -146,17 +146,22 @@ export type Database = {
       source_messages: {
         Row: {
           ai_classification: string | null
+          attachments_info: string | null
           body_text: string | null
           created_at: string | null
           dead_letter: boolean | null
           id: string
+          metadata: Json | null
           processing_status: string | null
+          raw_content: string | null
           received_at: string | null
+          reply_to_context: string | null
           sender: string | null
           sender_email: string | null
           source_id: string
           source_type: string
           subject: string | null
+          updated_at: string | null
           user_id: string | null
         }
         Insert: {
@@ -221,31 +226,58 @@ export type Database = {
       }
       tasks: {
         Row: {
-          ai_actions: Json | null
-          ai_generated_content: Json | null
-          completed_at: string | null
-          created_at: string | null
-          description: string | null
-          due_date: string | null
+          // Core fields
           id: string
-          linked_drive_docs: Json | null
-          manually_verified: boolean | null
-          priority: string | null
-          project_id: string | null
-          related_contact: string | null
-          related_contact_email: string | null
-          seen_at: string | null
-          snooze_count: number | null
-          snoozed_until: string | null
-          source_message_id: string | null
-          status: string | null
-          tags: string[] | null
-          task_type: string | null
+          user_id: string | null
           title: string
           title_he: string | null
+          description: string | null
+          priority: string | null
+          status: string | null
+          task_type: string | null
+
+          // Timing
+          due_date: string | null
+          due_time: string | null
+          reminder_at: string | null
+          recurrence_rule: string | null
+          snoozed_until: string | null
+          snooze_count: number | null
+          completed_at: string | null
+          seen_at: string | null
+          last_interaction_at: string | null
+          created_at: string | null
           updated_at: string | null
+
+          // Relationships
+          project_id: string | null
+          source_message_id: string | null
+          source_link: string | null
+          related_contact: string | null
+          related_contact_email: string | null
+          related_contact_phone: string | null
+
+          // AI fields
+          ai_actions: Json | null
+          ai_generated_content: Json | null
+          ai_confidence: number | null
+          ai_model_used: string | null
+          manually_verified: boolean | null
+
+          // Rich content
+          tags: string[] | null
           updates: Json | null
-          user_id: string | null
+          linked_drive_docs: Json | null
+
+          // Action tracking
+          requested_action: string | null
+          custom_action: string | null
+          action_status: string | null
+          action_result: string | null
+          action_error: string | null
+          action_retry_count: number | null
+          action_completed_at: string | null
+          draft_link: string | null
         }
         Insert: {
           [key: string]: unknown
@@ -294,6 +326,132 @@ export type Database = {
           timezone: string | null
           user_id: string
           whatsapp_connected: boolean | null
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
+
+      // ── New tables added in migration 20260424000001 ──────────────────
+
+      rules_memory: {
+        Row: {
+          id: string
+          user_id: string
+          trigger: string
+          rule_type: string
+          category: string | null
+          action: string | null
+          reason: string | null
+          is_active: boolean
+          created_by: string
+          suggested_by_run_id: string | null
+          suggestion_confidence: number | null
+          suggestion_status: string | null
+          user_feedback: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
+
+      run_sessions: {
+        Row: {
+          id: string
+          user_id: string
+          run_title: string
+          run_type: string
+          part: string
+          status: string
+          started_at: string
+          ended_at: string | null
+          duration_seconds: number | null
+          model_used: string | null
+          items_processed: number | null
+          items_skipped: number | null
+          tasks_created: number | null
+          tasks_updated: number | null
+          actionable_count: number | null
+          informational_count: number | null
+          rules_added: number | null
+          errors_count: number | null
+          summary: string | null
+          errors_log: Json | null
+          metadata: Json | null
+          created_at: string
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
+
+      action_history: {
+        Row: {
+          id: string
+          user_id: string
+          task_id: string | null
+          action_type: string
+          status: string
+          requested_at: string
+          completed_at: string | null
+          summary: string | null
+          result: string | null
+          error: string | null
+          model_used: string | null
+          cost_usd: number | null
+          created_at: string
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
+
+      sync_schedules: {
+        Row: {
+          id: string
+          user_id: string
+          part: string
+          is_auto: boolean
+          cron_expr: string
+          last_run_at: string | null
+          next_run_at: string | null
+          is_enabled: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          [key: string]: unknown
+        }
+        Update: {
+          [key: string]: unknown
+        }
+      }
+
+      ai_prompts: {
+        Row: {
+          id: string
+          user_id: string
+          prompt_key: string
+          version: number
+          is_active: boolean
+          content: string
+          notes: string | null
+          created_at: string
+          updated_at: string
         }
         Insert: {
           [key: string]: unknown
