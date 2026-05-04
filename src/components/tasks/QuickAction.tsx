@@ -12,7 +12,7 @@ import { toast } from "sonner";
 interface QuickActionProps {
   taskId: string;
   actionLabel: string;
-  actionPrompt: string;
+  actionPrompt?: string;
   open: boolean;
   onClose: () => void;
   onDone: () => void;
@@ -21,7 +21,6 @@ interface QuickActionProps {
 export function QuickAction({
   taskId,
   actionLabel,
-  actionPrompt,
   open,
   onClose,
   onDone,

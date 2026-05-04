@@ -291,7 +291,7 @@ export default function AdminSyncPage() {
         <CardContent>
           {sessions.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">
-              No runs yet. Click "Run Now" to start.
+              No runs yet. Click &quot;Run Now&quot; to start.
             </p>
           ) : (
             <div className="space-y-2">

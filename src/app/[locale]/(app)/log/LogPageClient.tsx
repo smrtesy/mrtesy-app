@@ -109,6 +109,7 @@ export function LogPageClient({ locale }: { locale: string }) {
     }
 
     const { data } = await query;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mapped = (data || []).map((row: any) => {
       // log_entries is an array (one source_message can have multiple log entries)
       // Take the most recent one (last in array)

@@ -69,7 +69,7 @@ export default function AdminRulesPage() {
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
-    const all = data ?? [];
+    const all: Rule[] = data ?? [];
     setPendingSuggestions(all.filter((r) => r.suggestion_status === "pending"));
     setRules(all.filter((r) => r.suggestion_status !== "pending" || r.is_active));
     setLoading(false);
