@@ -14,9 +14,18 @@ const PORT = parseInt(process.env.PORT ?? "3001", 10);
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json());
+
+const allowedOrigins = (process.env.FRONTEND_URL ?? "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL ?? "http://localhost:3000",
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      cb(null, allowedOrigins.includes(origin));
+    },
     credentials: true,
   }),
 );
