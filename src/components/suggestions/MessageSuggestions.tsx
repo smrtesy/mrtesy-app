@@ -10,12 +10,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, X, Bell, Mail, MessageCircle, FolderOpen, Calendar, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
-const sourceIcons: Record<string, typeof Mail> = {
+const sourceIcons = {
   gmail: Mail,
   whatsapp: MessageCircle,
-  google_drive: FolderOpen,
-  google_calendar: Calendar,
-};
+  drive: FolderOpen,
+  calendar: Calendar,
+} as const;
+
+function inferSourceType(sourceMessageId: string | null): keyof typeof sourceIcons {
+  if (!sourceMessageId) return "gmail";
+  if (sourceMessageId.startsWith("wa:")) return "whatsapp";
+  if (sourceMessageId.startsWith("drive:")) return "drive";
+  if (sourceMessageId.startsWith("cal:")) return "calendar";
+  return "gmail";
+}
 
 export function MessageSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
@@ -30,18 +38,16 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Get tasks created from AI that haven't been seen/verified
     const { data } = await supabase
       .from("tasks")
-      .select("*, source_messages(source_type, sender, subject, source_url, received_at)")
+      .select("*")
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
       .not("source_message_id", "is", null)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(50);
 
-    // Sort by priority: urgent > high > medium > low
     const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
     const sorted = (data || []).sort(
       (a: any, b: any) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2) // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -92,11 +98,11 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   return (
     <div className="space-y-3">
       {suggestions.map((task) => {
-        const source = task.source_messages as any | null /* eslint-disable-line @typescript-eslint/no-explicit-any */;
-        const Icon = sourceIcons[source?.source_type || "gmail"] || Mail;
+        const sourceType = inferSourceType(task.source_message_id as string | null);
+        const Icon = sourceIcons[sourceType];
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
-        const eventDate = source?.source_type === "google_calendar" && source?.received_at
-          ? new Date(source.received_at).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
+        const dueDate = task.due_date
+          ? new Date(task.due_date as string).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
           : null;
 
         return (
@@ -107,11 +113,11 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                   <Icon className="h-4 w-4 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="font-medium text-sm" dir="auto">{title}</h4>
-                    {eventDate && (
+                    {dueDate && (
                       <Badge variant="outline" className="text-[10px] bg-blue-50 shrink-0">
-                        {eventDate}
+                        {dueDate}
                       </Badge>
                     )}
                   </div>
@@ -120,10 +126,10 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                       {task.description}
                     </p>
                   ) : null}
-                  <div className="flex items-center gap-2 mt-1">
-                    {source?.sender && (
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {task.related_contact && (
                       <Badge variant="outline" className="text-[10px]">
-                        {source.sender}
+                        {task.related_contact as string}
                       </Badge>
                     )}
                     {task.priority && (
@@ -131,13 +137,18 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                         {tTasks(`priority.${task.priority}`)}
                       </Badge>
                     )}
+                    {(task.tags as string[] | null)?.slice(0, 2).map((tag) => (
+                      <Badge key={tag} variant="outline" className="text-[10px] capitalize">
+                        {tag}
+                      </Badge>
+                    ))}
                   </div>
                 </div>
               </div>
               <div className="flex gap-2 mt-3 justify-end">
-                {source?.source_url && (
+                {task.source_link && (
                   <a
-                    href={source.source_url}
+                    href={task.source_link as string}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 h-9 px-2 text-xs text-muted-foreground hover:text-primary"

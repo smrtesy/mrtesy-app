@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SmartTaskInput } from "@/components/tasks/SmartTaskInput";
+import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
   { key: "tasks", href: "/tasks", icon: CheckSquare },
@@ -31,6 +32,37 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const supabase = createClient();
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function fetchCount() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !mounted) return;
+      const { count } = await supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("status", "inbox")
+        .eq("manually_verified", false)
+        .not("source_message_id", "is", null);
+      if (mounted) setPendingCount(count ?? 0);
+    }
+
+    fetchCount();
+
+    const channel = supabase
+      .channel("sidebar-suggestions-count")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, fetchCount)
+      .subscribe();
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
 
   const basePath = `/${locale}`;
 
@@ -61,7 +93,14 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
                   : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               )}
             >
-              <item.icon className="h-5 w-5" />
+              <div className="relative">
+                <item.icon className="h-5 w-5" />
+                {item.key === "suggestions" && pendingCount > 0 && (
+                  <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
+                    {pendingCount > 99 ? "99+" : pendingCount}
+                  </span>
+                )}
+              </div>
               {t(item.key)}
             </Link>
           ))}
@@ -103,7 +142,14 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
                   : "text-muted-foreground"
               )}
             >
-              <item.icon className="h-5 w-5 shrink-0" />
+              <div className="relative">
+                <item.icon className="h-5 w-5 shrink-0" />
+                {item.key === "suggestions" && pendingCount > 0 && (
+                  <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
+                    {pendingCount > 99 ? "99+" : pendingCount}
+                  </span>
+                )}
+              </div>
               <span className="truncate max-w-full">{t(item.key)}</span>
             </Link>
           ))}
