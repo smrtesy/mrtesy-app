@@ -10,6 +10,7 @@ import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
 import { runPart2 } from "../parts/part2-whatsapp";
 import { runPart3 } from "../parts/part3-classifier";
+import { runPart4 } from "../parts/part4-projects";
 
 const router = Router();
 
@@ -75,6 +76,37 @@ router.post("/part3", async (req: Request, res: Response) => {
   const { limit } = req.body ?? {};
   try {
     const result = await runPart3({ userId, limit: limit ?? 50 });
+    return res.json({ ok: true, session_id: result.sessionId });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/sync/part4/suggest  — suggest projects from task clusters
+router.post("/part4/suggest", async (req: Request, res: Response) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const result = await runPart4({ userId, mode: "suggest" });
+    return res.json({ ok: true, session_id: result.sessionId });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/sync/part4/build_brief  — extract facts for a project brief
+router.post("/part4/build_brief", async (req: Request, res: Response) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  const { project_id } = req.body ?? {};
+  if (!project_id) return res.status(400).json({ error: "project_id required" });
+
+  try {
+    const result = await runPart4({ userId, mode: "build_brief", projectId: project_id });
     return res.json({ ok: true, session_id: result.sessionId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

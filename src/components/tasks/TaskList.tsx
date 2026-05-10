@@ -41,7 +41,7 @@ export function TaskList({ locale }: { locale: string }) {
 
     let query = supabase
       .from("tasks")
-      .select("*, source_messages(source_type, source_url)")
+      .select("*, source_messages(source_type, source_url), projects(id, name, name_he, color)")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(50);

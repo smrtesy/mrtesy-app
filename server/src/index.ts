@@ -1,4 +1,5 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config({ override: true }); // .env always wins over shell environment
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";

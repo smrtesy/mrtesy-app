@@ -21,11 +21,19 @@ import {
   ExternalLink,
   Pencil,
   X,
+  Folder,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
+
+interface ProjectOption {
+  id: string;
+  name: string;
+  name_he: string | null;
+  color: string | null;
+}
 
 interface TaskDetailProps {
   task: Task | null;
@@ -38,6 +46,7 @@ interface TaskDetailProps {
 
 export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction }: TaskDetailProps) {
   const t = useTranslations("tasks");
+  const tCommon = useTranslations("common");
   const supabase = createClient();
 
   // Description edit
@@ -50,6 +59,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
   const [editPriority, setEditPriority] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editStatus, setEditStatus] = useState("");
+  const [editProjectId, setEditProjectId] = useState("");
+  // Lazily loaded when edit mode first opens
+  const [selectorProjects, setSelectorProjects] = useState<ProjectOption[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
@@ -65,13 +77,27 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
   const generated = task.ai_generated_content || [];
   const docs = task.linked_drive_docs || [];
 
-  function startFieldEdit() {
+  async function startFieldEdit() {
     if (!task) return;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
     setEditPriority(task.priority);
     setEditDueDate(task.due_date || "");
     setEditStatus(task.status);
+    setEditProjectId(task.project_id || "");
     setEditingFields(true);
+    // Fetch projects list once for the selector (cached after first open)
+    if (selectorProjects.length === 0) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase
+          .from("projects")
+          .select("id, name, name_he, color")
+          .eq("user_id", user.id)
+          .eq("is_active", true)
+          .order("name");
+        setSelectorProjects((data as ProjectOption[]) || []);
+      }
+    }
   }
 
   async function saveFieldEdit() {
@@ -88,6 +114,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
     updateData.priority = editPriority;
     updateData.status = editStatus;
     updateData.due_date = editDueDate || null;
+    updateData.project_id = editProjectId || null;
+    // Mark as manually linked (confidence = 1) when user picks a project
+    if (editProjectId && editProjectId !== task.project_id) {
+      updateData.project_confidence = 1;
+    }
 
     if (editStatus !== task.status) {
       updateData.status_changed_at = new Date().toISOString();
@@ -102,7 +133,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
     if (error) {
       toast.error(error.message);
     } else {
-      toast.success(t("common.save") || "Saved");
+      toast.success(tCommon("save"));
       setEditingFields(false);
       onUpdate();
     }
@@ -206,6 +237,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
               <Pencil className="h-4 w-4" />
             </Button>
           </div>
+          {/* Linked project pill — data comes from the join, no extra fetch needed */}
+          {task.projects && (() => {
+            const proj = task.projects!;
+            const projName = locale === "he" && proj.name_he ? proj.name_he : proj.name;
+            return (
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
+                  style={proj.color ? { borderColor: proj.color, color: proj.color } : undefined}
+                >
+                  <Folder className="h-3 w-3" />
+                  {projName}
+                </span>
+              </div>
+            );
+          })()}
         </SheetHeader>
 
         <ScrollArea className="flex-1 px-4 py-4">
@@ -248,6 +295,21 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 <div>
                   <label className="text-xs font-medium">Due Date</label>
                   <Input type="date" value={editDueDate} onChange={(e) => setEditDueDate(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium">{locale === "he" ? "פרויקט" : "Project"}</label>
+                  <select
+                    value={editProjectId}
+                    onChange={(e) => setEditProjectId(e.target.value)}
+                    className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                  >
+                    <option value="">{locale === "he" ? "— ללא פרויקט —" : "— No project —"}</option>
+                    {selectorProjects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {locale === "he" && p.name_he ? p.name_he : p.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={saveFieldEdit} disabled={saving} className="gap-1">

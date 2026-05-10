@@ -13,6 +13,7 @@ import {
   FolderOpen,
   Calendar,
   ExternalLink,
+  Folder,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
@@ -50,6 +51,7 @@ export function TaskCard({
   onQuickAction,
   onDriveSearch,
 }: TaskCardProps) {
+  const project = task.projects ?? null;
   const t = useTranslations("tasks");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
@@ -83,7 +85,7 @@ export function TaskCard({
       )}
 
       {/* Due date + Contact + Source */}
-      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
         {SourceIcon && (
           source?.source_url ? (
             <a
@@ -108,6 +110,16 @@ export function TaskCard({
         )}
         {task.related_contact && (
           <span className="truncate" dir="auto">{task.related_contact}</span>
+        )}
+        {project && (
+          <span
+            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border"
+            style={project.color ? { borderColor: project.color, color: project.color } : undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Folder className="h-2.5 w-2.5" />
+            {locale === "he" && project.name_he ? project.name_he : project.name}
+          </span>
         )}
       </div>
 

@@ -41,11 +41,21 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
+    // Extract cluster metadata stored by Part 4
+    const clusterEntry = (task.ai_generated_content as Array<Record<string, unknown>> | null)
+      ?.find((e) => e.action_label === "project_cluster");
+    const clusteredTaskIds = (clusterEntry?.clustered_task_ids as string[] | undefined) ?? [];
+    const keywords = (clusterEntry?.keywords as string[] | undefined) ?? [];
+    const keyContacts = (clusterEntry?.key_contacts as string[] | undefined) ?? [];
+
+    // Create the project with enriched metadata
     const { data: project, error } = await supabase.from("projects").insert({
       user_id: user.id,
       name: task.title as string,
       name_he: task.title_he as string,
       template_type: "personal",
+      keywords,
+      key_contacts: keyContacts,
     }).select("id").single();
 
     if (error) {
@@ -53,10 +63,20 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
       return;
     }
 
+    // Archive the suggestion task
     await supabase
       .from("tasks")
       .update({ status: "archived", manually_verified: true, project_id: project.id })
       .eq("id", task.id as string);
+
+    // Link all clustered tasks to the new project
+    if (clusteredTaskIds.length > 0) {
+      await supabase
+        .from("tasks")
+        .update({ project_id: project.id })
+        .in("id", clusteredTaskIds)
+        .eq("user_id", user.id);
+    }
 
     toast.success(t("projectCreated"));
     fetchSuggestions();

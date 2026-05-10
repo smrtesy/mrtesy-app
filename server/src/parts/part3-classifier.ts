@@ -1,11 +1,12 @@
 /**
  * PART 3 — Deep Classifier
  *
- * Fetches source_messages with processing_status='pending', classifies each
- * with Claude (system prompt cached for ~90% cost savings), and creates/updates
- * tasks in Supabase.
+ * For each pending source_message:
+ *   1. Checks if it's a follow-up to an OPEN task → appends update, no new task
+ *   2. Classifies as ACTIONABLE or INFORMATIONAL
+ *   3. For ACTIONABLE: matches to an active project (if any), creates/updates task
  *
- * Processes in batches of 5 to keep the prompt cache warm between calls.
+ * Processes in batches of 5 to keep the Claude prompt cache warm.
  */
 
 import { db, loadRules, createRunSession, closeRunSession } from "../db";
@@ -15,9 +16,18 @@ import { DEEP_CLASSIFIER_SYSTEM } from "../prompts/classifier";
 const BATCH_SIZE = 5;
 
 interface ClassificationResult {
-  classification: "ACTIONABLE" | "INFORMATIONAL";
+  action: "new_task" | "update_task";
+
+  // update_task fields
+  task_id?: string;
+  update_he?: string;
+
+  // new_task fields
+  classification?: "ACTIONABLE" | "INFORMATIONAL";
   confidence: number;
-  reason_he: string;
+  reason_he?: string;
+  project_id?: string | null;
+  project_confidence?: number;
   suggested_rule?: {
     trigger: string;
     rule_type: string;
@@ -54,25 +64,61 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
   let itemsProcessed = 0;
 
   try {
-    // 1. Load rules once — cached in rulesContext block
+    // ── 1. Load rules (cached in rulesContext) ────────────────────────────────
     const rules = await loadRules(userId);
     const skipRules = rules
       .filter((r) => r.rule_type === "skip" || r.rule_type === "skip_spam")
       .map((r) => `- ${r.trigger}: ${r.reason ?? r.action ?? "skip"}`)
       .join("\n");
-
     const writingStyleHe = rules.find((r) => r.trigger === "writing_style_he")?.action ?? "";
     const writingStyleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
 
+    // ── 2. Load open tasks for update-threading ───────────────────────────────
+    const { data: openTasks } = await db
+      .from("tasks")
+      .select("id, title_he, title, related_contact, related_contact_email, related_contact_phone, tags, source_message_id")
+      .eq("user_id", userId)
+      .in("status", ["inbox", "in_progress"])
+      .eq("manually_verified", true)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    const openTasksBlock = (openTasks ?? []).length > 0
+      ? "OPEN TASKS (check for follow-ups before creating new):\n" +
+        (openTasks ?? []).map((t) =>
+          `[id:${t.id}] ${t.title_he ?? t.title} | contact: ${t.related_contact ?? ""} ${t.related_contact_email ?? ""} ${t.related_contact_phone ?? ""} | tags: ${(t.tags as string[] | null)?.join(",") ?? ""}`
+        ).join("\n")
+      : "";
+
+    // ── 3. Load active projects for matching ──────────────────────────────────
+    const { data: activeProjects } = await db
+      .from("projects")
+      .select("id, name, name_he, keywords, key_contacts")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .limit(20);
+
+    const projectsBlock = (activeProjects ?? []).length > 0
+      ? "\nACTIVE PROJECTS (match tasks to projects):\n" +
+        (activeProjects ?? []).map((p) => {
+          const keywords = (p.keywords as string[] | null)?.join(", ") ?? "";
+          const contacts = (p.key_contacts as string[] | null)?.join(", ") ?? "";
+          return `[id:${p.id}] ${p.name_he ?? p.name} | keywords: ${keywords} | contacts: ${contacts}`;
+        }).join("\n")
+      : "";
+
+    // ── 4. Build rulesContext (cached block) ──────────────────────────────────
     const rulesContext = [
       skipRules ? `SKIP RULES:\n${skipRules}` : "",
       writingStyleHe ? `WRITING STYLE (Hebrew):\n${writingStyleHe}` : "",
       writingStyleEn ? `WRITING STYLE (English):\n${writingStyleEn}` : "",
+      openTasksBlock,
+      projectsBlock,
     ]
       .filter(Boolean)
       .join("\n\n");
 
-    // 2. Fetch pending messages (FIFO)
+    // ── 5. Fetch pending messages (FIFO) ──────────────────────────────────────
     const { data: pending, error: fetchError } = await db
       .from("source_messages")
       .select("*")
@@ -87,27 +133,26 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       return { sessionId };
     }
 
-    // 3. Process in batches of BATCH_SIZE (keeps cache warm for 5 min windows)
+    // ── 6. Process in batches of BATCH_SIZE ───────────────────────────────────
     for (let i = 0; i < pending.length; i++) {
       const msg = pending[i];
       itemsProcessed++;
 
-      // Mark as processing to avoid double-processing in parallel runs
       await db
         .from("source_messages")
         .update({ processing_status: "processing" })
         .eq("id", msg.id);
 
-      // Check for existing task with same source_id
+      // Check for existing task with same source_id (dedup)
       const { data: existingTask } = await db
         .from("tasks")
-        .select("id, status")
+        .select("id, status, updates")
         .eq("user_id", userId)
         .eq("source_message_id", msg.source_id)
         .neq("status", "archived")
         .maybeSingle();
 
-      // Build user message for classifier
+      // Build user message
       const userMsg = [
         `Source: ${msg.source_type}`,
         `Received: ${msg.received_at}`,
@@ -120,7 +165,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .filter(Boolean)
         .join("\n");
 
-      // 4. Classify with Claude
+      // ── Classify with Claude (up to 3 retries) ──────────────────────────────
       let result: ClassificationResult | null = null;
       let retries = 0;
       while (retries < 3) {
@@ -133,6 +178,10 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
             maxTokens: 1024,
           });
           result = parseJsonResponse<ClassificationResult>(raw.content);
+          // Back-compat: if action is missing, treat as new_task
+          if (result && !result.action) {
+            result.action = "new_task";
+          }
           if (result) break;
         } catch (e) {
           errors.push(`classify attempt ${retries + 1} for ${msg.id}: ${e}`);
@@ -143,16 +192,59 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       if (!result) {
         await db
           .from("source_messages")
-          .update({
-            processing_status: "failed",
-            ai_classification: "error: max retries",
-          })
+          .update({ processing_status: "failed", ai_classification: "error: max retries" })
           .eq("id", msg.id);
         errors.push(`failed to classify ${msg.id} after 3 retries`);
         continue;
       }
 
-      // 5. Handle suggested rule (confidence ≥ 0.7)
+      // ── Handle: UPDATE existing open task ────────────────────────────────────
+      if (result.action === "update_task" && result.task_id) {
+        const targetTask = openTasks?.find((t) => t.id === result.task_id);
+        if (targetTask) {
+          const { data: fullTask } = await db
+            .from("tasks")
+            .select("updates")
+            .eq("id", result.task_id)
+            .single();
+
+          const currentUpdates = (fullTask?.updates as object[] | null) ?? [];
+          await db.from("tasks").update({
+            updates: [
+              ...currentUpdates,
+              {
+                id: crypto.randomUUID(),
+                created_at: new Date().toISOString(),
+                type: "ai_update",
+                actor: "claude",
+                content: result.update_he ?? "",
+                source_message_id: msg.source_id,
+                source_type: msg.source_type,
+              },
+            ],
+            last_interaction_at: new Date().toISOString(),
+          }).eq("id", result.task_id);
+
+          await db
+            .from("source_messages")
+            .update({ processing_status: "classified", ai_classification: "UPDATE" })
+            .eq("id", msg.id);
+
+          tasksUpdated++;
+          itemsProcessed++;
+
+          if ((i + 1) % BATCH_SIZE === 0) {
+            await db.from("run_sessions")
+              .update({ items_processed: itemsProcessed, tasks_updated: tasksUpdated })
+              .eq("id", sessionId);
+          }
+          continue;
+        }
+        // If task_id not found in open tasks, fall through to new_task
+        result.action = "new_task";
+      }
+
+      // ── Handle suggested rule ─────────────────────────────────────────────
       if (result.suggested_rule && (result.confidence ?? 0) >= 0.7) {
         await db.from("rules_memory").insert({
           user_id: userId,
@@ -168,12 +260,12 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         rulesAdded++;
       }
 
-      // 6. Update source_message status
+      // ── Update source_message status ──────────────────────────────────────
       await db
         .from("source_messages")
         .update({
           processing_status: "classified",
-          ai_classification: result.classification,
+          ai_classification: result.classification ?? "INFORMATIONAL",
         })
         .eq("id", msg.id);
 
@@ -182,9 +274,16 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         continue;
       }
 
-      // 7. Create or update task
+      // ── Create or update task ─────────────────────────────────────────────
       actionableCount++;
       const task = result.task!;
+
+      // Resolve project_id: use AI suggestion if confident, else null
+      const resolvedProjectId =
+        result.project_id && (result.project_confidence ?? 0) >= 0.7
+          ? result.project_id
+          : null;
+
       const taskPayload = {
         user_id: userId,
         title: task.title_he,
@@ -201,6 +300,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         ai_confidence: result.confidence ?? null,
         ai_model_used: MODELS.sonnet,
         manually_verified: false,
+        project_id: resolvedProjectId,
       };
 
       if (existingTask) {
@@ -211,18 +311,15 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         tasksCreated++;
       }
 
-      // 8. Checkpoint every BATCH_SIZE items
+      // Checkpoint every BATCH_SIZE
       if ((i + 1) % BATCH_SIZE === 0) {
-        await db
-          .from("run_sessions")
-          .update({
-            items_processed: itemsProcessed,
-            tasks_created: tasksCreated,
-            tasks_updated: tasksUpdated,
-            actionable_count: actionableCount,
-            informational_count: informationalCount,
-          })
-          .eq("id", sessionId);
+        await db.from("run_sessions").update({
+          items_processed: itemsProcessed,
+          tasks_created: tasksCreated,
+          tasks_updated: tasksUpdated,
+          actionable_count: actionableCount,
+          informational_count: informationalCount,
+        }).eq("id", sessionId);
       }
     }
 
@@ -238,7 +335,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         rules_added: rulesAdded,
         errors_count: errors.length,
       },
-      `Classified ${itemsProcessed} items: ${actionableCount} actionable, ${informationalCount} informational. Created ${tasksCreated} tasks.`,
+      `Classified ${itemsProcessed} items: ${actionableCount} actionable (${tasksCreated} new, ${tasksUpdated} updated), ${informationalCount} informational.`,
       errors,
     );
   } catch (err) {
