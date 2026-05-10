@@ -10,6 +10,7 @@ import { db, createRunSession, closeRunSession, updateSyncState, loadRules } fro
 import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
 import { listNewFiles, getFileContent } from "../services/drive";
 import { listEvents } from "../services/calendar";
+import { parseSkipRules } from "../lib/rule-filters";
 
 const GMAIL_ACCOUNTS = ["chanoch@maor.org", "chanoch@kinus.info"];
 
@@ -30,13 +31,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
   let itemsSkipped = 0;
 
   try {
-    // Load skip rules
+    // Load skip rules from rules_memory (single source of truth, managed via /admin/rules)
     const rules = await loadRules(userId);
-    const skipSenders = new Set(
-      rules
-        .filter((r) => r.rule_type === "skip" || r.rule_type === "skip_spam")
-        .map((r) => r.trigger.replace(/^(sender|from)\s*=\s*/i, "").trim().toLowerCase()),
-    );
+    const skipFilter = parseSkipRules(rules);
 
     // Load sync checkpoints
     const { data: syncStates } = await db
@@ -60,9 +57,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       for (const account of GMAIL_ACCOUNTS) {
         const query = [
           `after:${afterDate}`,
-          `-to:office@maor.org`,
-          `-from:outbox@maor.org`,
-          `-from:officetest@maor.org`,
+          ...skipFilter.gmailQueryFilters,
           `-in:drafts`,
           `deliveredto:${account}`,
         ].join(" ");
@@ -77,13 +72,11 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             );
 
             const fromEmail = (from.match(/<(.+)>/) ?? [])[1] ?? from;
-            const fromLower = fromEmail.toLowerCase();
 
-            // Hard skip rules
             if (
-              skipSenders.has(fromLower) ||
-              fromLower.includes("noreply") ||
-              fromLower.includes("no-reply") ||
+              skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
+              fromEmail.toLowerCase().includes("noreply") ||
+              fromEmail.toLowerCase().includes("no-reply") ||
               body.toLowerCase().includes("unsubscribe")
             ) {
               itemsSkipped++;
