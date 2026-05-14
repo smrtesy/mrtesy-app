@@ -246,11 +246,20 @@ export default function OnboardingSetup() {
 
       // Persist skip rules into rules_memory so part1's Gmail query AND the
       // runtime skipFilter both pick them up on this very same scan.
+      //
+      // Trigger semantics (matches parseSkipRules + the admin /admin/rules
+      // page):
+      //   - Bare email     → from=<email>   (skip mail SENT BY that address)
+      //   - Bare domain    → domain=<dom>   (already bidirectional: -from: AND -to:)
+      // The UI copy promises "messages from these addresses" — sender filtering
+      // is what users intuit and what the admin rules UI uses canonically.
+      // created_by must be one of ('user','claude','system') per the CHECK
+      // constraint on rules_memory; 'user' is the right bucket for a manually
+      // entered rule during onboarding.
       if (skipAddresses.length > 0) {
         const triggers = skipAddresses.map((addr) =>
-          addr.includes("@") ? `to=${addr}` : `domain=${addr}`,
+          addr.includes("@") ? `from=${addr}` : `domain=${addr}`,
         );
-        // Avoid duplicating rules if the user re-runs onboarding.
         const { data: existing } = await supabase
           .from("rules_memory")
           .select("trigger")
@@ -267,10 +276,13 @@ export default function OnboardingSetup() {
             rule_type: "skip",
             trigger,
             is_active: true,
-            created_by: "onboarding",
+            created_by: "user",
           }));
         if (rows.length > 0) {
-          await supabase.from("rules_memory").insert(rows);
+          const { error: rulesErr } = await supabase
+            .from("rules_memory")
+            .insert(rows);
+          if (rulesErr) throw new Error(`Failed to save skip rules: ${rulesErr.message}`);
         }
       }
 

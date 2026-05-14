@@ -70,8 +70,12 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
       const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
 
+      // `in:inbox` is essential: without it, Gmail's `q` searches ALL labels,
+      // pulling Sent/Chats/Archive into source_messages and creating
+      // "reply-to-yourself" task suggestions from the user's own outbound mail.
       const query = [
         `after:${afterDate}`,
+        `in:inbox`,
         ...skipFilter.gmailQueryFilters,
         `-in:drafts`,
       ].join(" ");
