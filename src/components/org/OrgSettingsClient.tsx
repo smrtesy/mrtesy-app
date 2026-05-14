@@ -45,8 +45,7 @@ export function OrgSettingsClient({ locale }: Props) {
     setOrgNameHe(active.name_he ?? "");
   }
 
-  const myRole = members.find((m) => m.user_id === active?.id)?.role; // placeholder; will fix below
-  // Better: derive myRole from the orgs list (it has my role per org)
+  // Role comes from the active org (the hook returns my role per org).
   const myRoleFromOrgs = active?.role;
   const canManage = myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin";
   const isOwner = myRoleFromOrgs === "owner";

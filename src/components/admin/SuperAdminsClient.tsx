@@ -130,7 +130,7 @@ export function SuperAdminsClient() {
             </div>
           )}
           {searchLower.length >= 2 && candidates.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">No matching users (or they're already super-admins).</p>
+            <p className="text-xs text-muted-foreground italic">No matching users (or they&apos;re already super-admins).</p>
           )}
         </CardContent>
       </Card>

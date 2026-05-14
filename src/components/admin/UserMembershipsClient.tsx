@@ -148,7 +148,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
             </div>
           )}
           <p className="text-[11px] text-muted-foreground mt-2">
-            Apps are granted at the organization level. To change a user's access, toggle the app on/off for one of their orgs below — or add them to an org that already has the app.
+            Apps are granted at the organization level. To change a user&apos;s access, toggle the app on/off for one of their orgs below — or add them to an org that already has the app.
           </p>
         </CardContent>
       </Card>

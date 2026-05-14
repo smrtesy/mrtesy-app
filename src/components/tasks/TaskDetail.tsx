@@ -23,7 +23,6 @@ import {
   X,
   Folder,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -48,7 +47,6 @@ interface TaskDetailProps {
 export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
-  const supabase = createClient();
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
