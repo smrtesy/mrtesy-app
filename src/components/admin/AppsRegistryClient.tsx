@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Layers, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Layers, Plus, Pencil, Trash2, Loader2, ChevronRight } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -24,6 +26,7 @@ interface AdminApp {
 const SLUG_RE = /^[a-z][a-z0-9-]{1,39}$/;
 
 export function AppsRegistryClient() {
+  const { locale } = useParams() as { locale: string };
   const [apps, setApps] = useState<AdminApp[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -132,13 +135,17 @@ export function AppsRegistryClient() {
       ) : (
         <div className="space-y-2">
           {apps.map((a) => (
-            <Card key={a.id}>
+            <Card key={a.id} className="hover:bg-accent/40 transition-colors">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <Link
+                    href={`/${locale}/admin/apps/${a.slug}`}
+                    className="flex items-center gap-2 min-w-0 flex-1 hover:underline"
+                  >
                     <span className="truncate">{a.name}</span>
                     <span className="text-xs font-mono text-muted-foreground">{a.slug}</span>
-                  </div>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Link>
                   <div className="flex gap-1">
                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(a)}>
                       <Pencil className="h-3.5 w-3.5" />

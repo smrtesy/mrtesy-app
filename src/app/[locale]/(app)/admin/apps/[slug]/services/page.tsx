@@ -1,13 +1,29 @@
 export const dynamic = "force-dynamic";
+import Link from "next/link";
+import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { listAllUserEmails } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ArrowLeft } from "lucide-react";
 
-export default async function AdminServicesPage() {
+export default async function AdminAppServicesPage({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>;
+}) {
+  const { locale, slug } = await params;
   const t = await getTranslations("admin");
   const supabase = await createClient();
+
+  // Verify the slug exists in the apps registry so unregistered apps 404.
+  const { data: app } = await supabase
+    .from("apps")
+    .select("id, name")
+    .eq("slug", slug)
+    .maybeSingle<{ id: string; name: string }>();
+  if (!app) notFound();
 
   const [syncResult, usersResult, emailMap] = await Promise.all([
     supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
@@ -22,7 +38,16 @@ export default async function AdminServicesPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">{t("serviceStatus")}</h1>
+      <div className="space-y-2">
+        <Link
+          href={`/${locale}/admin/apps/${slug}`}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3 w-3" />
+          {app.name}
+        </Link>
+        <h1 className="text-2xl font-bold">{t("serviceStatus")}</h1>
+      </div>
 
       {services.map((service) => {
         const states = syncStates.filter((s) => s.source === service);

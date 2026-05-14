@@ -254,8 +254,8 @@ export default function OnboardingSetup() {
       // Persist skip rules into rules_memory so part1's Gmail query AND the
       // runtime skipFilter both pick them up on this very same scan.
       //
-      // Trigger semantics (matches parseSkipRules + the admin /admin/rules
-      // page):
+      // Trigger semantics (matches parseSkipRules + the user-scope
+      // /settings/rules page):
       //   - Bare email     → from=<email>   (skip mail SENT BY that address)
       //   - Bare domain    → domain=<dom>   (already bidirectional: -from: AND -to:)
       // The UI copy promises "messages from these addresses" — sender filtering

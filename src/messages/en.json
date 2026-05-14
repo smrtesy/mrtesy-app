@@ -173,7 +173,10 @@
     "deleteAllData": "Delete All Data",
     "confirmDeletion": "Click again to confirm deletion",
     "dataDeletedRedirecting": "All data deleted. Redirecting to onboarding...",
-    "adminPanel": "Admin Panel"
+    "adminPanel": "Admin Panel",
+    "rulesAndAutomation": "Rules & Automation",
+    "skipRulesAndStyle": "Skip Rules & Style",
+    "syncSchedules": "Sync Schedules"
   },
   "admin": {
     "title": "Admin Dashboard",

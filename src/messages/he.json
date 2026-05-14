@@ -173,7 +173,10 @@
     "deleteAllData": "מחק את כל הנתונים",
     "confirmDeletion": "לחץ שוב לאישור מחיקה",
     "dataDeletedRedirecting": "כל הנתונים נמחקו. מעביר לאונבורדינג...",
-    "adminPanel": "פאנל ניהול"
+    "adminPanel": "פאנל ניהול",
+    "rulesAndAutomation": "כללים ואוטומציה",
+    "skipRulesAndStyle": "כללי דילוג וסגנון",
+    "syncSchedules": "תזמון סנכרון"
   },
   "admin": {
     "title": "ניהול מערכת",

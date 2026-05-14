@@ -91,7 +91,7 @@ function formatDuration(seconds: number | null) {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export default function AdminSyncPage() {
+export default function SettingsSyncPage() {
   const supabase = createClient();
   const [sessions, setSessions] = useState<RunSession[]>([]);
   const [schedules, setSchedules] = useState<Record<string, SyncSchedule>>({});
