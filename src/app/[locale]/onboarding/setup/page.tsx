@@ -257,7 +257,9 @@ export default function OnboardingSetup() {
           .eq("user_id", user.id)
           .eq("rule_type", "skip")
           .in("trigger", triggers);
-        const existingSet = new Set((existing ?? []).map((r) => r.trigger as string));
+        const existingSet = new Set(
+          ((existing ?? []) as Array<{ trigger: string }>).map((r) => r.trigger),
+        );
         const rows = triggers
           .filter((t) => !existingSet.has(t))
           .map((trigger) => ({

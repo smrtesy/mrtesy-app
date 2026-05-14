@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { listAllUserEmails } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,27 +9,14 @@ export default async function AdminServicesPage() {
   const t = await getTranslations("admin");
   const supabase = await createClient();
 
-  // Parallel queries — no broken join
-  const [syncResult, usersResult] = await Promise.all([
+  const [syncResult, usersResult, emailMap] = await Promise.all([
     supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
     supabase.from("user_settings").select("user_id, display_name"),
+    listAllUserEmails(),
   ]);
 
   const syncStates = syncResult.data || [];
   const nameMap = new Map((usersResult.data || []).map((u) => [u.user_id, u.display_name]));
-
-  // Emails live in auth.users — only the service-role client can read them.
-  const emailMap = new Map<string, string>();
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (serviceKey) {
-    const admin = createAdminClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    const { data: authData } = await admin.auth.admin.listUsers({ perPage: 100 });
-    for (const u of authData?.users || []) {
-      if (u.email) emailMap.set(u.id, u.email);
-    }
-  }
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
