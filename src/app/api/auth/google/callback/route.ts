@@ -77,6 +77,22 @@ export async function GET(request: Request) {
     Date.now() + tokens.expires_in * 1000
   ).toISOString();
 
+  // Resolve the Google account that just authorized — this may differ from the
+  // Supabase signup email when the user OAuths a different Google account.
+  // Falls back to the signup email on any failure so we never block onboarding.
+  let connectedEmail: string = user.email ?? "";
+  try {
+    const uiResp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    if (uiResp.ok) {
+      const ui = (await uiResp.json()) as { email?: string };
+      if (ui.email) connectedEmail = ui.email;
+    }
+  } catch (e) {
+    console.warn("[google-callback] userinfo lookup failed:", e);
+  }
+
   if (service === "gmail_calendar") {
     // Save Gmail credentials
     const { error: gmailErr } = await supabase
@@ -89,7 +105,7 @@ export async function GET(request: Request) {
           refresh_token: tokens.refresh_token,
           expires_at: expiresAt,
           scopes: ["gmail.modify", "spreadsheets.readonly"],
-          email: user.email,
+          email: connectedEmail,
         },
         { onConflict: "user_id,service" }
       );
@@ -105,7 +121,7 @@ export async function GET(request: Request) {
           refresh_token: tokens.refresh_token,
           expires_at: expiresAt,
           scopes: ["calendar"],
-          email: user.email,
+          email: connectedEmail,
         },
         { onConflict: "user_id,service" }
       );
@@ -114,13 +130,34 @@ export async function GET(request: Request) {
       console.error("Credential save error:", gmailErr || calErr);
     }
 
-    // Update settings
+    // Update settings. my_emails is the set of addresses the user considers
+    // "themselves" — used for identity hints, not scan scope. Merge the newly
+    // connected Google account into the existing list (case-insensitive
+    // dedup) so reconnecting Gmail never wipes manually added aliases.
+    const { data: existing } = await supabase
+      .from("user_settings")
+      .select("my_emails")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const prior: string[] = Array.isArray(existing?.my_emails)
+      ? (existing!.my_emails as unknown[]).filter(
+          (e): e is string => typeof e === "string" && e.length > 0,
+        )
+      : [];
+    const merged = connectedEmail
+      ? Array.from(
+          new Map(
+            [...prior, connectedEmail].map((e) => [e.toLowerCase(), e]),
+          ).values(),
+        )
+      : prior;
+
     await supabase
       .from("user_settings")
       .update({
         gmail_connected: true,
         calendar_connected: true,
-        my_emails: [user.email],
+        my_emails: merged,
       })
       .eq("user_id", user.id);
 
@@ -140,7 +177,7 @@ export async function GET(request: Request) {
         refresh_token: tokens.refresh_token,
         expires_at: expiresAt,
         scopes: ["drive.readonly"],
-        email: user.email,
+        email: connectedEmail,
       },
       { onConflict: "user_id,service" }
     );

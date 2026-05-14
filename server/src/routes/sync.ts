@@ -32,12 +32,14 @@ router.post("/part0", ...smrtesyGate, async (req: Request, res: Response) => {
 
 // ── Part 1: collector (Gmail/Drive/Calendar) ──────────────────────────────
 router.post("/part1", ...smrtesyGate, async (req: Request, res: Response) => {
-  const { gmail_days, drive_hours } = req.body ?? {};
+  const { gmail_days, drive_hours, cal_months, drive_folder_id } = req.body ?? {};
   try {
     const result = await runPart1({
       userId: req.user!.id,
       gmailDays: gmail_days,
       driveHours: drive_hours,
+      calMonths: cal_months,
+      driveFolderId: drive_folder_id,
     });
     return res.json({ ok: true, session_id: result.sessionId });
   } catch (e) {

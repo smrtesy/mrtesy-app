@@ -8,14 +8,16 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { google } from "googleapis";
 import { db } from "../../../db";
 import { requireAuth, isSuperAdmin } from "../../../middleware";
+import { getOAuthClient } from "../../../services/token-refresh";
 
 const router = Router();
 
 const UPDATABLE_SETTINGS = new Set([
   "display_name", "timezone", "office_addresses", "skip_senders",
-  "skip_recipients", "my_emails", "drive_folder_id",
+  "skip_recipients", "my_emails", "drive_folder_id", "whatsapp_sheet_id",
   "calendar_event_filter", "calendar_allday_tasks", "calendar_holidays_tasks",
   "classification_model", "summary_model", "daily_ai_budget_usd",
   "show_ai_costs", "reminder_channels", "default_reminder_timing",
@@ -81,6 +83,37 @@ router.patch("/me/settings", requireAuth, async (req: Request, res: Response) =>
 router.get("/me/super-admin", requireAuth, async (req: Request, res: Response) => {
   const ok = await isSuperAdmin(req.user!);
   res.json({ is_super_admin: ok });
+});
+
+/**
+ * POST /me/whatsapp/test-sheet — verify the caller can read a WhatsApp source
+ * Sheet with their connected Google credentials. Used during onboarding before
+ * the user has any smrtesy org entitlement, so it gates on requireAuth only.
+ *
+ * Body: { sheet_id: string, tab?: string }
+ * Returns: { ok: true, row_count: number }
+ */
+router.post("/me/whatsapp/test-sheet", requireAuth, async (req: Request, res: Response) => {
+  const { sheet_id, tab } = (req.body ?? {}) as { sheet_id?: string; tab?: string };
+  if (!sheet_id || typeof sheet_id !== "string") {
+    return res.status(400).json({ error: "sheet_id is required" });
+  }
+
+  try {
+    const auth = await getOAuthClient(req.user!.id, "gmail_calendar");
+    const sheets = google.sheets({ version: "v4", auth });
+    // Stay coherent with PART 2 (server/src/parts/part2-whatsapp.ts), which
+    // reads WHATSAPP_SHEET_TAB from env and only defaults to "Messages".
+    // Validating against "Messages" here while runtime reads a different
+    // tab would give the user a false-success/false-failure during onboarding.
+    const defaultTab = process.env.WHATSAPP_SHEET_TAB ?? "Messages";
+    const range = `${tab ?? defaultTab}!A2:A`;
+    const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: sheet_id, range });
+    return res.json({ ok: true, row_count: data.values?.length ?? 0 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(400).json({ error: msg });
+  }
 });
 
 /** GET /me/credentials — which services the user has connected (no token data!) */

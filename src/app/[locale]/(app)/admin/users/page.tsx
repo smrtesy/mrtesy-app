@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { listAllUserEmails } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -14,23 +14,14 @@ export default async function AdminUsersPage({
   const t = await getTranslations("admin");
   const supabase = await createClient();
 
-  const { data: users } = await supabase
-    .from("user_settings")
-    .select("user_id, plan, display_name, gmail_connected, drive_connected, whatsapp_connected, calendar_connected, onboarding_completed, created_at")
-    .order("created_at", { ascending: false });
-
-  // Fetch emails from auth.users via admin API
-  const emailMap: Record<string, string> = {};
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (serviceKey) {
-    const admin = createAdminClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    const { data: authData } = await admin.auth.admin.listUsers({ perPage: 100 });
-    for (const u of authData?.users || []) {
-      emailMap[u.id] = u.email || "";
-    }
-  }
+  const [{ data: users }, emails] = await Promise.all([
+    supabase
+      .from("user_settings")
+      .select("user_id, plan, display_name, gmail_connected, drive_connected, whatsapp_connected, calendar_connected, onboarding_completed, created_at")
+      .order("created_at", { ascending: false }),
+    listAllUserEmails(),
+  ]);
+  const emailMap = Object.fromEntries(emails.entries());
 
   return (
     <div className="space-y-4">
@@ -43,9 +34,21 @@ export default async function AdminUsersPage({
             href={`/${locale}/admin/users/${user.user_id}`}
             className="flex items-center justify-between rounded-lg border p-3 hover:bg-accent"
           >
-            <div>
-              <p className="font-medium">{user.display_name || emailMap[user.user_id] || user.user_id.slice(0, 8)}</p>
-              <p className="text-xs text-muted-foreground">{emailMap[user.user_id] ? `${user.plan || "free"} · ${emailMap[user.user_id]}` : user.plan}</p>
+            <div className="min-w-0">
+              <p className="font-medium truncate">
+                {emailMap[user.user_id] || user.display_name || "—"}
+              </p>
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                <span>{user.plan || "free"}</span>
+                {user.display_name && emailMap[user.user_id] && (
+                  <>
+                    <span>·</span>
+                    <span className="truncate">{user.display_name}</span>
+                  </>
+                )}
+                <span>·</span>
+                <code className="font-mono text-[10px] opacity-60">{user.user_id.slice(0, 8)}</code>
+              </p>
             </div>
             <div className="flex gap-1">
               {user.gmail_connected && <Badge variant="outline" className="text-xs">Gmail</Badge>}

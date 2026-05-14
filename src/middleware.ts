@@ -37,8 +37,32 @@ export async function middleware(request: NextRequest) {
 
   // Extract locale from path
   const pathnameLocale = pathname.split("/")[1];
-  const locale =
-    pathnameLocale === "he" || pathnameLocale === "en" ? pathnameLocale : "he";
+  const hasLocalePrefix = pathnameLocale === "he" || pathnameLocale === "en";
+  const locale = hasLocalePrefix ? pathnameLocale : "he";
+
+  // For a logged-in user hitting a URL without an explicit locale prefix,
+  // prefer their saved preferred_language over Accept-Language/cookie/default.
+  // Only fires on entry URLs (e.g. "/", "/tasks") — links already in-app carry
+  // a locale prefix and short-circuit here.
+  if (!hasLocalePrefix && user) {
+    const { data: settings } = await supabase
+      .from("user_settings")
+      .select("preferred_language")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const pref = settings?.preferred_language;
+    if (pref === "he" || pref === "en") {
+      const target = new URL(
+        `/${pref}${pathname === "/" ? "" : pathname}${request.nextUrl.search}`,
+        request.url,
+      );
+      const redirectResp = NextResponse.redirect(target);
+      response.cookies.getAll().forEach((cookie) => {
+        redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
+      });
+      return redirectResp;
+    }
+  }
 
   // Admin route protection.
   // Access granted if EITHER: super_admins row exists (canonical) OR email is in ADMIN_EMAIL env (fallback).

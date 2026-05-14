@@ -15,7 +15,11 @@ import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
 import { getOAuthClient } from "../services/token-refresh";
 import { WHATSAPP_CLASSIFIER_SYSTEM } from "../prompts/whatsapp";
 
-const SHEET_ID = process.env.WHATSAPP_SHEET_ID!;
+// Env-level fallbacks; the per-user Sheet ID resolved inside runPart2 takes
+// precedence (it lives on user_settings.whatsapp_sheet_id, written during
+// onboarding step 3). Without that resolution, every tenant would silently
+// pull rows from the operator's single Sheet.
+const ENV_SHEET_ID = process.env.WHATSAPP_SHEET_ID;
 const SHEET_TAB = process.env.WHATSAPP_SHEET_TAB ?? "Messages";
 
 // Column indices (0-based) — matches the 19-column structure from Dualhook
@@ -100,13 +104,26 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
 
     const lastRow = force ? 0 : parseInt(syncStateRow?.checkpoint ?? "0", 10);
 
+    // 2b. Resolve per-user Sheet ID (set during onboarding); fall back to
+    // the env-level operator Sheet only if the tenant hasn't configured one.
+    const { data: settingsRow } = await db
+      .from("user_settings")
+      .select("whatsapp_sheet_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    const sheetId = (settingsRow?.whatsapp_sheet_id as string | null | undefined) || ENV_SHEET_ID;
+    if (!sheetId) {
+      await closeRunSession(sessionId, "completed", { items_skipped: 0 }, "No WhatsApp Sheet configured for this user.");
+      return { sessionId };
+    }
+
     // 3. Authenticate with Google Sheets (uses gmail_calendar credential which includes sheets.readonly)
     const auth = await getOAuthClient(userId, "gmail_calendar");
     const sheets = google.sheets({ version: "v4", auth });
 
     // 4. Fetch new rows from the Sheet
     const sheetsResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId: sheetId,
       range: `${SHEET_TAB}!A2:S`,
     });
 

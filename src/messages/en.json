@@ -149,7 +149,8 @@
       "enterApp": "Enter App"
     },
     "skip": "Skip",
-    "connect": "Connect"
+    "connect": "Connect",
+    "signedInAs": "Signed in as"
   },
   "settings": {
     "title": "Settings",
@@ -164,7 +165,15 @@
     "disconnected": "Disconnected",
     "classificationModel": "Classification Model",
     "summaryModel": "Summary Model",
-    "showAiCosts": "Show AI Costs"
+    "showAiCosts": "Show AI Costs",
+    "organization": "Organization",
+    "manageOrgAndMembers": "Manage organization & members",
+    "dataManagement": "Data Management",
+    "resync": "Re-sync Data",
+    "deleteAllData": "Delete All Data",
+    "confirmDeletion": "Click again to confirm deletion",
+    "dataDeletedRedirecting": "All data deleted. Redirecting to onboarding...",
+    "adminPanel": "Admin Panel"
   },
   "admin": {
     "title": "Admin Dashboard",

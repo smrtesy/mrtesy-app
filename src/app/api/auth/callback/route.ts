@@ -22,6 +22,25 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
 
   const locale = settings?.preferred_language || "he";
 
+  // Super-admins skip the onboarding funnel entirely — they may be signing in
+  // to manage the platform, not to use any product app.
+  const { data: superAdminRow } = await supabase
+    .from("super_admins")
+    .select("user_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const adminEmails = (process.env.ADMIN_EMAIL || "")
+    .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const isSuperAdmin = !!superAdminRow || adminEmails.includes(user.email?.toLowerCase() || "");
+
+  if (isSuperAdmin) {
+    if (!settings) {
+      await supabase.from("user_settings").insert({ user_id: user.id, preferred_language: "he" });
+    }
+    const redirectPath = next === "/" ? `/${locale}/admin` : next;
+    return NextResponse.redirect(`${origin}${redirectPath}`);
+  }
+
   // Brand-new user (no user_settings row): create defaults + send to workspace creation step.
   if (!settings) {
     await supabase.from("user_settings").insert({ user_id: user.id, preferred_language: "he" });

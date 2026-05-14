@@ -4,9 +4,11 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X, Ban, Plus } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
 const gmailOptions = [
@@ -44,6 +46,10 @@ export default function OnboardingSetup() {
   const [selectedFolderName, setSelectedFolderName] = useState<string>("");
   const [driveConnected, setDriveConnected] = useState(false);
   const [driveToken, setDriveToken] = useState<string>("");
+  // Skip-rules state: addresses that should never be turned into tasks.
+  // Each entry becomes a row in rules_memory with rule_type='skip'.
+  const [skipAddresses, setSkipAddresses] = useState<string[]>([]);
+  const [skipInput, setSkipInput] = useState("");
   // Drive search state
   const [folderSearch, setFolderSearch] = useState("");
   const [searchResults, setSearchResults] = useState<DriveFolder[]>([]);
@@ -165,6 +171,24 @@ export default function OnboardingSetup() {
     setShowResults(false);
   }
 
+  function addSkipAddress() {
+    const v = skipInput.trim().toLowerCase();
+    if (!v) return;
+    // Accept either bare emails ("foo@bar.com") or full domains ("bar.com").
+    const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}$/.test(v);
+    if (!ok) {
+      toast.error(isHe ? "כתובת לא תקינה" : "Invalid address");
+      return;
+    }
+    if (skipAddresses.includes(v)) return;
+    setSkipAddresses([...skipAddresses, v]);
+    setSkipInput("");
+  }
+
+  function removeSkipAddress(addr: string) {
+    setSkipAddresses(skipAddresses.filter((a) => a !== addr));
+  }
+
   // Poll DB for progress while scanning
   useEffect(() => {
     if (!scanning) {
@@ -211,39 +235,78 @@ export default function OnboardingSetup() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Save scan preferences (including Drive folder if selected)
+      // Persist scan preferences first so the server-side runner can also read them
+      // directly from user_settings if the request body is incomplete.
+      // Always write drive_folder_id (use null when cleared). A truthy-only
+      // write meant `clearFolder()` could not actually clear the column —
+      // a stale persisted folder would keep being used on every re-sync.
       const updateData: Record<string, unknown> = {
         initial_scan_days_back: gmailDays,
         calendar_initial_scan_months: calMonths,
+        drive_folder_id: selectedFolder || null,
       };
-      if (selectedFolder) {
-        updateData.drive_folder_id = selectedFolder;
-      }
-      await supabase
+      const { error: settingsErr } = await supabase
         .from("user_settings")
         .update(updateData)
         .eq("user_id", user.id);
+      if (settingsErr) throw new Error(`Failed to save settings: ${settingsErr.message}`);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No session");
-
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-      const resp = await fetch(`${backendUrl}/api/sync/part1`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ gmail_days: gmailDays, drive_hours: 24 }),
-      });
-
-      const data = await resp.json();
-
-      if (!resp.ok) {
-        throw new Error(data.error ?? "Scan failed");
+      // Persist skip rules into rules_memory so part1's Gmail query AND the
+      // runtime skipFilter both pick them up on this very same scan.
+      //
+      // Trigger semantics (matches parseSkipRules + the admin /admin/rules
+      // page):
+      //   - Bare email     → from=<email>   (skip mail SENT BY that address)
+      //   - Bare domain    → domain=<dom>   (already bidirectional: -from: AND -to:)
+      // The UI copy promises "messages from these addresses" — sender filtering
+      // is what users intuit and what the admin rules UI uses canonically.
+      // created_by must be one of ('user','claude','system') per the CHECK
+      // constraint on rules_memory; 'user' is the right bucket for a manually
+      // entered rule during onboarding.
+      if (skipAddresses.length > 0) {
+        const triggers = skipAddresses.map((addr) =>
+          addr.includes("@") ? `from=${addr}` : `domain=${addr}`,
+        );
+        const { data: existing } = await supabase
+          .from("rules_memory")
+          .select("trigger")
+          .eq("user_id", user.id)
+          .eq("rule_type", "skip")
+          .in("trigger", triggers);
+        const existingSet = new Set(
+          ((existing ?? []) as Array<{ trigger: string }>).map((r) => r.trigger),
+        );
+        const rows = triggers
+          .filter((t) => !existingSet.has(t))
+          .map((trigger) => ({
+            user_id: user.id,
+            rule_type: "skip",
+            trigger,
+            is_active: true,
+            created_by: "user",
+          }));
+        if (rows.length > 0) {
+          const { error: rulesErr } = await supabase
+            .from("rules_memory")
+            .insert(rows);
+          if (rulesErr) throw new Error(`Failed to save skip rules: ${rulesErr.message}`);
+        }
       }
 
-      // Fetch stats from run_session
+      // api() auto-attaches Authorization + X-Org-Id from the active org in localStorage.
+      const data = await api<{ ok: true; session_id: string }>("/api/sync/part1", {
+        method: "POST",
+        body: {
+          gmail_days: gmailDays,
+          cal_months: calMonths,
+          drive_folder_id: selectedFolder || null,
+          // ~3 months. The UI hint at the Drive picker promises "last 3
+          // months" when the folder is left empty; the previous 24h value
+          // contradicted that and silently shrunk the initial scan window.
+          drive_hours: 90 * 24,
+        },
+      });
+
       const { data: runSession } = await supabase
         .from("run_sessions")
         .select("items_processed")
@@ -253,53 +316,20 @@ export default function OnboardingSetup() {
       setStats({ gmail: runSession?.items_processed ?? 0, calendar: 0 });
       toast.success(t("step4.complete"));
 
-      // onboarding_completed is now set by the edge function itself,
-      // but set it here too as a safety net
       await supabase
         .from("user_settings")
-        .update({ onboarding_completed: true })
+        .update({
+          onboarding_completed: true,
+          initial_scan_completed_at: new Date().toISOString(),
+        })
         .eq("user_id", user.id);
 
       setDone(true);
     } catch (e) {
-      // Even on timeout/error, check if the edge function managed to mark onboarding
-      // as complete (it may have finished the IDs phase but timed out on response)
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const { data: settings } = await supabase
-            .from("user_settings")
-            .select("onboarding_completed, initial_scan_completed_at")
-            .eq("user_id", user.id)
-            .single();
-
-          if (settings?.onboarding_completed) {
-            // Scan actually succeeded, just response timed out
-            toast.success(isHe ? "הסריקה הושלמה!" : "Scan completed!");
-            setDone(true);
-            return;
-          }
-
-          // Edge function started but didn't complete — mark onboarding anyway
-          // since IDs may have been saved and batch-details will fill in the rest
-          if (settings?.initial_scan_completed_at === null) {
-            await supabase
-              .from("user_settings")
-              .update({
-                onboarding_completed: true,
-                initial_scan_completed_at: new Date().toISOString(),
-              })
-              .eq("user_id", user.id);
-            toast.info(isHe
-              ? "הסריקה עדיין רצה ברקע. תוכל להיכנס לאפליקציה."
-              : "Scan is still running in the background. You can enter the app.");
-            setDone(true);
-            return;
-          }
-        }
-      } catch { /* ignore recovery errors */ }
-
-      toast.error((e as Error).message);
+      const msg = e instanceof ApiError
+        ? `${e.message} (HTTP ${e.status})`
+        : (e instanceof Error ? e.message : String(e));
+      toast.error(msg);
     } finally {
       setScanning(false);
     }
@@ -446,6 +476,65 @@ export default function OnboardingSetup() {
                 )}
               </div>
             )}
+
+            {/* Skip addresses */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Ban className="h-4 w-4 text-muted-foreground" />
+                <label className="text-sm font-medium">
+                  {isHe ? "כתובות שלא לסרוק (אופציונלי)" : "Addresses to skip (optional)"}
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isHe
+                  ? "הוסף אימייל מלא (office@maor.org) או דומיין (newsletter.com). הודעות מהכתובות האלה יידלגו לחלוטין."
+                  : "Add a full email (office@maor.org) or a domain (newsletter.com). Messages matching these are skipped entirely."}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={skipInput}
+                  onChange={(e) => setSkipInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addSkipAddress();
+                    }
+                  }}
+                  placeholder={isHe ? "כתובת או דומיין..." : "Email or domain..."}
+                  dir="ltr"
+                  className="font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-[40px] shrink-0"
+                  onClick={addSkipAddress}
+                  disabled={!skipInput.trim()}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+              {skipAddresses.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {skipAddresses.map((addr) => (
+                    <span
+                      key={addr}
+                      className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-xs font-mono"
+                    >
+                      {addr}
+                      <button
+                        onClick={() => removeSkipAddress(addr)}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label="remove"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <Button onClick={startScan} className="w-full min-h-[48px] mt-2">
               <Rocket className="h-4 w-4 me-2" />

@@ -12,19 +12,32 @@ import { listNewFiles, getFileContent } from "../services/drive";
 import { listEvents } from "../services/calendar";
 import { parseSkipRules } from "../lib/rule-filters";
 
-const GMAIL_ACCOUNTS = ["chanoch@maor.org", "chanoch@kinus.info"];
-
 export interface Part1Options {
   userId: string;
-  /** Override lookback for Gmail in days (default: since last sync or 3 days) */
+  /** Override Gmail lookback in days. Falls back to user_settings.initial_scan_days_back or 7. */
   gmailDays?: number;
-  /** Override lookback for Drive in hours (default: since last sync or 24h) */
+  /** Override Drive lookback in hours (default: since last sync or 24h) */
   driveHours?: number;
+  /** Override Calendar lookback in months. Falls back to user_settings.calendar_initial_scan_months or 1. */
+  calMonths?: number;
+  /** Override Drive folder. Falls back to user_settings.drive_folder_id. */
+  driveFolderId?: string | null;
 }
 
 export async function runPart1(opts: Part1Options): Promise<{ sessionId: string }> {
-  const { userId, gmailDays, driveHours } = opts;
+  const { userId, gmailDays, driveHours, calMonths, driveFolderId } = opts;
   const sessionId = await createRunSession(userId, "part1", "collector");
+
+  // Load per-user settings once; sub-scans share these.
+  const { data: settings } = await db
+    .from("user_settings")
+    .select("calendar_initial_scan_months, initial_scan_days_back, drive_folder_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  const effectiveGmailDays = gmailDays ?? (settings?.initial_scan_days_back as number | undefined) ?? 7;
+  const effectiveCalMonths = calMonths ?? (settings?.calendar_initial_scan_months as number | undefined) ?? 1;
+  const effectiveDriveFolder = driveFolderId ?? (settings?.drive_folder_id as string | null | undefined) ?? null;
 
   const errors: string[] = [];
   let itemsProcessed = 0;
@@ -46,66 +59,89 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       syncStates?.find((s) => s.source === source)?.last_synced_at ?? null;
 
     // ── 1. Gmail ──────────────────────────────────────────────────────────────
+    // One Gmail OAuth = one inbox. We scan everything in that inbox (subject to
+    // skip rules and the lookback window). The per-alias `deliveredto:` loop
+    // that lived here previously was a relic from the single-tenant build.
     try {
+      // Lookback priority:
+      //   1. Explicit `gmailDays` from caller (onboarding/resync — user
+      //      just chose a window and expects that window to be honored).
+      //   2. Stored checkpoint (incremental sync after the first scan).
+      //   3. `user_settings.initial_scan_days_back` or hard default.
+      // Without step 1 taking precedence, a stale sync_state row from a
+      // previous scan would silently shorten the user's chosen window.
       const lastGmailSync = checkpoint("gmail");
-      const since = lastGmailSync
-        ? new Date(lastGmailSync)
-        : new Date(Date.now() - (gmailDays ?? 3) * 24 * 60 * 60 * 1000);
+      const since = gmailDays != null
+        ? new Date(Date.now() - gmailDays * 24 * 60 * 60 * 1000)
+        : lastGmailSync
+          ? new Date(lastGmailSync)
+          : new Date(Date.now() - effectiveGmailDays * 24 * 60 * 60 * 1000);
 
       const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
 
-      for (const account of GMAIL_ACCOUNTS) {
-        const query = [
-          `after:${afterDate}`,
-          ...skipFilter.gmailQueryFilters,
-          `-in:drafts`,
-          `deliveredto:${account}`,
-        ].join(" ");
+      // `in:inbox` is essential: without it, Gmail's `q` searches ALL labels,
+      // pulling Sent/Chats/Archive into source_messages and creating
+      // "reply-to-yourself" task suggestions from the user's own outbound mail.
+      const query = [
+        `after:${afterDate}`,
+        `in:inbox`,
+        ...skipFilter.gmailQueryFilters,
+        `-in:drafts`,
+      ].join(" ");
 
-        const messages = await searchGmail(userId, query, 100);
+      const messages = await searchGmail(userId, query, 100);
 
-        for (const { id, threadId } of messages) {
-          try {
-            const msg = await getMessage(userId, id);
-            const { subject, from, to, date, body } = extractEmailText(
-              msg as Parameters<typeof extractEmailText>[0],
-            );
+      for (const { id, threadId } of messages) {
+        try {
+          const msg = await getMessage(userId, id);
+          const { subject, from, to, date, body } = extractEmailText(
+            msg as Parameters<typeof extractEmailText>[0],
+          );
 
-            const fromEmail = (from.match(/<(.+)>/) ?? [])[1] ?? from;
+          // `[^>]+` is non-greedy across angle-bracket pairs; the greedy
+          // `.+` form swallowed everything between the first `<` and the
+          // LAST `>` on multi-recipient headers, producing garbage like
+          // `alice@a.com>, "Bob" <bob@b.com`.
+          const fromEmail = (from.match(/<([^>]+)>/) ?? [])[1] ?? from;
 
-            if (
-              skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
-              fromEmail.toLowerCase().includes("noreply") ||
-              fromEmail.toLowerCase().includes("no-reply") ||
-              body.toLowerCase().includes("unsubscribe")
-            ) {
-              itemsSkipped++;
-              continue;
-            }
-
-            const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`.slice(0, 3000);
-
-            await db.from("source_messages").upsert(
-              {
-                user_id: userId,
-                source_type: "gmail",
-                source_id: id,
-                sender: from,
-                sender_email: fromEmail,
-                subject,
-                body_text: body.slice(0, 1000),
-                raw_content: rawContent,
-                received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
-                processing_status: "pending",
-                reply_to_context: `${account}`,
-                metadata: { threadId, account },
-              },
-              { onConflict: "user_id,source_type,source_id" },
-            );
-            itemsProcessed++;
-          } catch (e) {
-            errors.push(`gmail msg ${id}: ${e}`);
+          if (
+            skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
+            fromEmail.toLowerCase().includes("noreply") ||
+            fromEmail.toLowerCase().includes("no-reply") ||
+            body.toLowerCase().includes("unsubscribe")
+          ) {
+            itemsSkipped++;
+            continue;
           }
+
+          const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`.slice(0, 3000);
+
+          // Derive the actual recipient alias from the To: header so the
+          // classifier has it without the collector having to loop on aliases.
+          // Same non-greedy fix as fromEmail above; multi-recipient To:
+          // headers would otherwise produce concatenated garbage.
+          const toEmail = (to.match(/<([^>]+)>/) ?? [])[1] ?? to.trim();
+
+          await db.from("source_messages").upsert(
+            {
+              user_id: userId,
+              source_type: "gmail",
+              source_id: id,
+              sender: from,
+              sender_email: fromEmail,
+              subject,
+              body_text: body.slice(0, 1000),
+              raw_content: rawContent,
+              received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+              processing_status: "pending",
+              reply_to_context: toEmail,
+              metadata: { threadId, to: toEmail },
+            },
+            { onConflict: "user_id,source_type,source_id" },
+          );
+          itemsProcessed++;
+        } catch (e) {
+          errors.push(`gmail msg ${id}: ${e}`);
         }
       }
 
@@ -116,12 +152,15 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
     // ── 2. Google Drive (ScanSnap) ────────────────────────────────────────────
     try {
+      // Same explicit-overrides-checkpoint pattern as Gmail above.
       const lastDriveSync = checkpoint("drive");
-      const since = lastDriveSync
-        ? new Date(lastDriveSync)
-        : new Date(Date.now() - (driveHours ?? 24) * 60 * 60 * 1000);
+      const since = driveHours != null
+        ? new Date(Date.now() - driveHours * 60 * 60 * 1000)
+        : lastDriveSync
+          ? new Date(lastDriveSync)
+          : new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      const files = await listNewFiles(userId, since.toISOString());
+      const files = await listNewFiles(userId, since.toISOString(), effectiveDriveFolder);
 
       for (const file of files) {
         if (!file.id || !file.name) continue;
@@ -161,8 +200,12 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     // ── 3. Google Calendar ────────────────────────────────────────────────────
     try {
       const now = new Date();
-      const timeMin = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
-      const timeMax = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      // Symmetric window: lookback AND lookahead both use the user's
+      // onboarding choice. The UI labels read "±N months" and the helper
+      // text promises "up to N months ahead" — both directions must match.
+      const windowMs = effectiveCalMonths * 30 * 24 * 60 * 60 * 1000;
+      const timeMin = new Date(now.getTime() - windowMs).toISOString();
+      const timeMax = new Date(now.getTime() + windowMs).toISOString();
 
       const events = await listEvents(userId, timeMin, timeMax);
       const seenIds = new Set<string>();

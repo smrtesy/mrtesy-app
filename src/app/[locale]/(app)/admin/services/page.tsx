@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
+import { listAllUserEmails } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,14 +9,14 @@ export default async function AdminServicesPage() {
   const t = await getTranslations("admin");
   const supabase = await createClient();
 
-  // Parallel queries — no broken join
-  const [syncResult, usersResult] = await Promise.all([
+  const [syncResult, usersResult, emailMap] = await Promise.all([
     supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
     supabase.from("user_settings").select("user_id, display_name"),
+    listAllUserEmails(),
   ]);
 
   const syncStates = syncResult.data || [];
-  const userMap = new Map((usersResult.data || []).map((u) => [u.user_id, u.display_name]));
+  const nameMap = new Map((usersResult.data || []).map((u) => [u.user_id, u.display_name]));
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
@@ -37,12 +38,16 @@ export default async function AdminServicesPage() {
               )}
               {states.map((s) => (
                 <div key={s.id} className="flex items-center justify-between rounded border p-2">
-                  <div>
-                    <p className="text-sm font-medium">
-                      {userMap.get(s.user_id) || s.user_id.slice(0, 8)}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {emailMap.get(s.user_id) || nameMap.get(s.user_id) || "—"}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      {t("lastSuccess")}: {s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("noUsersConnected")}
+                    <p className="text-xs text-muted-foreground flex items-center gap-2">
+                      <code className="font-mono text-[10px] opacity-60">{s.user_id.slice(0, 8)}</code>
+                      <span>·</span>
+                      <span className="truncate">
+                        {t("lastSuccess")}: {s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : t("noUsersConnected")}
+                      </span>
                     </p>
                   </div>
                   <div className="text-end">
