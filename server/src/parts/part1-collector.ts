@@ -182,10 +182,12 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     // ── 3. Google Calendar ────────────────────────────────────────────────────
     try {
       const now = new Date();
-      // Lookback uses the user's onboarding choice (months). Lookahead stays at 7d.
-      const lookbackMs = effectiveCalMonths * 30 * 24 * 60 * 60 * 1000;
-      const timeMin = new Date(now.getTime() - lookbackMs).toISOString();
-      const timeMax = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      // Symmetric window: lookback AND lookahead both use the user's
+      // onboarding choice. The UI labels read "±N months" and the helper
+      // text promises "up to N months ahead" — both directions must match.
+      const windowMs = effectiveCalMonths * 30 * 24 * 60 * 60 * 1000;
+      const timeMin = new Date(now.getTime() - windowMs).toISOString();
+      const timeMax = new Date(now.getTime() + windowMs).toISOString();
 
       const events = await listEvents(userId, timeMin, timeMax);
       const seenIds = new Set<string>();
