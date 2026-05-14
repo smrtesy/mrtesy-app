@@ -21,20 +21,9 @@ export default async function AppLayout({
     redirect(`/${locale}/login`);
   }
 
-  // Check onboarding (skip in dev bypass)
-  if (user && !devBypass) {
-    const { data: settings } = await supabase
-      .from("user_settings")
-      .select("onboarding_completed")
-      .eq("user_id", user.id)
-      .single();
-
-    if (!settings?.onboarding_completed) {
-      redirect(`/${locale}/onboarding`);
-    }
-  }
-
-  // Super-admin: DB row (canonical) OR ADMIN_EMAIL env-var (fallback)
+  // Compute super-admin status BEFORE the onboarding gate: super-admins manage
+  // the platform itself and must be able to reach /admin even if they haven't
+  // gone through (or care about) the smrtesy onboarding flow.
   let isAdmin = devBypass;
   if (!isAdmin && user) {
     const { data: row } = await supabase
@@ -48,6 +37,20 @@ export default async function AppLayout({
     const adminEmails = (process.env.ADMIN_EMAIL || "")
       .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
     isAdmin = adminEmails.includes(user?.email?.toLowerCase() || "");
+  }
+
+  // Onboarding gate — skipped for super-admins (platform operators) and in
+  // dev bypass. Regular users get pushed through onboarding once.
+  if (user && !devBypass && !isAdmin) {
+    const { data: settings } = await supabase
+      .from("user_settings")
+      .select("onboarding_completed")
+      .eq("user_id", user.id)
+      .single();
+
+    if (!settings?.onboarding_completed) {
+      redirect(`/${locale}/onboarding`);
+    }
   }
 
   return (
