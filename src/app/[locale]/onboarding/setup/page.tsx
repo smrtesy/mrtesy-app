@@ -33,6 +33,7 @@ interface DriveFolder {
 
 export default function OnboardingSetup() {
   const t = useTranslations("onboarding");
+  const tSetup = useTranslations("onboardingSetup");
   const { locale } = useParams();
   const router = useRouter();
   const supabase = createClient();
@@ -117,7 +118,7 @@ export default function OnboardingSetup() {
           setShowResults(false);
           setSearchResults([]);
         } else {
-          toast.error(isHe ? "תיקייה לא נמצאה" : "Folder not found");
+          toast.error(tSetup("folderNotFound"));
         }
       } catch { /* ignore */ }
       setSearchLoading(false);
@@ -177,7 +178,7 @@ export default function OnboardingSetup() {
     // Accept either bare emails ("foo@bar.com") or full domains ("bar.com").
     const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}$/.test(v);
     if (!ok) {
-      toast.error(isHe ? "כתובת לא תקינה" : "Invalid address");
+      toast.error(tSetup("invalidAddress"));
       return;
     }
     if (skipAddresses.includes(v)) return;
@@ -356,9 +357,7 @@ export default function OnboardingSetup() {
               <div className="flex items-start gap-2">
                 <Info className="h-4 w-4 shrink-0 mt-0.5" />
                 <p>
-                  {isHe
-                    ? "הסריקה הראשונית שואבת את כל ההודעות והאירועים, מסווגת אותם עם AI ויוצרת משימות חכמות אוטומטית. התהליך עשוי לקחת מספר דקות."
-                    : "The initial scan fetches all messages and events, classifies them with AI, and creates smart tasks automatically. This may take a few minutes."}
+                  {tSetup("scanExplanation")}
                 </p>
               </div>
             </div>
@@ -368,7 +367,7 @@ export default function OnboardingSetup() {
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4 text-red-500" />
                 <label className="text-sm font-medium">
-                  {isHe ? "Gmail — כמה ימים אחורה?" : "Gmail — how many days back?"}
+                  {tSetup("gmailDaysQuestion")}
                 </label>
               </div>
               <div className="flex gap-2 flex-wrap">
@@ -380,7 +379,7 @@ export default function OnboardingSetup() {
                     className="min-h-[40px]"
                     onClick={() => setGmailDays(opt.value)}
                   >
-                    {opt.value} {isHe ? "ימים" : "days"}
+                    {opt.value} {tSetup("daysUnit")}
                   </Button>
                 ))}
               </div>
@@ -391,7 +390,7 @@ export default function OnboardingSetup() {
               <div className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-blue-500" />
                 <label className="text-sm font-medium">
-                  {isHe ? "לוח שנה — כמה חודשים?" : "Calendar — how many months?"}
+                  {tSetup("calendarMonthsQuestion")}
                 </label>
               </div>
               <div className="flex gap-2 flex-wrap">
@@ -403,14 +402,12 @@ export default function OnboardingSetup() {
                     className="min-h-[40px]"
                     onClick={() => setCalMonths(opt.value)}
                   >
-                    ±{opt.value} {isHe ? "חודשים" : "months"}
+                    ±{opt.value} {tSetup("monthsUnit")}
                   </Button>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                {isHe
-                  ? `אירועים עתידיים — עד ${calMonths} חודשים קדימה`
-                  : `Future events — up to ${calMonths} months ahead`}
+                {tSetup("futureEventsHint", { months: calMonths })}
               </p>
             </div>
 
@@ -420,7 +417,7 @@ export default function OnboardingSetup() {
                 <div className="flex items-center gap-2">
                   <FolderOpen className="h-4 w-4 text-green-500" />
                   <label className="text-sm font-medium">
-                    {isHe ? "Drive — איזו תיקייה לסרוק?" : "Drive — which folder to scan?"}
+                    {tSetup("driveFolderQuestion")}
                   </label>
                 </div>
                 <div ref={searchContainerRef} className="relative">
@@ -431,7 +428,7 @@ export default function OnboardingSetup() {
                       value={folderSearch}
                       onChange={(e) => handleSearchChange(e.target.value)}
                       onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
-                      placeholder={isHe ? "חפש תיקייה או הדבק קישור Drive..." : "Search folder or paste Drive URL..."}
+                      placeholder={tSetup("driveSearchPlaceholder")}
                       className="w-full rounded-md border px-3 py-2.5 ps-9 pe-9 text-sm bg-background min-h-[44px]"
                       dir="auto"
                     />
@@ -466,12 +463,12 @@ export default function OnboardingSetup() {
                 {selectedFolder && (
                   <p className="text-xs text-green-600 flex items-center gap-1">
                     <CheckCircle2 className="h-3 w-3" />
-                    {isHe ? `נבחרה: ${selectedFolderName}` : `Selected: ${selectedFolderName}`}
+                    {tSetup("folderSelected", { name: selectedFolderName })}
                   </p>
                 )}
                 {!selectedFolder && (
                   <p className="text-xs text-muted-foreground">
-                    {isHe ? "השאר ריק לסריקת כל הקבצים (3 חודשים אחרונים)" : "Leave empty to scan all files (last 3 months)"}
+                    {tSetup("driveEmptyHint")}
                   </p>
                 )}
               </div>
@@ -482,13 +479,11 @@ export default function OnboardingSetup() {
               <div className="flex items-center gap-2">
                 <Ban className="h-4 w-4 text-muted-foreground" />
                 <label className="text-sm font-medium">
-                  {isHe ? "כתובות שלא לסרוק (אופציונלי)" : "Addresses to skip (optional)"}
+                  {tSetup("skipAddressesLabel")}
                 </label>
               </div>
               <p className="text-xs text-muted-foreground">
-                {isHe
-                  ? "הוסף אימייל מלא (office@maor.org) או דומיין (newsletter.com). הודעות מהכתובות האלה יידלגו לחלוטין."
-                  : "Add a full email (office@maor.org) or a domain (newsletter.com). Messages matching these are skipped entirely."}
+                {tSetup("skipAddressesHint")}
               </p>
               <div className="flex gap-2">
                 <Input
@@ -500,7 +495,7 @@ export default function OnboardingSetup() {
                       addSkipAddress();
                     }
                   }}
-                  placeholder={isHe ? "כתובת או דומיין..." : "Email or domain..."}
+                  placeholder={tSetup("skipAddressPlaceholder")}
                   dir="ltr"
                   className="font-mono text-xs"
                 />
@@ -538,7 +533,7 @@ export default function OnboardingSetup() {
 
             <Button onClick={startScan} className="w-full min-h-[48px] mt-2">
               <Rocket className="h-4 w-4 me-2" />
-              {isHe ? "התחל סריקה" : "Start Scan"}
+              {tSetup("startScan")}
             </Button>
           </>
         )}
@@ -548,7 +543,7 @@ export default function OnboardingSetup() {
             <div className="flex flex-col items-center gap-2">
               <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
               <p className="text-sm font-medium">
-                {isHe ? "סורק..." : "Scanning..."}
+                {tSetup("scanning")}
               </p>
             </div>
 
@@ -565,7 +560,7 @@ export default function OnboardingSetup() {
                   <span className="flex items-center gap-1">
                     <Mail className="h-3 w-3 text-red-500" /> Gmail
                   </span>
-                  <span className="font-mono">{progress.gmail.toLocaleString()} {isHe ? "הודעות" : "messages"}</span>
+                  <span className="font-mono">{progress.gmail.toLocaleString()} {tSetup("messagesUnit")}</span>
                 </div>
                 <div className="h-2 rounded-full bg-red-100 overflow-hidden relative">
                   <div
@@ -578,9 +573,9 @@ export default function OnboardingSetup() {
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3 text-blue-500" /> {isHe ? "לוח שנה" : "Calendar"}
+                    <Calendar className="h-3 w-3 text-blue-500" /> {tSetup("calendarLabel")}
                   </span>
-                  <span className="font-mono">{progress.calendar.toLocaleString()} {isHe ? "אירועים" : "events"}</span>
+                  <span className="font-mono">{progress.calendar.toLocaleString()} {tSetup("eventsUnit")}</span>
                 </div>
                 <div className="h-2 rounded-full bg-blue-100 overflow-hidden relative">
                   <div
@@ -592,9 +587,7 @@ export default function OnboardingSetup() {
             </div>
 
             <p className="text-xs text-center text-muted-foreground">
-              {isHe
-                ? "שומר הודעות... העיבוד ימשיך ברקע."
-                : "Saving messages... Processing will continue in the background."}
+              {tSetup("savingMessages")}
             </p>
           </div>
         )}
@@ -606,20 +599,16 @@ export default function OnboardingSetup() {
               <p className="font-medium">{t("step4.complete")}</p>
               {stats && (
                 <div className="text-center text-sm text-muted-foreground space-y-1">
-                  <p>Gmail: {stats.gmail} {isHe ? "הודעות" : "messages"}</p>
-                  <p>{isHe ? "לוח שנה" : "Calendar"}: {stats.calendar} {isHe ? "אירועים" : "events"}</p>
+                  <p>Gmail: {stats.gmail} {tSetup("messagesUnit")}</p>
+                  <p>{tSetup("calendarLabel")}: {stats.calendar} {tSetup("eventsUnit")}</p>
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-2">
-                {isHe
-                  ? "המערכת תעבד את ההודעות ברקע ותיצור משימות אוטומטית."
-                  : "The system will process messages in the background and create tasks automatically."}
+                {tSetup("backgroundProcessing")}
               </p>
               {stats && stats.gmail > 1000 && (
                 <p className="text-xs text-amber-600 mt-1">
-                  {isHe
-                    ? `יש הרבה הודעות (${stats.gmail.toLocaleString()}) — העיבוד ברקע עשוי לקחת מספר שעות.`
-                    : `Large mailbox (${stats.gmail.toLocaleString()} messages) — background processing may take a few hours.`}
+                  {tSetup("largeMailboxWarning", { count: stats.gmail.toLocaleString() })}
                 </p>
               )}
             </div>

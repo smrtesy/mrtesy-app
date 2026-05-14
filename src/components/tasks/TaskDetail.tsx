@@ -47,6 +47,7 @@ interface TaskDetailProps {
 export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
+  const tDetail = useTranslations("taskDetailExt");
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -177,7 +178,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
         method: "POST",
         body: { content: newUpdate.trim(), type: "note" },
       });
-      toast.success(locale === "he" ? "עדכון נוסף" : "Update added");
+      toast.success(tDetail("toastUpdateAdded"));
       setNewUpdate("");
       onUpdate();
     } catch (e) {
@@ -224,7 +225,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
             {editingFields && (
               <div className="space-y-3 rounded-lg border p-3 bg-muted/50">
                 <div>
-                  <label className="text-xs font-medium">{locale === "he" ? "כותרת" : "Title"}</label>
+                  <label className="text-xs font-medium">{tDetail("titleLabel")}</label>
                   <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} dir="auto" />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -260,13 +261,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                   <Input type="date" value={editDueDate} onChange={(e) => setEditDueDate(e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium">{locale === "he" ? "פרויקט" : "Project"}</label>
+                  <label className="text-xs font-medium">{tDetail("projectLabel")}</label>
                   <select
                     value={editProjectId}
                     onChange={(e) => setEditProjectId(e.target.value)}
                     className="w-full rounded border px-2 py-1.5 text-sm bg-background"
                   >
-                    <option value="">{locale === "he" ? "— ללא פרויקט —" : "— No project —"}</option>
+                    <option value="">{tDetail("noProjectOption")}</option>
                     {selectorProjects.map((p) => (
                       <option key={p.id} value={p.id}>
                         {locale === "he" && p.name_he ? p.name_he : p.name}
@@ -275,13 +276,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium">{locale === "he" ? "משויך ל-" : "Assigned to"}</label>
+                  <label className="text-xs font-medium">{tDetail("assignedToLabel")}</label>
                   <select
                     value={editAssignedTo}
                     onChange={(e) => setEditAssignedTo(e.target.value)}
                     className="w-full rounded border px-2 py-1.5 text-sm bg-background"
                   >
-                    <option value="">{locale === "he" ? "— לא משויך —" : "— Unassigned —"}</option>
+                    <option value="">{tDetail("unassignedOption")}</option>
                     {selectorMembers.map((m) => (
                       <option key={m.user_id} value={m.user_id}>
                         {m.email
@@ -294,7 +295,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 <div className="flex gap-2">
                   <Button size="sm" onClick={saveFieldEdit} disabled={saving} className="gap-1">
                     <Save className="h-3 w-3" />
-                    {saving ? "..." : (locale === "he" ? "שמור" : "Save")}
+                    {saving ? "..." : tDetail("saveButton")}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditingFields(false)}>
                     <X className="h-3 w-3" />
@@ -317,7 +318,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                   <div className="flex gap-2">
                     <Button size="sm" onClick={handleDescSave} disabled={saving} className="gap-1">
                       <Save className="h-3 w-3" />
-                      {saving ? "..." : (locale === "he" ? "שמור" : "Save")}
+                      {saving ? "..." : tDetail("saveButton")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditingDesc(false)}>
                       <X className="h-3 w-3" />
@@ -376,7 +377,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     <Textarea
                       value={newUpdate}
                       onChange={(e) => setNewUpdate(e.target.value)}
-                      placeholder={locale === "he" ? "הוסף עדכון..." : "Add update..."}
+                      placeholder={tDetail("addUpdatePlaceholder")}
                       className="min-h-[60px] text-xs"
                       dir="auto"
                     />

@@ -17,6 +17,7 @@ import { useActiveOrg } from "@/lib/api/use-active-org";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
 
 interface Props {
   locale: string;
@@ -25,6 +26,7 @@ interface Props {
 export function OrgSwitcher({ locale }: Props) {
   const { orgs, active, loading, switchOrg, refresh } = useActiveOrg();
   const isHe = locale === "he";
+  const tSw = useTranslations("orgSwitcher");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -40,7 +42,7 @@ export function OrgSwitcher({ locale }: Props) {
         noOrg: true,
       });
       switchOrg(org.id);
-      toast.success(isHe ? "ארגון נוצר" : "Organization created");
+      toast.success(tSw("orgCreated"));
       setNewName("");
       setCreateOpen(false);
       refresh();
@@ -72,7 +74,7 @@ export function OrgSwitcher({ locale }: Props) {
             <span className="flex items-center gap-2 min-w-0">
               <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="truncate text-start" dir="auto">
-                {active ? displayName(active) : (isHe ? "בחר ארגון" : "Select org")}
+                {active ? displayName(active) : tSw("selectOrg")}
               </span>
             </span>
             <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -96,7 +98,7 @@ export function OrgSwitcher({ locale }: Props) {
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setCreateOpen(true)} className="gap-2">
             <Plus className="h-4 w-4" />
-            <span>{isHe ? "ארגון חדש" : "New organization"}</span>
+            <span>{tSw("newOrganization")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -104,13 +106,13 @@ export function OrgSwitcher({ locale }: Props) {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{isHe ? "ארגון חדש" : "New organization"}</DialogTitle>
+            <DialogTitle>{tSw("newOrganization")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder={isHe ? "שם הארגון" : "Organization name"}
+              placeholder={tSw("organizationName")}
               dir="auto"
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
@@ -121,7 +123,7 @@ export function OrgSwitcher({ locale }: Props) {
               className="w-full gap-2"
             >
               {creating && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isHe ? "צור" : "Create"}
+              {tSw("create")}
             </Button>
           </div>
         </DialogContent>

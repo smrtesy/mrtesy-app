@@ -14,6 +14,7 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:300
 
 export default function OnboardingWhatsApp() {
   const t = useTranslations("onboarding");
+  const tWa = useTranslations("onboardingWhatsapp");
   const { locale } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -54,11 +55,7 @@ export default function OnboardingWhatsApp() {
       const count = (payload.row_count as number | undefined) ?? 0;
       setRowCount(count);
       setTestResult("success");
-      toast.success(
-        isHe
-          ? `גישה לSheet הצליחה! ${count} שורות זוהו`
-          : `Sheet access successful! ${count} rows found`,
-      );
+      toast.success(tWa("sheetAccessSuccess", { count }));
     } catch (e) {
       setTestResult("error");
       toast.error(e instanceof Error ? e.message : String(e));
@@ -83,7 +80,7 @@ export default function OnboardingWhatsApp() {
       return;
     }
 
-    toast.success(isHe ? "WhatsApp חובר בהצלחה" : "WhatsApp connected");
+    toast.success(tWa("whatsappConnected"));
     router.push(redirectTo === "settings" ? `/${locale}/settings` : `/${locale}/onboarding/setup`);
   }
 
@@ -97,33 +94,27 @@ export default function OnboardingWhatsApp() {
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
           <MessageCircle className="h-8 w-8 text-emerald-600" />
         </div>
-        <CardTitle>{isHe ? "חיבור WhatsApp" : "WhatsApp Connection"}</CardTitle>
+        <CardTitle>{tWa("title")}</CardTitle>
         <CardDescription>
-          {isHe
-            ? "המערכת קוראת הודעות WhatsApp מ-Google Sheet שמעודכן על ידי Dualhook"
-            : "The system reads WhatsApp messages from a Google Sheet updated by Dualhook"}
+          {tWa("description")}
         </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-4">
         {/* How it works */}
         <div className="rounded-lg border bg-muted/50 p-3 text-xs space-y-1.5" dir={isHe ? "rtl" : "ltr"}>
-          <p className="font-medium">{isHe ? "איך זה עובד:" : "How it works:"}</p>
+          <p className="font-medium">{tWa("howItWorks")}</p>
           <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-            <li>
-              {isHe
-                ? "Dualhook מעתיק הודעות WhatsApp ל-Google Sheet אישי שלך"
-                : "Dualhook copies WhatsApp messages to your own Google Sheet"}
-            </li>
-            <li>{isHe ? "השרת קורא מה-Sheet כל כמה שעות" : "The server reads from the Sheet every few hours"}</li>
-            <li>{isHe ? "AI מנתח את השיחות ויוצר משימות" : "AI analyzes conversations and creates tasks"}</li>
+            <li>{tWa("step1")}</li>
+            <li>{tWa("step2")}</li>
+            <li>{tWa("step3")}</li>
           </ol>
         </div>
 
         {/* Sheet ID field */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium">
-            {isHe ? "Google Sheet ID" : "Google Sheet ID"}
+            {tWa("sheetIdLabel")}
           </label>
           <Input
             value={sheetId}
@@ -133,7 +124,7 @@ export default function OnboardingWhatsApp() {
             placeholder="Sheet ID..."
           />
           <p className="text-xs text-muted-foreground">
-            {isHe ? "ה-ID של ה-Sheet האישי שלך (מתוך הקישור)" : "Your own Sheet's ID (from its URL)"}
+            {tWa("sheetIdHint")}
           </p>
         </div>
 
@@ -153,30 +144,24 @@ export default function OnboardingWhatsApp() {
           ) : (
             <MessageCircle className="h-4 w-4" />
           )}
-          {testing
-            ? (isHe ? "בודק גישה…" : "Testing access…")
-            : (isHe ? "בדוק גישה ל-Sheet" : "Test Sheet Access")}
+          {testing ? tWa("testingAccess") : tWa("testSheetAccess")}
         </Button>
 
         {testResult === "success" && rowCount !== null && (
           <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700 text-center">
-            {isHe
-              ? `✓ גישה לSheet מאושרת — ${rowCount} הודעות נמצאו`
-              : `✓ Sheet access confirmed — ${rowCount} messages found`}
+            {tWa("sheetAccessConfirmed", { count: rowCount })}
           </div>
         )}
 
         {testResult === "error" && (
           <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700" dir={isHe ? "rtl" : "ltr"}>
-            {isHe
-              ? "שגיאה בגישה ל-Sheet. ודא שחיבור Google מאושר ושה-Sheet משותף נכון."
-              : "Sheet access failed. Make sure Google is connected and the Sheet is properly shared."}
+            {tWa("sheetAccessError")}
           </div>
         )}
 
         {/* Connect / Skip */}
         <Button onClick={handleConnect} className="w-full min-h-[48px]">
-          {isHe ? "אשר חיבור" : "Confirm Connection"}
+          {tWa("confirmConnection")}
         </Button>
         <Button onClick={handleSkip} variant="ghost" className="w-full min-h-[48px]">
           {t("skip")}

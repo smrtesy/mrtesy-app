@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,7 @@ const ROLE_COLORS: Record<OrgMember["role"], string> = {
 
 export function OrgSettingsClient({ locale }: Props) {
   const isHe = locale === "he";
+  const tOrg = useTranslations("orgSettings");
   const { active, refresh: refreshOrgs } = useActiveOrg();
   const { members, loading, refresh: refreshMembers } = useOrgMembers();
 
@@ -51,14 +53,14 @@ export function OrgSettingsClient({ locale }: Props) {
   const isOwner = myRoleFromOrgs === "owner";
 
   async function handleRenameOrg() {
-    if (!orgName.trim()) { toast.error(isHe ? "שם נדרש" : "Name required"); return; }
+    if (!orgName.trim()) { toast.error(tOrg("nameRequired")); return; }
     setSavingOrg(true);
     try {
       await api("/api/org", {
         method: "PATCH",
         body: { name: orgName.trim(), name_he: orgNameHe.trim() || null },
       });
-      toast.success(isHe ? "הארגון עודכן" : "Organization updated");
+      toast.success(tOrg("organizationUpdated"));
       refreshOrgs();
     } catch (e) {
       toast.error((e as Error).message);
@@ -75,7 +77,7 @@ export function OrgSettingsClient({ locale }: Props) {
         method: "POST",
         body: { email: inviteEmail.trim(), role: inviteRole },
       });
-      toast.success(isHe ? "המוזמן צורף" : "Member added");
+      toast.success(tOrg("memberAdded"));
       setInviteEmail("");
       refreshMembers();
     } catch (e) {
@@ -88,7 +90,7 @@ export function OrgSettingsClient({ locale }: Props) {
   async function handleChangeRole(userId: string, role: OrgMember["role"]) {
     try {
       await api(`/api/org/members/${userId}/role`, { method: "PATCH", body: { role } });
-      toast.success(isHe ? "התפקיד עודכן" : "Role updated");
+      toast.success(tOrg("roleUpdated"));
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
@@ -96,10 +98,10 @@ export function OrgSettingsClient({ locale }: Props) {
   }
 
   async function handleRemove(userId: string) {
-    if (!confirm(isHe ? "להסיר חבר זה?" : "Remove this member?")) return;
+    if (!confirm(tOrg("removeMemberConfirm"))) return;
     try {
       await api(`/api/org/members/${userId}`, { method: "DELETE" });
-      toast.success(isHe ? "החבר הוסר" : "Member removed");
+      toast.success(tOrg("memberRemoved"));
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
@@ -119,21 +121,21 @@ export function OrgSettingsClient({ locale }: Props) {
     <div className="space-y-4">
       <h1 className="text-2xl font-bold flex items-center gap-2">
         <Building2 className="h-6 w-6" />
-        {isHe ? "הגדרות ארגון" : "Organization Settings"}
+        {tOrg("title")}
       </h1>
 
       {/* Org info */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">{isHe ? "פרטי ארגון" : "Organization Info"}</CardTitle>
+          <CardTitle className="text-base">{tOrg("orgInfo")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div>
-            <label className="text-xs font-medium">{isHe ? "שם" : "Name"}</label>
+            <label className="text-xs font-medium">{tOrg("name")}</label>
             <Input value={orgName} onChange={(e) => setOrgName(e.target.value)} disabled={!canManage} dir="auto" />
           </div>
           <div>
-            <label className="text-xs font-medium">{isHe ? "שם (עברית)" : "Name (Hebrew)"}</label>
+            <label className="text-xs font-medium">{tOrg("nameHebrew")}</label>
             <Input value={orgNameHe} onChange={(e) => setOrgNameHe(e.target.value)} disabled={!canManage} dir="rtl" />
           </div>
           <div className="text-xs text-muted-foreground">
@@ -142,7 +144,7 @@ export function OrgSettingsClient({ locale }: Props) {
           {canManage && (
             <Button onClick={handleRenameOrg} disabled={savingOrg} className="gap-2">
               {savingOrg && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isHe ? "שמור" : "Save"}
+              {tOrg("save")}
             </Button>
           )}
         </CardContent>
@@ -152,7 +154,7 @@ export function OrgSettingsClient({ locale }: Props) {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between">
-            <span>{isHe ? "חברים" : "Members"} ({members.length})</span>
+            <span>{tOrg("members")} ({members.length})</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -162,7 +164,7 @@ export function OrgSettingsClient({ locale }: Props) {
               <Input
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder={isHe ? "אימייל לצירוף" : "Email to invite"}
+                placeholder={tOrg("emailToInvite")}
                 className="flex-1 min-w-[200px]"
                 dir="auto"
               />
@@ -171,13 +173,13 @@ export function OrgSettingsClient({ locale }: Props) {
                 onChange={(e) => setInviteRole(e.target.value as OrgMember["role"])}
                 className="rounded border px-2 py-1.5 text-sm bg-background"
               >
-                <option value="member">{isHe ? "חבר" : "Member"}</option>
-                <option value="admin">{isHe ? "מנהל" : "Admin"}</option>
-                {isOwner && <option value="owner">{isHe ? "בעלים" : "Owner"}</option>}
+                <option value="member">{tOrg("roleMember")}</option>
+                <option value="admin">{tOrg("roleAdmin")}</option>
+                {isOwner && <option value="owner">{tOrg("roleOwner")}</option>}
               </select>
               <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="gap-2">
                 {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                {isHe ? "צרף" : "Invite"}
+                {tOrg("invite")}
               </Button>
             </div>
           )}
@@ -209,9 +211,9 @@ export function OrgSettingsClient({ locale }: Props) {
                         onChange={(e) => handleChangeRole(m.user_id, e.target.value as OrgMember["role"])}
                         className="rounded border px-2 py-1 text-xs bg-background"
                       >
-                        <option value="member">{isHe ? "חבר" : "Member"}</option>
-                        <option value="admin">{isHe ? "מנהל" : "Admin"}</option>
-                        <option value="owner">{isHe ? "בעלים" : "Owner"}</option>
+                        <option value="member">{tOrg("roleMember")}</option>
+                        <option value="admin">{tOrg("roleAdmin")}</option>
+                        <option value="owner">{tOrg("roleOwner")}</option>
                       </select>
                     ) : (
                       <Badge variant="outline" className="text-[10px] uppercase">{m.role}</Badge>

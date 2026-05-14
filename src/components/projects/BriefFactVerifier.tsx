@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,8 +44,10 @@ const typeColors: Record<Fact["type"], string> = {
 export function BriefFactVerifier({ projectId, pendingFacts: initialFacts, locale }: BriefFactVerifierProps) {
   const [facts, setFacts] = useState<Fact[]>(initialFacts);
   const [saving, setSaving] = useState<string | null>(null);
+  const tBrief = useTranslations("briefVerifier");
 
   const isHe = locale === "he";
+  const tBrief = useTranslations("briefVerifier");
 
   const handleVerify = useCallback(async (fact: Fact, approve: boolean) => {
     setSaving(fact.id);
@@ -58,14 +61,14 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts, local
 
       setFacts((prev) => prev.filter((f) => f.id !== fact.id));
       toast.success(approve
-        ? (isHe ? "עובדה אושרה" : "Fact approved")
-        : (isHe ? "עובדה נדחתה" : "Fact rejected"));
+        ? tBrief("factApproved")
+        : tBrief("factRejected"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     } finally {
       setSaving(null);
     }
-  }, [projectId, isHe]);
+  }, [projectId, tBrief]);
 
   if (facts.length === 0) return null;
 
@@ -74,12 +77,10 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts, local
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2">
           <BookOpen className="h-4 w-4 text-blue-600" />
-          {isHe ? `AI למד ${facts.length} עובדות — אשר כל אחת` : `AI learned ${facts.length} facts — verify each`}
+          {tBrief("aiLearnedFacts", { count: facts.length })}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          {isHe
-            ? "אשר עובדות נכונות כדי לשפר את ההתאמה לפרויקט זה בעתיד"
-            : "Approve correct facts to improve future project matching"}
+          {tBrief("approveFactsHint")}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">

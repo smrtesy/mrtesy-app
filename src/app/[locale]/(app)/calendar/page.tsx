@@ -24,6 +24,7 @@ export default async function CalendarPage({
   const { locale } = await params;
   const t = await getTranslations("calendar");
   const tTasks = await getTranslations("tasks");
+  const tCal = await getTranslations("calendarPage");
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
@@ -70,7 +71,7 @@ export default async function CalendarPage({
     timeline.push({
       id: `event-${event.id}`,
       type: "event",
-      title: event.subject || (locale === "he" ? "(ללא כותרת)" : "(No title)"),
+      title: event.subject || tCal("noTitle"),
       date: eventDate,
       sourceUrl: event.source_url,
       classification: event.ai_classification,
@@ -118,7 +119,7 @@ export default async function CalendarPage({
                   })}
                   {isToday && (
                     <Badge variant="default" className="text-[10px]">
-                      {locale === "he" ? "היום" : "Today"}
+                      {tCal("today")}
                     </Badge>
                   )}
                 </h3>

@@ -17,6 +17,7 @@ export default async function ProjectDetailPage({
 }) {
   const { locale, id } = await params;
   const t = await getTranslations("projects");
+  const tDetail = await getTranslations("projectDetail");
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
@@ -159,7 +160,7 @@ export default async function ProjectDetailPage({
             {verifiedFacts.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-1">
-                  {locale === "he" ? "עובדות מאומתות" : "Verified facts"} ({verifiedFacts.length})
+                  {tDetail("verifiedFacts")} ({verifiedFacts.length})
                 </p>
                 <div className="space-y-1">
                   {verifiedFacts.map((fact) => (

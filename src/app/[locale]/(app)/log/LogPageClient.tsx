@@ -15,9 +15,9 @@ const sourceIcons: Record<string, string> = {
   google_calendar: "📅",
 };
 
-const processingBadge: Record<string, { variant: "default" | "secondary" | "outline"; label: string; labelEn: string }> = {
-  pending: { variant: "secondary", label: "ממתין", labelEn: "Pending" },
-  processed: { variant: "outline", label: "עובד", labelEn: "Processed" },
+const processingBadge: Record<string, { variant: "default" | "secondary" | "outline"; key: string }> = {
+  pending: { variant: "secondary", key: "badgePending" },
+  processed: { variant: "outline", key: "badgeProcessed" },
 };
 
 const classificationColors: Record<string, string> = {
@@ -29,17 +29,17 @@ const classificationColors: Record<string, string> = {
 };
 
 const sourceFilters = [
-  { key: "all", label: "הכל", labelEn: "All" },
-  { key: "gmail", label: "📧 אימייל", labelEn: "📧 Email" },
-  { key: "google_drive", label: "📁 דרייב", labelEn: "📁 Drive" },
-  { key: "google_calendar", label: "📅 יומן", labelEn: "📅 Calendar" },
-  { key: "whatsapp", label: "💬 WhatsApp", labelEn: "💬 WhatsApp" },
+  { key: "all", labelKey: "filterAll" },
+  { key: "gmail", labelKey: "filterGmail" },
+  { key: "google_drive", labelKey: "filterDrive" },
+  { key: "google_calendar", labelKey: "filterCalendar" },
+  { key: "whatsapp", labelKey: "filterWhatsapp" },
 ];
 
 const statusFilters = [
-  { key: "all", label: "הכל", labelEn: "All" },
-  { key: "pending", label: "ממתין", labelEn: "Pending" },
-  { key: "processed", label: "עובד", labelEn: "Processed" },
+  { key: "all", labelKey: "statusAll" },
+  { key: "pending", labelKey: "statusPending" },
+  { key: "processed", labelKey: "statusProcessed" },
 ];
 
 interface SourceEntry {
@@ -69,6 +69,7 @@ interface SourceEntry {
 
 export function LogPageClient({ locale }: { locale: string }) {
   const t = useTranslations("log");
+  const tLog = useTranslations("logPage");
   const supabase = createClient();
   const [logs, setLogs] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -175,7 +176,7 @@ export function LogPageClient({ locale }: { locale: string }) {
                 : "bg-muted text-muted-foreground hover:bg-accent"
             }`}
           >
-            {locale === "he" ? f.label : f.labelEn}
+            {tLog(f.labelKey)}
           </button>
         ))}
       </div>
@@ -192,7 +193,7 @@ export function LogPageClient({ locale }: { locale: string }) {
                 : "bg-muted text-muted-foreground hover:bg-accent"
             }`}
           >
-            {locale === "he" ? f.label : f.labelEn}
+            {tLog(f.labelKey)}
           </button>
         ))}
       </div>
@@ -212,7 +213,7 @@ export function LogPageClient({ locale }: { locale: string }) {
         <div className="space-y-2">
           {logs.map((log) => {
             const isExpanded = expandedId === log.id;
-            const displayTitle = log.subject || log.sender || (locale === "he" ? "הודעה ללא נושא" : "No subject");
+            const displayTitle = log.subject || log.sender || tLog("noSubject");
             const displayDate = log.received_at || log.created_at;
             const badge = processingBadge[log.processing_status] || processingBadge.pending;
             const classColor = classificationColors[log.ai_classification || "pending"] || "";
@@ -231,7 +232,7 @@ export function LogPageClient({ locale }: { locale: string }) {
                     {sourceIcons[log.source_type || ""] || "📋"}
                   </span>
                   <Badge variant={badge.variant} className="text-[10px]">
-                    {locale === "he" ? badge.label : badge.labelEn}
+                    {tLog(badge.key)}
                   </Badge>
                   {log.ai_classification && log.ai_classification !== "pending" && (
                     <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${classColor}`}>
