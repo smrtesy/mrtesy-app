@@ -120,7 +120,7 @@ export default function SettingsPage() {
         onboarding_completed: false,
       }).eq("user_id", uid);
 
-      toast.success(locale === "he" ? "כל הנתונים נמחקו. מעביר לאונבורדינג..." : "All data deleted. Redirecting to onboarding...");
+      toast.success(t("dataDeletedRedirecting"));
       setResetConfirm(false);
       // Redirect to onboarding after reset
       setTimeout(() => { window.location.href = `/${locale}/onboarding`; }, 1500);
@@ -161,14 +161,12 @@ export default function SettingsPage() {
       {/* Organization */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">
-            {locale === "he" ? "ארגון" : "Organization"}
-          </CardTitle>
+          <CardTitle className="text-base">{t("organization")}</CardTitle>
         </CardHeader>
         <CardContent>
           <Link href={`/${locale}/settings/org`}>
             <Button variant="outline" className="min-h-[48px] w-full sm:w-auto">
-              {locale === "he" ? "נהל ארגון וחברים" : "Manage organization & members"}
+              {t("manageOrgAndMembers")}
             </Button>
           </Link>
         </CardContent>
@@ -246,9 +244,7 @@ export default function SettingsPage() {
       {/* Data Management */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">
-            {locale === "he" ? "ניהול נתונים" : "Data Management"}
-          </CardTitle>
+          <CardTitle className="text-base">{t("dataManagement")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {/* Re-sync button */}
@@ -259,7 +255,7 @@ export default function SettingsPage() {
             className="w-full min-h-[48px] gap-2"
           >
             {resyncLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            {locale === "he" ? "סנכרון מחדש" : "Re-sync Data"}
+            {t("resync")}
           </Button>
 
           {/* Reset data button */}
@@ -270,9 +266,7 @@ export default function SettingsPage() {
             className="w-full min-h-[48px] gap-2"
           >
             {resetLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            {resetConfirm
-              ? (locale === "he" ? "לחץ שוב לאישור מחיקה" : "Click again to confirm deletion")
-              : (locale === "he" ? "מחק את כל הנתונים" : "Delete All Data")}
+            {resetConfirm ? t("confirmDeletion") : t("deleteAllData")}
           </Button>
         </CardContent>
       </Card>
@@ -286,7 +280,7 @@ export default function SettingsPage() {
               className="flex items-center gap-3 text-sm font-medium text-primary hover:underline"
             >
               <Shield className="h-5 w-5" />
-              {locale === "he" ? "פאנל ניהול" : "Admin Panel"}
+              {t("adminPanel")}
             </Link>
           </CardContent>
         </Card>

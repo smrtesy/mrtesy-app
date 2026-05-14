@@ -164,7 +164,15 @@
     "disconnected": "מנותק",
     "classificationModel": "מודל סיווג",
     "summaryModel": "מודל סיכום",
-    "showAiCosts": "הצג עלויות AI"
+    "showAiCosts": "הצג עלויות AI",
+    "organization": "ארגון",
+    "manageOrgAndMembers": "נהל ארגון וחברים",
+    "dataManagement": "ניהול נתונים",
+    "resync": "סנכרון מחדש",
+    "deleteAllData": "מחק את כל הנתונים",
+    "confirmDeletion": "לחץ שוב לאישור מחיקה",
+    "dataDeletedRedirecting": "כל הנתונים נמחקו. מעביר לאונבורדינג...",
+    "adminPanel": "פאנל ניהול"
   },
   "admin": {
     "title": "ניהול מערכת",
