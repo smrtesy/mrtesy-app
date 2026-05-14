@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,7 +41,6 @@ interface EditProjectSheetProps {
 }
 
 export function EditProjectSheet({ project, brief, locale }: EditProjectSheetProps) {
-  const supabase = createClient();
   const router = useRouter();
   const isHe = locale === "he";
 
@@ -79,42 +78,31 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
     if (!name.trim()) { toast.error(isHe ? "שם נדרש" : "Name is required"); return; }
     setSaving(true);
     try {
-      // 1. Update projects table
-      const { error: projErr } = await supabase
-        .from("projects")
-        .update({
+      // 1. Update project core fields
+      await api(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        body: {
           name: name.trim(),
           name_he: nameHe.trim() || name.trim(),
           color,
           keywords,
           key_contacts: contacts,
-        })
-        .eq("id", project.id);
-      if (projErr) throw projErr;
+        },
+      });
 
-      // 2. Upsert project_briefs (create if missing, update if exists)
-      const briefPayload = {
-        project_id: project.id,
-        purpose: purpose.trim() || null,
-        target_audience: targetAudience.trim() || null,
-        current_status: currentStatus.trim() || null,
-        ai_context: aiContext.trim() || null,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (brief?.id) {
-        const { error: briefErr } = await supabase
-          .from("project_briefs")
-          .update(briefPayload)
-          .eq("id", brief.id);
-        if (briefErr) throw briefErr;
-      } else if (purpose.trim() || targetAudience.trim() || currentStatus.trim() || aiContext.trim()) {
-        // Only create brief if the user filled in at least one field
-        const { data: { user } } = await supabase.auth.getUser();
-        const { error: briefErr } = await supabase
-          .from("project_briefs")
-          .insert({ ...briefPayload, user_id: user?.id });
-        if (briefErr) throw briefErr;
+      // 2. Upsert brief (the PUT endpoint handles create-vs-update on its own)
+      const hasBriefContent =
+        purpose.trim() || targetAudience.trim() || currentStatus.trim() || aiContext.trim();
+      if (hasBriefContent || brief?.id) {
+        await api(`/api/projects/${project.id}/brief`, {
+          method: "PUT",
+          body: {
+            purpose: purpose.trim() || null,
+            target_audience: targetAudience.trim() || null,
+            current_status: currentStatus.trim() || null,
+            ai_context: aiContext.trim() || null,
+          },
+        });
       }
 
       toast.success(isHe ? "הפרויקט עודכן" : "Project updated");

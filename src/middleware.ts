@@ -21,7 +21,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Update Supabase session
-  const { user, response } = await updateSession(request);
+  const { user, supabase, response } = await updateSession(request);
 
   // Dev auth bypass — skip all auth redirects on localhost
   const devBypass =
@@ -40,14 +40,25 @@ export async function middleware(request: NextRequest) {
   const locale =
     pathnameLocale === "he" || pathnameLocale === "en" ? pathnameLocale : "he";
 
-  // Admin route protection
+  // Admin route protection.
+  // Access granted if EITHER: super_admins row exists (canonical) OR email is in ADMIN_EMAIL env (fallback).
   const ADMIN_EMAILS = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
   const isAdminRoute = pathname.includes("/admin");
   if (isAdminRoute) {
     if (!user) {
       return NextResponse.redirect(new URL(`/${locale}/login`, request.url));
     }
-    if (ADMIN_EMAILS.length > 0 && !ADMIN_EMAILS.includes(user.email?.toLowerCase() || "")) {
+    const emailMatches = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
+    let hasAccess = emailMatches;
+    if (!hasAccess) {
+      const { data: row } = await supabase
+        .from("super_admins")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      hasAccess = !!row;
+    }
+    if (!hasAccess) {
       return NextResponse.redirect(new URL(`/${locale}`, request.url));
     }
   }

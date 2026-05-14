@@ -22,13 +22,23 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
 
   const locale = settings?.preferred_language || "he";
 
+  // Brand-new user (no user_settings row): create defaults + send to workspace creation step.
   if (!settings) {
     await supabase.from("user_settings").insert({ user_id: user.id, preferred_language: "he" });
-    return NextResponse.redirect(`${origin}/he/onboarding`);
+    return NextResponse.redirect(`${origin}/he/onboarding/organization`);
   }
 
+  // Existing user but onboarding not finished — if they don't yet belong to an org,
+  // route through the workspace step first so all subsequent screens have an org context.
   if (!settings.onboarding_completed) {
-    return NextResponse.redirect(`${origin}/${locale}/onboarding`);
+    const { data: membership } = await supabase
+      .from("org_members")
+      .select("org_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+    const target = membership ? "onboarding" : "onboarding/organization";
+    return NextResponse.redirect(`${origin}/${locale}/${target}`);
   }
 
   const redirectPath = next === "/" ? `/${locale}` : next;

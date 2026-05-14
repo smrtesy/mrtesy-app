@@ -1,4 +1,11 @@
+import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+
+// ESM hoists imports — `db.ts` is imported by `index.ts` BEFORE its body runs,
+// so dotenv.config() in index.ts is too late. Loading here, in this file,
+// ensures env vars exist by the time we read them three lines down.
+// `override: true` makes the .env file win over any shell-set empties.
+dotenv.config({ override: true });
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;

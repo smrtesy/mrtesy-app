@@ -17,7 +17,9 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SmartTaskInput } from "@/components/tasks/SmartTaskInput";
+import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 
 const navItems = [
   { key: "tasks", href: "/tasks", icon: CheckSquare },
@@ -39,28 +41,36 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
     let mounted = true;
 
     async function fetchCount() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || !mounted) return;
-      const { count } = await supabase
-        .from("tasks")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .eq("status", "inbox")
-        .eq("manually_verified", false)
-        .not("source_message_id", "is", null);
-      if (mounted) setPendingCount(count ?? 0);
+      try {
+        const { count } = await api<{ count: number }>(
+          "/api/tasks/count?status=inbox&verified=false&has_source=true",
+        );
+        if (mounted) setPendingCount(count);
+      } catch (e) {
+        // 401 right after login is expected; anything else log silently
+        if (mounted && !(e instanceof ApiError && e.status === 401)) {
+          console.error("badge count:", e);
+        }
+      }
     }
 
     fetchCount();
 
+    // Realtime stays on Supabase — fires whenever the tasks table changes,
+    // then we re-fetch through the API to respect org scoping.
     const channel = supabase
       .channel("sidebar-suggestions-count")
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, fetchCount)
       .subscribe();
 
+    // Also refresh when the user switches org
+    const handleOrgChange = () => fetchCount();
+    window.addEventListener("smrtesy:active-org-changed", handleOrgChange);
+
     return () => {
       mounted = false;
       supabase.removeChannel(channel);
+      window.removeEventListener("smrtesy:active-org-changed", handleOrgChange);
     };
   }, [supabase]);
 
@@ -80,6 +90,9 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
           <Link href={basePath} className="text-xl font-bold text-[#1E4D8C]">
             smrtesy
           </Link>
+        </div>
+        <div className="px-3 pt-3">
+          <OrgSwitcher locale={locale} />
         </div>
         <nav className="flex-1 space-y-1 p-3">
           {navItems.map((item) => (

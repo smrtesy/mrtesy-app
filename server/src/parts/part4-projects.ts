@@ -39,6 +39,8 @@ interface ProjectFact {
 
 export interface Part4Options {
   userId: string;
+  /** Active organization — scopes all task/project queries and stamps new rows. Required. */
+  orgId: string;
   mode: "suggest" | "build_brief";
   /** Required when mode = "build_brief" */
   projectId?: string;
@@ -47,14 +49,15 @@ export interface Part4Options {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export async function runPart4(opts: Part4Options): Promise<{ sessionId: string }> {
-  const { userId, mode } = opts;
+  const { userId, orgId, mode } = opts;
+  if (!orgId) throw new Error("Part4: orgId is required");
   const sessionId = await createRunSession(userId, "part4", mode === "suggest" ? "classifier" : "collector");
 
   try {
     if (mode === "suggest") {
-      await suggestProjects(userId, sessionId);
+      await suggestProjects(userId, orgId, sessionId);
     } else if (mode === "build_brief" && opts.projectId) {
-      await buildBrief(userId, opts.projectId, sessionId);
+      await buildBrief(userId, orgId, opts.projectId, sessionId);
     } else {
       throw new Error("build_brief mode requires projectId");
     }
@@ -69,14 +72,14 @@ export async function runPart4(opts: Part4Options): Promise<{ sessionId: string 
 
 // ── Mode: suggest projects ─────────────────────────────────────────────────
 
-async function suggestProjects(userId: string, sessionId: string) {
+async function suggestProjects(userId: string, orgId: string, sessionId: string) {
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Fetch approved tasks from the last 60 days
+  // Fetch approved tasks in this org from the last 60 days
   const { data: tasks } = await db
     .from("tasks")
     .select("id, title_he, title, related_contact, related_contact_email, tags, description, created_at")
-    .eq("user_id", userId)
+    .eq("organization_id", orgId)
     .eq("manually_verified", true)
     .neq("status", "archived")
     .gte("created_at", since)
@@ -88,11 +91,11 @@ async function suggestProjects(userId: string, sessionId: string) {
     return;
   }
 
-  // Get existing project names to avoid re-suggesting
+  // Get existing project names in this org to avoid re-suggesting
   const { data: existingProjects } = await db
     .from("projects")
     .select("name, name_he")
-    .eq("user_id", userId);
+    .eq("organization_id", orgId);
   const existingNames = (existingProjects ?? [])
     .map((p) => p.name_he ?? p.name)
     .join(", ");
@@ -132,11 +135,11 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
   for (const cluster of clusters) {
     if (cluster.confidence < 0.65 || cluster.task_ids.length < 3) continue;
 
-    // Avoid duplicate suggestions
+    // Avoid duplicate suggestions in this org
     const { data: existing } = await db
       .from("tasks")
       .select("id")
-      .eq("user_id", userId)
+      .eq("organization_id", orgId)
       .eq("task_type", "project_suggestion")
       .ilike("title_he", cluster.name_he)
       .maybeSingle();
@@ -145,6 +148,7 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
 
     await db.from("tasks").insert({
       user_id: userId,
+      organization_id: orgId,
       title: cluster.name_he,
       title_he: cluster.name_he,
       description: cluster.description_he,
@@ -177,23 +181,23 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
 
 // ── Mode: build brief ──────────────────────────────────────────────────────
 
-async function buildBrief(userId: string, projectId: string, sessionId: string) {
-  // Load project
+async function buildBrief(userId: string, orgId: string, projectId: string, sessionId: string) {
+  // Load project — must belong to active org
   const { data: project } = await db
     .from("projects")
     .select("*")
     .eq("id", projectId)
-    .eq("user_id", userId)
+    .eq("organization_id", orgId)
     .single();
 
-  if (!project) throw new Error(`Project ${projectId} not found`);
+  if (!project) throw new Error(`Project ${projectId} not found in active org`);
 
-  // Load linked tasks
+  // Load linked tasks in this org
   const { data: tasks } = await db
     .from("tasks")
     .select("id, title_he, title, description, related_contact, related_contact_email, related_contact_phone, tags, source_message_id, due_date, source_link")
     .eq("project_id", projectId)
-    .eq("user_id", userId)
+    .eq("organization_id", orgId)
     .neq("status", "archived")
     .order("created_at", { ascending: false })
     .limit(50);

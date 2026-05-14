@@ -6,6 +6,8 @@ import cron from "node-cron";
 import { db } from "./db";
 import syncRouter from "./routes/sync";
 import actionsRouter from "./routes/actions";
+import baseRouter from "./modules/base";
+import adminRouter from "./modules/admin";
 import { runPart1 } from "./parts/part1-collector";
 import { runPart2 } from "./parts/part2-whatsapp";
 import { runPart3 } from "./parts/part3-classifier";
@@ -36,6 +38,8 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
+app.use("/api", baseRouter);
+app.use("/api", adminRouter);
 app.use("/api/sync", syncRouter);
 app.use("/api/actions", actionsRouter);
 
@@ -62,7 +66,33 @@ async function runScheduledJobs() {
       } else if (schedule.part === "part2") {
         await runPart2({ userId: schedule.user_id });
       } else if (schedule.part === "part3") {
-        await runPart3({ userId: schedule.user_id });
+        // Part 3 is org-aware: use the user's primary org (oldest membership).
+        // Skip the schedule entry if the user has no org or smrtesy isn't enabled there.
+        const { data: membership } = await db
+          .from("org_members")
+          .select("org_id")
+          .eq("user_id", schedule.user_id)
+          .order("joined_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        if (!membership) {
+          console.warn(`[cron] part3 skipped — user ${schedule.user_id} has no org`);
+          continue;
+        }
+
+        const { data: app } = await db.from("apps").select("id").eq("slug", "smrtesy").maybeSingle();
+        const { data: entitled } = await db
+          .from("app_memberships")
+          .select("org_id")
+          .eq("org_id", membership.org_id)
+          .eq("app_id", app?.id ?? "")
+          .maybeSingle();
+        if (!entitled) {
+          console.warn(`[cron] part3 skipped — smrtesy not enabled for org ${membership.org_id}`);
+          continue;
+        }
+
+        await runPart3({ userId: schedule.user_id, orgId: membership.org_id as string });
       }
 
       // Advance next_run_at by 8 hours

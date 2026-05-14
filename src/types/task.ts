@@ -46,6 +46,7 @@ export interface Task {
   created_at: string;
   updated_at: string;
   project_id: string | null;
+  assigned_to_user_id: string | null;
   /** Embedded via Supabase left-join: projects(id, name, name_he, color) */
   projects?: { id: string; name: string; name_he: string | null; color: string | null } | null;
   source_message_id: string | null;

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Check, Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
 interface SmartTaskInputProps {
@@ -103,44 +104,44 @@ User input: "${input}"`,
     setLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { error } = await supabase.from("tasks").insert({
-        user_id: user.id,
-        title: parsed.title_he,
-        title_he: parsed.title_he,
-        description: parsed.description,
-        priority: parsed.priority,
-        status: "inbox",
-        due_date: editDueDate || parsed.due_date || null,
-        recurrence_rule: parsed.recurrence_rule,
-        task_type: "action",
-        manually_verified: true,
-        updates: [{
-          id: crypto.randomUUID(),
-          created_at: new Date().toISOString(),
-          type: "initial",
-          actor: "user",
-          content: parsed.description || parsed.title_he,
-        }],
+      // 1. Create the task via Express
+      const { task } = await api<{ task: { id: string } }>("/api/tasks", {
+        method: "POST",
+        body: {
+          title: parsed.title_he,
+          title_he: parsed.title_he,
+          description: parsed.description,
+          priority: parsed.priority,
+          status: "inbox",
+          due_date: editDueDate || parsed.due_date || null,
+          recurrence_rule: parsed.recurrence_rule,
+        },
       });
 
-      if (error) throw error;
+      // 2. Append the initial update entry (server seeds task.updates = [])
+      if (parsed.description || parsed.title_he) {
+        await api(`/api/tasks/${task.id}/updates`, {
+          method: "POST",
+          body: { content: parsed.description || parsed.title_he, type: "initial" },
+        });
+      }
 
-      // Create reminders if any
+      // 3. Create reminders if any
       if (parsed.reminders?.length && parsed.due_date) {
         for (const reminder of parsed.reminders) {
           const remindAt = new Date(parsed.due_date);
           remindAt.setDate(remindAt.getDate() - reminder.days_before);
           remindAt.setHours(9, 0, 0, 0);
 
-          await supabase.from("reminders").insert({
-            user_id: user.id,
-            remind_at: remindAt.toISOString(),
-            message_he: reminder.message,
-            message: reminder.message,
-            source: "manual",
+          await api("/api/reminders", {
+            method: "POST",
+            body: {
+              task_id: task.id,
+              remind_at: remindAt.toISOString(),
+              message: reminder.message,
+              message_he: reminder.message,
+              source: "manual",
+            },
           });
         }
       }

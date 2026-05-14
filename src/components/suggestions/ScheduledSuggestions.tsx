@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,43 +10,57 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Clock, Pause, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+interface ReminderRow {
+  id: string;
+  remind_at: string | null;
+  recurrence_rule: string | null;
+  message: string | null;
+  message_he: string | null;
+  title_he: string | null;
+  tasks: { title: string | null; title_he: string | null } | { title: string | null; title_he: string | null }[] | null;
+}
+
 export function ScheduledSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
-  const supabase = createClient();
-  const [reminders, setReminders] = useState<any[] /* eslint-disable-line @typescript-eslint/no-explicit-any */>([]);
+  const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchReminders = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data } = await supabase
-      .from("reminders")
-      .select("*, tasks(title, title_he)")
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .order("remind_at", { ascending: true })
-      .limit(30);
-
-    setReminders(data || []);
-    setLoading(false);
-  }, [supabase]);
+    try {
+      const { reminders } = await api<{ reminders: ReminderRow[] }>(
+        "/api/reminders?active=true&limit=30",
+      );
+      setReminders(reminders ?? []);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchReminders();
   }, [fetchReminders]);
 
   async function handlePause(id: string) {
-    await supabase.from("reminders").update({ is_active: false }).eq("id", id);
-    toast.success(t("paused"));
-    fetchReminders();
+    try {
+      await api(`/api/reminders/${id}`, { method: "PATCH", body: { is_active: false } });
+      toast.success(t("paused"));
+      fetchReminders();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   }
 
   async function handleDelete(id: string) {
-    await supabase.from("reminders").update({ is_active: false }).eq("id", id);
-    toast.success(t("removed"));
-    fetchReminders();
+    try {
+      await api(`/api/reminders/${id}`, { method: "DELETE" });
+      toast.success(t("removed"));
+      fetchReminders();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   }
 
   if (loading) {

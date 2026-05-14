@@ -47,12 +47,15 @@ interface ClassificationResult {
 
 export interface Part3Options {
   userId: string;
+  /** Active organization — new tasks belong to this org. Required. */
+  orgId: string;
   /** Max items to process in one run. Default: 50 */
   limit?: number;
 }
 
 export async function runPart3(opts: Part3Options): Promise<{ sessionId: string }> {
-  const { userId, limit = 50 } = opts;
+  const { userId, orgId, limit = 50 } = opts;
+  if (!orgId) throw new Error("Part3: orgId is required");
   const sessionId = await createRunSession(userId, "part3", "classifier", MODELS.sonnet);
 
   const errors: string[] = [];
@@ -73,11 +76,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
     const writingStyleHe = rules.find((r) => r.trigger === "writing_style_he")?.action ?? "";
     const writingStyleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
 
-    // ── 2. Load open tasks for update-threading ───────────────────────────────
+    // ── 2. Load open tasks for update-threading (scoped to active org) ───────
     const { data: openTasks } = await db
       .from("tasks")
       .select("id, title_he, title, related_contact, related_contact_email, related_contact_phone, tags, source_message_id")
-      .eq("user_id", userId)
+      .eq("organization_id", orgId)
       .in("status", ["inbox", "in_progress"])
       .eq("manually_verified", true)
       .order("created_at", { ascending: false })
@@ -90,11 +93,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         ).join("\n")
       : "";
 
-    // ── 3. Load active projects for matching ──────────────────────────────────
+    // ── 3. Load active projects for matching (scoped to active org) ──────────
     const { data: activeProjects } = await db
       .from("projects")
       .select("id, name, name_he, keywords, key_contacts")
-      .eq("user_id", userId)
+      .eq("organization_id", orgId)
       .eq("is_active", true)
       .limit(20);
 
@@ -143,11 +146,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .update({ processing_status: "processing" })
         .eq("id", msg.id);
 
-      // Check for existing task with same source_id (dedup)
+      // Check for existing task with same source_id (dedup — scoped to active org)
       const { data: existingTask } = await db
         .from("tasks")
         .select("id, status, updates")
-        .eq("user_id", userId)
+        .eq("organization_id", orgId)
         .eq("source_message_id", msg.source_id)
         .neq("status", "archived")
         .maybeSingle();
@@ -206,6 +209,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
             .from("tasks")
             .select("updates")
             .eq("id", result.task_id)
+            .eq("organization_id", orgId)
             .single();
 
           const currentUpdates = (fullTask?.updates as object[] | null) ?? [];
@@ -223,7 +227,9 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
               },
             ],
             last_interaction_at: new Date().toISOString(),
-          }).eq("id", result.task_id);
+          })
+          .eq("id", result.task_id)
+          .eq("organization_id", orgId);
 
           await db
             .from("source_messages")
@@ -278,14 +284,17 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       actionableCount++;
       const task = result.task!;
 
-      // Resolve project_id: use AI suggestion if confident, else null
+      // Resolve project_id: use AI suggestion only if confident AND it's in this org
+      const aiProjectId = result.project_id;
+      const orgProjectIds = new Set((activeProjects ?? []).map((p) => p.id));
       const resolvedProjectId =
-        result.project_id && (result.project_confidence ?? 0) >= 0.7
-          ? result.project_id
+        aiProjectId && (result.project_confidence ?? 0) >= 0.7 && orgProjectIds.has(aiProjectId)
+          ? aiProjectId
           : null;
 
       const taskPayload = {
         user_id: userId,
+        organization_id: orgId,
         title: task.title_he,
         title_he: task.title_he,
         description: task.description_he,
@@ -301,10 +310,13 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         ai_model_used: MODELS.sonnet,
         manually_verified: false,
         project_id: resolvedProjectId,
+        project_confidence: resolvedProjectId ? result.project_confidence ?? null : null,
       };
 
       if (existingTask) {
-        await db.from("tasks").update(taskPayload).eq("id", existingTask.id);
+        await db.from("tasks").update(taskPayload)
+          .eq("id", existingTask.id)
+          .eq("organization_id", orgId);
         tasksUpdated++;
       } else {
         await db.from("tasks").insert(taskPayload);

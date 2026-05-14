@@ -1,15 +1,42 @@
 "use client";
 
+import { useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Mail, Calendar } from "lucide-react";
+import { api, setActiveOrgId, ApiError } from "@/lib/api/client";
 
 export default function OnboardingStep1() {
   const t = useTranslations("onboarding");
   const { locale } = useParams();
   const router = useRouter();
+
+  // Defensive: if the user somehow reached this step without an org
+  // (e.g. older account from before this onboarding flow existed), bounce
+  // them through the workspace step first.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { orgs } = await api<{ orgs: Array<{ id: string }> }>(
+          "/api/orgs/me",
+          { noOrg: true },
+        );
+        if (!orgs || orgs.length === 0) {
+          router.replace(`/${locale}/onboarding/organization`);
+          return;
+        }
+        // Make sure an active org is selected so the next API calls carry X-Org-Id.
+        setActiveOrgId(orgs[0].id);
+      } catch (e) {
+        // If auth check failed, the middleware will already redirect to /login.
+        if (!(e instanceof ApiError && e.status === 401)) {
+          console.error("[onboarding] org check failed:", e);
+        }
+      }
+    })();
+  }, [router, locale]);
 
   function handleConnect() {
     window.location.href = "/api/auth/google?service=gmail_calendar";

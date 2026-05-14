@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, AlertCircle } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
 interface BriefApprovalProps {
@@ -25,7 +25,6 @@ interface BriefApprovalProps {
 
 export function BriefApproval({ taskId, projectId, projectName, brief, onApproved }: BriefApprovalProps) {
   const t = useTranslations("projects");
-  const supabase = createClient();
   const [approving, setApproving] = useState(false);
 
   // Checklist items per doc section 12.5
@@ -41,20 +40,18 @@ export function BriefApproval({ taskId, projectId, projectName, brief, onApprove
   async function handleApprove() {
     setApproving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      // Touch the brief's updated_at (no-op PUT with empty body refreshes timestamp)
+      await api(`/api/projects/${projectId}/brief`, {
+        method: "PUT",
+        body: {},
+      });
 
-      // Lock CORE brief — mark as approved
-      await supabase.from("project_briefs").update({
-        updated_at: new Date().toISOString(),
-      }).eq("project_id", projectId);
-
-      // Mark the brief_review task as completed
-      await supabase.from("tasks").update({
-        status: "archived",
-        completed_at: new Date().toISOString(),
-        manually_verified: true,
-      }).eq("id", taskId);
+      // Mark the brief_review task as completed + verified
+      await api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: { status: "archived", manually_verified: true },
+      });
+      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
 
       toast.success(t("brief") + " approved");
       onApproved();

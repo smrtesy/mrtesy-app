@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { X, MessageSquareWarning, Send } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
 interface AIClarificationProps {
@@ -14,7 +14,6 @@ interface AIClarificationProps {
 }
 
 export function AIClarification({ taskId, questions, onAnswered }: AIClarificationProps) {
-  const supabase = createClient();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
@@ -28,28 +27,14 @@ export function AIClarification({ taskId, questions, onAnswered }: AIClarificati
     if (!answer?.trim()) return;
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Save answer to contacts if it's contact info
       if (field === "email" || field === "phone" || field === "name") {
-        // Get task's related contact
-        const { data: task } = await supabase
-          .from("tasks")
-          .select("related_contact, related_contact_email, related_contact_phone")
-          .eq("id", taskId)
-          .single();
-
-        if (task) {
-          const update: Record<string, string> = {};
-          if (field === "email") update.related_contact_email = answer;
-          if (field === "phone") update.related_contact_phone = answer;
-          if (field === "name") update.related_contact = answer;
-          await supabase.from("tasks").update(update).eq("id", taskId);
-        }
+        const update: Record<string, string> = {};
+        if (field === "email") update.related_contact_email = answer;
+        if (field === "phone") update.related_contact_phone = answer;
+        if (field === "name")  update.related_contact = answer;
+        await api(`/api/tasks/${taskId}`, { method: "PATCH", body: update });
       }
 
-      // Remove answered question
       setDismissed((prev) => new Set(Array.from(prev).concat(questionId)));
       onAnswered();
     } catch (e) {
@@ -60,21 +45,19 @@ export function AIClarification({ taskId, questions, onAnswered }: AIClarificati
   async function handleDismiss(questionId: string) {
     setDismissed((prev) => new Set(Array.from(prev).concat(questionId)));
 
-    // Save to ai_clarification_prefs to not ask again
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: settings } = await supabase
-        .from("user_settings")
-        .select("ai_clarification_prefs")
-        .eq("user_id", user.id)
-        .single();
-
-      const prefs = (settings?.ai_clarification_prefs || {}) as Record<string, boolean>;
-      prefs[questionId] = false; // don't ask again
-      await supabase
-        .from("user_settings")
-        .update({ ai_clarification_prefs: prefs })
-        .eq("user_id", user.id);
+    // Save to ai_clarification_prefs so this question isn't asked again
+    try {
+      const { settings } = await api<{ settings: { ai_clarification_prefs: Record<string, boolean> | null } | null }>(
+        "/api/me/settings",
+      );
+      const prefs = (settings?.ai_clarification_prefs ?? {}) as Record<string, boolean>;
+      prefs[questionId] = false;
+      await api("/api/me/settings", {
+        method: "PATCH",
+        body: { ai_clarification_prefs: prefs },
+      });
+    } catch {
+      // Non-critical; user already dismissed locally
     }
   }
 

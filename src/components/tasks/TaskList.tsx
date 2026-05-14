@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { TaskCard } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
 import { SmartSearch } from "./SmartSearch";
@@ -36,34 +37,27 @@ export function TaskList({ locale }: { locale: string }) {
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      const params = new URLSearchParams();
+      if (filter === "inbox")     { params.set("status", "inbox"); params.set("verified", "true"); }
+      else if (filter === "active")    { params.set("status", "in_progress"); }
+      else if (filter === "completed") { params.set("status", "archived"); }
+      params.set("limit", "50");
 
-    let query = supabase
-      .from("tasks")
-      .select("*, source_messages(source_type, source_url), projects(id, name, name_he, color)")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(50);
+      const { tasks: rows } = await api<{ tasks: Task[] }>(`/api/tasks?${params}`);
 
-    if (filter === "inbox") {
-      // Only show manually verified tasks (not pending suggestions)
-      query = query.eq("status", "inbox").eq("manually_verified", true);
-    } else if (filter === "active") {
-      query = query.eq("status", "in_progress");
-    } else if (filter === "completed") {
-      query = query.eq("status", "archived");
+      // Sort by priority: urgent > high > medium > low
+      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+      const sorted = (rows ?? []).sort(
+        (a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
+      );
+      setTasks(sorted);
+    } catch (e) {
+      if (e instanceof ApiError && e.status !== 401) toast.error(e.message);
+    } finally {
+      setLoading(false);
     }
-
-    const { data } = await query;
-    // Sort by priority: urgent > high > medium > low
-    const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-    const sorted = ((data as Task[]) || []).sort(
-      (a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
-    );
-    setTasks(sorted);
-    setLoading(false);
-  }, [filter, supabase]);
+  }, [filter]);
 
   useEffect(() => {
     fetchTasks();
@@ -86,43 +80,29 @@ export function TaskList({ locale }: { locale: string }) {
   }, [fetchTasks, supabase]);
 
   async function handleComplete(taskId: string) {
-    const { error } = await supabase
-      .from("tasks")
-      .update({
-        status: "archived",
-        completed_at: new Date().toISOString(),
-        status_changed_at: new Date().toISOString(),
-      })
-      .eq("id", taskId);
-    if (error) { toast.error(error.message); return; }
-    toast.success(t("actions.complete"));
-    fetchTasks();
+    try {
+      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+      toast.success(t("actions.complete"));
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
   }
 
   async function handleSnooze(taskId: string) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-
-    const { error } = await supabase
-      .from("tasks")
-      .update({
-        snoozed_until: tomorrow.toISOString(),
-        status: "snoozed",
-      })
-      .eq("id", taskId);
-    if (error) { toast.error(error.message); return; }
-    toast.success(t("actions.snooze"));
-    fetchTasks();
+    try {
+      await api(`/api/tasks/${taskId}/snooze`, { method: "POST" });
+      toast.success(t("actions.snooze"));
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
   }
 
   function handleSelect(task: Task) {
     if (!task.seen_at) {
-      supabase
-        .from("tasks")
-        .update({ seen_at: new Date().toISOString() })
-        .eq("id", task.id)
-        .then();
+      // Fire-and-forget; if it fails we just don't update the indicator
+      api(`/api/tasks/${task.id}/seen`, { method: "POST" }).catch(() => {});
     }
     setSelectedTask(task);
     setDetailOpen(true);

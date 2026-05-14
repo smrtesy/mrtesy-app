@@ -158,6 +158,22 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-start">{t("title")}</h1>
 
+      {/* Organization */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            {locale === "he" ? "ארגון" : "Organization"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Link href={`/${locale}/settings/org`}>
+            <Button variant="outline" className="min-h-[48px] w-full sm:w-auto">
+              {locale === "he" ? "נהל ארגון וחברים" : "Manage organization & members"}
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
+
       {/* Language */}
       <Card>
         <CardHeader className="pb-3">

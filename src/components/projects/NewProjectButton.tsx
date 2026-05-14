@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Plus, Loader2 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
@@ -15,7 +15,6 @@ const COLORS = [
 ];
 
 export function NewProjectButton({ locale, label }: { locale: string; label: string }) {
-  const supabase = createClient();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -27,23 +26,15 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
     setLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data, error } = await supabase.from("projects").insert({
-        user_id: user.id,
-        name: name.trim(),
-        name_he: name.trim(),
-        color,
-        template_type: "personal",
-      }).select("id").single();
-
-      if (error) throw error;
+      const { project } = await api<{ project: { id: string } }>("/api/projects", {
+        method: "POST",
+        body: { name: name.trim(), name_he: name.trim(), color },
+      });
 
       toast.success(locale === "he" ? "פרויקט נוצר" : "Project created");
       setName("");
       setOpen(false);
-      router.push(`/${locale}/projects/${data.id}`);
+      router.push(`/${locale}/projects/${project.id}`);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {

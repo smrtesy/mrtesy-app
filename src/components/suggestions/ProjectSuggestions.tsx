@@ -2,93 +2,64 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Lightbulb, CheckCircle2, X } from "lucide-react";
 import { toast } from "sonner";
 
+interface SuggestionTask {
+  id: string;
+  title: string;
+  title_he: string | null;
+  description: string | null;
+}
+
 export function ProjectSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
-  const supabase = createClient();
-  const [suggestions, setSuggestions] = useState<any[] /* eslint-disable-line @typescript-eslint/no-explicit-any */>([]);
+  const [suggestions, setSuggestions] = useState<SuggestionTask[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchSuggestions = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data } = await supabase
-      .from("tasks")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("task_type", "project_suggestion")
-      .eq("status", "inbox")
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    setSuggestions(data || []);
-    setLoading(false);
-  }, [supabase]);
+    try {
+      const { tasks } = await api<{ tasks: SuggestionTask[] }>(
+        "/api/tasks?task_type=project_suggestion&status=inbox&limit=10",
+      );
+      setSuggestions(tasks ?? []);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchSuggestions();
   }, [fetchSuggestions]);
 
-  async function handleApprove(task: Record<string, unknown>) {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    // Extract cluster metadata stored by Part 4
-    const clusterEntry = (task.ai_generated_content as Array<Record<string, unknown>> | null)
-      ?.find((e) => e.action_label === "project_cluster");
-    const clusteredTaskIds = (clusterEntry?.clustered_task_ids as string[] | undefined) ?? [];
-    const keywords = (clusterEntry?.keywords as string[] | undefined) ?? [];
-    const keyContacts = (clusterEntry?.key_contacts as string[] | undefined) ?? [];
-
-    // Create the project with enriched metadata
-    const { data: project, error } = await supabase.from("projects").insert({
-      user_id: user.id,
-      name: task.title as string,
-      name_he: task.title_he as string,
-      template_type: "personal",
-      keywords,
-      key_contacts: keyContacts,
-    }).select("id").single();
-
-    if (error) {
-      toast.error(error.message);
-      return;
+  async function handleApprove(task: SuggestionTask) {
+    try {
+      await api(`/api/tasks/${task.id}/approve-as-project`, { method: "POST" });
+      toast.success(t("projectCreated"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
     }
-
-    // Archive the suggestion task
-    await supabase
-      .from("tasks")
-      .update({ status: "archived", manually_verified: true, project_id: project.id })
-      .eq("id", task.id as string);
-
-    // Link all clustered tasks to the new project
-    if (clusteredTaskIds.length > 0) {
-      await supabase
-        .from("tasks")
-        .update({ project_id: project.id })
-        .in("id", clusteredTaskIds)
-        .eq("user_id", user.id);
-    }
-
-    toast.success(t("projectCreated"));
-    fetchSuggestions();
   }
 
   async function handleDismiss(taskId: string) {
-    await supabase
-      .from("tasks")
-      .update({ status: "archived", manually_verified: true })
-      .eq("id", taskId);
-    toast.success(t("dismiss"));
-    fetchSuggestions();
+    try {
+      await api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: { status: "archived", manually_verified: true },
+      });
+      toast.success(t("dismiss"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   }
 
   if (loading) {
@@ -134,7 +105,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                   size="sm"
                   variant="ghost"
                   className="h-9 gap-1 text-red-500"
-                  onClick={() => handleDismiss(task.id as string)}
+                  onClick={() => handleDismiss(task.id)}
                 >
                   <X className="h-4 w-4" />
                 </Button>

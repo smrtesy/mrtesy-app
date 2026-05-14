@@ -34,8 +34,21 @@ export default async function AppLayout({
     }
   }
 
-  const adminEmails = (process.env.ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const isAdmin = devBypass || adminEmails.includes(user?.email?.toLowerCase() || "");
+  // Super-admin: DB row (canonical) OR ADMIN_EMAIL env-var (fallback)
+  let isAdmin = devBypass;
+  if (!isAdmin && user) {
+    const { data: row } = await supabase
+      .from("super_admins")
+      .select("user_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (row) isAdmin = true;
+  }
+  if (!isAdmin) {
+    const adminEmails = (process.env.ADMIN_EMAIL || "")
+      .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    isAdmin = adminEmails.includes(user?.email?.toLowerCase() || "");
+  }
 
   return (
     <div className="flex min-h-screen">

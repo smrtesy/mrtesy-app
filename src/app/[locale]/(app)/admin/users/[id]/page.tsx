@@ -2,13 +2,14 @@ export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { UserMembershipsClient } from "@/components/admin/UserMembershipsClient";
 
 export default async function AdminUserDetailPage({
   params,
 }: {
   params: Promise<{ locale: string; id: string }>;
 }) {
-  const { id } = await params;
+  const { locale, id } = await params;
   const supabase = await createClient();
 
   const [settingsResult, syncResult, logsResult, tasksResult] = await Promise.all([
@@ -30,6 +31,9 @@ export default async function AdminUserDetailPage({
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">User: {settings.display_name || id.slice(0, 8)}</h1>
+
+      {/* Memberships + effective app access (new) */}
+      <UserMembershipsClient userId={id} locale={locale} />
 
       {/* Connections */}
       <Card>

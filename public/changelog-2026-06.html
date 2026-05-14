@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>smrtesy — Development Changelog (Apr–May 2026)</title>
+  <style>
+    :root {
+      --primary: #1E4D8C;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --bg: #ffffff;
+      --bg-alt: #f9fafb;
+      --code-bg: #f3f4f6;
+      --accent: #2563eb;
+      --success: #059669;
+      --warn: #d97706;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      line-height: 1.6;
+      margin: 0;
+      background: var(--bg-alt);
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+      background: var(--bg);
+    }
+    header {
+      border-bottom: 4px solid var(--primary);
+      padding-bottom: 24px;
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-size: 32px;
+      margin: 0 0 8px;
+      color: var(--primary);
+      letter-spacing: -0.02em;
+    }
+    header .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    header .meta strong { color: var(--text); }
+    h2 {
+      font-size: 24px;
+      margin: 48px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--border);
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    h2:first-of-type { margin-top: 0; }
+    h3 {
+      font-size: 18px;
+      margin: 28px 0 12px;
+      color: var(--text);
+    }
+    h4 {
+      font-size: 14px;
+      margin: 16px 0 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    p { margin: 0 0 12px; }
+    ul, ol { margin: 0 0 16px; padding-left: 24px; }
+    li { margin: 4px 0; }
+    code {
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.9em;
+      color: #be185d;
+    }
+    pre {
+      background: var(--code-bg);
+      padding: 12px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 12px 0 20px;
+    }
+    pre code { background: none; padding: 0; color: inherit; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      background: var(--bg-alt);
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    tr:hover { background: var(--bg-alt); }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: #eff6ff;
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 4px;
+    }
+    .callout strong { color: var(--accent); }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge-done { background: #d1fae5; color: var(--success); }
+    .badge-pending { background: #fef3c7; color: var(--warn); }
+    .toc {
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+    }
+    .toc h4 { margin: 0 0 8px; }
+    .toc ol { margin: 0; padding-left: 20px; }
+    .toc a { color: var(--text); text-decoration: none; }
+    .toc a:hover { color: var(--primary); text-decoration: underline; }
+    footer {
+      margin-top: 64px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+    @media print {
+      body { background: white; }
+      .container { max-width: none; padding: 24px; }
+      h2 { page-break-before: auto; page-break-after: avoid; }
+      table { page-break-inside: avoid; }
+    }
+    @media (max-width: 640px) {
+      .container { padding: 24px 16px 48px; }
+      header h1 { font-size: 24px; }
+      h2 { font-size: 20px; }
+      table { font-size: 13px; }
+      th, td { padding: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>smrtesy — Development Changelog</h1>
+    </header>
+
+    <p>This document summarises every change shipped since the last update. It's organised by feature theme rather than chronologically so it's easy to scan.</p>
+
+    <div class="toc">
+      <h4>Contents</h4>
+      <ol>
+        <li><a href="#s1">Smarter Task Management</a></li>
+        <li><a href="#s2">Multi-Tenant Platform Foundation</a></li>
+        <li><a href="#s3">Workspace Onboarding</a></li>
+        <li><a href="#s4">Super-Admin Console</a></li>
+        <li><a href="#s5">Architecture &amp; Code Quality</a></li>
+        <li><a href="#s6">Database Migrations</a></li>
+        <li><a href="#s7">Messaging (backend ready, UI pending)</a></li>
+        <li><a href="#s8">Known gaps / next iteration</a></li>
+        <li><a href="#s9">Statistics &amp; demo flow</a></li>
+      </ol>
+    </div>
+
+    <h2 id="s1">1. Smarter Task Management</h2>
+
+    <h3>1.1 Task Update Threading (Plan 2A)</h3>
+    <p><strong>Problem solved:</strong> Before this, every new email/WhatsApp about the same topic created a brand-new task — you'd end up with 5 tasks all about the same grant application.</p>
+    <p><strong>What now happens:</strong> When a new message arrives, the AI classifier first checks your <strong>currently open tasks</strong>. If it's a follow-up to something already open, it appends an update entry to that task instead of creating a duplicate. The new content shows up in the task's <strong>Update History</strong> with a timestamp and the source (email/WhatsApp/etc.).</p>
+    <p><strong>Trigger:</strong> Every scheduled sync, automatic.</p>
+
+    <h3>1.2 Project Intelligence (Plan 2B)</h3>
+    <p>Four connected pieces that learn what each project is about and link new tasks to the right one automatically.</p>
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>What it does</th><th>When it runs</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Auto project matching</strong></td>
+          <td>New tasks get linked to the right project when AI is ≥70% confident, based on keywords + key contacts</td>
+          <td>Every sync</td>
+        </tr>
+        <tr>
+          <td><strong>AI project suggestions</strong></td>
+          <td>Analyses last 60 days of tasks, suggests clusters of 3+ related tasks as new projects</td>
+          <td>Manual (Admin → Sync)</td>
+        </tr>
+        <tr>
+          <td><strong>Build Brief with AI</strong></td>
+          <td>Extracts structured facts (contacts, keywords, timelines, links) from a project's tasks + messages</td>
+          <td>Manual button on each project page</td>
+        </tr>
+        <tr>
+          <td><strong>Fact verification</strong></td>
+          <td>User approves/rejects each extracted fact one by one; approved keywords/contacts feed back into matching</td>
+          <td>After Build Brief runs</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>The more facts you verify, the more accurately the AI links future incoming items to the right project.</p>
+
+    <h3>1.3 Task UI improvements</h3>
+    <ul>
+      <li><strong>Manual project link</strong> — task edit form has a Project dropdown to manually link/relink a task to any project</li>
+      <li><strong>Project badge on task cards</strong> — every task card shows a coloured pill with the project name</li>
+      <li><strong>Project info shown in task detail panel</strong> — the linked project appears as a chip below the title</li>
+      <li><strong>Task assignment</strong> — task edit form has an Assignee dropdown listing every org member</li>
+    </ul>
+
+    <h3>1.4 Project page improvements</h3>
+    <ul>
+      <li><strong>Edit Project sheet</strong> — comprehensive edit panel that updates name, color, keywords, key contacts, and brief fields (purpose, target audience, current status, AI context) in one place</li>
+      <li><strong>Verified facts list</strong> — green-checkmarked facts displayed inside the brief card</li>
+      <li><strong>Keywords + key contacts</strong> shown as chips at the top of every project page</li>
+    </ul>
+
+    <h2 id="s2">2. Multi-Tenant Platform Foundation</h2>
+    <p>The biggest change in this period — the app went from a single-user tool to a multi-tenant platform that can host multiple apps for multiple organizations.</p>
+
+    <h3>2.1 New tenancy model</h3>
+    <ul>
+      <li><strong>Organizations</strong> — every team gets its own workspace. Tasks, projects, contacts, and messages all live inside an org.</li>
+      <li><strong>Members + Roles</strong> — each org has owners, admins, and members. Owners can manage everything; admins can manage members + apps; members can work with tasks.</li>
+      <li><strong>App entitlements</strong> — each org has a set of "installed apps." smrtesy is the first app. Future apps (CRM, Coach, etc.) plug in the same way.</li>
+    </ul>
+
+    <h3>2.2 Backward-compatible migration</h3>
+    <p>Every existing user automatically got a "Personal" workspace created for them. All their existing tasks and projects were stamped with that workspace's ID. <strong>Zero data loss; everyone keeps working.</strong></p>
+
+    <h3>2.3 Workspace switcher</h3>
+    <ul>
+      <li>Sidebar dropdown shows all workspaces you belong to</li>
+      <li>Switch between workspaces with one click (all data reloads scoped to the new workspace)</li>
+      <li>Create new workspaces from the dropdown</li>
+    </ul>
+
+    <h3>2.4 Member management</h3>
+    <ul>
+      <li>New page at <strong>Settings → Manage organization &amp; members</strong> (<code>/settings/org</code>)</li>
+      <li>Owner/admin can invite by email (user must have signed up first)</li>
+      <li>Inline role change dropdown</li>
+      <li>Remove members (with last-owner protection)</li>
+    </ul>
+
+    <h3>2.5 Per-organization app gating</h3>
+    <p>Each org's set of enabled apps gates which features are available:</p>
+    <ul>
+      <li>An org with <code>smrtesy</code> enabled → AI sync, classifier, project suggestions, brief builder all work</li>
+      <li>An org without <code>smrtesy</code> enabled → base features still work (tasks, members, messaging), but AI sync routes return 403</li>
+    </ul>
+    <p>This means a future "Sales-only" org could subscribe just to a CRM app without paying for the AI brain.</p>
+
+    <h2 id="s3">3. Workspace Onboarding</h2>
+    <p>New first step in the signup flow.</p>
+    <pre>Before: sign up → Gmail → Drive → WhatsApp → Setup
+After:  sign up → "Create your workspace" → Gmail → Drive → WhatsApp → Setup
+                       ↑ NEW</pre>
+    <p><strong>The new step:</strong></p>
+    <ul>
+      <li>Suggests a default workspace name from the user's full name or email</li>
+      <li>User confirms or changes it</li>
+      <li>Creates the organization, makes the user the owner</li>
+      <li>Enables smrtesy for the workspace automatically</li>
+      <li>Continues into the existing connection flow</li>
+    </ul>
+    <p><strong>Smart fallback:</strong> Existing users who refresh during onboarding skip this step (they already have a workspace from the migration).</p>
+
+    <h2 id="s4">4. Super-Admin Console</h2>
+    <p>A platform-wide admin role for support, billing, and policy management — independent of per-org roles.</p>
+
+    <h3>4.1 Identity model</h3>
+    <ul>
+      <li>New <code>super_admins</code> table — a user can have super-admin status while also being a regular member of their own orgs</li>
+      <li>DB-backed and managed via API; the <code>ADMIN_EMAIL</code> env var stays as a permanent lockout-safety fallback</li>
+    </ul>
+
+    <h3>4.2 Admin Console pages (under <code>/admin</code>)</h3>
+    <table>
+      <thead><tr><th>Page</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Dashboard</strong></td><td><em>(existing)</em> user count, AI cost, sync health</td></tr>
+        <tr><td><strong>Users</strong></td><td><em>(existing)</em> list of all users with connections + settings</td></tr>
+        <tr><td><strong>User detail</strong></td><td><span class="badge badge-done">New</span> sections at top: effective app access, every org the user belongs to (with apps), add to org, remove from org, change role</td></tr>
+        <tr><td><strong>Organizations</strong></td><td><span class="badge badge-done">New</span> every org in the system + member count, owner email, enabled apps</td></tr>
+        <tr><td><strong>Org detail</strong></td><td><span class="badge badge-done">New</span> rename org, "Open as this org" support button, member management, app toggle switches, hard-delete with double confirm</td></tr>
+        <tr><td><strong>Apps Registry</strong></td><td><span class="badge badge-done">New</span> every registered app + how many orgs use each; register new apps, edit, unregister</td></tr>
+        <tr><td><strong>Super Admins</strong></td><td><span class="badge badge-done">New</span> grant/revoke super-admin by searching users; protected against last-admin self-revoke</td></tr>
+        <tr><td>Services / Logs / Prompts / Rules / Sync</td><td><em>(existing)</em> smrtesy operational pages</td></tr>
+      </tbody>
+    </table>
+
+    <h3>4.3 App access management for super-admins</h3>
+    <p>Two ways to grant a user access to an app:</p>
+    <ol>
+      <li>From <code>/admin/orgs/[id]</code> — toggle the app on for an org they're in</li>
+      <li>From <code>/admin/users/[id]</code> — add them to an org that already has the app</li>
+    </ol>
+    <p>Either path shows the user the same outcome on their "Effective App Access" view.</p>
+
+    <h3>4.4 Audit-friendly</h3>
+    <p>Every grant/enable records <code>granted_by</code>, <code>granted_at</code>, <code>enabled_by</code>, <code>enabled_at</code> for accountability.</p>
+
+    <h2 id="s5">5. Architecture &amp; Code Quality</h2>
+
+    <h3>5.1 Express backend grew into a real platform</h3>
+    <p>A standalone Express backend now owns all business logic. The Next.js frontend is now mostly a UI layer — it calls REST endpoints rather than talking to the database directly.</p>
+    <div class="callout">
+      <strong>Why this matters:</strong> Future apps (CRM, Coach, mobile app) can hit the same backend API without rewriting business logic.
+    </div>
+
+    <h3>5.2 Frontend migration from direct DB to API</h3>
+    <p>Roughly 12 client-side components were migrated from direct Supabase queries to the new backend API:</p>
+    <ul>
+      <li>Task list / detail / quick-action / drive-search / smart-input / AI-clarification</li>
+      <li>Project creation / edit / suggestions / brief approval / fact verifier</li>
+      <li>Sidebar suggestion-count badge</li>
+      <li>Reminders inbox</li>
+    </ul>
+    <p>The only direct-Supabase calls remaining are:</p>
+    <ul>
+      <li><strong>Realtime subscriptions</strong> (intentional — keeps live updates instant)</li>
+      <li><strong>Auth flows</strong> (intentional — Supabase Auth handles login/signup)</li>
+      <li><strong>Server-component reads on admin pages</strong> (intentional — server-side with RLS protection)</li>
+    </ul>
+
+    <h3>5.3 AI pipeline became org-aware</h3>
+    <p>Part 3 (classifier) and Part 4 (project suggester / brief builder) now scope every query by <code>organization_id</code>. A user in multiple orgs can switch workspaces and the AI only sees their active workspace's data.</p>
+
+    <h3>5.4 Middleware stack</h3>
+    <p>A clean four-piece middleware chain gates every API call:</p>
+    <ul>
+      <li><code>requireAuth</code> — verifies the user's session token</li>
+      <li><code>requireOrg</code> — verifies the user belongs to the workspace they're operating in</li>
+      <li><code>requireRole(...)</code> — gates by role (owner/admin/member)</li>
+      <li><code>requireApp(slug)</code> — gates by which apps the workspace has enabled</li>
+      <li><code>requireSuperAdmin</code> — gates platform-admin routes</li>
+    </ul>
+
+    <h2 id="s6">6. Database migrations applied</h2>
+    <table>
+      <thead><tr><th>File</th><th>What it changed</th></tr></thead>
+      <tbody>
+        <tr><td><code>20260507000001_project_enrichment.sql</code></td><td>Added <code>keywords</code>, <code>key_contacts</code> to projects; <code>pending_facts</code>, <code>verified_facts</code>, <code>rejected_facts</code> to project_briefs; <code>project_confidence</code> to tasks</td></tr>
+        <tr><td><code>20260510000001_platform_foundation.sql</code></td><td>Created <code>organizations</code>, <code>org_members</code>, <code>apps</code>, <code>app_memberships</code>; added <code>assigned_to_user_id</code> on tasks; backfilled Personal org for every existing user</td></tr>
+        <tr><td><code>20260510000002_org_id_autofill.sql</code></td><td>Trigger that auto-fills <code>organization_id</code> on task/project insert from the user's primary org</td></tr>
+        <tr><td><code>20260510000003_fix_org_members_rls.sql</code></td><td>Fixed an infinite-recursion bug in the <code>org_members</code> RLS policy</td></tr>
+        <tr><td><code>20260510000004_reminders_org_id.sql</code></td><td>Added <code>organization_id</code> to <code>reminders</code> + trigger + backfill</td></tr>
+        <tr><td><code>20260510000005_messaging.sql</code></td><td>Created <code>conversations</code>, <code>conversation_members</code>, <code>messages</code> tables for in-app messaging</td></tr>
+        <tr><td><code>20260513000001_super_admins.sql</code></td><td>Created <code>super_admins</code> table; bootstrapped from <code>ADMIN_EMAIL</code> env</td></tr>
+        <tr><td><code>20260513000002_super_admins_self_read.sql</code></td><td>Allowed each user to read their own super-admin status (needed for the admin layout)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="s7">7. Messaging system <span class="badge badge-pending">UI pending</span></h2>
+    <p>The complete backend for in-app messaging between teammates was built:</p>
+    <ul>
+      <li>1-on-1 direct messages</li>
+      <li>Group conversations (3+ members)</li>
+      <li>Message history with pagination</li>
+      <li>"Mark as read" with per-user <code>last_read_at</code></li>
+      <li>Realtime-ready (Supabase realtime fires on inserts)</li>
+    </ul>
+    <p>The frontend pages for inbox + chat thread view are <strong>not yet built</strong>. Could be shipped in a separate sprint.</p>
+
+    <h2 id="s8">8. Known gaps / next iteration</h2>
+    <p>These were deliberately deferred and are good candidates for the next sprint:</p>
+    <ol>
+      <li><strong>Messaging UI</strong> — backend is ready; needs inbox page + thread view</li>
+      <li><strong>Email-based invites with magic link</strong> — currently inviting requires the user to have already signed up. A <code>pending_invites</code> table + email flow would close this gap.</li>
+      <li><strong>Per-app trial / expiration</strong> — <code>app_memberships</code> doesn't yet support time-bound entitlements</li>
+      <li><strong>Audit log</strong> — beyond <code>enabled_by</code>/<code>granted_by</code> columns, no full audit log of admin actions exists</li>
+      <li><strong>Notifications</strong> — assigning a task to a teammate doesn't notify them yet</li>
+      <li><strong>Mobile push notifications</strong> — none</li>
+    </ol>
+
+    <h2 id="s9">9. Statistics</h2>
+    <ul>
+      <li><strong>Backend endpoints shipped:</strong> ~60 new REST endpoints across 8 modules</li>
+      <li><strong>Frontend pages:</strong> 6 new admin pages, 1 new onboarding step, 1 new settings page, multiple component overhauls</li>
+      <li><strong>DB migrations:</strong> 8 (all backward-compatible)</li>
+      <li><strong>Test status:</strong> All TypeScript checks pass; no runtime tests added in this period</li>
+    </ul>
+
+    <h3>Quick demo flow</h3>
+    <ol>
+      <li><strong>Sign up with a new email</strong> → "Create your workspace" step → name your org → continue into Gmail/Drive connection</li>
+      <li><strong>Open the workspace</strong> → sidebar shows the workspace name in a dropdown</li>
+      <li><strong>Settings → Manage organization &amp; members</strong> → invite a teammate by email</li>
+      <li><strong>Edit a task</strong> → see the new Project + Assignee dropdowns</li>
+      <li><strong>Open a project</strong> → click "Edit" → notice keywords + key contacts management</li>
+      <li><strong>Click "Build Brief with AI"</strong> → wait ~10 seconds → approve the extracted facts one by one</li>
+      <li><strong>Sign out, sign in as a super-admin</strong> → Admin link appears in sidebar</li>
+      <li><strong>Admin → Organizations</strong> → click any org → toggle apps on/off</li>
+      <li><strong>Admin → Apps</strong> → register a new fake app (e.g. "test-crm") → see it appear in the org detail page's toggle list</li>
+      <li><strong>Admin → Super Admins → Grant</strong> → promote another user</li>
+    </ol>
+  </div>
+</body>
+</html>

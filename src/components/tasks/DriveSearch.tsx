@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { Loader2, ExternalLink, FolderSearch, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
 interface DriveSearchProps {
@@ -69,28 +70,21 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
       setFiles(data.files || []);
       setSearched(true);
 
-      // Save linked docs to task
+      // Save linked docs to task via Express
       if (data.files?.length) {
-        const { data: task } = await supabase
-          .from("tasks")
-          .select("linked_drive_docs")
-          .eq("id", taskId)
-          .eq("user_id", user.id)
-          .single();
-
-        const existing = task?.linked_drive_docs || [];
+        const { task } = await api<{ task: { linked_drive_docs: Array<{ url: string; name: string }> | null } }>(`/api/tasks/${taskId}`);
+        const existing = task.linked_drive_docs ?? [];
         const newDocs = data.files.map((f: DriveFile) => ({
           name: f.name,
           url: f.webViewLink,
         }));
-        // Merge without duplicates
-        const existingUrls = new Set(existing.map((d: { url: string }) => d.url));
+        const existingUrls = new Set(existing.map((d) => d.url));
         const merged = [...existing, ...newDocs.filter((d: { url: string }) => !existingUrls.has(d.url))];
 
-        await supabase.from("tasks").update({
-          linked_drive_docs: merged,
-          updated_at: new Date().toISOString(),
-        }).eq("id", taskId);
+        await api(`/api/tasks/${taskId}`, {
+          method: "PATCH",
+          body: { linked_drive_docs: merged },
+        });
       }
     } catch (e) {
       toast.error((e as Error).message);
@@ -129,21 +123,16 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
 
-      // Save summary to linked_drive_docs
-      const { data: task } = await supabase
-        .from("tasks")
-        .select("linked_drive_docs")
-        .eq("id", taskId)
-        .single();
-
-      const docs = (task?.linked_drive_docs || []).map((d: { url: string; name: string; summary?: string }) =>
+      // Save summary to linked_drive_docs via Express
+      const { task } = await api<{ task: { linked_drive_docs: Array<{ url: string; name: string; summary?: string }> | null } }>(`/api/tasks/${taskId}`);
+      const docs = (task.linked_drive_docs ?? []).map((d) =>
         d.url === file.webViewLink ? { ...d, summary: data.result } : d
       );
 
-      await supabase.from("tasks").update({
-        linked_drive_docs: docs,
-        updated_at: new Date().toISOString(),
-      }).eq("id", taskId);
+      await api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: { linked_drive_docs: docs },
+      });
 
       toast.success("Summary generated");
       onDone();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,8 +40,7 @@ const typeColors: Record<Fact["type"], string> = {
   note: "bg-gray-50 text-gray-700",
 };
 
-export function BriefFactVerifier({ projectId, briefId, pendingFacts: initialFacts, locale }: BriefFactVerifierProps) {
-  const supabase = createClient();
+export function BriefFactVerifier({ projectId, pendingFacts: initialFacts, locale }: BriefFactVerifierProps) {
   const [facts, setFacts] = useState<Fact[]>(initialFacts);
   const [saving, setSaving] = useState<string | null>(null);
 
@@ -50,63 +49,12 @@ export function BriefFactVerifier({ projectId, briefId, pendingFacts: initialFac
   const handleVerify = useCallback(async (fact: Fact, approve: boolean) => {
     setSaving(fact.id);
     try {
-      // Fetch latest brief state
-      const { data: brief } = await supabase
-        .from("project_briefs")
-        .select("pending_facts, verified_facts, rejected_facts")
-        .eq("id", briefId)
-        .single();
-
-      if (!brief) throw new Error("Brief not found");
-
-      const pending = (brief.pending_facts as Fact[] | null) ?? [];
-      const verified = (brief.verified_facts as Fact[] | null) ?? [];
-      const rejected = (brief.rejected_facts as Fact[] | null) ?? [];
-
-      const remaining = pending.filter((f) => f.id !== fact.id);
-      const newVerified = approve ? [...verified, fact] : verified;
-      const newRejected = approve ? rejected : [...rejected, fact];
-
-      await supabase
-        .from("project_briefs")
-        .update({
-          pending_facts: remaining,
-          verified_facts: newVerified,
-          rejected_facts: newRejected,
-        })
-        .eq("id", briefId);
-
-      // If approving a keyword or contact, also update projects table
-      if (approve) {
-        if (fact.type === "keyword") {
-          const { data: proj } = await supabase
-            .from("projects")
-            .select("keywords")
-            .eq("id", projectId)
-            .single();
-          const existing = (proj?.keywords as string[] | null) ?? [];
-          if (!existing.includes(fact.value)) {
-            await supabase
-              .from("projects")
-              .update({ keywords: [...existing, fact.value] })
-              .eq("id", projectId);
-          }
-        }
-        if (fact.type === "contact") {
-          const { data: proj } = await supabase
-            .from("projects")
-            .select("key_contacts")
-            .eq("id", projectId)
-            .single();
-          const existing = (proj?.key_contacts as string[] | null) ?? [];
-          if (!existing.includes(fact.value)) {
-            await supabase
-              .from("projects")
-              .update({ key_contacts: [...existing, fact.value] })
-              .eq("id", projectId);
-          }
-        }
-      }
+      // Server handles: moves fact between pending/verified/rejected arrays
+      // AND appends approved keyword/contact facts to projects.keywords/key_contacts.
+      await api(`/api/projects/${projectId}/brief/verify-fact`, {
+        method: "PATCH",
+        body: { fact_id: fact.id, approve },
+      });
 
       setFacts((prev) => prev.filter((f) => f.id !== fact.id));
       toast.success(approve
@@ -117,7 +65,7 @@ export function BriefFactVerifier({ projectId, briefId, pendingFacts: initialFac
     } finally {
       setSaving(null);
     }
-  }, [supabase, briefId, projectId, isHe]);
+  }, [projectId, isHe]);
 
   if (facts.length === 0) return null;
 

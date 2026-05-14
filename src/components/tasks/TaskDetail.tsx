@@ -24,6 +24,7 @@ import {
   Folder,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
@@ -60,8 +61,10 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
   const [editDueDate, setEditDueDate] = useState("");
   const [editStatus, setEditStatus] = useState("");
   const [editProjectId, setEditProjectId] = useState("");
+  const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
   const [selectorProjects, setSelectorProjects] = useState<ProjectOption[]>([]);
+  const [selectorMembers, setSelectorMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
 
   const [saving, setSaving] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
@@ -84,143 +87,105 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
     setEditDueDate(task.due_date || "");
     setEditStatus(task.status);
     setEditProjectId(task.project_id || "");
+    setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
-    // Fetch projects list once for the selector (cached after first open)
+    // Fetch projects + org members for selectors (cached after first open)
     if (selectorProjects.length === 0) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from("projects")
-          .select("id, name, name_he, color")
-          .eq("user_id", user.id)
-          .eq("is_active", true)
-          .order("name");
-        setSelectorProjects((data as ProjectOption[]) || []);
-      }
+      try {
+        const { projects } = await api<{ projects: ProjectOption[] }>("/api/projects");
+        setSelectorProjects(projects ?? []);
+      } catch { /* ignore — selector just stays empty */ }
+    }
+    if (selectorMembers.length === 0) {
+      try {
+        const { members } = await api<{ members: Array<{ user_id: string; email: string | null; name: string | null }> }>("/api/org/members");
+        setSelectorMembers(members ?? []);
+      } catch { /* ignore */ }
     }
   }
 
   async function saveFieldEdit() {
     if (!task) return;
     setSaving(true);
-    const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
+
+    const body: Record<string, unknown> = {
+      priority: editPriority,
+      status: editStatus,
+      due_date: editDueDate || null,
+      project_id: editProjectId || null,
+      assigned_to_user_id: editAssignedTo || null,
     };
-    if (locale === "he") {
-      updateData.title_he = editTitle;
-    } else {
-      updateData.title = editTitle;
-    }
-    updateData.priority = editPriority;
-    updateData.status = editStatus;
-    updateData.due_date = editDueDate || null;
-    updateData.project_id = editProjectId || null;
-    // Mark as manually linked (confidence = 1) when user picks a project
-    if (editProjectId && editProjectId !== task.project_id) {
-      updateData.project_confidence = 1;
-    }
+    if (locale === "he") body.title_he = editTitle;
+    else                 body.title = editTitle;
+    // Manually linking a project → mark as 100% confident
+    if (editProjectId && editProjectId !== task.project_id) body.project_confidence = 1;
 
-    if (editStatus !== task.status) {
-      updateData.status_changed_at = new Date().toISOString();
-    }
-
-    const { error } = await supabase
-      .from("tasks")
-      .update(updateData)
-      .eq("id", task.id);
-
-    setSaving(false);
-    if (error) {
-      toast.error(error.message);
-    } else {
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body });
       toast.success(tCommon("save"));
       setEditingFields(false);
       onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function handleDescSave() {
     if (!task) return;
     setSaving(true);
-    const { error } = await supabase
-      .from("tasks")
-      .update({
-        description,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", task.id);
-
-    setSaving(false);
-    if (error) {
-      toast.error(error.message);
-    } else {
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { description } });
       toast.success(t("detail.description"));
       setEditingDesc(false);
       onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function handleComplete() {
     if (!task) return;
-    const { error } = await supabase
-      .from("tasks")
-      .update({
-        status: "archived",
-        completed_at: new Date().toISOString(),
-        status_changed_at: new Date().toISOString(),
-      })
-      .eq("id", task.id);
-    if (error) { toast.error(error.message); return; }
-    toast.success(t("actions.complete"));
-    onClose();
-    onUpdate();
+    try {
+      await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+      toast.success(t("actions.complete"));
+      onClose();
+      onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
   }
 
   async function handleSnooze() {
     if (!task) return;
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-
-    const { error } = await supabase
-      .from("tasks")
-      .update({
-        snoozed_until: tomorrow.toISOString(),
-        snooze_count: (task.snooze_count || 0) + 1,
-        status: "snoozed",
-      })
-      .eq("id", task.id);
-    if (error) { toast.error(error.message); return; }
-    toast.success(t("actions.snooze"));
-    onClose();
-    onUpdate();
+    try {
+      await api(`/api/tasks/${task.id}/snooze`, { method: "POST" });
+      toast.success(t("actions.snooze"));
+      onClose();
+      onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
   }
 
   async function handleAddUpdate() {
     if (!task || !newUpdate.trim()) return;
     setAddingUpdate(true);
-    const currentUpdates = task.updates || [];
-    const updatedList = [
-      ...currentUpdates,
-      {
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        type: "note",
-        actor: "user",
-        content: newUpdate.trim(),
-      },
-    ];
-    const { error } = await supabase
-      .from("tasks")
-      .update({ updates: updatedList, updated_at: new Date().toISOString() })
-      .eq("id", task.id);
-    setAddingUpdate(false);
-    if (error) {
-      toast.error(error.message);
-    } else {
+    try {
+      await api(`/api/tasks/${task.id}/updates`, {
+        method: "POST",
+        body: { content: newUpdate.trim(), type: "note" },
+      });
       toast.success(locale === "he" ? "עדכון נוסף" : "Update added");
       setNewUpdate("");
       onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setAddingUpdate(false);
     }
   }
 
@@ -307,6 +272,21 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     {selectorProjects.map((p) => (
                       <option key={p.id} value={p.id}>
                         {locale === "he" && p.name_he ? p.name_he : p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">{locale === "he" ? "משויך ל-" : "Assigned to"}</label>
+                  <select
+                    value={editAssignedTo}
+                    onChange={(e) => setEditAssignedTo(e.target.value)}
+                    className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                  >
+                    <option value="">{locale === "he" ? "— לא משויך —" : "— Unassigned —"}</option>
+                    {selectorMembers.map((m) => (
+                      <option key={m.user_id} value={m.user_id}>
+                        {m.name || m.email || m.user_id.slice(0, 8)}
                       </option>
                     ))}
                   </select>
