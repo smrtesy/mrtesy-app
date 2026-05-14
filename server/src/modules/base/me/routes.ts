@@ -17,7 +17,7 @@ const router = Router();
 
 const UPDATABLE_SETTINGS = new Set([
   "display_name", "timezone", "office_addresses", "skip_senders",
-  "skip_recipients", "my_emails", "drive_folder_id",
+  "skip_recipients", "my_emails", "drive_folder_id", "whatsapp_sheet_id",
   "calendar_event_filter", "calendar_allday_tasks", "calendar_holidays_tasks",
   "classification_model", "summary_model", "daily_ai_budget_usd",
   "show_ai_costs", "reminder_channels", "default_reminder_timing",
@@ -102,7 +102,12 @@ router.post("/me/whatsapp/test-sheet", requireAuth, async (req: Request, res: Re
   try {
     const auth = await getOAuthClient(req.user!.id, "gmail_calendar");
     const sheets = google.sheets({ version: "v4", auth });
-    const range = `${tab ?? "Messages"}!A2:A`;
+    // Stay coherent with PART 2 (server/src/parts/part2-whatsapp.ts), which
+    // reads WHATSAPP_SHEET_TAB from env and only defaults to "Messages".
+    // Validating against "Messages" here while runtime reads a different
+    // tab would give the user a false-success/false-failure during onboarding.
+    const defaultTab = process.env.WHATSAPP_SHEET_TAB ?? "Messages";
+    const range = `${tab ?? defaultTab}!A2:A`;
     const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: sheet_id, range });
     return res.json({ ok: true, row_count: data.values?.length ?? 0 });
   } catch (e) {

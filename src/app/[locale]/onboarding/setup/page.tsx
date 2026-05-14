@@ -237,12 +237,19 @@ export default function OnboardingSetup() {
 
       // Persist scan preferences first so the server-side runner can also read them
       // directly from user_settings if the request body is incomplete.
+      // Always write drive_folder_id (use null when cleared). A truthy-only
+      // write meant `clearFolder()` could not actually clear the column —
+      // a stale persisted folder would keep being used on every re-sync.
       const updateData: Record<string, unknown> = {
         initial_scan_days_back: gmailDays,
         calendar_initial_scan_months: calMonths,
+        drive_folder_id: selectedFolder || null,
       };
-      if (selectedFolder) updateData.drive_folder_id = selectedFolder;
-      await supabase.from("user_settings").update(updateData).eq("user_id", user.id);
+      const { error: settingsErr } = await supabase
+        .from("user_settings")
+        .update(updateData)
+        .eq("user_id", user.id);
+      if (settingsErr) throw new Error(`Failed to save settings: ${settingsErr.message}`);
 
       // Persist skip rules into rules_memory so part1's Gmail query AND the
       // runtime skipFilter both pick them up on this very same scan.
@@ -293,7 +300,10 @@ export default function OnboardingSetup() {
           gmail_days: gmailDays,
           cal_months: calMonths,
           drive_folder_id: selectedFolder || null,
-          drive_hours: 24,
+          // ~3 months. The UI hint at the Drive picker promises "last 3
+          // months" when the folder is left empty; the previous 24h value
+          // contradicted that and silently shrunk the initial scan window.
+          drive_hours: 90 * 24,
         },
       });
 

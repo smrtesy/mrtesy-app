@@ -63,10 +63,19 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     // skip rules and the lookback window). The per-alias `deliveredto:` loop
     // that lived here previously was a relic from the single-tenant build.
     try {
+      // Lookback priority:
+      //   1. Explicit `gmailDays` from caller (onboarding/resync — user
+      //      just chose a window and expects that window to be honored).
+      //   2. Stored checkpoint (incremental sync after the first scan).
+      //   3. `user_settings.initial_scan_days_back` or hard default.
+      // Without step 1 taking precedence, a stale sync_state row from a
+      // previous scan would silently shorten the user's chosen window.
       const lastGmailSync = checkpoint("gmail");
-      const since = lastGmailSync
-        ? new Date(lastGmailSync)
-        : new Date(Date.now() - effectiveGmailDays * 24 * 60 * 60 * 1000);
+      const since = gmailDays != null
+        ? new Date(Date.now() - gmailDays * 24 * 60 * 60 * 1000)
+        : lastGmailSync
+          ? new Date(lastGmailSync)
+          : new Date(Date.now() - effectiveGmailDays * 24 * 60 * 60 * 1000);
 
       const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
 
@@ -89,7 +98,11 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             msg as Parameters<typeof extractEmailText>[0],
           );
 
-          const fromEmail = (from.match(/<(.+)>/) ?? [])[1] ?? from;
+          // `[^>]+` is non-greedy across angle-bracket pairs; the greedy
+          // `.+` form swallowed everything between the first `<` and the
+          // LAST `>` on multi-recipient headers, producing garbage like
+          // `alice@a.com>, "Bob" <bob@b.com`.
+          const fromEmail = (from.match(/<([^>]+)>/) ?? [])[1] ?? from;
 
           if (
             skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
@@ -105,7 +118,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
           // Derive the actual recipient alias from the To: header so the
           // classifier has it without the collector having to loop on aliases.
-          const toEmail = (to.match(/<(.+)>/) ?? [])[1] ?? to.trim();
+          // Same non-greedy fix as fromEmail above; multi-recipient To:
+          // headers would otherwise produce concatenated garbage.
+          const toEmail = (to.match(/<([^>]+)>/) ?? [])[1] ?? to.trim();
 
           await db.from("source_messages").upsert(
             {
@@ -137,10 +152,13 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
     // ── 2. Google Drive (ScanSnap) ────────────────────────────────────────────
     try {
+      // Same explicit-overrides-checkpoint pattern as Gmail above.
       const lastDriveSync = checkpoint("drive");
-      const since = lastDriveSync
-        ? new Date(lastDriveSync)
-        : new Date(Date.now() - (driveHours ?? 24) * 60 * 60 * 1000);
+      const since = driveHours != null
+        ? new Date(Date.now() - driveHours * 60 * 60 * 1000)
+        : lastDriveSync
+          ? new Date(lastDriveSync)
+          : new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       const files = await listNewFiles(userId, since.toISOString(), effectiveDriveFolder);
 

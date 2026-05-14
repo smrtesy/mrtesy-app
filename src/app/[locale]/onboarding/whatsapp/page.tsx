@@ -5,12 +5,11 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, CheckCircle2, AlertCircle, Loader2, ExternalLink } from "lucide-react";
+import { MessageCircle, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
-const DEFAULT_SHEET_ID = "1_0hZE_gTzAyN-DHWhaxSQEnF4tJm1XL6nFUSJngtuaI";
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 export default function OnboardingWhatsApp() {
@@ -22,7 +21,11 @@ export default function OnboardingWhatsApp() {
   const supabase = createClient();
   const isHe = locale === "he";
 
-  const [sheetId, setSheetId] = useState(DEFAULT_SHEET_ID);
+  // Start empty: each tenant must paste their own Sheet ID. Pre-filling
+  // a shared default would silently route every new tenant to the operator's
+  // Sheet, which is exactly the multi-tenant footgun this onboarding step
+  // is supposed to prevent.
+  const [sheetId, setSheetId] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
   const [rowCount, setRowCount] = useState<number | null>(null);
@@ -68,10 +71,17 @@ export default function OnboardingWhatsApp() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    await supabase
+    // Persist the per-user Sheet ID so PART 2 routes this user's pipeline
+    // to their own Sheet, not the operator's env-configured default.
+    // Without this, every tenant would silently ingest the operator's rows.
+    const { error: updErr } = await supabase
       .from("user_settings")
-      .update({ whatsapp_connected: true })
+      .update({ whatsapp_connected: true, whatsapp_sheet_id: sheetId })
       .eq("user_id", user.id);
+    if (updErr) {
+      toast.error(updErr.message);
+      return;
+    }
 
     toast.success(isHe ? "WhatsApp חובר בהצלחה" : "WhatsApp connected");
     router.push(redirectTo === "settings" ? `/${locale}/settings` : `/${locale}/onboarding/setup`);
@@ -101,15 +111,9 @@ export default function OnboardingWhatsApp() {
           <p className="font-medium">{isHe ? "איך זה עובד:" : "How it works:"}</p>
           <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
             <li>
-              {isHe ? "Dualhook מעתיק הודעות WhatsApp ל-" : "Dualhook copies WhatsApp messages to "}
-              <a
-                href={`https://docs.google.com/spreadsheets/d/${DEFAULT_SHEET_ID}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline inline-flex items-center gap-0.5"
-              >
-                Google Sheet <ExternalLink className="h-2.5 w-2.5" />
-              </a>
+              {isHe
+                ? "Dualhook מעתיק הודעות WhatsApp ל-Google Sheet אישי שלך"
+                : "Dualhook copies WhatsApp messages to your own Google Sheet"}
             </li>
             <li>{isHe ? "השרת קורא מה-Sheet כל כמה שעות" : "The server reads from the Sheet every few hours"}</li>
             <li>{isHe ? "AI מנתח את השיחות ויוצר משימות" : "AI analyzes conversations and creates tasks"}</li>
@@ -129,7 +133,7 @@ export default function OnboardingWhatsApp() {
             placeholder="Sheet ID..."
           />
           <p className="text-xs text-muted-foreground">
-            {isHe ? "ה-ID מתוך קישור ה-Sheet (ברירת מחדל: ה-Sheet הנוכחי)" : "ID from the Sheet URL (default: current Sheet)"}
+            {isHe ? "ה-ID של ה-Sheet האישי שלך (מתוך הקישור)" : "Your own Sheet's ID (from its URL)"}
           </p>
         </div>
 

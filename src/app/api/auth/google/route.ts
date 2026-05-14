@@ -12,13 +12,18 @@ export async function GET(request: Request) {
 
   let scopes: string;
 
+  // `openid email` is required by the userinfo endpoint that the callback
+  // hits to discover which Google account was authorized (so we can store
+  // the actual Gmail address, not the Supabase signup email). Without it,
+  // userinfo returns 401 and connectedEmail silently falls back to the
+  // signup address — a multi-tenant footgun.
   switch (service) {
     case "gmail_calendar":
       scopes =
-        "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets.readonly";
+        "openid email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets.readonly";
       break;
     case "drive":
-      scopes = "https://www.googleapis.com/auth/drive.readonly";
+      scopes = "openid email https://www.googleapis.com/auth/drive.readonly";
       break;
     default:
       return NextResponse.json({ error: "Invalid service" }, { status: 400 });
