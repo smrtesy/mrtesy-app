@@ -16,22 +16,38 @@ const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use(express.json());
-
+// CORS MUST be registered BEFORE express.json() so preflight OPTIONS requests
+// don't have their bodies parsed (and so OPTIONS short-circuits without hitting
+// downstream middleware that could 502 on a proxy like Railway).
+//
+// Allowed origins come from FRONTEND_URL (comma-separated). Falls back to
+// localhost:3000 for local development only — production hosts must set the env var.
 const allowedOrigins = (process.env.FRONTEND_URL ?? "http://localhost:3000")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      cb(null, allowedOrigins.includes(origin));
-    },
-    credentials: true,
-  }),
-);
+console.log("[cors] allowed origins:", allowedOrigins.join(", "));
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    // Server-to-server or curl/Postman calls have no Origin header — allow.
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    console.warn(`[cors] rejected origin: ${origin}`);
+    cb(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Authorization", "Content-Type", "X-Org-Id", "X-Cron-Secret"],
+};
+
+app.use(cors(corsOptions));
+// Explicitly handle ALL preflight requests so they short-circuit BEFORE any
+// body-parsing or route logic. Some proxies (Railway, Vercel) otherwise 502.
+app.options(/.*/, cors(corsOptions));
+
+app.use(express.json());
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
