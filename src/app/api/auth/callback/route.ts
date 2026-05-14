@@ -35,7 +35,10 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
 
   if (isSuperAdmin) {
     if (!settings) {
-      await supabase.from("user_settings").insert({ user_id: user.id, preferred_language: "he" });
+      const { error } = await supabase
+        .from("user_settings")
+        .insert({ user_id: user.id, preferred_language: "he" });
+      if (error) console.warn("[auth/callback] user_settings insert (admin path) failed:", error.message);
     }
     const redirectPath = next === "/" ? `/${locale}/admin` : next;
     return NextResponse.redirect(`${origin}${redirectPath}`);
@@ -43,7 +46,10 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
 
   // Brand-new user (no user_settings row): create defaults + send to workspace creation step.
   if (!settings) {
-    await supabase.from("user_settings").insert({ user_id: user.id, preferred_language: "he" });
+    const { error } = await supabase
+      .from("user_settings")
+      .insert({ user_id: user.id, preferred_language: "he" });
+    if (error) console.warn("[auth/callback] user_settings insert (regular path) failed:", error.message);
     return NextResponse.redirect(`${origin}/he/onboarding/organization`);
   }
 

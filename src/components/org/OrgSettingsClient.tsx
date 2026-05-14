@@ -27,8 +27,7 @@ const ROLE_COLORS: Record<OrgMember["role"], string> = {
   member: "text-gray-600 bg-gray-50",
 };
 
-export function OrgSettingsClient({ locale }: Props) {
-  const isHe = locale === "he";
+export function OrgSettingsClient(_: Props) {
   const tOrg = useTranslations("orgSettings");
   const { active, refresh: refreshOrgs } = useActiveOrg();
   const { members, loading, refresh: refreshMembers } = useOrgMembers();

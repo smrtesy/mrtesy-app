@@ -41,10 +41,9 @@ interface EditProjectSheetProps {
   locale: string;
 }
 
-export function EditProjectSheet({ project, brief, locale }: EditProjectSheetProps) {
+export function EditProjectSheet({ project, brief }: EditProjectSheetProps) {
   const tEdit = useTranslations("projectsEdit");
   const router = useRouter();
-  const isHe = locale === "he";
 
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);

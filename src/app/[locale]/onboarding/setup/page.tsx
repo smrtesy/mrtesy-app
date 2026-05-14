@@ -60,8 +60,6 @@ export default function OnboardingSetup() {
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  const isHe = locale === "he";
-
   // Check if Drive is connected and get token
   useEffect(() => {
     async function checkDrive() {
@@ -142,7 +140,7 @@ export default function OnboardingSetup() {
       }
     } catch { /* ignore */ }
     setSearchLoading(false);
-  }, [driveToken, isHe]);
+  }, [driveToken]);
 
   // Handle search input change with debounce
   function handleSearchChange(value: string) {
