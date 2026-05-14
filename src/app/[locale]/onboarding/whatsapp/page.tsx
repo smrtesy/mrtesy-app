@@ -36,37 +36,25 @@ export default function OnboardingWhatsApp() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      // Trigger a test PART 2 run with the sheet ID
-      const res = await fetch(`${BACKEND_URL}/api/sync/part2`, {
+      const res = await fetch(`${BACKEND_URL}/api/me/whatsapp/test-sheet`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ lookback_hours: 168, force: true }),
+        body: JSON.stringify({ sheet_id: sheetId }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error ?? `HTTP ${res.status}`);
 
-      // Check if any whatsapp source_messages were created
-      const { data: { user } } = await supabase.auth.getUser();
-      await new Promise((r) => setTimeout(r, 3000)); // give server time to process
-
-      const { count } = await supabase
-        .from("source_messages")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", user!.id)
-        .eq("source_type", "whatsapp");
-
-      setRowCount(count ?? 0);
+      const count = (payload.row_count as number | undefined) ?? 0;
+      setRowCount(count);
       setTestResult("success");
       toast.success(
         isHe
-          ? `גישה לSheet הצליחה! ${count ?? 0} הודעות זוהו`
-          : `Sheet access successful! ${count ?? 0} messages found`,
+          ? `גישה לSheet הצליחה! ${count} שורות זוהו`
+          : `Sheet access successful! ${count} rows found`,
       );
     } catch (e) {
       setTestResult("error");

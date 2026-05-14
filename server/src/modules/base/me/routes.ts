@@ -8,8 +8,10 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { google } from "googleapis";
 import { db } from "../../../db";
 import { requireAuth, isSuperAdmin } from "../../../middleware";
+import { getOAuthClient } from "../../../services/token-refresh";
 
 const router = Router();
 
@@ -81,6 +83,32 @@ router.patch("/me/settings", requireAuth, async (req: Request, res: Response) =>
 router.get("/me/super-admin", requireAuth, async (req: Request, res: Response) => {
   const ok = await isSuperAdmin(req.user!);
   res.json({ is_super_admin: ok });
+});
+
+/**
+ * POST /me/whatsapp/test-sheet — verify the caller can read a WhatsApp source
+ * Sheet with their connected Google credentials. Used during onboarding before
+ * the user has any smrtesy org entitlement, so it gates on requireAuth only.
+ *
+ * Body: { sheet_id: string, tab?: string }
+ * Returns: { ok: true, row_count: number }
+ */
+router.post("/me/whatsapp/test-sheet", requireAuth, async (req: Request, res: Response) => {
+  const { sheet_id, tab } = (req.body ?? {}) as { sheet_id?: string; tab?: string };
+  if (!sheet_id || typeof sheet_id !== "string") {
+    return res.status(400).json({ error: "sheet_id is required" });
+  }
+
+  try {
+    const auth = await getOAuthClient(req.user!.id, "gmail_calendar");
+    const sheets = google.sheets({ version: "v4", auth });
+    const range = `${tab ?? "Messages"}!A2:A`;
+    const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: sheet_id, range });
+    return res.json({ ok: true, row_count: data.values?.length ?? 0 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(400).json({ error: msg });
+  }
 });
 
 /** GET /me/credentials — which services the user has connected (no token data!) */
