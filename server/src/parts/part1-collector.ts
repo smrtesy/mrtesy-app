@@ -31,13 +31,10 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
   // Load per-user settings once; sub-scans share these.
   const { data: settings } = await db
     .from("user_settings")
-    .select("my_emails, calendar_initial_scan_months, initial_scan_days_back, drive_folder_id")
+    .select("calendar_initial_scan_months, initial_scan_days_back, drive_folder_id")
     .eq("user_id", userId)
     .maybeSingle();
 
-  const myEmails: string[] = Array.isArray(settings?.my_emails)
-    ? (settings!.my_emails as unknown[]).filter((e): e is string => typeof e === "string" && e.length > 0)
-    : [];
   const effectiveGmailDays = gmailDays ?? (settings?.initial_scan_days_back as number | undefined) ?? 7;
   const effectiveCalMonths = calMonths ?? (settings?.calendar_initial_scan_months as number | undefined) ?? 1;
   const effectiveDriveFolder = driveFolderId ?? (settings?.drive_folder_id as string | null | undefined) ?? null;
@@ -62,6 +59,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       syncStates?.find((s) => s.source === source)?.last_synced_at ?? null;
 
     // ── 1. Gmail ──────────────────────────────────────────────────────────────
+    // One Gmail OAuth = one inbox. We scan everything in that inbox (subject to
+    // skip rules and the lookback window). The per-alias `deliveredto:` loop
+    // that lived here previously was a relic from the single-tenant build.
     try {
       const lastGmailSync = checkpoint("gmail");
       const since = lastGmailSync
@@ -70,62 +70,59 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
       const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
 
-      // If the user has my_emails configured, scope per account. Otherwise scan
-      // the whole inbox (one pass, no deliveredto: filter).
-      const accounts: (string | null)[] = myEmails.length > 0 ? myEmails : [null];
+      const query = [
+        `after:${afterDate}`,
+        ...skipFilter.gmailQueryFilters,
+        `-in:drafts`,
+      ].join(" ");
 
-      for (const account of accounts) {
-        const query = [
-          `after:${afterDate}`,
-          ...skipFilter.gmailQueryFilters,
-          `-in:drafts`,
-          account ? `deliveredto:${account}` : null,
-        ].filter(Boolean).join(" ");
+      const messages = await searchGmail(userId, query, 100);
 
-        const messages = await searchGmail(userId, query, 100);
+      for (const { id, threadId } of messages) {
+        try {
+          const msg = await getMessage(userId, id);
+          const { subject, from, to, date, body } = extractEmailText(
+            msg as Parameters<typeof extractEmailText>[0],
+          );
 
-        for (const { id, threadId } of messages) {
-          try {
-            const msg = await getMessage(userId, id);
-            const { subject, from, to, date, body } = extractEmailText(
-              msg as Parameters<typeof extractEmailText>[0],
-            );
+          const fromEmail = (from.match(/<(.+)>/) ?? [])[1] ?? from;
 
-            const fromEmail = (from.match(/<(.+)>/) ?? [])[1] ?? from;
-
-            if (
-              skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
-              fromEmail.toLowerCase().includes("noreply") ||
-              fromEmail.toLowerCase().includes("no-reply") ||
-              body.toLowerCase().includes("unsubscribe")
-            ) {
-              itemsSkipped++;
-              continue;
-            }
-
-            const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`.slice(0, 3000);
-
-            await db.from("source_messages").upsert(
-              {
-                user_id: userId,
-                source_type: "gmail",
-                source_id: id,
-                sender: from,
-                sender_email: fromEmail,
-                subject,
-                body_text: body.slice(0, 1000),
-                raw_content: rawContent,
-                received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
-                processing_status: "pending",
-                reply_to_context: account ?? "",
-                metadata: { threadId, account: account ?? null },
-              },
-              { onConflict: "user_id,source_type,source_id" },
-            );
-            itemsProcessed++;
-          } catch (e) {
-            errors.push(`gmail msg ${id}: ${e}`);
+          if (
+            skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
+            fromEmail.toLowerCase().includes("noreply") ||
+            fromEmail.toLowerCase().includes("no-reply") ||
+            body.toLowerCase().includes("unsubscribe")
+          ) {
+            itemsSkipped++;
+            continue;
           }
+
+          const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`.slice(0, 3000);
+
+          // Derive the actual recipient alias from the To: header so the
+          // classifier has it without the collector having to loop on aliases.
+          const toEmail = (to.match(/<(.+)>/) ?? [])[1] ?? to.trim();
+
+          await db.from("source_messages").upsert(
+            {
+              user_id: userId,
+              source_type: "gmail",
+              source_id: id,
+              sender: from,
+              sender_email: fromEmail,
+              subject,
+              body_text: body.slice(0, 1000),
+              raw_content: rawContent,
+              received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+              processing_status: "pending",
+              reply_to_context: toEmail,
+              metadata: { threadId, to: toEmail },
+            },
+            { onConflict: "user_id,source_type,source_id" },
+          );
+          itemsProcessed++;
+        } catch (e) {
+          errors.push(`gmail msg ${id}: ${e}`);
         }
       }
 

@@ -4,7 +4,8 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X, Ban, Plus } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
@@ -45,6 +46,10 @@ export default function OnboardingSetup() {
   const [selectedFolderName, setSelectedFolderName] = useState<string>("");
   const [driveConnected, setDriveConnected] = useState(false);
   const [driveToken, setDriveToken] = useState<string>("");
+  // Skip-rules state: addresses that should never be turned into tasks.
+  // Each entry becomes a row in rules_memory with rule_type='skip'.
+  const [skipAddresses, setSkipAddresses] = useState<string[]>([]);
+  const [skipInput, setSkipInput] = useState("");
   // Drive search state
   const [folderSearch, setFolderSearch] = useState("");
   const [searchResults, setSearchResults] = useState<DriveFolder[]>([]);
@@ -166,6 +171,24 @@ export default function OnboardingSetup() {
     setShowResults(false);
   }
 
+  function addSkipAddress() {
+    const v = skipInput.trim().toLowerCase();
+    if (!v) return;
+    // Accept either bare emails ("foo@bar.com") or full domains ("bar.com").
+    const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}$/.test(v);
+    if (!ok) {
+      toast.error(isHe ? "כתובת לא תקינה" : "Invalid address");
+      return;
+    }
+    if (skipAddresses.includes(v)) return;
+    setSkipAddresses([...skipAddresses, v]);
+    setSkipInput("");
+  }
+
+  function removeSkipAddress(addr: string) {
+    setSkipAddresses(skipAddresses.filter((a) => a !== addr));
+  }
+
   // Poll DB for progress while scanning
   useEffect(() => {
     if (!scanning) {
@@ -220,6 +243,34 @@ export default function OnboardingSetup() {
       };
       if (selectedFolder) updateData.drive_folder_id = selectedFolder;
       await supabase.from("user_settings").update(updateData).eq("user_id", user.id);
+
+      // Persist skip rules into rules_memory so part1's Gmail query AND the
+      // runtime skipFilter both pick them up on this very same scan.
+      if (skipAddresses.length > 0) {
+        const triggers = skipAddresses.map((addr) =>
+          addr.includes("@") ? `to=${addr}` : `domain=${addr}`,
+        );
+        // Avoid duplicating rules if the user re-runs onboarding.
+        const { data: existing } = await supabase
+          .from("rules_memory")
+          .select("trigger")
+          .eq("user_id", user.id)
+          .eq("rule_type", "skip")
+          .in("trigger", triggers);
+        const existingSet = new Set((existing ?? []).map((r) => r.trigger as string));
+        const rows = triggers
+          .filter((t) => !existingSet.has(t))
+          .map((trigger) => ({
+            user_id: user.id,
+            rule_type: "skip",
+            trigger,
+            is_active: true,
+            created_by: "onboarding",
+          }));
+        if (rows.length > 0) {
+          await supabase.from("rules_memory").insert(rows);
+        }
+      }
 
       // api() auto-attaches Authorization + X-Org-Id from the active org in localStorage.
       const data = await api<{ ok: true; session_id: string }>("/api/sync/part1", {
@@ -401,6 +452,65 @@ export default function OnboardingSetup() {
                 )}
               </div>
             )}
+
+            {/* Skip addresses */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Ban className="h-4 w-4 text-muted-foreground" />
+                <label className="text-sm font-medium">
+                  {isHe ? "כתובות שלא לסרוק (אופציונלי)" : "Addresses to skip (optional)"}
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isHe
+                  ? "הוסף אימייל מלא (office@maor.org) או דומיין (newsletter.com). הודעות מהכתובות האלה יידלגו לחלוטין."
+                  : "Add a full email (office@maor.org) or a domain (newsletter.com). Messages matching these are skipped entirely."}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={skipInput}
+                  onChange={(e) => setSkipInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addSkipAddress();
+                    }
+                  }}
+                  placeholder={isHe ? "כתובת או דומיין..." : "Email or domain..."}
+                  dir="ltr"
+                  className="font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-[40px] shrink-0"
+                  onClick={addSkipAddress}
+                  disabled={!skipInput.trim()}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+              {skipAddresses.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {skipAddresses.map((addr) => (
+                    <span
+                      key={addr}
+                      className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-xs font-mono"
+                    >
+                      {addr}
+                      <button
+                        onClick={() => removeSkipAddress(addr)}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label="remove"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <Button onClick={startScan} className="w-full min-h-[48px] mt-2">
               <Rocket className="h-4 w-4 me-2" />

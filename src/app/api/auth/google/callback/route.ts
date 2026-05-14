@@ -77,6 +77,22 @@ export async function GET(request: Request) {
     Date.now() + tokens.expires_in * 1000
   ).toISOString();
 
+  // Resolve the Google account that just authorized — this may differ from the
+  // Supabase signup email when the user OAuths a different Google account.
+  // Falls back to the signup email on any failure so we never block onboarding.
+  let connectedEmail: string = user.email ?? "";
+  try {
+    const uiResp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    if (uiResp.ok) {
+      const ui = (await uiResp.json()) as { email?: string };
+      if (ui.email) connectedEmail = ui.email;
+    }
+  } catch (e) {
+    console.warn("[google-callback] userinfo lookup failed:", e);
+  }
+
   if (service === "gmail_calendar") {
     // Save Gmail credentials
     const { error: gmailErr } = await supabase
@@ -89,7 +105,7 @@ export async function GET(request: Request) {
           refresh_token: tokens.refresh_token,
           expires_at: expiresAt,
           scopes: ["gmail.modify", "spreadsheets.readonly"],
-          email: user.email,
+          email: connectedEmail,
         },
         { onConflict: "user_id,service" }
       );
@@ -105,7 +121,7 @@ export async function GET(request: Request) {
           refresh_token: tokens.refresh_token,
           expires_at: expiresAt,
           scopes: ["calendar"],
-          email: user.email,
+          email: connectedEmail,
         },
         { onConflict: "user_id,service" }
       );
@@ -114,13 +130,14 @@ export async function GET(request: Request) {
       console.error("Credential save error:", gmailErr || calErr);
     }
 
-    // Update settings
+    // Update settings — my_emails reflects the Google account actually wired
+    // up, not the Supabase signup address.
     await supabase
       .from("user_settings")
       .update({
         gmail_connected: true,
         calendar_connected: true,
-        my_emails: [user.email],
+        my_emails: connectedEmail ? [connectedEmail] : [],
       })
       .eq("user_id", user.id);
 
@@ -140,7 +157,7 @@ export async function GET(request: Request) {
         refresh_token: tokens.refresh_token,
         expires_at: expiresAt,
         scopes: ["drive.readonly"],
-        email: user.email,
+        email: connectedEmail,
       },
       { onConflict: "user_id,service" }
     );
