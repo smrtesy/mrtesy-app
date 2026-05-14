@@ -149,7 +149,8 @@
       "enterApp": "כנס לאפליקציה"
     },
     "skip": "דלג",
-    "connect": "חבר"
+    "connect": "חבר",
+    "signedInAs": "מחובר כ"
   },
   "settings": {
     "title": "הגדרות",

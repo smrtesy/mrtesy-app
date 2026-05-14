@@ -149,7 +149,8 @@
       "enterApp": "Enter App"
     },
     "skip": "Skip",
-    "connect": "Connect"
+    "connect": "Connect",
+    "signedInAs": "Signed in as"
   },
   "settings": {
     "title": "Settings",
