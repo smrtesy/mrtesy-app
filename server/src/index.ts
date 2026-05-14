@@ -1,5 +1,21 @@
 import dotenv from "dotenv";
 dotenv.config({ override: true }); // .env always wins over shell environment
+
+// ── Startup env diagnostics (visible in Railway logs) ────────────────────────
+const REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
+const presentEnv = REQUIRED_ENV.map((k) => `${k}=${process.env[k] ? "✓" : "✗ MISSING"}`);
+const optionalEnv = ["ANTHROPIC_API_KEY", "FRONTEND_URL", "PORT", "NODE_ENV"]
+  .map((k) => `${k}=${process.env[k] ? "✓" : "—"}`);
+console.log("[startup] required env:", presentEnv.join(", "));
+console.log("[startup] optional env:", optionalEnv.join(", "));
+
+const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+if (missing.length > 0) {
+  console.error(`[startup] FATAL: missing required env vars: ${missing.join(", ")}`);
+  console.error("[startup] Set them in your hosting provider (Railway → Variables) and redeploy.");
+  process.exit(1);
+}
+
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -14,6 +30,7 @@ import { runPart3 } from "./parts/part3-classifier";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
+const HOST = process.env.HOST ?? "0.0.0.0"; // Bind to all interfaces — required by Railway/Fly/Render
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 // CORS MUST be registered BEFORE express.json() so preflight OPTIONS requests
@@ -130,6 +147,14 @@ cron.schedule("*/15 * * * *", () => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[server] listening on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`[server] listening on ${HOST}:${PORT}`);
+});
+
+// Surface unhandled errors so Railway logs show them instead of a silent crash
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
 });
