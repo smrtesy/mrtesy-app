@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, CheckCircle2, Rocket, Mail, Calendar, Info, FolderOpen, Search, X } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
 const gmailOptions = [
@@ -211,39 +212,26 @@ export default function OnboardingSetup() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Save scan preferences (including Drive folder if selected)
+      // Persist scan preferences first so the server-side runner can also read them
+      // directly from user_settings if the request body is incomplete.
       const updateData: Record<string, unknown> = {
         initial_scan_days_back: gmailDays,
         calendar_initial_scan_months: calMonths,
       };
-      if (selectedFolder) {
-        updateData.drive_folder_id = selectedFolder;
-      }
-      await supabase
-        .from("user_settings")
-        .update(updateData)
-        .eq("user_id", user.id);
+      if (selectedFolder) updateData.drive_folder_id = selectedFolder;
+      await supabase.from("user_settings").update(updateData).eq("user_id", user.id);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No session");
-
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-      const resp = await fetch(`${backendUrl}/api/sync/part1`, {
+      // api() auto-attaches Authorization + X-Org-Id from the active org in localStorage.
+      const data = await api<{ ok: true; session_id: string }>("/api/sync/part1", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
+        body: {
+          gmail_days: gmailDays,
+          cal_months: calMonths,
+          drive_folder_id: selectedFolder || null,
+          drive_hours: 24,
         },
-        body: JSON.stringify({ gmail_days: gmailDays, drive_hours: 24 }),
       });
 
-      const data = await resp.json();
-
-      if (!resp.ok) {
-        throw new Error(data.error ?? "Scan failed");
-      }
-
-      // Fetch stats from run_session
       const { data: runSession } = await supabase
         .from("run_sessions")
         .select("items_processed")
@@ -253,53 +241,20 @@ export default function OnboardingSetup() {
       setStats({ gmail: runSession?.items_processed ?? 0, calendar: 0 });
       toast.success(t("step4.complete"));
 
-      // onboarding_completed is now set by the edge function itself,
-      // but set it here too as a safety net
       await supabase
         .from("user_settings")
-        .update({ onboarding_completed: true })
+        .update({
+          onboarding_completed: true,
+          initial_scan_completed_at: new Date().toISOString(),
+        })
         .eq("user_id", user.id);
 
       setDone(true);
     } catch (e) {
-      // Even on timeout/error, check if the edge function managed to mark onboarding
-      // as complete (it may have finished the IDs phase but timed out on response)
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const { data: settings } = await supabase
-            .from("user_settings")
-            .select("onboarding_completed, initial_scan_completed_at")
-            .eq("user_id", user.id)
-            .single();
-
-          if (settings?.onboarding_completed) {
-            // Scan actually succeeded, just response timed out
-            toast.success(isHe ? "הסריקה הושלמה!" : "Scan completed!");
-            setDone(true);
-            return;
-          }
-
-          // Edge function started but didn't complete — mark onboarding anyway
-          // since IDs may have been saved and batch-details will fill in the rest
-          if (settings?.initial_scan_completed_at === null) {
-            await supabase
-              .from("user_settings")
-              .update({
-                onboarding_completed: true,
-                initial_scan_completed_at: new Date().toISOString(),
-              })
-              .eq("user_id", user.id);
-            toast.info(isHe
-              ? "הסריקה עדיין רצה ברקע. תוכל להיכנס לאפליקציה."
-              : "Scan is still running in the background. You can enter the app.");
-            setDone(true);
-            return;
-          }
-        }
-      } catch { /* ignore recovery errors */ }
-
-      toast.error((e as Error).message);
+      const msg = e instanceof ApiError
+        ? `${e.message} (HTTP ${e.status})`
+        : (e instanceof Error ? e.message : String(e));
+      toast.error(msg);
     } finally {
       setScanning(false);
     }

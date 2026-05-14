@@ -1,20 +1,40 @@
 import { google } from "googleapis";
 import { getOAuthClient } from "./token-refresh";
+import { db } from "../db";
 
-const SCANSNAP_FOLDER = "1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1";
+const DEFAULT_DRIVE_FOLDER = "1wDogvxjUfBYSNcd3z9zSwfdvtQVqCw-1";
 
 export async function getDriveClient(userId: string) {
   const auth = await getOAuthClient(userId, "google_drive");
   return google.drive({ version: "v3", auth });
 }
 
-export async function listNewFiles(userId: string, since: string, pageSize = 10) {
+async function resolveFolderId(userId: string, explicit?: string | null): Promise<string> {
+  if (explicit) return explicit;
+  const { data } = await db
+    .from("user_settings")
+    .select("drive_folder_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const fromSettings = (data?.drive_folder_id as string | null | undefined) ?? null;
+  return fromSettings || DEFAULT_DRIVE_FOLDER;
+}
+
+export async function listNewFiles(
+  userId: string,
+  since: string,
+  folderId?: string | null,
+  pageSize = 50,
+) {
   const drive = await getDriveClient(userId);
+  const folder = await resolveFolderId(userId, folderId);
   const res = await drive.files.list({
-    q: `'${SCANSNAP_FOLDER}' in parents and modifiedTime >= '${since}' and trashed = false`,
+    q: `'${folder}' in parents and modifiedTime >= '${since}' and trashed = false`,
     pageSize,
     fields: "files(id, name, mimeType, modifiedTime, size)",
     orderBy: "modifiedTime desc",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
   return res.data.files ?? [];
 }

@@ -12,19 +12,35 @@ import { listNewFiles, getFileContent } from "../services/drive";
 import { listEvents } from "../services/calendar";
 import { parseSkipRules } from "../lib/rule-filters";
 
-const GMAIL_ACCOUNTS = ["chanoch@maor.org", "chanoch@kinus.info"];
-
 export interface Part1Options {
   userId: string;
-  /** Override lookback for Gmail in days (default: since last sync or 3 days) */
+  /** Override Gmail lookback in days. Falls back to user_settings.initial_scan_days_back or 7. */
   gmailDays?: number;
-  /** Override lookback for Drive in hours (default: since last sync or 24h) */
+  /** Override Drive lookback in hours (default: since last sync or 24h) */
   driveHours?: number;
+  /** Override Calendar lookback in months. Falls back to user_settings.calendar_initial_scan_months or 1. */
+  calMonths?: number;
+  /** Override Drive folder. Falls back to user_settings.drive_folder_id. */
+  driveFolderId?: string | null;
 }
 
 export async function runPart1(opts: Part1Options): Promise<{ sessionId: string }> {
-  const { userId, gmailDays, driveHours } = opts;
+  const { userId, gmailDays, driveHours, calMonths, driveFolderId } = opts;
   const sessionId = await createRunSession(userId, "part1", "collector");
+
+  // Load per-user settings once; sub-scans share these.
+  const { data: settings } = await db
+    .from("user_settings")
+    .select("my_emails, calendar_initial_scan_months, initial_scan_days_back, drive_folder_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  const myEmails: string[] = Array.isArray(settings?.my_emails)
+    ? (settings!.my_emails as unknown[]).filter((e): e is string => typeof e === "string" && e.length > 0)
+    : [];
+  const effectiveGmailDays = gmailDays ?? (settings?.initial_scan_days_back as number | undefined) ?? 7;
+  const effectiveCalMonths = calMonths ?? (settings?.calendar_initial_scan_months as number | undefined) ?? 1;
+  const effectiveDriveFolder = driveFolderId ?? (settings?.drive_folder_id as string | null | undefined) ?? null;
 
   const errors: string[] = [];
   let itemsProcessed = 0;
@@ -50,17 +66,21 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       const lastGmailSync = checkpoint("gmail");
       const since = lastGmailSync
         ? new Date(lastGmailSync)
-        : new Date(Date.now() - (gmailDays ?? 3) * 24 * 60 * 60 * 1000);
+        : new Date(Date.now() - effectiveGmailDays * 24 * 60 * 60 * 1000);
 
       const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
 
-      for (const account of GMAIL_ACCOUNTS) {
+      // If the user has my_emails configured, scope per account. Otherwise scan
+      // the whole inbox (one pass, no deliveredto: filter).
+      const accounts: (string | null)[] = myEmails.length > 0 ? myEmails : [null];
+
+      for (const account of accounts) {
         const query = [
           `after:${afterDate}`,
           ...skipFilter.gmailQueryFilters,
           `-in:drafts`,
-          `deliveredto:${account}`,
-        ].join(" ");
+          account ? `deliveredto:${account}` : null,
+        ].filter(Boolean).join(" ");
 
         const messages = await searchGmail(userId, query, 100);
 
@@ -97,8 +117,8 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
                 raw_content: rawContent,
                 received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
                 processing_status: "pending",
-                reply_to_context: `${account}`,
-                metadata: { threadId, account },
+                reply_to_context: account ?? "",
+                metadata: { threadId, account: account ?? null },
               },
               { onConflict: "user_id,source_type,source_id" },
             );
@@ -121,7 +141,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
         ? new Date(lastDriveSync)
         : new Date(Date.now() - (driveHours ?? 24) * 60 * 60 * 1000);
 
-      const files = await listNewFiles(userId, since.toISOString());
+      const files = await listNewFiles(userId, since.toISOString(), effectiveDriveFolder);
 
       for (const file of files) {
         if (!file.id || !file.name) continue;
@@ -161,7 +181,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     // ── 3. Google Calendar ────────────────────────────────────────────────────
     try {
       const now = new Date();
-      const timeMin = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+      // Lookback uses the user's onboarding choice (months). Lookahead stays at 7d.
+      const lookbackMs = effectiveCalMonths * 30 * 24 * 60 * 60 * 1000;
+      const timeMin = new Date(now.getTime() - lookbackMs).toISOString();
       const timeMax = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
       const events = await listEvents(userId, timeMin, timeMax);
