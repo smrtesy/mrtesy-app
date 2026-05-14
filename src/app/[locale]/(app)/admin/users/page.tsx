@@ -43,9 +43,21 @@ export default async function AdminUsersPage({
             href={`/${locale}/admin/users/${user.user_id}`}
             className="flex items-center justify-between rounded-lg border p-3 hover:bg-accent"
           >
-            <div>
-              <p className="font-medium">{user.display_name || emailMap[user.user_id] || user.user_id.slice(0, 8)}</p>
-              <p className="text-xs text-muted-foreground">{emailMap[user.user_id] ? `${user.plan || "free"} · ${emailMap[user.user_id]}` : user.plan}</p>
+            <div className="min-w-0">
+              <p className="font-medium truncate">
+                {emailMap[user.user_id] || user.display_name || "—"}
+              </p>
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                <span>{user.plan || "free"}</span>
+                {user.display_name && emailMap[user.user_id] && (
+                  <>
+                    <span>·</span>
+                    <span className="truncate">{user.display_name}</span>
+                  </>
+                )}
+                <span>·</span>
+                <code className="font-mono text-[10px] opacity-60">{user.user_id.slice(0, 8)}</code>
+              </p>
             </div>
             <div className="flex gap-1">
               {user.gmail_connected && <Badge variant="outline" className="text-xs">Gmail</Badge>}

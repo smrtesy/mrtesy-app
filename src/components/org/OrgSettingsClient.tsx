@@ -196,8 +196,12 @@ export function OrgSettingsClient({ locale }: Props) {
                       <Icon className="h-4 w-4" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{m.name || m.email || m.user_id.slice(0, 8)}</div>
-                      {m.email && m.name && <div className="text-xs text-muted-foreground truncate">{m.email}</div>}
+                      <div className="text-sm font-medium truncate">{m.email || m.name || "—"}</div>
+                      <div className="text-xs text-muted-foreground flex items-center gap-2">
+                        {m.name && m.email && <span className="truncate">{m.name}</span>}
+                        {m.name && m.email && <span>·</span>}
+                        <code className="font-mono text-[10px] opacity-60">{m.user_id.slice(0, 8)}</code>
+                      </div>
                     </div>
                     {canManage && isOwner ? (
                       <select

@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserMembershipsClient } from "@/components/admin/UserMembershipsClient";
@@ -24,13 +25,31 @@ export default async function AdminUserDetailPage({
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
 
+  // Resolve email from auth.users (service-role required).
+  let email = "";
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceKey) {
+    const admin = createAdminClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: authUser } = await admin.auth.admin.getUserById(id);
+    email = authUser?.user?.email || "";
+  }
+
   if (!settings) {
     return <p>User not found</p>;
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">User: {settings.display_name || id.slice(0, 8)}</h1>
+      <div>
+        <h1 className="text-2xl font-bold truncate">{email || settings.display_name || "User"}</h1>
+        <p className="text-xs text-muted-foreground flex items-center gap-2 mt-1">
+          {settings.display_name && email && <span>{settings.display_name}</span>}
+          {settings.display_name && email && <span>·</span>}
+          <code className="font-mono text-[11px] opacity-70">{id}</code>
+        </p>
+      </div>
 
       {/* Memberships + effective app access (new) */}
       <UserMembershipsClient userId={id} locale={locale} />

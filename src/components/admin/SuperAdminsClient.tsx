@@ -113,8 +113,12 @@ export function SuperAdminsClient() {
               {candidates.map((u) => (
                 <div key={u.id} className="flex items-center gap-2 rounded border p-2 text-sm">
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{u.name || u.email || u.id.slice(0, 8)}</div>
-                    {u.email && u.name && <div className="text-xs text-muted-foreground truncate">{u.email}</div>}
+                    <div className="font-medium truncate">{u.email || u.name || "—"}</div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                      {u.name && u.email && <span className="truncate">{u.name}</span>}
+                      {u.name && u.email && <span>·</span>}
+                      <code className="font-mono text-[10px] opacity-60">{u.id.slice(0, 8)}</code>
+                    </div>
                   </div>
                   <Button
                     size="sm"
@@ -147,8 +151,12 @@ export function SuperAdminsClient() {
             <div key={a.user_id} className="flex items-center gap-3 rounded-lg border p-2.5">
               <Crown className="h-4 w-4 text-amber-600 shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{a.name || a.email || a.user_id.slice(0, 8)}</div>
-                {a.email && a.name && <div className="text-xs text-muted-foreground truncate">{a.email}</div>}
+                <div className="text-sm font-medium truncate">{a.email || a.name || "—"}</div>
+                <div className="text-xs text-muted-foreground flex items-center gap-2">
+                  {a.name && a.email && <span className="truncate">{a.name}</span>}
+                  {a.name && a.email && <span>·</span>}
+                  <code className="font-mono text-[10px] opacity-60">{a.user_id.slice(0, 8)}</code>
+                </div>
                 {a.note && <div className="text-[10px] text-muted-foreground italic mt-0.5">{a.note}</div>}
               </div>
               <div className="text-[10px] text-muted-foreground text-end shrink-0">

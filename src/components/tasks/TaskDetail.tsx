@@ -284,7 +284,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     <option value="">{locale === "he" ? "— לא משויך —" : "— Unassigned —"}</option>
                     {selectorMembers.map((m) => (
                       <option key={m.user_id} value={m.user_id}>
-                        {m.name || m.email || m.user_id.slice(0, 8)}
+                        {m.email
+                          ? m.name ? `${m.email} (${m.name})` : m.email
+                          : m.name || m.user_id.slice(0, 8)}
                       </option>
                     ))}
                   </select>
