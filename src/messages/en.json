@@ -26,7 +26,10 @@
     "calendar": "Calendar",
     "settings": "Settings",
     "projects": "Projects",
-    "admin": "Admin"
+    "admin": "Platform",
+    "sectionManagement": "Management",
+    "sectionPlatform": "Platform",
+    "newTask": "New Task"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
@@ -361,8 +364,8 @@
     "failures": "Failures",
     "lastSuccess": "Last Success",
     "systemLogs": "System Logs",
-    "active": "active",
-    "onboardingPending": "onboarding pending",
+    "active": "Active",
+    "onboardingPending": "Onboarding Pending",
     "forceReconnect": "Force Reconnect",
     "notifyUser": "Notify User",
     "filterAll": "All",
@@ -371,6 +374,13 @@
     "filterInfo": "Info",
     "filterToday": "Today",
     "filter7d": "7 Days",
-    "filter30d": "30 Days"
+    "filter30d": "30 Days",
+    "alertSyncStopped": "Sync stopped for some users (consecutive failures ≥ 5)",
+    "alertDeadLetters": "{count} dead letter messages",
+    "alertAiCost": "AI cost today: ${cost}",
+    "serviceGmail": "Gmail",
+    "serviceGoogleDrive": "Google Drive",
+    "serviceGoogleCalendar": "Google Calendar",
+    "serviceWhatsapp": "WhatsApp"
   }
 }

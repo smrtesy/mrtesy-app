@@ -24,6 +24,13 @@ export default async function AdminDashboard() {
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
+  const serviceLabels: Record<string, string> = {
+    gmail: t("serviceGmail"),
+    google_drive: t("serviceGoogleDrive"),
+    google_calendar: t("serviceGoogleCalendar"),
+    whatsapp: t("serviceWhatsapp"),
+  };
+
   function getServiceStatus(source: string) {
     const states = syncStates.filter((s) => s.source === source);
     const failed = states.filter((s) => (s.consecutive_failures || 0) >= 5);
@@ -46,13 +53,13 @@ export default async function AdminDashboard() {
   // Alerts
   const alerts: Array<{ level: string; message: string }> = [];
   if (syncStates.filter((s) => (s.consecutive_failures || 0) >= 5).length > 0) {
-    alerts.push({ level: "critical", message: "Sync stopped for some users (consecutive failures >= 5)" });
+    alerts.push({ level: "critical", message: t("alertSyncStopped") });
   }
   if (deadLetters > 10) {
-    alerts.push({ level: "critical", message: `${deadLetters} dead letter messages` });
+    alerts.push({ level: "critical", message: t("alertDeadLetters", { count: deadLetters }) });
   }
   if (todayCost > 5) {
-    alerts.push({ level: "important", message: `AI cost today: $${todayCost.toFixed(2)}` });
+    alerts.push({ level: "important", message: t("alertAiCost", { cost: todayCost.toFixed(2) }) });
   }
 
   return (
@@ -121,7 +128,7 @@ export default async function AdminDashboard() {
               <div key={service} className="flex items-center justify-between rounded-lg border p-3">
                 <div className="flex items-center gap-3">
                   {statusBadge(status)}
-                  <span className="font-medium capitalize">{service.replace(/_/g, " ")}</span>
+                  <span className="font-medium">{serviceLabels[service] ?? service}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
                   {lastSync?.last_synced_at ? new Date(lastSync.last_synced_at).toLocaleString() : t("noUsersConnected")}
@@ -150,13 +157,6 @@ export default async function AdminDashboard() {
           </CardContent>
         </Card>
       )}
-      {/*
-        The old footer-shortcut row used to repeat the top AdminNav (and held
-        broken links to /admin/sync, /admin/rules, /admin/prompts,
-        /admin/services after Phase 1 moved rules+sync to /settings and the
-        app-scoped pages under /admin/apps/[slug]/*). Removed — the top nav
-        is the single source of truth for admin navigation.
-      */}
     </div>
   );
 }
