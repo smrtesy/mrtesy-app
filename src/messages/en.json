@@ -326,6 +326,17 @@
     "noTitle": "(No title)",
     "today": "Today"
   },
+  "adminNav": {
+    "dashboard": "Dashboard",
+    "users": "Users",
+    "orgs": "Organizations",
+    "apps": "Apps",
+    "superAdmins": "Super Admins",
+    "logs": "Logs"
+  },
+  "adminUsers": {
+    "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
+  },
   "admin": {
     "title": "Admin Dashboard",
     "overview": "Overview",

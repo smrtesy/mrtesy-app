@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -14,19 +15,21 @@ import {
 
 // Platform-level only. Per-app concerns (services, prompts) now live
 // under /admin/apps/[slug]/*. User-scoped concerns (rules, sync) moved
-// to /settings/* — see CLAUDE.md for the conceptual split.
+// to /settings/* — see CLAUDE.md for the conceptual split. Labels resolve
+// to i18n keys at render time so the tab strip respects the active locale.
 const items = [
-  { key: "dashboard",    href: "",               label: "Dashboard",    icon: LayoutDashboard },
-  { key: "users",        href: "users",          label: "Users",        icon: Users },
-  { key: "orgs",         href: "orgs",           label: "Organizations", icon: Building2 },
-  { key: "apps",         href: "apps",           label: "Apps",         icon: Layers },
-  { key: "super-admins", href: "super-admins",   label: "Super Admins", icon: Crown },
-  { key: "logs",         href: "logs",           label: "Logs",         icon: FileText },
+  { key: "dashboard",    href: "",               labelKey: "dashboard",    icon: LayoutDashboard },
+  { key: "users",        href: "users",          labelKey: "users",        icon: Users },
+  { key: "orgs",         href: "orgs",           labelKey: "orgs",         icon: Building2 },
+  { key: "apps",         href: "apps",           labelKey: "apps",         icon: Layers },
+  { key: "super-admins", href: "super-admins",   labelKey: "superAdmins",  icon: Crown },
+  { key: "logs",         href: "logs",           labelKey: "logs",         icon: FileText },
 ];
 
 export function AdminNav() {
   const pathname = usePathname();
   const { locale } = useParams() as { locale: string };
+  const t = useTranslations("adminNav");
   const base = `/${locale}/admin`;
 
   function isActive(href: string) {
@@ -52,7 +55,7 @@ export function AdminNav() {
               )}
             >
               <item.icon className="h-3.5 w-3.5" />
-              {item.label}
+              {t(item.labelKey)}
             </Link>
           );
         })}

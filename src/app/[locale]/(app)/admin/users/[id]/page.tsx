@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { createClient } from "@/lib/supabase/server";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserMembershipsClient } from "@/components/admin/UserMembershipsClient";
@@ -25,13 +25,12 @@ export default async function AdminUserDetailPage({
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
 
-  // Resolve email from auth.users (service-role required).
+  // Resolve email from auth.users via the shared admin helper.
+  // Returns empty if SUPABASE_SERVICE_ROLE_KEY is not configured — the
+  // helper logs a warning, the page just shows the UUID-only header.
   let email = "";
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (serviceKey) {
-    const admin = createAdminClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+  const admin = createAdminSupabaseClient();
+  if (admin) {
     const { data: authUser } = await admin.auth.admin.getUserById(id);
     email = authUser?.user?.email || "";
   }

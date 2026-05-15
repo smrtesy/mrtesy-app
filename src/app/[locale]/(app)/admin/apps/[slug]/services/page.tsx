@@ -25,7 +25,7 @@ export default async function AdminAppServicesPage({
     .maybeSingle<{ id: string; name: string }>();
   if (!app) notFound();
 
-  const [syncResult, usersResult, emailMap] = await Promise.all([
+  const [syncResult, usersResult, emailLookup] = await Promise.all([
     supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
     supabase.from("user_settings").select("user_id, display_name"),
     listAllUserEmails(),
@@ -33,6 +33,7 @@ export default async function AdminAppServicesPage({
 
   const syncStates = syncResult.data || [];
   const nameMap = new Map((usersResult.data || []).map((u) => [u.user_id, u.display_name]));
+  const emailMap = emailLookup.emails;
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
