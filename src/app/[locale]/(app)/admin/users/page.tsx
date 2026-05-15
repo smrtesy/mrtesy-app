@@ -12,20 +12,27 @@ export default async function AdminUsersPage({
 }) {
   const { locale } = await params;
   const t = await getTranslations("admin");
+  const tWarn = await getTranslations("adminUsers");
   const supabase = await createClient();
 
-  const [{ data: users }, emails] = await Promise.all([
+  const [{ data: users }, emailLookup] = await Promise.all([
     supabase
       .from("user_settings")
       .select("user_id, plan, display_name, gmail_connected, drive_connected, whatsapp_connected, calendar_connected, onboarding_completed, created_at")
       .order("created_at", { ascending: false }),
     listAllUserEmails(),
   ]);
-  const emailMap = Object.fromEntries(emails.entries());
+  const emailMap = Object.fromEntries(emailLookup.emails.entries());
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">{t("users")}</h1>
+
+      {emailLookup.error === "service_role_missing" && (
+        <div className="rounded-md border border-amber-400 bg-amber-50 p-3 text-xs text-amber-900">
+          {tWarn("serviceRoleMissing")}
+        </div>
+      )}
 
       <div className="space-y-2">
         {(users || []).map((user) => (

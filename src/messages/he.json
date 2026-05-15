@@ -326,6 +326,17 @@
     "noTitle": "(ללא כותרת)",
     "today": "היום"
   },
+  "adminNav": {
+    "dashboard": "סקירה",
+    "users": "משתמשים",
+    "orgs": "ארגונים",
+    "apps": "אפליקציות",
+    "superAdmins": "מנהלי-על",
+    "logs": "לוגים"
+  },
+  "adminUsers": {
+    "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
+  },
   "admin": {
     "title": "ניהול מערכת",
     "overview": "סקירה",
