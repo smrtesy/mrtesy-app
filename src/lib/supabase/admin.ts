@@ -44,7 +44,7 @@ export const listAllUserEmails = cache(
     if (!admin) {
       console.warn(
         "[supabase/admin] SUPABASE_SERVICE_ROLE_KEY is not set; auth.users emails cannot be resolved. " +
-          "Set it in the Vercel environment (Production scope) so /admin/users + /admin/services can show real addresses.",
+          "Set it in the Vercel environment (Production scope) so /admin/users and /admin/apps/[slug]/services can show real addresses.",
       );
       return { emails, error: "service_role_missing" };
     }

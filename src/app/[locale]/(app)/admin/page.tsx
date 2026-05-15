@@ -3,14 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import Link from "next/link";
 
-export default async function AdminDashboard({
-  params,
-}: {
-  params: Promise<{ locale: string }>;
-}) {
-  const { locale } = await params;
+export default async function AdminDashboard() {
   const t = await getTranslations("admin");
   const supabase = await createClient();
 
@@ -67,8 +61,6 @@ export default async function AdminDashboard({
   if (todayCost > 5) {
     alerts.push({ level: "important", message: t("alertAiCost", { cost: todayCost.toFixed(2) }) });
   }
-
-  const basePath = `/${locale}/admin`;
 
   return (
     <div className="space-y-6">
@@ -165,15 +157,6 @@ export default async function AdminDashboard({
           </CardContent>
         </Card>
       )}
-
-      <div className="flex flex-wrap gap-3">
-        <Link href={`${basePath}/sync`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("quickSyncControl")}</Link>
-        <Link href={`${basePath}/rules`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("quickFilterRules")}</Link>
-        <Link href={`${basePath}/prompts`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("quickAiPrompts")}</Link>
-        <Link href={`${basePath}/users`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("users")}</Link>
-        <Link href={`${basePath}/services`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("services")}</Link>
-        <Link href={`${basePath}/logs`} className="rounded-lg border p-3 hover:bg-accent flex-1 text-center text-sm font-medium">{t("logs")}</Link>
-      </div>
     </div>
   );
 }
