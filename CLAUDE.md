@@ -13,16 +13,37 @@ The goal is to catch bugs in the same session that introduced them, so the
 user never sees a stream of "push → bot finds bug → push again" round trips.
 The standard is **zero findings from Claude Code Review on the first push.**
 
-### Step 1 — Type check
+### Step 1 — Real build (not just tsc)
 
 ```
-npx tsc --noEmit
+npm install --no-audit --no-fund && npm run build
 ```
 
-If the project also has `npm run typecheck` or `npm run build`, prefer that.
-A TS error blocks Vercel; catching it here saves a deploy cycle. Treat any
-new error in files this branch touched as a blocker. Pre-existing errors in
-unrelated files are not your problem this session.
+**`npm run build` is the only authoritative check.** It runs the
+Next.js production build which combines TypeScript checking, ESLint
+(with `react-hooks/exhaustive-deps`, `@typescript-eslint/no-unused-vars`,
+etc. — rules that catch what tsc alone misses), and JSX/MDX compilation.
+Vercel runs exactly the same pipeline; if it passes locally, it passes
+there.
+
+Do NOT lean on `tsc --noEmit` as the only check. In this sandbox tsc
+fails on missing `node_modules` and reports "Cannot find module 'react'"
+type errors that are environmental, masking real type errors and giving
+a false-clean signal. Install first, build second.
+
+Catching ESLint errors here saves a deploy cycle. Real categories that
+have slipped past in this repo: `@typescript-eslint/no-unused-vars`
+(unused props after refactor), `react-hooks/exhaustive-deps` (hooks
+referenced in callbacks but missing from deps), `TS2451` duplicate
+declarations from parallel agent edits, double-imports.
+
+Treat any new error in files this branch touched as a blocker.
+Pre-existing errors in unrelated files are not your problem this session.
+
+If `npm install` is slow on a given sandbox, accept the cost once per
+session — every subsequent build reuses the install. Iterating with
+`tsc --noEmit` between fixes is fine after the initial install, since
+tsc resolves node_modules from there.
 
 ### Step 2 — Targeted greps for the categories of bug that slip past me
 
