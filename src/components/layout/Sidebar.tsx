@@ -21,14 +21,34 @@ import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 
-const navItems = [
+const smrtTaskItems = [
   { key: "tasks", href: "/tasks", icon: CheckSquare },
-  { key: "suggestions", href: "/suggestions", icon: Bell },
-  { key: "log", href: "/log", icon: FileText },
-  { key: "calendar", href: "/calendar", icon: Calendar },
   { key: "projects", href: "/projects", icon: FolderOpen },
+  { key: "suggestions", href: "/suggestions", icon: Bell },
+  { key: "calendar", href: "/calendar", icon: Calendar },
+  { key: "log", href: "/log", icon: FileText },
+] as const;
+
+const managementItems = [
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
+
+// Mobile shows a flat list of the most-used items
+const mobileItems = [
+  { key: "tasks", href: "/tasks", icon: CheckSquare },
+  { key: "projects", href: "/projects", icon: FolderOpen },
+  { key: "suggestions", href: "/suggestions", icon: Bell },
+  { key: "calendar", href: "/calendar", icon: Calendar },
+  { key: "settings", href: "/settings", icon: Settings },
+] as const;
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+      {children}
+    </p>
+  );
+}
 
 export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean }) {
   const t = useTranslations("nav");
@@ -47,7 +67,6 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
         );
         if (mounted) setPendingCount(count);
       } catch (e) {
-        // 401 right after login is expected; anything else log silently
         if (mounted && !(e instanceof ApiError && e.status === 401)) {
           console.error("badge count:", e);
         }
@@ -56,14 +75,11 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
 
     fetchCount();
 
-    // Realtime stays on Supabase — fires whenever the tasks table changes,
-    // then we re-fetch through the API to respect org scoping.
     const channel = supabase
       .channel("sidebar-suggestions-count")
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, fetchCount)
       .subscribe();
 
-    // Also refresh when the user switches org
     const handleOrgChange = () => fetchCount();
     window.addEventListener("smrtesy:active-org-changed", handleOrgChange);
 
@@ -82,6 +98,38 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
     return pathname.startsWith(fullPath);
   }
 
+  function NavItem({
+    itemKey,
+    href,
+    icon: Icon,
+  }: {
+    itemKey: string;
+    href: string;
+    icon: React.ElementType;
+  }) {
+    return (
+      <Link
+        href={`${basePath}${href}`}
+        className={cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+          isActive(href)
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        )}
+      >
+        <div className="relative">
+          <Icon className="h-5 w-5" />
+          {itemKey === "suggestions" && pendingCount > 0 && (
+            <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
+              {pendingCount > 99 ? "99+" : pendingCount}
+            </span>
+          )}
+        </div>
+        {t(itemKey as Parameters<typeof t>[0])}
+      </Link>
+    );
+  }
+
   return (
     <>
       {/* Desktop Sidebar */}
@@ -94,49 +142,44 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
         <div className="px-3 pt-3">
           <OrgSwitcher locale={locale} />
         </div>
-        <nav className="flex-1 space-y-1 p-3">
-          {navItems.map((item) => (
-            <Link
-              key={item.key}
-              href={`${basePath}${item.href}`}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                isActive(item.href)
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              )}
-            >
-              <div className="relative">
-                <item.icon className="h-5 w-5" />
-                {item.key === "suggestions" && pendingCount > 0 && (
-                  <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
-                    {pendingCount > 99 ? "99+" : pendingCount}
-                  </span>
-                )}
-              </div>
-              {t(item.key)}
-            </Link>
+
+        <nav className="flex-1 overflow-y-auto p-3">
+          {/* smrtTask section */}
+          <SectionLabel>smrtTask</SectionLabel>
+          {smrtTaskItems.map((item) => (
+            <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
           ))}
+
+          {/* Management section */}
+          <SectionLabel>{t("sectionManagement")}</SectionLabel>
+          {managementItems.map((item) => (
+            <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
+          ))}
+
+          {/* Platform section — super-admins only */}
           {isAdmin && (
-            <Link
-              href={`${basePath}/admin`}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors mt-4 border-t pt-4",
-                pathname.startsWith(`${basePath}/admin`)
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              )}
-            >
-              <Shield className="h-5 w-5" />
-              {t("admin")}
-            </Link>
+            <>
+              <SectionLabel>{t("sectionPlatform")}</SectionLabel>
+              <Link
+                href={`${basePath}/admin`}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  pathname.startsWith(`${basePath}/admin`)
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                )}
+              >
+                <Shield className="h-5 w-5" />
+                {t("admin")}
+              </Link>
+            </>
           )}
         </nav>
-        {/* Desktop new task button */}
+
         <div className="p-3 border-t">
           <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
             <Plus className="h-4 w-4" />
-            {t("tasks")}
+            {t("newTask")}
           </Button>
         </div>
       </aside>
@@ -144,15 +187,13 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
       {/* Mobile Bottom Tab Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
-          {navItems.map((item) => (
+          {mobileItems.map((item) => (
             <Link
               key={item.key}
               href={`${basePath}${item.href}`}
               className={cn(
                 "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
-                isActive(item.href)
-                  ? "text-primary"
-                  : "text-muted-foreground"
+                isActive(item.href) ? "text-primary" : "text-muted-foreground",
               )}
             >
               <div className="relative">
@@ -163,7 +204,7 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
                   </span>
                 )}
               </div>
-              <span className="truncate max-w-full">{t(item.key)}</span>
+              <span className="truncate max-w-full">{t(item.key as Parameters<typeof t>[0])}</span>
             </Link>
           ))}
         </div>
@@ -178,12 +219,10 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
         <Plus className="h-6 w-6" />
       </Button>
 
-      {/* Smart Task Input */}
       <SmartTaskInput
         open={taskInputOpen}
         onClose={() => setTaskInputOpen(false)}
         onCreated={() => {
-          // Trigger page refresh — TaskList will re-fetch
           window.location.reload();
         }}
       />
