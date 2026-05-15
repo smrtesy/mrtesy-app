@@ -13,7 +13,6 @@ import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
-interface Props { locale: string }
 
 const ROLE_ICONS: Record<OrgMember["role"], typeof User> = {
   owner: Crown,
@@ -27,7 +26,10 @@ const ROLE_COLORS: Record<OrgMember["role"], string> = {
   member: "text-gray-600 bg-gray-50",
 };
 
-export function OrgSettingsClient(_: Props) {
+// All user-facing strings go through useTranslations now, so the component
+// no longer needs locale as a prop. The page wrapper used to pass it; that
+// arg has been dropped from the wrapper too.
+export function OrgSettingsClient() {
   const tOrg = useTranslations("orgSettings");
   const { active, refresh: refreshOrgs } = useActiveOrg();
   const { members, loading, refresh: refreshMembers } = useOrgMembers();
