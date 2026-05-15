@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Activity, Sparkles, ArrowLeft } from "lucide-react";
@@ -14,17 +15,13 @@ interface AppRow {
   description: string | null;
 }
 
-/**
- * Per-app overview screen for super-admins. Each registered app gets a
- * landing page that links to its sub-sections (services, prompts, etc.).
- * The slug is verified against the `apps` table — unregistered slugs 404.
- */
 export default async function AdminAppDetailPage({
   params,
 }: {
   params: Promise<{ locale: string; slug: string }>;
 }) {
   const { locale, slug } = await params;
+  const t = await getTranslations("admin");
   const supabase = await createClient();
 
   const { data: app } = await supabase
@@ -45,15 +42,15 @@ export default async function AdminAppDetailPage({
   const sections = [
     {
       key: "services",
-      title: "Services",
-      description: "Connected user services (Gmail, Drive, Calendar, WhatsApp) and their sync state.",
+      title: t("appServicesTitle"),
+      description: t("appServicesDesc"),
       icon: Activity,
       href: `${base}/services`,
     },
     {
       key: "prompts",
-      title: "Prompts",
-      description: "AI prompt configuration for this app (classifier, project briefs, etc.).",
+      title: t("appPromptsTitle"),
+      description: t("appPromptsDesc"),
       icon: Sparkles,
       href: `${base}/prompts`,
     },
@@ -67,13 +64,13 @@ export default async function AdminAppDetailPage({
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
-          All apps
+          {t("allApps")}
         </Link>
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold">{app.name}</h1>
           <Badge variant="outline" className="font-mono text-[10px]">{app.slug}</Badge>
           <Badge variant="secondary" className="text-[10px]">
-            {orgCount ?? 0} {orgCount === 1 ? "org" : "orgs"}
+            {t("orgsCount", { count: orgCount ?? 0 })}
           </Badge>
         </div>
         {app.description && (
