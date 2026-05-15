@@ -46,8 +46,6 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: Bri
   const [saving, setSaving] = useState<string | null>(null);
   const tBrief = useTranslations("briefVerifier");
 
-  const tBrief = useTranslations("briefVerifier");
-
   const handleVerify = useCallback(async (fact: Fact, approve: boolean) => {
     setSaving(fact.id);
     try {

@@ -60,7 +60,7 @@ export default function OnboardingOrganizationStep() {
       }
       setChecking(false);
     })();
-  }, [router, locale, supabase, isHe]);
+  }, [router, locale, supabase, isHe, tOrg]);
 
   async function handleCreate() {
     const trimmed = name.trim();

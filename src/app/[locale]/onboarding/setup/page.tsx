@@ -140,7 +140,7 @@ export default function OnboardingSetup() {
       }
     } catch { /* ignore */ }
     setSearchLoading(false);
-  }, [driveToken]);
+  }, [driveToken, tSetup]);
 
   // Handle search input change with debounce
   function handleSearchChange(value: string) {
