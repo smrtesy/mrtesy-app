@@ -45,7 +45,7 @@ const TYPE_LABELS: Record<string, string> = {
   financial:  "Financial",
 };
 
-export default function AdminRulesPage() {
+export default function SettingsRulesPage() {
   const supabase = createClient();
   const [rules, setRules] = useState<Rule[]>([]);
   const [pendingSuggestions, setPendingSuggestions] = useState<Rule[]>([]);

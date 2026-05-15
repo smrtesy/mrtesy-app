@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Save, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Save, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
 // Default prompts (server defaults — can be overridden per user in DB)
@@ -80,7 +82,8 @@ interface Prompt {
   updated_at: string;
 }
 
-export default function AdminPromptsPage() {
+export default function AdminAppPromptsPage() {
+  const { locale, slug } = useParams() as { locale: string; slug: string };
   const supabase = createClient();
   const [prompts, setPrompts] = useState<Record<string, Prompt>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -175,8 +178,18 @@ export default function AdminPromptsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">AI Prompts</h1>
+      <div className="space-y-2">
+        <Link
+          href={`/${locale}/admin/apps/${slug}`}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3 w-3" />
+          Back to app
+        </Link>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold">AI Prompts</h1>
+          <Badge variant="outline" className="font-mono text-[10px]">{slug}</Badge>
+        </div>
         <p className="text-sm text-muted-foreground mt-1">
           Edit the prompts used by the AI pipeline. Changes take effect on the next run.
         </p>

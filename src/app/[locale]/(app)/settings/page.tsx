@@ -11,7 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
   CheckCircle2, XCircle, RefreshCw, Trash2, RotateCcw, Shield,
-  Loader2,
+  Loader2, Filter, Repeat,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -238,6 +238,27 @@ export default function SettingsPage() {
               </div>
             );
           })}
+        </CardContent>
+      </Card>
+
+      {/* Rules + Sync — moved out of /admin/* because they are user-scoped */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-2">
+          <Link href={`/${locale}/settings/rules`}>
+            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
+              <Filter className="h-4 w-4" />
+              {t("skipRulesAndStyle")}
+            </Button>
+          </Link>
+          <Link href={`/${locale}/settings/sync`}>
+            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
+              <Repeat className="h-4 w-4" />
+              {t("syncSchedules")}
+            </Button>
+          </Link>
         </CardContent>
       </Card>
 

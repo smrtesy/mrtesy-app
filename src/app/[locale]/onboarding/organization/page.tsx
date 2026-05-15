@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { api, setActiveOrgId, ApiError } from "@/lib/api/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +24,7 @@ export default function OnboardingOrganizationStep() {
   const router = useRouter();
   const supabase = createClient();
   const isHe = locale === "he";
+  const tOrg = useTranslations("onboardingOrg");
 
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -53,7 +55,7 @@ export default function OnboardingOrganizationStep() {
           ?? (user.user_metadata?.name as string | undefined)
           ?? user.email?.split("@")[0];
         if (fullName) {
-          setName(isHe ? `סביבת העבודה של ${fullName}` : `${fullName}'s Workspace`);
+          setName(tOrg("defaultWorkspaceName", { fullName }));
         }
       }
       setChecking(false);
@@ -63,7 +65,7 @@ export default function OnboardingOrganizationStep() {
   async function handleCreate() {
     const trimmed = name.trim();
     if (!trimmed) {
-      toast.error(isHe ? "נא להזין שם" : "Please enter a name");
+      toast.error(tOrg("enterNameError"));
       return;
     }
     setCreating(true);
@@ -85,7 +87,7 @@ export default function OnboardingOrganizationStep() {
         console.warn("[onboarding] failed to enable smrtesy app:", e);
       }
 
-      toast.success(isHe ? "סביבת העבודה נוצרה" : "Workspace created");
+      toast.success(tOrg("workspaceCreated"));
       router.push(`/${locale}/onboarding`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error creating organization");
@@ -111,32 +113,28 @@ export default function OnboardingOrganizationStep() {
           <Building2 className="h-8 w-8 text-blue-600" />
         </div>
         <CardTitle>
-          {isHe ? "צרו סביבת עבודה" : "Create your workspace"}
+          {tOrg("title")}
         </CardTitle>
         <CardDescription>
-          {isHe
-            ? "כל המשימות, הפרויקטים והאנשי קשר שייכים לסביבה. תוכלו להזמין חברי צוות אחר כך."
-            : "Tasks, projects, and contacts live inside a workspace. You can invite teammates later."}
+          {tOrg("description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="space-y-1">
           <label className="text-xs font-medium">
-            {isHe ? "שם סביבת העבודה" : "Workspace name"}
+            {tOrg("workspaceNameLabel")}
           </label>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={isHe ? "לדוגמה: מאור" : "e.g. Maor"}
+            placeholder={tOrg("workspaceNamePlaceholder")}
             dir="auto"
             autoFocus
             onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             className="min-h-[48px]"
           />
           <p className="text-[11px] text-muted-foreground">
-            {isHe
-              ? "אפשר לשנות בהמשך מההגדרות."
-              : "You can change this later from settings."}
+            {tOrg("changeLaterHint")}
           </p>
         </div>
 
@@ -146,7 +144,7 @@ export default function OnboardingOrganizationStep() {
           className="w-full min-h-[48px] gap-2"
         >
           {creating && <Loader2 className="h-4 w-4 animate-spin" />}
-          {isHe ? "המשך" : "Continue"}
+          {tOrg("continue")}
         </Button>
 
         {/* 5-step indicator: org → gmail → drive → whatsapp → setup */}

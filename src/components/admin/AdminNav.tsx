@@ -9,24 +9,19 @@ import {
   Building2,
   Layers,
   Crown,
-  Activity,
   FileText,
-  Sparkles,
-  Filter,
-  Repeat,
 } from "lucide-react";
 
+// Platform-level only. Per-app concerns (services, prompts) now live
+// under /admin/apps/[slug]/*. User-scoped concerns (rules, sync) moved
+// to /settings/* — see CLAUDE.md for the conceptual split.
 const items = [
   { key: "dashboard",    href: "",               label: "Dashboard",    icon: LayoutDashboard },
   { key: "users",        href: "users",          label: "Users",        icon: Users },
   { key: "orgs",         href: "orgs",           label: "Organizations", icon: Building2 },
   { key: "apps",         href: "apps",           label: "Apps",         icon: Layers },
   { key: "super-admins", href: "super-admins",   label: "Super Admins", icon: Crown },
-  { key: "services",     href: "services",       label: "Services",     icon: Activity },
   { key: "logs",         href: "logs",           label: "Logs",         icon: FileText },
-  { key: "prompts",      href: "prompts",        label: "Prompts",      icon: Sparkles },
-  { key: "rules",        href: "rules",          label: "Rules",        icon: Filter },
-  { key: "sync",         href: "sync",           label: "Sync",         icon: Repeat },
 ];
 
 export function AdminNav() {

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,9 +41,9 @@ interface EditProjectSheetProps {
   locale: string;
 }
 
-export function EditProjectSheet({ project, brief, locale }: EditProjectSheetProps) {
+export function EditProjectSheet({ project, brief }: EditProjectSheetProps) {
+  const tEdit = useTranslations("projectsEdit");
   const router = useRouter();
-  const isHe = locale === "he";
 
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -75,7 +76,7 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
   }
 
   async function handleSave() {
-    if (!name.trim()) { toast.error(isHe ? "שם נדרש" : "Name is required"); return; }
+    if (!name.trim()) { toast.error(tEdit("nameRequired")); return; }
     setSaving(true);
     try {
       // 1. Update project core fields
@@ -105,7 +106,7 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
         });
       }
 
-      toast.success(isHe ? "הפרויקט עודכן" : "Project updated");
+      toast.success(tEdit("projectUpdated"));
       setOpen(false);
       router.refresh();
     } catch (e) {
@@ -119,7 +120,7 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
     <>
       <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
         <Pencil className="h-3.5 w-3.5" />
-        {isHe ? "ערוך" : "Edit"}
+        {tEdit("edit")}
       </Button>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -129,7 +130,7 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
         >
           <SheetHeader className="sticky top-0 z-10 bg-background border-b px-4 py-3">
             <SheetTitle className="text-start">
-              {isHe ? "עריכת פרויקט" : "Edit Project"}
+              {tEdit("editProject")}
             </SheetTitle>
           </SheetHeader>
 
@@ -139,26 +140,26 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
               {/* ── Project Info ── */}
               <section className="space-y-3">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {isHe ? "פרטי פרויקט" : "Project Info"}
+                  {tEdit("projectInfo")}
                 </h3>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "שם (אנגלית)" : "Name"}</label>
+                  <label className="text-xs font-medium">{tEdit("nameEnglish")}</label>
                   <Input value={name} onChange={(e) => setName(e.target.value)} dir="auto" />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "שם (עברית)" : "Name (Hebrew)"}</label>
+                  <label className="text-xs font-medium">{tEdit("nameHebrew")}</label>
                   <Input
                     value={nameHe}
                     onChange={(e) => setNameHe(e.target.value)}
                     dir="rtl"
-                    placeholder={isHe ? "אופציונלי" : "Optional"}
+                    placeholder={tEdit("optional")}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "צבע" : "Color"}</label>
+                  <label className="text-xs font-medium">{tEdit("color")}</label>
                   <div className="flex gap-2 flex-wrap">
                     {COLORS.map((c) => (
                       <button
@@ -180,14 +181,14 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
               {/* ── Keywords ── */}
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {isHe ? "מילות מפתח" : "Keywords"}
+                  {tEdit("keywords")}
                 </h3>
                 <div className="flex gap-2">
                   <Input
                     value={kwInput}
                     onChange={(e) => setKwInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addKeyword(); } }}
-                    placeholder={isHe ? "הוסף מילת מפתח..." : "Add keyword…"}
+                    placeholder={tEdit("addKeywordPlaceholder")}
                     dir="auto"
                     className="flex-1"
                   />
@@ -218,14 +219,14 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
               {/* ── Key Contacts ── */}
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {isHe ? "אנשי קשר מרכזיים" : "Key Contacts"}
+                  {tEdit("keyContacts")}
                 </h3>
                 <div className="flex gap-2">
                   <Input
                     value={ctInput}
                     onChange={(e) => setCtInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addContact(); } }}
-                    placeholder={isHe ? "הוסף איש קשר..." : "Add contact…"}
+                    placeholder={tEdit("addContactPlaceholder")}
                     dir="auto"
                     className="flex-1"
                   />
@@ -255,50 +256,48 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
               {/* ── Brief ── */}
               <section className="space-y-3">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {isHe ? "תקציר פרויקט" : "Project Brief"}
+                  {tEdit("projectBrief")}
                 </h3>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "מטרה" : "Purpose"}</label>
+                  <label className="text-xs font-medium">{tEdit("purpose")}</label>
                   <Textarea
                     value={purpose}
                     onChange={(e) => setPurpose(e.target.value)}
-                    placeholder={isHe ? "מה מטרת הפרויקט?" : "What is this project for?"}
+                    placeholder={tEdit("purposePlaceholder")}
                     className="min-h-[80px]"
                     dir="auto"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "קהל יעד" : "Target Audience"}</label>
+                  <label className="text-xs font-medium">{tEdit("targetAudience")}</label>
                   <Input
                     value={targetAudience}
                     onChange={(e) => setTargetAudience(e.target.value)}
-                    placeholder={isHe ? "מי קהל היעד?" : "Who is this for?"}
+                    placeholder={tEdit("targetAudiencePlaceholder")}
                     dir="auto"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{isHe ? "סטטוס נוכחי" : "Current Status"}</label>
+                  <label className="text-xs font-medium">{tEdit("currentStatus")}</label>
                   <Input
                     value={currentStatus}
                     onChange={(e) => setCurrentStatus(e.target.value)}
-                    placeholder={isHe ? "מה המצב הנוכחי?" : "What's the current state?"}
+                    placeholder={tEdit("currentStatusPlaceholder")}
                     dir="auto"
                   />
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium">
-                    {isHe ? "הקשר ל-AI" : "Notes for AI"}
+                    {tEdit("aiContext")}
                   </label>
                   <Textarea
                     value={aiContext}
                     onChange={(e) => setAiContext(e.target.value)}
-                    placeholder={isHe
-                      ? "מידע שיעזור ל-AI לקשר משימות נכון לפרויקט זה"
-                      : "Context to help AI link tasks to this project correctly"}
+                    placeholder={tEdit("aiContextPlaceholder")}
                     className="min-h-[80px]"
                     dir="auto"
                   />
@@ -315,7 +314,7 @@ export function EditProjectSheet({ project, brief, locale }: EditProjectSheetPro
               disabled={saving || !name.trim()}
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {saving ? (isHe ? "שומר..." : "Saving…") : (isHe ? "שמור שינויים" : "Save Changes")}
+              {saving ? tEdit("saving") : tEdit("saveChanges")}
             </Button>
           </div>
         </SheetContent>

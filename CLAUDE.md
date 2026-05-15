@@ -83,14 +83,21 @@ change.
 
 ## Why this exists
 
-PR #1 went through three rounds of "Claude Code Review finds bugs, I fix,
-push again" because I skipped this protocol. Five real bugs (skip-rules
-direction inverted, hardcoded Drive folder fallback, CHECK constraint
-violation, missing `in:inbox`, asymmetric calendar window) every single
-one of which a 1-minute grep or read would have caught. The user
-correctly pointed out that I have the same tool the GitHub bot has —
-there's no excuse for handing them low-quality work and waiting for the
-bot to do my job.
+PR #1 went through four rounds of "Claude Code Review finds bugs, I fix,
+push again" because I skipped this protocol. Thirteen real bugs across
+those rounds — every single one of which a 1-minute grep, schema read,
+or sub-agent review would have caught locally.
+
+The user explicitly told me they no longer want to rely on the GitHub
+Claude Code Review bot as the quality gate. **The sub-agent review I run
+in Step 3 of this protocol IS the gate.** The bot may stay enabled as a
+silent safety net — if it ever surfaces a finding I missed, the protocol
+itself is broken and needs strengthening. The default expectation is
+that the bot finds nothing because I caught it first.
+
+This is not about avoiding work. It's about doing the work *before* the
+push, in one session, so the user sees a clean PR instead of a stream
+of fix-up commits.
 
 ## Project conventions worth remembering
 

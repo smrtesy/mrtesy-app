@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -16,6 +17,7 @@ const COLORS = [
 
 export function NewProjectButton({ locale, label }: { locale: string; label: string }) {
   const router = useRouter();
+  const tNew = useTranslations("newProject");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState(COLORS[0]);
@@ -31,7 +33,7 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
         body: { name: name.trim(), name_he: name.trim(), color },
       });
 
-      toast.success(locale === "he" ? "פרויקט נוצר" : "Project created");
+      toast.success(tNew("projectCreated"));
       setName("");
       setOpen(false);
       router.push(`/${locale}/projects/${project.id}`);
@@ -53,7 +55,7 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
         <SheetContent side="bottom" className="h-auto max-h-[60vh]">
           <SheetHeader>
             <SheetTitle className="text-start">
-              {locale === "he" ? "פרויקט חדש" : "New Project"}
+              {tNew("newProjectTitle")}
             </SheetTitle>
           </SheetHeader>
           <div className="space-y-4 py-4">
@@ -61,14 +63,14 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-              placeholder={locale === "he" ? "שם הפרויקט" : "Project name"}
+              placeholder={tNew("projectNamePlaceholder")}
               className="min-h-[48px]"
               dir="auto"
               autoFocus
             />
             <div>
               <p className="text-sm text-muted-foreground mb-2">
-                {locale === "he" ? "צבע" : "Color"}
+                {tNew("color")}
               </p>
               <div className="flex gap-2 flex-wrap">
                 {COLORS.map((c) => (
@@ -88,7 +90,7 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
               disabled={loading || !name.trim()}
               className="w-full min-h-[48px]"
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (locale === "he" ? "צור פרויקט" : "Create Project")}
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : tNew("createProject")}
             </Button>
           </div>
         </SheetContent>
