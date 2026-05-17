@@ -560,6 +560,12 @@
     "inviteSendBtn": "שלח הזמנה",
     "inviteSent": "הזמנה נשלחה ל-{email}",
     "inviteRevoked": "ההזמנה בוטלה",
-    "inviteExpires": "פג תוקף ב-{date}"
+    "inviteExpires": "פג תוקף ב-{date}",
+    "addDirectSection": "הוסף ישירות",
+    "addDirectPlaceholder": "אימייל של משתמש קיים...",
+    "addDirectBtn": "הוסף",
+    "addDirectSuccess": "{email} נוסף לארגון",
+    "addDirectNotFound": "משתמש לא נמצא — שלח הזמנה במקום",
+    "addDirectAlreadyMember": "המשתמש כבר חבר בארגון"
   }
 }
