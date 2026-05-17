@@ -84,10 +84,10 @@ export default function SettingsPage() {
           .from("app_memberships")
           .select("apps!inner(slug)")
           .in("org_id", orgIds)
-          .eq("apps.slug", "smrttask");
+          .eq("apps.slug", "smrtesy");
         const found = (appRows ?? []).some((r: { apps: unknown }) => {
           const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
-          return (app as { slug?: string } | null)?.slug === "smrttask";
+          return (app as { slug?: string } | null)?.slug === "smrtesy";
         });
         setHasSmrtTask(found);
       }
