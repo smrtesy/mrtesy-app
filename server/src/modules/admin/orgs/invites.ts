@@ -75,7 +75,8 @@ router.post("/", async (req: Request, res: Response) => {
 
   if (insertErr) return res.status(500).json({ error: insertErr.message });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  // FRONTEND_URL may be comma-separated (CORS list) — take the first entry as the canonical app URL
+  const appUrl = (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim();
   const inviteUrl = `${appUrl}/${locale}/invite/${invite.token}`;
 
   try {
