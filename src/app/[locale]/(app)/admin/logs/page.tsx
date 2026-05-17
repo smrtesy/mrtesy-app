@@ -6,16 +6,134 @@ import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 
 type LogLevel = "all" | "info" | "warning" | "error";
 type TimeRange = "today" | "7d" | "30d";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LogEntry = Record<string, any>;
+
+function copyToClipboard(text: string, onDone: () => void) {
+  navigator.clipboard.writeText(text).then(onDone).catch(() => {
+    const el = document.createElement("textarea");
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+    onDone();
+  });
+}
+
+function LogRow({ log }: { log: LogEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const isError = log.level === "error";
+
+  function handleCopy() {
+    copyToClipboard(JSON.stringify(log, null, 2), () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  // Fields to show in expanded view — ordered by usefulness for debugging
+  const debugFields = [
+    ["id", log.id],
+    ["user_id", log.user_id],
+    ["level", log.level],
+    ["category", log.category],
+    ["status", log.status],
+    ["source_type", log.source_type],
+    ["error_message", log.error_message],
+    ["details", log.details ? JSON.stringify(log.details, null, 2) : null],
+    ["classification_reason", log.classification_reason],
+    ["ai_classification", log.ai_classification],
+    ["pre_classification", log.pre_classification],
+    ["task_title", log.task_title],
+    ["task_action", log.task_action],
+    ["subject", log.subject],
+    ["sender_email", log.sender_email],
+    ["sender", log.sender],
+    ["source_id", log.source_id],
+    ["source_url", log.source_url],
+    ["ai_model_used", log.ai_model_used],
+    ["ai_input_tokens", log.ai_input_tokens],
+    ["ai_output_tokens", log.ai_output_tokens],
+    ["ai_cost_usd", log.ai_cost_usd],
+    ["processing_duration_ms", log.processing_duration_ms],
+    ["retry_count", log.retry_count],
+    ["created_at", log.created_at],
+    ["message_received_at", log.message_received_at],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+
+  return (
+    <div className={`rounded border text-sm ${isError ? "border-red-300 bg-red-50/40 dark:bg-red-950/20" : ""}`}>
+      {/* Summary row */}
+      <div
+        className="flex items-start gap-2 p-2 cursor-pointer hover:bg-accent/40 rounded"
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <span className="mt-0.5 text-muted-foreground shrink-0">
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </span>
+        <Badge
+          variant={isError ? "destructive" : log.level === "warning" ? "secondary" : "outline"}
+          className="text-[10px] shrink-0 mt-0.5"
+        >
+          {log.level}
+        </Badge>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-xs font-semibold">{log.category}</span>
+            {log.status && <Badge variant="outline" className="text-[10px]">{log.status}</Badge>}
+            {log.source_type && <span className="text-[11px] text-muted-foreground">{log.source_type}</span>}
+          </div>
+          {log.error_message && (
+            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 break-words whitespace-pre-wrap">
+              {log.error_message}
+            </p>
+          )}
+          {!log.error_message && log.subject && (
+            <p className="text-xs text-muted-foreground mt-0.5 truncate">{log.subject}</p>
+          )}
+        </div>
+        <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
+          {new Date(log.created_at).toLocaleString()}
+        </span>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="border-t px-3 pb-3 pt-2 space-y-2">
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={handleCopy}>
+              {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied!" : "Copy JSON"}
+            </Button>
+          </div>
+          <div className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-1 text-xs font-mono">
+            {debugFields.map(([key, val]) => (
+              <div key={key} className="contents">
+                <span className="text-muted-foreground truncate">{key}</span>
+                <span className={`break-all whitespace-pre-wrap ${key === "error_message" ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>
+                  {String(val)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminLogsPage() {
   const t = useTranslations("admin");
   const supabase = createClient();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [level, setLevel] = useState<LogLevel>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("today");
@@ -26,22 +144,18 @@ export default function AdminLogsPage() {
       .from("log_entries")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(200);
 
-    if (level !== "all") {
-      query = query.eq("level", level);
-    }
+    if (level !== "all") query = query.eq("level", level);
 
     const now = new Date();
     if (timeRange === "today") {
       const start = new Date(now); start.setHours(0, 0, 0, 0);
       query = query.gte("created_at", start.toISOString());
     } else if (timeRange === "7d") {
-      const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      query = query.gte("created_at", start.toISOString());
+      query = query.gte("created_at", new Date(now.getTime() - 7 * 86400000).toISOString());
     } else if (timeRange === "30d") {
-      const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      query = query.gte("created_at", start.toISOString());
+      query = query.gte("created_at", new Date(now.getTime() - 30 * 86400000).toISOString());
     }
 
     const { data } = await query;
@@ -49,27 +163,32 @@ export default function AdminLogsPage() {
     setLoading(false);
   }, [level, timeRange, supabase]);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+
+  const errorCount = logs.filter((l) => l.level === "error").length;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t("systemLogs")}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">{t("systemLogs")}</h1>
+          {errorCount > 0 && (
+            <Badge variant="destructive">{errorCount} errors</Badge>
+          )}
+          <span className="text-sm text-muted-foreground">{logs.length} entries</span>
+        </div>
         <Button variant="outline" size="icon" className="h-9 w-9" onClick={fetchLogs}>
           <RefreshCw className="h-4 w-4" />
         </Button>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="flex rounded-lg border overflow-hidden">
           {(["all", "error", "warning", "info"] as LogLevel[]).map((l) => (
             <button
               key={l}
               onClick={() => setLevel(l)}
-              className={`px-3 py-1.5 text-xs font-medium ${level === l ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${level === l ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
             >
               {t(`filter${l.charAt(0).toUpperCase() + l.slice(1)}`)}
             </button>
@@ -80,7 +199,7 @@ export default function AdminLogsPage() {
             <button
               key={tr}
               onClick={() => setTimeRange(tr)}
-              className={`px-3 py-1.5 text-xs font-medium ${timeRange === tr ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${timeRange === tr ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
             >
               {t(`filter${tr === "today" ? "Today" : tr === "7d" ? "7d" : "30d"}`)}
             </button>
@@ -88,7 +207,6 @@ export default function AdminLogsPage() {
         </div>
       </div>
 
-      {/* Log entries */}
       {loading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-12 rounded" />)}
@@ -97,30 +215,7 @@ export default function AdminLogsPage() {
         <p className="text-center text-muted-foreground py-8">{t("noLogs")}</p>
       ) : (
         <div className="space-y-1">
-          {logs.map((log) => (
-            <div key={log.id} className="flex items-start gap-2 rounded border p-2 text-sm">
-              <Badge
-                variant={log.level === "error" ? "destructive" : log.level === "warning" ? "secondary" : "outline"}
-                className="text-[10px] mt-0.5"
-              >
-                {log.level}
-              </Badge>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{log.category}</span>
-                  <Badge variant="outline" className="text-[10px]">{log.status}</Badge>
-                </div>
-                {log.subject && <p className="text-xs text-muted-foreground truncate">{log.subject}</p>}
-                {log.ai_response && <p className="text-xs text-muted-foreground truncate">{log.ai_response.substring(0, 120)}</p>}
-                {log.error_message && <p className="text-xs text-red-500 truncate">{log.error_message}</p>}
-                {log.ai_cost_usd && <span className="text-xs text-muted-foreground">${Number(log.ai_cost_usd).toFixed(6)}</span>}
-                {log.source_message_id && <span className="text-xs text-muted-foreground ms-2">msg: {log.source_message_id.substring(0, 8)}</span>}
-              </div>
-              <span className="text-xs text-muted-foreground whitespace-nowrap">
-                {new Date(log.created_at).toLocaleString()}
-              </span>
-            </div>
-          ))}
+          {logs.map((log) => <LogRow key={log.id} log={log} />)}
         </div>
       )}
     </div>
