@@ -51,7 +51,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
-  const hasSmrtTask = enabledApps.includes("smrttask");
+  const hasSmrtTask = enabledApps.includes("smrtesy");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
