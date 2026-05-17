@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, Mail, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
+import { translateActionLabel } from "@/lib/actionLabels";
 import { toast } from "sonner";
 
 interface QuickActionProps {
@@ -126,7 +127,11 @@ export function QuickAction({
           },
           body: JSON.stringify({
             task_id: taskId,
-            action_type: "draft_reply_he",
+            // Use the action's own label when it's an email-draft action; otherwise
+            // fall back to Hebrew reply draft (the most common case).
+            action_type: actionLabel.startsWith("draft_reply_") || actionLabel.startsWith("draft_settlement")
+              ? actionLabel
+              : "draft_reply_he",
           }),
         }
       );
@@ -150,7 +155,7 @@ export function QuickAction({
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="bottom" className="h-[70vh] sm:h-auto sm:max-h-[60vh] flex flex-col">
         <SheetHeader>
-          <SheetTitle className="text-start" dir="auto">{actionLabel}</SheetTitle>
+          <SheetTitle className="text-start" dir="auto">{translateActionLabel(actionLabel, t)}</SheetTitle>
         </SheetHeader>
 
         <div className="flex-1 overflow-auto py-4">

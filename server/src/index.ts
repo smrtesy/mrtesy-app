@@ -22,6 +22,7 @@ import cron from "node-cron";
 import { db } from "./db";
 import syncRouter from "./routes/sync";
 import actionsRouter from "./routes/actions";
+import quickActionRouter from "./routes/quick-action";
 import baseRouter from "./modules/base";
 import adminRouter from "./modules/admin";
 import { runPart1 } from "./parts/part1-collector";
@@ -75,6 +76,7 @@ app.use("/api", baseRouter);
 app.use("/api", adminRouter);
 app.use("/api/sync", syncRouter);
 app.use("/api/actions", actionsRouter);
+app.use("/api/quick-action", quickActionRouter);
 
 // ── Cron Scheduler ────────────────────────────────────────────────────────────
 // Reads sync_schedules table to decide which users/parts to run automatically.

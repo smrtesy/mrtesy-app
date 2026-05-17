@@ -13,7 +13,8 @@ import { google } from "googleapis";
 import { db, loadRules, createRunSession, closeRunSession, updateSyncState } from "../db";
 import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
 import { getOAuthClient } from "../services/token-refresh";
-import { WHATSAPP_CLASSIFIER_SYSTEM } from "../prompts/whatsapp";
+import { buildWhatsappClassifierSystem } from "../prompts/whatsapp";
+import { getUserPromptContext } from "../lib/user-context";
 
 // Env-level fallbacks; the per-user Sheet ID resolved inside runPart2 takes
 // precedence (it lives on user_settings.whatsapp_sheet_id, written during
@@ -79,6 +80,7 @@ export interface Part2Options {
 export async function runPart2(opts: Part2Options): Promise<{ sessionId: string }> {
   const { userId, lookbackHours = 48, force = false } = opts;
   const sessionId = await createRunSession(userId, "part2", "whatsapp", MODELS.sonnet);
+  const systemPrompt = buildWhatsappClassifierSystem(await getUserPromptContext(userId));
 
   const errors: string[] = [];
   let tasksCreated = 0;
@@ -247,7 +249,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       try {
         const result = await cachedCall({
           model: "sonnet",
-          systemPrompt: WHATSAPP_CLASSIFIER_SYSTEM,
+          systemPrompt,
           userMessage: `Chat: ${chatName}\nPhone: ${lastMsg.fromPhone}\nLast 20 messages:\n${context}`,
           maxTokens: 512,
         });

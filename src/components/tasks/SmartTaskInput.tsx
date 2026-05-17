@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Check, Pencil } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -28,7 +27,6 @@ interface ParsedTask {
 
 export function SmartTaskInput({ open, onClose, onCreated }: SmartTaskInputProps) {
   const t = useTranslations("tasks.smartInput");
-  const supabase = createClient();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [parsed, setParsed] = useState<ParsedTask | null>(null);
@@ -40,52 +38,30 @@ export function SmartTaskInput({ open, onClose, onCreated }: SmartTaskInputProps
     setLoading(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      // Call Sonnet to parse natural language into task JSON
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/quick-action`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            task_id: "new-task",
-            action_label: "parse_task",
-            prompt: `Parse this natural language into a task. Return ONLY valid JSON:
+      const today = new Date().toISOString().slice(0, 10);
+      const { result } = await api<{ result: string }>("/api/quick-action", {
+        method: "POST",
+        body: {
+          prompt: `Parse this natural language input into a task. Today is ${today}. Return ONLY valid JSON, no markdown fences:
 {"title_he":"Hebrew title","description":"details","due_date":"YYYY-MM-DD or null","priority":"urgent|high|medium|low","recurrence_rule":"RRULE string or null","reminders":[{"days_before":1,"message":"reminder text"}]}
 
 User input: "${input}"`,
-          }),
-        }
-      );
+          max_tokens: 600,
+        },
+      });
 
-      const data = await resp.json();
-      if (data.error) throw new Error(data.error);
-
-      try {
-        const jsonMatch = (data.result || "").match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const taskData = JSON.parse(jsonMatch[0]) as ParsedTask;
-          setParsed(taskData);
-          setEditDueDate(taskData.due_date || "");
-        }
-      } catch {
-        // If JSON parsing fails, create basic task
-        setParsed({
-          title_he: input,
-          description: "",
-          due_date: null,
-          priority: "medium",
-          recurrence_rule: null,
-          reminders: [],
-        });
+      const jsonMatch = (result || "").match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const taskData = JSON.parse(jsonMatch[0]) as ParsedTask;
+        setParsed(taskData);
+        setEditDueDate(taskData.due_date || "");
+      } else {
+        throw new Error("could not parse model output");
       }
     } catch {
-      // Fallback: if AI call fails, create basic task directly from input
+      // Fallback: AI call or JSON parse failed — create a basic task from
+      // raw input and let the user fix it manually.
+      toast.error("AI parsing failed — using raw input");
       setParsed({
         title_he: input,
         description: "",

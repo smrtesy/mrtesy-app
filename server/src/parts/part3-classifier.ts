@@ -11,7 +11,8 @@
 
 import { db, loadRules, createRunSession, closeRunSession } from "../db";
 import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
-import { DEEP_CLASSIFIER_SYSTEM } from "../prompts/classifier";
+import { buildDeepClassifierSystem } from "../prompts/classifier";
+import { getUserPromptContext } from "../lib/user-context";
 
 const BATCH_SIZE = 5;
 
@@ -67,6 +68,10 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
   let itemsProcessed = 0;
 
   try {
+    // ── 0. Per-tenant identity used in the system prompt ─────────────────────
+    const promptCtx = await getUserPromptContext(userId, orgId);
+    const systemPrompt = buildDeepClassifierSystem(promptCtx);
+
     // ── 1. Load rules (cached in rulesContext) ────────────────────────────────
     const rules = await loadRules(userId);
     const skipRules = rules
@@ -175,7 +180,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         try {
           const raw = await cachedCall({
             model: "sonnet",
-            systemPrompt: DEEP_CLASSIFIER_SYSTEM,
+            systemPrompt,
             rulesContext: rulesContext || undefined,
             userMessage: userMsg,
             maxTokens: 1024,

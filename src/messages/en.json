@@ -78,7 +78,21 @@
       "searchDocs": "Search Documents",
       "gmailDraft": "Gmail Draft",
       "saveDraft": "Save Draft",
-      "processing": "Claude is processing..."
+      "processing": "Claude is processing...",
+      "labels": {
+        "draft_reply_he": "Draft reply (Hebrew)",
+        "draft_reply_en": "Draft reply (English)",
+        "draft_whatsapp_he": "Draft WhatsApp (Hebrew)",
+        "draft_whatsapp_en": "Draft WhatsApp (English)",
+        "summarize_history": "Summarize history",
+        "find_in_emails": "Find in emails",
+        "check_past_handling": "Past handling",
+        "set_reminder": "Set reminder",
+        "call_preparation": "Prepare for call",
+        "financial_advisor": "Financial advisor",
+        "draft_settlement_request": "Draft settlement request",
+        "custom": "Custom action"
+      }
     },
     "detail": {
       "description": "Description",
@@ -303,6 +317,9 @@
   "taskDetailExt": {
     "toastUpdateAdded": "Update added",
     "titleLabel": "Title",
+    "priorityLabel": "Priority",
+    "statusLabel": "Status",
+    "dueDateLabel": "Due Date",
     "projectLabel": "Project",
     "noProjectOption": "— No project —",
     "assignedToLabel": "Assigned to",
