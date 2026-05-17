@@ -25,6 +25,7 @@ interface OrgRow {
   id: string;
   slug: string;
   name: string;
+  name_he: string | null;
   member_count: number;
   apps_enabled: string[];
 }
@@ -243,7 +244,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
               {candidates.map((o) => (
                 <div key={o.id} className="flex items-center gap-2 rounded border p-2 text-sm">
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate" dir="auto">{o.name}</div>
+                    <div className="font-medium truncate" dir="auto">{isHe && o.name_he ? o.name_he : o.name}</div>
                     <div className="text-[10px] text-muted-foreground font-mono">{o.slug}</div>
                   </div>
                   <div className="flex gap-1.5 flex-wrap">

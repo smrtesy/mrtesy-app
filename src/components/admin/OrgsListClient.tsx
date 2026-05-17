@@ -133,6 +133,7 @@ function CreateOrgDialog({
 }
 
 export function OrgsListClient({ locale }: { locale: string }) {
+  const isHe = locale === "he";
   const t = useTranslations("admin");
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
@@ -203,7 +204,7 @@ export function OrgsListClient({ locale }: { locale: string }) {
                       className="hover:underline truncate"
                       dir="auto"
                     >
-                      {o.name}
+                      {isHe && o.name_he ? o.name_he : o.name}
                     </Link>
                     <span className="text-xs font-normal text-muted-foreground font-mono">
                       {o.slug}

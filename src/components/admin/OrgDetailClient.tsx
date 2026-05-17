@@ -49,6 +49,7 @@ const ROLE_ICONS = { owner: Crown, admin: Shield, member: User };
 export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: string }) {
   const t = useTranslations("admin");
   const router = useRouter();
+  const isHe = locale === "he";
   const [data, setData] = useState<AdminOrgDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -139,7 +140,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
   }
 
   async function handleDeleteOrg() {
-    if (!confirm(t("deleteOrgConfirm", { name: data?.org.name ?? "" }))) return;
+    if (!confirm(t("deleteOrgConfirm", { name: (isHe && data?.org.name_he ? data.org.name_he : data?.org.name) ?? "" }))) return;
     if (!confirm(t("deleteOrgConfirm2", { tasks: data?.stats.task_count ?? 0, projects: data?.stats.project_count ?? 0 }))) return;
     try {
       await api(`/api/admin/orgs/${orgId}`, { method: "DELETE", noOrg: true });
@@ -234,7 +235,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold flex items-center gap-2 min-w-0">
           <Building2 className="h-6 w-6 shrink-0" />
-          <span className="truncate" dir="auto">{data.org.name}</span>
+          <span className="truncate" dir="auto">{isHe && data.org.name_he ? data.org.name_he : data.org.name}</span>
           <span className="text-sm font-mono text-muted-foreground">{data.org.slug}</span>
         </h1>
         <div className="flex gap-2">
