@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
@@ -8,17 +8,18 @@ import { api, setActiveOrgId, ApiError } from "@/lib/api/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Building2, Loader2 } from "lucide-react";
+import { Building2, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
-/**
- * Step 0 of onboarding — name your workspace.
- *
- * Creates the user's first organization, enables the smrtesy app on it, and
- * sets it as the active org in localStorage so subsequent screens (Gmail/Drive)
- * are scoped correctly. If the user already has any org (e.g. they refreshed
- * after creating it), we skip straight to the next step.
- */
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "";
+}
+
 export default function OnboardingOrganizationStep() {
   const { locale } = useParams() as { locale: string };
   const router = useRouter();
@@ -27,6 +28,9 @@ export default function OnboardingOrganizationStep() {
   const tOrg = useTranslations("onboardingOrg");
 
   const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [slugStatus, setSlugStatus] = useState<"idle" | "checking" | "available" | "taken" | "invalid">("idle");
   const [creating, setCreating] = useState(false);
   const [checking, setChecking] = useState(true);
 
@@ -34,7 +38,6 @@ export default function OnboardingOrganizationStep() {
   useEffect(() => {
     (async () => {
       try {
-        // If user already has any org, jump to the next step.
         const { orgs } = await api<{ orgs: Array<{ id: string }> }>("/api/orgs/me", { noOrg: true });
         if (orgs && orgs.length > 0) {
           setActiveOrgId(orgs[0].id);
@@ -42,13 +45,11 @@ export default function OnboardingOrganizationStep() {
           return;
         }
       } catch (e) {
-        // 401 means session not yet established — let the user proceed; they'll get the error on submit.
         if (!(e instanceof ApiError && e.status === 401)) {
           console.error("orgs/me check:", e);
         }
       }
 
-      // Suggest a default workspace name based on auth metadata.
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const fullName = (user.user_metadata?.full_name as string | undefined)
@@ -60,27 +61,51 @@ export default function OnboardingOrganizationStep() {
       }
       setChecking(false);
     })();
-  }, [router, locale, supabase, isHe, tOrg]);
+  }, [router, locale, supabase, tOrg]);
+
+  // Auto-generate slug from name (unless user edited it manually)
+  useEffect(() => {
+    if (!slugEdited) {
+      setSlug(toSlug(name));
+      setSlugStatus("idle");
+    }
+  }, [name, slugEdited]);
+
+  const checkSlug = useCallback(async (value: string) => {
+    if (!value) { setSlugStatus("idle"); return; }
+    setSlugStatus("checking");
+    try {
+      const res = await api<{ available: boolean; reason?: string }>(`/api/orgs/slug-check?slug=${encodeURIComponent(value)}`, { noOrg: true });
+      setSlugStatus(res.available ? "available" : (res.reason === "invalid_format" ? "invalid" : "taken"));
+    } catch {
+      setSlugStatus("idle");
+    }
+  }, []);
+
+  // Debounce slug check
+  useEffect(() => {
+    if (!slug) { setSlugStatus("idle"); return; }
+    const t = setTimeout(() => checkSlug(slug), 500);
+    return () => clearTimeout(t);
+  }, [slug, checkSlug]);
 
   async function handleCreate() {
     const trimmed = name.trim();
-    if (!trimmed) {
-      toast.error(tOrg("enterNameError"));
-      return;
-    }
+    if (!trimmed) { toast.error(tOrg("enterNameError")); return; }
+    if (!slug) { toast.error(tOrg("slugRequired")); return; }
+    if (slugStatus === "taken") { toast.error(tOrg("slugTaken")); return; }
+    if (slugStatus === "invalid") { toast.error(tOrg("slugInvalid")); return; }
+
     setCreating(true);
     try {
-      // 1. Create the org (caller becomes owner)
       const { org } = await api<{ org: { id: string; slug: string } }>("/api/orgs", {
         method: "POST",
-        body: { name: trimmed, name_he: isHe ? trimmed : null },
+        body: { name: trimmed, name_he: isHe ? trimmed : null, slug },
         noOrg: true,
       });
 
-      // 2. Make it the active org so the next API call carries X-Org-Id
       setActiveOrgId(org.id);
 
-      // 3. Enable smrtesy for the new org (best-effort — onboarding can continue without it)
       try {
         await api(`/api/org/apps/smrtesy`, { method: "POST" });
       } catch (e) {
@@ -90,7 +115,12 @@ export default function OnboardingOrganizationStep() {
       toast.success(tOrg("workspaceCreated"));
       router.push(`/${locale}/onboarding`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error creating organization");
+      if (e instanceof ApiError && e.status === 409) {
+        toast.error(tOrg("slugTaken"));
+        setSlugStatus("taken");
+      } else {
+        toast.error(e instanceof Error ? e.message : "Error creating organization");
+      }
     } finally {
       setCreating(false);
     }
@@ -106,24 +136,20 @@ export default function OnboardingOrganizationStep() {
     );
   }
 
+  const appDomain = process.env.NEXT_PUBLIC_APP_DOMAIN;
+
   return (
     <Card>
       <CardHeader className="text-center">
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
           <Building2 className="h-8 w-8 text-blue-600" />
         </div>
-        <CardTitle>
-          {tOrg("title")}
-        </CardTitle>
-        <CardDescription>
-          {tOrg("description")}
-        </CardDescription>
+        <CardTitle>{tOrg("title")}</CardTitle>
+        <CardDescription>{tOrg("description")}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <div className="space-y-1">
-          <label className="text-xs font-medium">
-            {tOrg("workspaceNameLabel")}
-          </label>
+          <label className="text-xs font-medium">{tOrg("workspaceNameLabel")}</label>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -133,21 +159,53 @@ export default function OnboardingOrganizationStep() {
             onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             className="min-h-[48px]"
           />
-          <p className="text-[11px] text-muted-foreground">
-            {tOrg("changeLaterHint")}
-          </p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium">{tOrg("subdomainLabel")}</label>
+          <div className="flex items-center gap-1">
+            <Input
+              value={slug}
+              onChange={(e) => {
+                const v = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "");
+                setSlug(v);
+                setSlugEdited(true);
+              }}
+              placeholder="my-org"
+              dir="ltr"
+              className="min-h-[48px] font-mono text-sm"
+            />
+            <div className="w-6 shrink-0 flex justify-center">
+              {slugStatus === "checking" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              {slugStatus === "available" && <CheckCircle2 className="h-4 w-4 text-green-500" />}
+              {(slugStatus === "taken" || slugStatus === "invalid") && <XCircle className="h-4 w-4 text-red-500" />}
+            </div>
+          </div>
+          {appDomain && slug && (
+            <p className="text-[11px] text-muted-foreground font-mono">
+              {slug}.{appDomain}
+            </p>
+          )}
+          {slugStatus === "taken" && (
+            <p className="text-[11px] text-red-500">{tOrg("slugTaken")}</p>
+          )}
+          {slugStatus === "invalid" && (
+            <p className="text-[11px] text-red-500">{tOrg("slugInvalid")}</p>
+          )}
+          {slugStatus === "available" && (
+            <p className="text-[11px] text-green-600">{tOrg("slugAvailable")}</p>
+          )}
         </div>
 
         <Button
           onClick={handleCreate}
-          disabled={creating || !name.trim()}
+          disabled={creating || !name.trim() || !slug || slugStatus !== "available"}
           className="w-full min-h-[48px] gap-2"
         >
           {creating && <Loader2 className="h-4 w-4 animate-spin" />}
           {tOrg("continue")}
         </Button>
 
-        {/* 5-step indicator: org → gmail → drive → whatsapp → setup */}
         <div className="flex justify-center gap-2 pt-2">
           <div className="h-2 w-6 rounded-full bg-blue-600" />
           <div className="h-2 w-6 rounded-full bg-gray-200" />

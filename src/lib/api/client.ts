@@ -36,10 +36,25 @@ export function setActiveOrgId(id: string) {
 }
 
 /**
+ * Read the org ID set by middleware for the current subdomain.
+ * Cookie name: smrt_org_id — written by src/middleware.ts.
+ * Takes precedence over localStorage so the subdomain always wins.
+ */
+function getSubdomainOrgId(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)smrt_org_id=([^;]+)(?:;|$)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
  * Resolve the active org id.
- * Order: in-memory → localStorage → fetch /api/orgs/me and pick the first one.
+ * Priority: subdomain cookie → in-memory → localStorage → fetch /api/orgs/me.
  */
 export async function getActiveOrgId(): Promise<string | null> {
+  // Subdomain org always wins — set by middleware from the hostname
+  const subdomainOrg = getSubdomainOrgId();
+  if (subdomainOrg) return subdomainOrg;
+
   if (activeOrgId) return activeOrgId;
 
   const stored = getStoredActiveOrgId();

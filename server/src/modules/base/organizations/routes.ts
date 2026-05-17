@@ -15,18 +15,38 @@ const router = Router();
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function slugify(name: string): string {
-  const base = name
+export function slugify(name: string): string {
+  return name
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "org";
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return `${base}-${suffix}`;
 }
 
 // ── routes ─────────────────────────────────────────────────────────────────
+
+/** GET /orgs/slug-check?slug=maor — check if a slug is available */
+router.get("/orgs/slug-check", requireAuth, async (req: Request, res: Response) => {
+  const slug = typeof req.query.slug === "string" ? req.query.slug.trim().toLowerCase() : "";
+  if (!slug) return res.status(400).json({ error: "slug is required" });
+
+  // Basic format validation: 2-40 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen
+  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(slug) && !/^[a-z0-9]{2,40}$/.test(slug)) {
+    return res.json({ available: false, reason: "invalid_format" });
+  }
+
+  const RESERVED = new Set(["app", "www", "api", "admin", "mail", "smtp", "cdn", "static", "assets"]);
+  if (RESERVED.has(slug)) return res.json({ available: false, reason: "reserved" });
+
+  const { data } = await db
+    .from("organizations")
+    .select("id")
+    .eq("slug", slug)
+    .maybeSingle();
+
+  res.json({ available: !data, slug });
+});
 
 /** POST /orgs — create a new organization. Caller becomes owner. */
 router.post("/orgs", requireAuth, async (req: Request, res: Response) => {
@@ -35,7 +55,11 @@ router.post("/orgs", requireAuth, async (req: Request, res: Response) => {
     return res.status(400).json({ error: "name is required" });
   }
 
-  const finalSlug = (typeof slug === "string" && slug.trim()) ? slug.trim() : slugify(name);
+  const finalSlug = (typeof slug === "string" && slug.trim()) ? slug.trim().toLowerCase() : slugify(name);
+
+  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(finalSlug) && !/^[a-z0-9]{2,40}$/.test(finalSlug)) {
+    return res.status(400).json({ error: "invalid slug format" });
+  }
 
   // Create org
   const { data: org, error: orgErr } = await db
@@ -64,7 +88,8 @@ router.post("/orgs", requireAuth, async (req: Request, res: Response) => {
 
   if (mErr) {
     // Roll back org so we don't leave an orphaned record
-    await db.from("organizations").delete().eq("id", org.id);
+    const { error: rollbackErr } = await db.from("organizations").delete().eq("id", org.id);
+    if (rollbackErr) console.error("[orgs] rollback failed for org", org.id, rollbackErr.message);
     return res.status(500).json({ error: `failed to add creator as owner: ${mErr.message}` });
   }
 

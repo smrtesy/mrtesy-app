@@ -247,6 +247,11 @@
     "workspaceNameLabel": "Workspace name",
     "workspaceNamePlaceholder": "e.g. Maor",
     "changeLaterHint": "You can change this later from settings.",
+    "subdomainLabel": "Subdomain",
+    "slugRequired": "Subdomain is required",
+    "slugTaken": "This subdomain is already taken",
+    "slugInvalid": "Use only lowercase letters, numbers and hyphens",
+    "slugAvailable": "Available!",
     "continue": "Continue"
   },
   "orgSettings": {

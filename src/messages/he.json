@@ -247,6 +247,11 @@
     "workspaceNameLabel": "שם סביבת העבודה",
     "workspaceNamePlaceholder": "לדוגמה: מאור",
     "changeLaterHint": "אפשר לשנות בהמשך מההגדרות.",
+    "subdomainLabel": "כתובת משנה",
+    "slugRequired": "כתובת משנה נדרשת",
+    "slugTaken": "כתובת המשנה הזו כבר תפוסה",
+    "slugInvalid": "השתמש רק באותיות קטנות, מספרים ומקפים",
+    "slugAvailable": "זמין!",
     "continue": "המשך"
   },
   "orgSettings": {
