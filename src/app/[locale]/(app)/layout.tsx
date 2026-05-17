@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { Sidebar } from "@/components/layout/Sidebar";
 
 export default async function AppLayout({
@@ -53,10 +54,42 @@ export default async function AppLayout({
     }
   }
 
+  // Check which apps the active org has enabled
+  let enabledApps: string[] = [];
+  if (user) {
+    const cookieStore = await cookies();
+    const activeOrgId = cookieStore.get("smrt_org_id")?.value;
+
+    if (activeOrgId) {
+      const { data: appRows } = await supabase
+        .from("app_memberships")
+        .select("slug")
+        .eq("org_id", activeOrgId)
+        .eq("enabled", true);
+      enabledApps = (appRows ?? []).map((r) => r.slug);
+    } else if (user) {
+      // No active org (e.g. super-admin on app.smrtesy.com) — check any org
+      const { data: memberships } = await supabase
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", user.id)
+        .limit(1);
+      const firstOrgId = memberships?.[0]?.org_id;
+      if (firstOrgId) {
+        const { data: appRows } = await supabase
+          .from("app_memberships")
+          .select("slug")
+          .eq("org_id", firstOrgId)
+          .eq("enabled", true);
+        enabledApps = (appRows ?? []).map((r) => r.slug);
+      }
+    }
+  }
+
   return (
     <div className="flex min-h-screen">
       {/* Desktop Sidebar */}
-      <Sidebar locale={locale} isAdmin={isAdmin} />
+      <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
       {/* Main content */}
       <main className="flex-1 pb-20 md:pb-0 md:ms-64">
         <div className="mx-auto max-w-4xl p-4 md:p-6">

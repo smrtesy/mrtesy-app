@@ -50,7 +50,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean }) {
+export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
+  const hasSmrtTask = enabledApps.includes("smrttask");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -144,11 +145,15 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">
-          {/* smrtTask section */}
-          <SectionLabel>smrtTask</SectionLabel>
-          {smrtTaskItems.map((item) => (
-            <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
-          ))}
+          {/* smrtTask section — only shown when the active org has smrtTask enabled */}
+          {hasSmrtTask && (
+            <>
+              <SectionLabel>smrtTask</SectionLabel>
+              {smrtTaskItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
+              ))}
+            </>
+          )}
 
           {/* Management section */}
           <SectionLabel>{t("sectionManagement")}</SectionLabel>
@@ -176,18 +181,20 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
           )}
         </nav>
 
-        <div className="p-3 border-t">
-          <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
-            <Plus className="h-4 w-4" />
-            {t("newTask")}
-          </Button>
-        </div>
+        {hasSmrtTask && (
+          <div className="p-3 border-t">
+            <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
+              <Plus className="h-4 w-4" />
+              {t("newTask")}
+            </Button>
+          </div>
+        )}
       </aside>
 
       {/* Mobile Bottom Tab Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
-          {mobileItems.map((item) => (
+          {(hasSmrtTask ? mobileItems : mobileItems.filter((i) => i.key === "settings")).map((item) => (
             <Link
               key={item.key}
               href={`${basePath}${item.href}`}
@@ -210,14 +217,16 @@ export function Sidebar({ locale, isAdmin }: { locale: string; isAdmin?: boolean
         </div>
       </nav>
 
-      {/* FAB — Mobile only */}
-      <Button
-        size="icon"
-        className="fixed bottom-20 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-        onClick={() => setTaskInputOpen(true)}
-      >
-        <Plus className="h-6 w-6" />
-      </Button>
+      {/* FAB — Mobile only, smrtTask only */}
+      {hasSmrtTask && (
+        <Button
+          size="icon"
+          className="fixed bottom-20 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+          onClick={() => setTaskInputOpen(true)}
+        >
+          <Plus className="h-6 w-6" />
+        </Button>
+      )}
 
       <SmartTaskInput
         open={taskInputOpen}
