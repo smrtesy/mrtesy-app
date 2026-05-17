@@ -3,14 +3,17 @@ import { NextResponse } from "next/server";
 
 // Validate redirect path to prevent open redirects
 function sanitizeRedirect(path: string): string {
-  // Must start with / and not start with // (protocol-relative URL)
   if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/\\")) {
     return "/";
   }
   return path;
 }
 
-async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, origin: string, next: string) {
+async function redirectUser(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  origin: string,
+  next: string,
+) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
@@ -22,8 +25,7 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
 
   const locale = settings?.preferred_language || "he";
 
-  // Super-admins skip the onboarding funnel entirely — they may be signing in
-  // to manage the platform, not to use any product app.
+  // Super-admins skip the onboarding funnel entirely.
   const { data: superAdminRow } = await supabase
     .from("super_admins")
     .select("user_id")
@@ -44,17 +46,54 @@ async function redirectUser(supabase: Awaited<ReturnType<typeof createClient>>, 
     return NextResponse.redirect(`${origin}${redirectPath}`);
   }
 
-  // Brand-new user (no user_settings row): create defaults + send to workspace creation step.
+  // Brand-new user (no user_settings row): must have a valid invite.
   if (!settings) {
-    const { error } = await supabase
+    const { data: invites } = await supabase
+      .from("org_invites")
+      .select("id, org_id, role")
+      .eq("email", user.email?.toLowerCase() ?? "")
+      .is("accepted_at", null)
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const invite = invites?.[0] ?? null;
+
+    if (!invite) {
+      await supabase.auth.signOut();
+      return NextResponse.redirect(`${origin}/he/login?error=no_invite`);
+    }
+
+    // Valid invite: create settings, join org, mark invite accepted.
+    const { error: settingsErr } = await supabase
       .from("user_settings")
       .insert({ user_id: user.id, preferred_language: "he" });
-    if (error) console.warn("[auth/callback] user_settings insert (regular path) failed:", error.message);
-    return NextResponse.redirect(`${origin}/he/onboarding/organization`);
+    if (settingsErr) {
+      console.error("[auth/callback] user_settings insert failed:", settingsErr.message);
+      await supabase.auth.signOut();
+      return NextResponse.redirect(`${origin}/he/login?error=system_error`);
+    }
+
+    const { error: memberErr } = await supabase
+      .from("org_members")
+      .insert({ org_id: invite.org_id, user_id: user.id, role: invite.role, invited_by: null });
+    if (memberErr && memberErr.code !== "23505") {
+      // 23505 = duplicate key: user was already added to this org manually, treat as success
+      console.error("[auth/callback] org_members insert failed:", memberErr.message);
+      await supabase.auth.signOut();
+      return NextResponse.redirect(`${origin}/he/login?error=system_error`);
+    }
+
+    const { error: acceptErr } = await supabase
+      .from("org_invites")
+      .update({ accepted_at: new Date().toISOString() })
+      .eq("id", invite.id);
+    if (acceptErr) console.warn("[auth/callback] invite accept failed:", acceptErr.message);
+
+    return NextResponse.redirect(`${origin}/${locale}/onboarding`);
   }
 
-  // Existing user but onboarding not finished — if they don't yet belong to an org,
-  // route through the workspace step first so all subsequent screens have an org context.
+  // Existing user but onboarding not finished.
   if (!settings.onboarding_completed) {
     const { data: membership } = await supabase
       .from("org_members")
@@ -84,13 +123,11 @@ export async function GET(request: Request) {
       const redirect = await redirectUser(supabase, origin, next);
       if (redirect) return redirect;
     } else {
-      // PKCE exchange failed — check if user has a valid existing session
       console.error("[auth/callback] exchangeCodeForSession error:", error.message);
       const redirect = await redirectUser(supabase, origin, next);
       if (redirect) return redirect;
     }
   }
 
-  // No code and no session — back to login
   return NextResponse.redirect(`${origin}/he/login`);
 }

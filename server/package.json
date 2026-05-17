@@ -18,7 +18,8 @@
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "googleapis": "^140.0.1",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "resend": "^6.12.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

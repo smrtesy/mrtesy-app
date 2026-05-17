@@ -18,9 +18,13 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireSuperAdmin, type Role } from "../../../middleware";
+import invitesRouter from "./invites";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
+
+// Invite sub-router mounted under /admin/orgs/:id/invites
+router.use("/admin/orgs/:id/invites", invitesRouter);
 
 const ROLES: Role[] = ["owner", "admin", "member"];
 
