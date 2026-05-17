@@ -372,7 +372,8 @@
     "joined": "Joined: {date}",
     "recentLogs": "Recent Logs ({count})",
     "userNotFound": "User not found",
-    "failures": "Failures: {count}"
+    "failures": "Failures: {count}",
+    "smrtTaskSection": "smrtTask data"
   },
   "adminUserMemberships": {
     "effectiveAppAccess": "Effective App Access",

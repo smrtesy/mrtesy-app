@@ -51,6 +51,16 @@ export default async function AdminUserDetailPage({
 
       <UserMembershipsClient userId={id} locale={locale} />
 
+      {/* smrtTask-specific data — grouped separately from platform info */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="h-px flex-1 bg-border" />
+          <span className="text-xs font-semibold text-muted-foreground tracking-widest uppercase px-2">
+            {t("smrtTaskSection")}
+          </span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+
       <Card>
         <CardHeader><CardTitle>{t("connectionsSection")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
@@ -114,6 +124,8 @@ export default async function AdminUserDetailPage({
           ))}
         </CardContent>
       </Card>
+
+      </div>{/* end smrtTask section */}
     </div>
   );
 }

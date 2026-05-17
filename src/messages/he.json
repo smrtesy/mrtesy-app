@@ -372,7 +372,8 @@
     "joined": "הצטרף: {date}",
     "recentLogs": "לוגים אחרונים ({count})",
     "userNotFound": "משתמש לא נמצא",
-    "failures": "כשלים: {count}"
+    "failures": "כשלים: {count}",
+    "smrtTaskSection": "נתוני smrtTask"
   },
   "adminUserMemberships": {
     "effectiveAppAccess": "גישה לאפליקציות",
