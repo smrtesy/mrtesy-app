@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 export default function SettingsRulesPage() {
   const supabase = createClient();
+  const { appSlug } = useParams<{ appSlug: string }>();
   const [rules, setRules] = useState<Rule[]>([]);
   const [pendingSuggestions, setPendingSuggestions] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,41 +69,45 @@ export default function SettingsRulesPage() {
       .from("rules_memory")
       .select("*")
       .eq("user_id", user.id)
+      .eq("app_slug", appSlug)
       .order("created_at", { ascending: false });
 
     const all: Rule[] = data ?? [];
     setPendingSuggestions(all.filter((r) => r.suggestion_status === "pending"));
     setRules(all.filter((r) => r.suggestion_status !== "pending" || r.is_active));
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, appSlug]);
 
   useEffect(() => {
     loadRules();
   }, [loadRules]);
 
   async function approveRule(id: string) {
-    await supabase
+    const { error } = await supabase
       .from("rules_memory")
       .update({ suggestion_status: "approved", is_active: true })
       .eq("id", id);
+    if (error) { toast.error(error.message); return; }
     toast.success("Rule approved and activated");
     loadRules();
   }
 
   async function rejectRule(id: string) {
-    await supabase
+    const { error } = await supabase
       .from("rules_memory")
       .update({ suggestion_status: "rejected", is_active: false })
       .eq("id", id);
+    if (error) { toast.error(error.message); return; }
     toast.success("Rule rejected");
     loadRules();
   }
 
   async function toggleRule(id: string, currentActive: boolean) {
-    await supabase
+    const { error } = await supabase
       .from("rules_memory")
       .update({ is_active: !currentActive })
       .eq("id", id);
+    if (error) { toast.error(error.message); return; }
     loadRules();
   }
 
@@ -118,6 +124,7 @@ export default function SettingsRulesPage() {
 
     const { error } = await supabase.from("rules_memory").insert({
       user_id: user.id,
+      app_slug: appSlug,
       trigger: newRule.trigger,
       rule_type: newRule.rule_type,
       category: newRule.category || null,

@@ -194,7 +194,8 @@
     "adminPanel": "Admin Panel",
     "rulesAndAutomation": "Rules & Automation",
     "skipRulesAndStyle": "Skip Rules & Style",
-    "syncSchedules": "Sync Schedules"
+    "syncSchedules": "Sync Schedules",
+    "smrtTaskSection": "smrtTask"
   },
   "onboardingSetup": {
     "folderNotFound": "Folder not found",

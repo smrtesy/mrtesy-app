@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,7 @@ function formatDuration(seconds: number | null) {
 
 export default function SettingsSyncPage() {
   const supabase = createClient();
+  const { appSlug } = useParams<{ appSlug: string }>();
   const [sessions, setSessions] = useState<RunSession[]>([]);
   const [schedules, setSchedules] = useState<Record<string, SyncSchedule>>({});
   const [running, setRunning] = useState<Record<string, boolean>>({});
@@ -107,12 +109,14 @@ export default function SettingsSyncPage() {
         .from("run_sessions")
         .select("*")
         .eq("user_id", user.id)
+        .eq("app_slug", appSlug)
         .order("started_at", { ascending: false })
         .limit(30),
       supabase
         .from("sync_schedules")
         .select("*")
-        .eq("user_id", user.id),
+        .eq("user_id", user.id)
+        .eq("app_slug", appSlug),
     ]);
 
     setSessions(sessionsRes.data ?? []);
@@ -120,11 +124,10 @@ export default function SettingsSyncPage() {
     for (const s of schedulesRes.data ?? []) sched[s.part] = s;
     setSchedules(sched);
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, appSlug]);
 
   useEffect(() => {
     loadData();
-    // Poll every 5 seconds while a run session might be active
     const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
   }, [loadData]);
@@ -162,16 +165,18 @@ export default function SettingsSyncPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    await supabase.from("sync_schedules").upsert(
+    const { error } = await supabase.from("sync_schedules").upsert(
       {
         user_id: user.id,
+        app_slug: appSlug,
         part,
         is_auto: !currentAuto,
         is_enabled: true,
         next_run_at: !currentAuto ? new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() : null,
       },
-      { onConflict: "user_id,part" },
+      { onConflict: "user_id,app_slug,part" },
     );
+    if (error) { toast.error(error.message); return; }
     await loadData();
     toast.success(`Auto-sync ${!currentAuto ? "enabled" : "disabled"} for ${part.toUpperCase()}`);
   }

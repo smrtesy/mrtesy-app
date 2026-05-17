@@ -184,6 +184,13 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* smrtTask section */}
+      <div className="pt-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+          {t("smrtTaskSection")}
+        </p>
+      </div>
+
       {/* Connections */}
       <Card>
         <CardHeader className="pb-3">
@@ -241,19 +248,19 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Rules + Sync — moved out of /admin/* because they are user-scoped */}
+      {/* Rules + Sync */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-2 sm:grid-cols-2">
-          <Link href={`/${locale}/settings/rules`}>
+          <Link href={`/${locale}/settings/smrttask/rules`}>
             <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
               <Filter className="h-4 w-4" />
               {t("skipRulesAndStyle")}
             </Button>
           </Link>
-          <Link href={`/${locale}/settings/sync`}>
+          <Link href={`/${locale}/settings/smrttask/sync`}>
             <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
               <Repeat className="h-4 w-4" />
               {t("syncSchedules")}
