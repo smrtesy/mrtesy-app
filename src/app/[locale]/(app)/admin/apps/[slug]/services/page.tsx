@@ -37,6 +37,13 @@ export default async function AdminAppServicesPage({
 
   const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
 
+  const serviceLabels: Record<string, string> = {
+    gmail: t("serviceGmail"),
+    google_drive: t("serviceGoogleDrive"),
+    google_calendar: t("serviceGoogleCalendar"),
+    whatsapp: t("serviceWhatsapp"),
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -56,7 +63,7 @@ export default async function AdminAppServicesPage({
         return (
           <Card key={service}>
             <CardHeader>
-              <CardTitle className="capitalize">{service.replace(/_/g, " ")}</CardTitle>
+              <CardTitle>{serviceLabels[service] ?? service}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {states.length === 0 && (

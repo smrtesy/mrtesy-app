@@ -8,53 +8,19 @@ export default async function AdminDashboard() {
   const t = await getTranslations("admin");
   const supabase = await createClient();
 
-  const [usersResult, deadLetterResult, errorsResult, aiCostResult, syncResult] = await Promise.all([
-    supabase.from("user_settings").select("user_id, onboarding_completed, gmail_connected, drive_connected, whatsapp_connected, calendar_connected"),
+  const [usersResult, deadLetterResult, errorsResult, aiCostResult] = await Promise.all([
+    supabase.from("user_settings").select("user_id, onboarding_completed"),
     supabase.from("source_messages").select("id", { count: "exact" }).eq("dead_letter", true),
     supabase.from("log_entries").select("id, category, error_message, created_at").eq("level", "error").order("created_at", { ascending: false }).limit(10),
     supabase.from("log_entries").select("ai_cost_usd").gte("created_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString()).not("ai_cost_usd", "is", null),
-    supabase.from("sync_state").select("user_id, source, last_synced_at, consecutive_failures, last_error").order("last_synced_at", { ascending: false }),
   ]);
 
   const users = usersResult.data || [];
   const deadLetters = deadLetterResult.count || 0;
   const recentErrors = errorsResult.data || [];
   const todayCost = (aiCostResult.data || []).reduce((sum, r) => sum + (Number(r.ai_cost_usd) || 0), 0);
-  const syncStates = syncResult.data || [];
 
-  const services = ["gmail", "google_drive", "google_calendar", "whatsapp"];
-
-  const serviceLabels: Record<string, string> = {
-    gmail: t("serviceGmail"),
-    google_drive: t("serviceGoogleDrive"),
-    google_calendar: t("serviceGoogleCalendar"),
-    whatsapp: t("serviceWhatsapp"),
-  };
-
-  function getServiceStatus(source: string) {
-    const states = syncStates.filter((s) => s.source === source);
-    const failed = states.filter((s) => (s.consecutive_failures || 0) >= 5);
-    const warn = states.filter((s) => (s.consecutive_failures || 0) > 0 && (s.consecutive_failures || 0) < 5);
-    if (failed.length > 0) return "error";
-    if (warn.length > 0) return "warn";
-    if (states.length === 0) return "none";
-    return "ok";
-  }
-
-  function statusBadge(status: string) {
-    switch (status) {
-      case "ok": return <Badge variant="default" className="bg-green-500">OK</Badge>;
-      case "warn": return <Badge variant="secondary" className="bg-yellow-500 text-white">WARN</Badge>;
-      case "error": return <Badge variant="destructive">ERROR</Badge>;
-      default: return <Badge variant="outline">N/A</Badge>;
-    }
-  }
-
-  // Alerts
   const alerts: Array<{ level: string; message: string }> = [];
-  if (syncStates.filter((s) => (s.consecutive_failures || 0) >= 5).length > 0) {
-    alerts.push({ level: "critical", message: t("alertSyncStopped") });
-  }
   if (deadLetters > 10) {
     alerts.push({ level: "critical", message: t("alertDeadLetters", { count: deadLetters }) });
   }
@@ -113,31 +79,6 @@ export default async function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">{t("serviceStatus")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {services.map((service) => {
-            const status = getServiceStatus(service);
-            const lastSync = syncStates
-              .filter((s) => s.source === service)
-              .sort((a, b) => new Date(b.last_synced_at!).getTime() - new Date(a.last_synced_at!).getTime())[0];
-            return (
-              <div key={service} className="flex items-center justify-between rounded-lg border p-3">
-                <div className="flex items-center gap-3">
-                  {statusBadge(status)}
-                  <span className="font-medium">{serviceLabels[service] ?? service}</span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  {lastSync?.last_synced_at ? new Date(lastSync.last_synced_at).toLocaleString() : t("noUsersConnected")}
-                </span>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
 
       {recentErrors.length > 0 && (
         <Card>

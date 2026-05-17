@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ interface AdminUser {
 }
 
 export function SuperAdminsClient() {
+  const t = useTranslations("admin");
   const [admins, setAdmins] = useState<SuperAdmin[]>([]);
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,7 @@ export function SuperAdminsClient() {
     setGranting(user.id);
     try {
       await api(`/api/admin/users/${user.id}/super-admin`, { method: "POST", body: {}, noOrg: true });
-      toast.success(`${user.email ?? user.id.slice(0, 8)} is now a super-admin`);
+      toast.success(t("isNowSuperAdmin", { email: user.email ?? user.id.slice(0, 8) }));
       fetchData();
     } catch (e) {
       toast.error((e as Error).message);
@@ -65,11 +67,11 @@ export function SuperAdminsClient() {
   }
 
   async function handleRevoke(admin: SuperAdmin) {
-    if (!confirm(`Revoke super-admin from ${admin.email ?? admin.user_id.slice(0, 8)}?`)) return;
+    if (!confirm(t("revokeSuperAdminConfirm", { email: admin.email ?? admin.user_id.slice(0, 8) }))) return;
     setRevoking(admin.user_id);
     try {
       await api(`/api/admin/users/${admin.user_id}/super-admin`, { method: "DELETE", noOrg: true });
-      toast.success("Revoked");
+      toast.success(t("revoked"));
       fetchData();
     } catch (e) {
       toast.error((e as Error).message);
@@ -92,19 +94,20 @@ export function SuperAdminsClient() {
     <div className="space-y-4">
       <h1 className="text-2xl font-bold flex items-center gap-2">
         <Crown className="h-6 w-6 text-amber-600" />
-        Super Admins <span className="text-muted-foreground text-base">({admins.length})</span>
+        {t("superAdminsTitle")} <span className="text-muted-foreground text-base">({admins.length})</span>
       </h1>
 
-      {/* Grant section */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Grant super-admin</CardTitle></CardHeader>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("grantSuperAdmin")}</CardTitle>
+        </CardHeader>
         <CardContent className="space-y-2">
           <div className="relative">
             <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by email or name…"
+              placeholder={t("searchByEmailOrName")}
               className="ps-9"
             />
           </div>
@@ -127,26 +130,27 @@ export function SuperAdminsClient() {
                     className="gap-1.5"
                   >
                     {granting === u.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Crown className="h-3 w-3" />}
-                    Grant
+                    {t("grant")}
                   </Button>
                 </div>
               ))}
             </div>
           )}
           {searchLower.length >= 2 && candidates.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">No matching users (or they&apos;re already super-admins).</p>
+            <p className="text-xs text-muted-foreground italic">{t("noMatchingUsers")}</p>
           )}
         </CardContent>
       </Card>
 
-      {/* Current super-admins */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Current super-admins</CardTitle></CardHeader>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("currentSuperAdmins")}</CardTitle>
+        </CardHeader>
         <CardContent className="space-y-2">
           {loading ? (
             <div className="space-y-2">{[1, 2].map((i) => <Skeleton key={i} className="h-12" />)}</div>
           ) : admins.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">No super-admins yet. (Env-var fallback is still in effect.)</p>
+            <p className="text-sm text-muted-foreground italic">{t("noSuperAdmins")}</p>
           ) : admins.map((a) => (
             <div key={a.user_id} className="flex items-center gap-3 rounded-lg border p-2.5">
               <Crown className="h-4 w-4 text-amber-600 shrink-0" />
@@ -160,7 +164,7 @@ export function SuperAdminsClient() {
                 {a.note && <div className="text-[10px] text-muted-foreground italic mt-0.5">{a.note}</div>}
               </div>
               <div className="text-[10px] text-muted-foreground text-end shrink-0">
-                granted {new Date(a.granted_at).toLocaleDateString()}
+                {t("granted")} {new Date(a.granted_at).toLocaleDateString()}
               </div>
               <Button
                 size="icon"
