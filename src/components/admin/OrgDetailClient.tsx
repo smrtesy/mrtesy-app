@@ -56,6 +56,9 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [inviting, setInviting] = useState(false);
+  const [directEmail, setDirectEmail] = useState("");
+  const [directRole, setDirectRole] = useState("member");
+  const [addingDirect, setAddingDirect] = useState(false);
 
   const fetchOrg = useCallback(async () => {
     try {
@@ -163,6 +166,35 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
       toast.error((e as Error).message);
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleAddDirect() {
+    if (!directEmail.trim()) return;
+    setAddingDirect(true);
+    try {
+      const { user } = await api<{ user: { id: string; email: string } }>(
+        `/api/admin/users/by-email?email=${encodeURIComponent(directEmail.trim())}`,
+        { noOrg: true },
+      );
+      await api(`/api/admin/orgs/${orgId}/members`, {
+        method: "POST",
+        body: { user_id: user.id, role: directRole },
+        noOrg: true,
+      });
+      toast.success(t("addDirectSuccess", { email: directEmail.trim() }));
+      setDirectEmail("");
+      fetchOrg();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        toast.error(t("addDirectNotFound"));
+      } else if (e instanceof ApiError && e.status === 409) {
+        toast.error(t("addDirectAlreadyMember"));
+      } else {
+        toast.error((e as Error).message);
+      }
+    } finally {
+      setAddingDirect(false);
     }
   }
 
@@ -292,6 +324,38 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Direct add — super-admin can add any existing user without sending an invite */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("addDirectSection")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Input
+              type="email"
+              placeholder={t("addDirectPlaceholder")}
+              value={directEmail}
+              onChange={(e) => setDirectEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddDirect()}
+              className="flex-1"
+              dir="auto"
+            />
+            <select
+              value={directRole}
+              onChange={(e) => setDirectRole(e.target.value)}
+              className="rounded border px-2 py-1 text-sm bg-background"
+            >
+              <option value="member">{t("roleMember")}</option>
+              <option value="admin">{t("roleAdmin")}</option>
+              <option value="owner">{t("roleOwner")}</option>
+            </select>
+            <Button size="sm" onClick={handleAddDirect} disabled={addingDirect || !directEmail.trim()}>
+              {addingDirect ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("addDirectBtn")}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
