@@ -363,9 +363,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
                   <option value="admin">{t("roleAdmin")}</option>
                   <option value="owner">{t("roleOwner")}</option>
                 </select>
-                <Badge variant="outline" className="text-[10px]">
-                  {t(`role${m.role.charAt(0).toUpperCase() + m.role.slice(1)}` as "roleMember" | "roleAdmin" | "roleOwner")}
-                </Badge>
+                <Badge variant="outline" className="text-[10px]">{t(`role${m.role.charAt(0).toUpperCase() + m.role.slice(1)}` as "roleMember" | "roleAdmin" | "roleOwner")}</Badge>
                 <Button
                   size="icon"
                   variant="ghost"

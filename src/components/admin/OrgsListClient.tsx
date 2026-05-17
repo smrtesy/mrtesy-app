@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +23,7 @@ interface AdminOrg {
 }
 
 export function OrgsListClient({ locale }: { locale: string }) {
+  const t = useTranslations("admin");
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -53,11 +55,11 @@ export function OrgsListClient({ locale }: { locale: string }) {
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Building2 className="h-6 w-6" />
-          Organizations <span className="text-muted-foreground text-base">({orgs.length})</span>
+          {t("organizationsTitle")} <span className="text-muted-foreground text-base">({orgs.length})</span>
         </h1>
         <input
           type="search"
-          placeholder="Search name, slug, or owner email…"
+          placeholder={t("searchOrgs")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="rounded border px-3 py-1.5 text-sm bg-background w-72"
@@ -69,7 +71,7 @@ export function OrgsListClient({ locale }: { locale: string }) {
       ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            {orgs.length === 0 ? "No organizations yet." : "No matches."}
+            {orgs.length === 0 ? t("noOrgs") : t("noMatches")}
           </CardContent>
         </Card>
       ) : (
@@ -102,15 +104,15 @@ export function OrgsListClient({ locale }: { locale: string }) {
                 <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                   <span className="flex items-center gap-1">
                     <Users className="h-3 w-3" />
-                    {o.member_count} member{o.member_count === 1 ? "" : "s"}
+                    {t("memberCount", { count: o.member_count })}
                   </span>
                   {o.owner_email && (
-                    <span className="truncate max-w-[200px]">owner: {o.owner_email}</span>
+                    <span className="truncate max-w-[200px]">{t("ownerLabel")}: {o.owner_email}</span>
                   )}
                   <span className="flex items-center gap-1">
                     <Layers className="h-3 w-3" />
                     {o.apps_enabled.length === 0
-                      ? <span className="italic">no apps</span>
+                      ? <span className="italic">{t("noAppsLabel")}</span>
                       : o.apps_enabled.map((slug) => (
                         <Badge key={slug} variant="outline" className="text-[10px]">{slug}</Badge>
                       ))
