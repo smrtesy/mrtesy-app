@@ -120,6 +120,16 @@ This is not about avoiding work. It's about doing the work *before* the
 push, in one session, so the user sees a clean PR instead of a stream
 of fix-up commits.
 
+## Product naming convention
+
+All product names follow the pattern **`smrt` + English word**:
+- `smrt` is always lowercase, no space, attached directly to the word
+- The following word is a valid English word, either `camelCase` (e.g. `smrtTask`) or all-lowercase (e.g. `smrtcrm`)
+- Correct: `smrtTask`, `smrtCRM`, `smrtHR`, `smrtMail`
+- Incorrect: `SmartTask`, `smrt-task`, `smrttsk` (abbreviation), `smrtמשימות`
+- The platform itself is **smrtesy** (the name, not subject to this rule)
+- App slugs in the DB follow the same pattern (lowercase): `smrttask`, `smrtcrm`
+
 ## Project conventions worth remembering
 
 - **i18n**: every user-visible string goes through `useTranslations()` /

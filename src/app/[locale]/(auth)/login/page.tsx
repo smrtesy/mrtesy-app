@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,9 +10,16 @@ import { toast } from "sonner";
 
 export default function LoginPage() {
   const t = useTranslations("auth");
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const supabase = createClient();
+
+  useEffect(() => {
+    if (searchParams.get("error") === "no_invite") {
+      toast.error(t("noInviteError"));
+    }
+  }, [searchParams, t]);
 
   async function handleGoogleLogin() {
     const { error } = await supabase.auth.signInWithOAuth({

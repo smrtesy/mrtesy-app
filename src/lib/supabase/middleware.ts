@@ -1,8 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+function getCookieDomain(): string | undefined {
+  const domain = process.env.NEXT_PUBLIC_APP_DOMAIN;
+  if (!domain || domain === "localhost" || domain.includes("localhost")) return undefined;
+  return `.${domain}`; // e.g. '.smrtesy.com'
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
+  const cookieDomain = getCookieDomain();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,7 +25,10 @@ export async function updateSession(request: NextRequest) {
           );
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, {
+              ...options,
+              ...(cookieDomain ? { domain: cookieDomain } : {}),
+            })
           );
         },
       },
@@ -31,3 +41,4 @@ export async function updateSession(request: NextRequest) {
 
   return { supabase, user, response: supabaseResponse };
 }
+
