@@ -48,15 +48,14 @@ export default async function AdminUsersPage({
   if (orgIds.length > 0) {
     const { data: enabledApps } = await supabase
       .from("app_memberships")
-      .select("org_id, slug, apps(name)")
-      .in("org_id", orgIds)
-      .eq("enabled", true);
+      .select("org_id, apps(name, slug)")
+      .in("org_id", orgIds);
 
     for (const a of enabledApps ?? []) {
       if (!appsByOrg[a.org_id]) appsByOrg[a.org_id] = [];
-      const appName = (Array.isArray(a.apps) ? a.apps[0] : a.apps) as { name?: string } | null;
-      const name = appName?.name || a.slug;
-      if (!appsByOrg[a.org_id].includes(name)) appsByOrg[a.org_id].push(name);
+      const appData = (Array.isArray(a.apps) ? a.apps[0] : a.apps) as { name?: string; slug?: string } | null;
+      const name = appData?.name || appData?.slug || "";
+      if (name && !appsByOrg[a.org_id].includes(name)) appsByOrg[a.org_id].push(name);
     }
   }
 
