@@ -8,9 +8,10 @@
 
 import { Router, Request, Response } from "express";
 import { db, loadRules } from "../db";
-import { simpleCall, cachedCall } from "../anthropic";
+import { simpleCall } from "../anthropic";
 import { createDraft, searchGmail, getMessage, extractEmailText } from "../services/gmail";
 import { createCalendarEvent } from "../services/calendar";
+import { getUserPromptContext } from "../lib/user-context";
 
 const router = Router();
 
@@ -51,10 +52,14 @@ router.post("/execute", async (req: Request, res: Response) => {
         .maybeSingle()
     : { data: null };
 
-  // Load writing style rules
-  const rules = await loadRules(userId);
+  // Load writing style rules + per-user identity (replaces single-tenant hardcoding)
+  const [rules, promptCtx] = await Promise.all([
+    loadRules(userId),
+    getUserPromptContext(userId),
+  ]);
   const styleHe = rules.find((r) => r.trigger === "writing_style_he")?.action ?? "";
   const styleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
+  const userName = promptCtx.userName;
 
   const taskContext = [
     `Task: ${task.title_he ?? task.title}`,
@@ -84,7 +89,7 @@ router.post("/execute", async (req: Request, res: Response) => {
         const style = action_type.endsWith("_he") ? styleHe : styleEn;
         const { content } = await simpleCall(
           "sonnet",
-          `Draft an email reply in ${lang} for Chanoch Chaskind.\n${style ? `Writing style:\n${style}` : ""}`,
+          `Draft an email reply in ${lang} for ${userName}.\n${style ? `Writing style:\n${style}` : ""}`,
           `Original message:\n${originalContent}\n\nTask context:\n${taskContext}`,
           1024,
         );
@@ -115,7 +120,7 @@ router.post("/execute", async (req: Request, res: Response) => {
         const style = action_type.endsWith("_he") ? styleHe : styleEn;
         const { content } = await simpleCall(
           "sonnet",
-          `Draft a WhatsApp message in ${lang} for Chanoch Chaskind. Keep it concise and conversational.\n${style ? `Style:\n${style}` : ""}`,
+          `Draft a WhatsApp message in ${lang} for ${userName}. Keep it concise and conversational.\n${style ? `Style:\n${style}` : ""}`,
           `Context:\n${taskContext}\n\nOriginal:\n${originalContent}`,
           512,
         );
@@ -143,7 +148,7 @@ router.post("/execute", async (req: Request, res: Response) => {
 
         const { content } = await simpleCall(
           "sonnet",
-          `Summarize communication history with ${contact} for Chanoch Chaskind. Hebrew. 200-400 words. Include topics, status, open items.`,
+          `Summarize communication history with ${contact} for ${userName}. Hebrew. 200-400 words. Include topics, status, open items.`,
           history || `No email history found. Task context:\n${taskContext}`,
           800,
         );
@@ -214,23 +219,11 @@ router.post("/execute", async (req: Request, res: Response) => {
         break;
       }
 
-      // ── Forward to Chava ────────────────────────────────────────────────────
-      case "forward_to_chava": {
-        const { content } = await simpleCall(
-          "haiku",
-          "Draft a brief WhatsApp message to Chava (secretary) in Hebrew. Max 3 lines. State the issue and what action is needed.",
-          `Task:\n${taskContext}`,
-          300,
-        );
-        result = `הודעה לחווה (+17326660770):\n\n${content}`;
-        break;
-      }
-
       // ── Call preparation ────────────────────────────────────────────────────
       case "call_preparation": {
         const { content } = await simpleCall(
           "sonnet",
-          `Prepare Chanoch for a phone call with ${task.related_contact ?? "the contact"}. Output in Hebrew:
+          `Prepare ${userName} for a phone call with ${task.related_contact ?? "the contact"}. Output in Hebrew:
 - Purpose of call
 - Key points to mention
 - Questions to ask
@@ -247,7 +240,7 @@ router.post("/execute", async (req: Request, res: Response) => {
       case "financial_advisor": {
         const { content } = await simpleCall(
           "opus",
-          `You are a financial advisor for Chanoch Chaskind. Analyze and recommend optimal course of action.
+          `You are a financial advisor for ${userName}. Analyze and recommend optimal course of action.
 Output in Hebrew:
 - Analysis (2-3 paragraphs)
 - Recommended approach
@@ -265,7 +258,7 @@ Output in Hebrew:
       case "draft_settlement_request": {
         const { content } = await simpleCall(
           "opus",
-          `Draft a formal settlement request email in Hebrew for Chanoch Chaskind.
+          `Draft a formal settlement request email in Hebrew for ${userName}.
 ${styleHe ? `Writing style:\n${styleHe}` : ""}
 Be professional, factual, and constructive.`,
           `Task context:\n${taskContext}\n\nOriginal:\n${originalContent}`,
@@ -295,7 +288,7 @@ Be professional, factual, and constructive.`,
         }
         const { content } = await simpleCall(
           "sonnet",
-          `You are an AI assistant for Chanoch Chaskind. Perform the requested action.`,
+          `You are an AI assistant for ${userName}. Perform the requested action.`,
           `Task context:\n${taskContext}\n\nRequest:\n${custom_action}\n\nOriginal message:\n${originalContent}`,
           1500,
         );

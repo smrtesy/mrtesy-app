@@ -176,6 +176,7 @@ export function TaskList({ locale }: { locale: string }) {
         onClose={() => setDetailOpen(false)}
         onUpdate={fetchTasks}
         onQuickAction={handleQuickAction}
+        onDriveSearch={handleDriveSearch}
       />
 
       {/* Quick Action Sheet */}

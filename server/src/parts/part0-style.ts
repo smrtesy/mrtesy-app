@@ -1,7 +1,7 @@
 /**
  * PART 0 — Writing Style Learning (manual-only, run once)
  *
- * Samples sent emails to build a writing style profile for Chanoch.
+ * Samples the user's own sent emails to build a writing style profile.
  * Saves result to rules_memory with trigger=writing_style_he / writing_style_en.
  * Once both exist, PART 3 uses them automatically — no need to re-run.
  */
@@ -9,6 +9,7 @@
 import { db, loadRules, createRunSession, closeRunSession } from "../db";
 import { simpleCall } from "../anthropic";
 import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
+import { getUserPromptContext } from "../lib/user-context";
 
 const STYLE_SYSTEM = `You analyze email writing style. Given sample sent emails, extract a concise style profile (~150 words) describing:
 - Tone (formal/informal/warm)
@@ -32,11 +33,14 @@ export async function runPart0(opts: { userId: string; language: "he" | "en" }) 
       return { sessionId, skipped: true };
     }
 
-    // Search for sent emails in that language
+    // Search the caller's OWN sent mail for samples (no hard-coded address).
+    // Gmail accepts "in:sent" without a from: clause — sent mail is by the user.
+    const ctx = await getUserPromptContext(userId);
+    const fromClause = ctx.gmailAddress ? `from:${ctx.gmailAddress} ` : "";
     const query =
       language === "he"
-        ? "from:chanoch@maor.org in:sent שלום"
-        : "from:chanoch@maor.org in:sent Thank you";
+        ? `${fromClause}in:sent שלום`
+        : `${fromClause}in:sent Thank you`;
 
     const messages = await searchGmail(userId, query, 10);
     if (messages.length === 0) {

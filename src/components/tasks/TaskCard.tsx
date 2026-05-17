@@ -16,6 +16,7 @@ import {
   Folder,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { translateActionLabel } from "@/lib/actionLabels";
 import type { Task } from "@/types/task";
 
 interface TaskCardProps {
@@ -53,6 +54,7 @@ export function TaskCard({
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
+  const tActions = useTranslations("tasks.actions");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
   const aiActions = (task.ai_actions || []).slice(0, 2);
@@ -138,7 +140,7 @@ export function TaskCard({
               }}
             >
               <Zap className="h-3 w-3" />
-              {action.label}
+              {translateActionLabel(action.label, tActions)}
             </Button>
           ))}
         </div>

@@ -78,7 +78,21 @@
       "searchDocs": "חפש מסמכים",
       "gmailDraft": "טיוטת Gmail",
       "saveDraft": "שמור טיוטא",
-      "processing": "Claude מעבד..."
+      "processing": "Claude מעבד...",
+      "labels": {
+        "draft_reply_he": "טיוטת מענה (עברית)",
+        "draft_reply_en": "טיוטת מענה (אנגלית)",
+        "draft_whatsapp_he": "טיוטת ווטסאפ (עברית)",
+        "draft_whatsapp_en": "טיוטת ווטסאפ (אנגלית)",
+        "summarize_history": "סיכום היסטוריה",
+        "find_in_emails": "חיפוש במיילים",
+        "check_past_handling": "טיפול בעבר",
+        "set_reminder": "קביעת תזכורת",
+        "call_preparation": "הכנה לשיחה",
+        "financial_advisor": "ייעוץ פיננסי",
+        "draft_settlement_request": "טיוטת בקשת פשרה",
+        "custom": "פעולה מותאמת"
+      }
     },
     "detail": {
       "description": "תיאור",
@@ -302,6 +316,9 @@
   "taskDetailExt": {
     "toastUpdateAdded": "עדכון נוסף",
     "titleLabel": "כותרת",
+    "priorityLabel": "עדיפות",
+    "statusLabel": "סטטוס",
+    "dueDateLabel": "תאריך יעד",
     "projectLabel": "פרויקט",
     "noProjectOption": "— ללא פרויקט —",
     "assignedToLabel": "משויך ל-",

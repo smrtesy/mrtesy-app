@@ -16,7 +16,7 @@ const DEFAULT_PROMPTS: Record<string, { label: string; description: string; defa
   whatsapp_classifier: {
     label: "WhatsApp Classifier",
     description: "System prompt used to classify WhatsApp conversation threads (PART 2)",
-    default: `You analyze WhatsApp conversations for Chanoch Chaskind, director of the Maor nonprofit organization.
+    default: `You analyze WhatsApp conversations for {{user}}.
 Given the last messages in a conversation thread, classify the conversation status and suggest actions.
 
 Output ONLY valid JSON (no markdown fences):
@@ -32,18 +32,18 @@ Output ONLY valid JSON (no markdown fences):
 
 NEEDS_RESPONSE: last message is incoming, contains a question or request, more than 4 hours old
 WAITING_REPLY: last message is outgoing and was a question, no reply in more than 24 hours
-PERSONAL_REMINDER: message contains a reminder or task for Chanoch to act on
+PERSONAL_REMINDER: message contains a reminder or task for the user to act on
 CLOSED: conversation ended with acknowledgment (ok, thanks, received, reaction)
 NOISE: automated/bot messages with no dialog`,
   },
   deep_classifier: {
     label: "Deep Classifier",
     description: "System prompt used to classify emails/documents into tasks (PART 3)",
-    default: `You are the task classifier and builder for Chanoch Chaskind, director of Maor nonprofit organization.
+    default: `You are the task classifier and builder for {{user}}.
 
 Classify each message as ACTIONABLE or INFORMATIONAL, then build a task for ACTIONABLE items.
 
-ACTIONABLE = requires a real action or decision from Chanoch.
+ACTIONABLE = requires a real action or decision from the user.
 INFORMATIONAL = useful to know but no action needed right now.
 
 Output ONLY valid JSON (no markdown fences).
@@ -59,8 +59,8 @@ For ACTIONABLE:
     "due_date": "YYYY-MM-DD or null",
     "description_he": "Full context with numbers, dates, contacts, stakes",
     "contact_person": "name + phone + email if mentioned",
-    "category": "maor|personal",
-    "tags": ["payments","legal","family","tech","mortgage","maor"],
+    "category": "work|personal",
+    "tags": ["payments","legal","family","tech","mortgage"],
     "suggested_actions": ["action1","action2","action3"]
   }
 }
