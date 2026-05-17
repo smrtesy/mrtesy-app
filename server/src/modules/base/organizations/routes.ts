@@ -93,6 +93,30 @@ router.post("/orgs", requireAuth, async (req: Request, res: Response) => {
     return res.status(500).json({ error: `failed to add creator as owner: ${mErr.message}` });
   }
 
+  // Register subdomain with Vercel (fire-and-forget — org creation already succeeded)
+  const appDomain = process.env.APP_DOMAIN;
+  const vercelToken = process.env.VERCEL_TOKEN;
+  const vercelProjectId = process.env.VERCEL_PROJECT_ID;
+  if (appDomain && vercelToken && vercelProjectId) {
+    const subdomain = `${finalSlug}.${appDomain}`;
+    fetch(`https://api.vercel.com/v10/projects/${vercelProjectId}/domains`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${vercelToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: subdomain }),
+    })
+      .then((r) => r.json())
+      .then((body) => {
+        if ((body as { error?: { code?: string } }).error?.code === "domain_already_in_use") return;
+        if ((body as { error?: unknown }).error) {
+          console.warn("[orgs] Vercel domain register failed for", subdomain, JSON.stringify(body));
+        }
+      })
+      .catch((e) => console.warn("[orgs] Vercel domain register error:", e));
+  }
+
   res.status(201).json({ org });
 });
 
