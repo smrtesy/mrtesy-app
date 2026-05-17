@@ -49,6 +49,7 @@ const ROLE_ICONS = { owner: Crown, admin: Shield, member: User };
 export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: string }) {
   const t = useTranslations("admin");
   const router = useRouter();
+  const isHe = locale === "he";
   const [data, setData] = useState<AdminOrgDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -56,6 +57,9 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [inviting, setInviting] = useState(false);
+  const [directEmail, setDirectEmail] = useState("");
+  const [directRole, setDirectRole] = useState("member");
+  const [addingDirect, setAddingDirect] = useState(false);
 
   const fetchOrg = useCallback(async () => {
     try {
@@ -136,7 +140,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
   }
 
   async function handleDeleteOrg() {
-    if (!confirm(t("deleteOrgConfirm", { name: data?.org.name ?? "" }))) return;
+    if (!confirm(t("deleteOrgConfirm", { name: (isHe && data?.org.name_he ? data.org.name_he : data?.org.name) ?? "" }))) return;
     if (!confirm(t("deleteOrgConfirm2", { tasks: data?.stats.task_count ?? 0, projects: data?.stats.project_count ?? 0 }))) return;
     try {
       await api(`/api/admin/orgs/${orgId}`, { method: "DELETE", noOrg: true });
@@ -163,6 +167,35 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
       toast.error((e as Error).message);
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleAddDirect() {
+    if (!directEmail.trim()) return;
+    setAddingDirect(true);
+    try {
+      const { user } = await api<{ user: { id: string; email: string } }>(
+        `/api/admin/users/by-email?email=${encodeURIComponent(directEmail.trim())}`,
+        { noOrg: true },
+      );
+      await api(`/api/admin/orgs/${orgId}/members`, {
+        method: "POST",
+        body: { user_id: user.id, role: directRole },
+        noOrg: true,
+      });
+      toast.success(t("addDirectSuccess", { email: directEmail.trim() }));
+      setDirectEmail("");
+      fetchOrg();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        toast.error(t("addDirectNotFound"));
+      } else if (e instanceof ApiError && e.status === 409) {
+        toast.error(t("addDirectAlreadyMember"));
+      } else {
+        toast.error((e as Error).message);
+      }
+    } finally {
+      setAddingDirect(false);
     }
   }
 
@@ -202,7 +235,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold flex items-center gap-2 min-w-0">
           <Building2 className="h-6 w-6 shrink-0" />
-          <span className="truncate" dir="auto">{data.org.name}</span>
+          <span className="truncate" dir="auto">{isHe && data.org.name_he ? data.org.name_he : data.org.name}</span>
           <span className="text-sm font-mono text-muted-foreground">{data.org.slug}</span>
         </h1>
         <div className="flex gap-2">
@@ -273,7 +306,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
                 <div key={inv.id} className="flex items-center justify-between rounded border p-2 text-sm">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate text-sm">{inv.email}</span>
-                    <Badge variant="outline" className="text-[10px] shrink-0">{inv.role}</Badge>
+                    <Badge variant="outline" className="text-[10px] shrink-0">{t(`role${inv.role.charAt(0).toUpperCase() + inv.role.slice(1)}` as "roleMember" | "roleAdmin" | "roleOwner")}</Badge>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-muted-foreground">
@@ -295,6 +328,38 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
         </CardContent>
       </Card>
 
+      {/* Direct add — super-admin can add any existing user without sending an invite */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("addDirectSection")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Input
+              type="email"
+              placeholder={t("addDirectPlaceholder")}
+              value={directEmail}
+              onChange={(e) => setDirectEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddDirect()}
+              className="flex-1"
+              dir="auto"
+            />
+            <select
+              value={directRole}
+              onChange={(e) => setDirectRole(e.target.value)}
+              className="rounded border px-2 py-1 text-sm bg-background"
+            >
+              <option value="member">{t("roleMember")}</option>
+              <option value="admin">{t("roleAdmin")}</option>
+              <option value="owner">{t("roleOwner")}</option>
+            </select>
+            <Button size="sm" onClick={handleAddDirect} disabled={addingDirect || !directEmail.trim()}>
+              {addingDirect ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("addDirectBtn")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">{t("appsSection")}</CardTitle>
@@ -305,11 +370,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
           ) : data.apps.map((a) => (
             <div key={a.id} className="flex items-center gap-3 rounded-lg border p-2.5">
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium flex items-center gap-2">
-                  {a.name}
-                  <span className="text-[10px] font-mono text-muted-foreground">{a.slug}</span>
-                </div>
-                {a.description && <div className="text-xs text-muted-foreground truncate">{a.description}</div>}
+                <div className="text-sm font-medium">{a.name}</div>
                 {a.enabled && a.enabled_at && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
                     {t("enabledAt", { date: new Date(a.enabled_at).toLocaleString() })}

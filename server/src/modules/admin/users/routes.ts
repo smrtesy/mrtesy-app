@@ -43,6 +43,18 @@ function nameOf(u: AuthUser | undefined): string | null {
 
 // ── routes ─────────────────────────────────────────────────────────────────
 
+/** GET /admin/users/by-email?email=… — look up a single user by email */
+router.get("/admin/users/by-email", async (req: Request, res: Response) => {
+  const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
+  if (!email) return res.status(400).json({ error: "email is required" });
+
+  const { data } = await db.auth.admin.listUsers({ perPage: 1000 });
+  const match = (data?.users ?? []).find((u) => u.email?.toLowerCase() === email);
+  if (!match) return res.status(404).json({ error: "user not found" });
+
+  res.json({ user: { id: match.id, email: match.email ?? null, name: nameOf(match as AuthUser) } });
+});
+
 /** GET /admin/users — list all users with email, name, org count, super-admin flag */
 router.get("/admin/users", async (_req: Request, res: Response) => {
   const [userMap, memberRows, superAdminRows, settingsRows] = await Promise.all([

@@ -60,15 +60,21 @@ export default async function AppLayout({
     const cookieStore = await cookies();
     const activeOrgId = cookieStore.get("smrt_org_id")?.value;
 
-    if (activeOrgId) {
-      const { data: appRows } = await supabase
+    async function fetchEnabledApps(orgId: string): Promise<string[]> {
+      const { data } = await supabase
         .from("app_memberships")
-        .select("slug")
-        .eq("org_id", activeOrgId)
-        .eq("enabled", true);
-      enabledApps = (appRows ?? []).map((r) => r.slug);
-    } else if (user) {
-      // No active org (e.g. super-admin on app.smrtesy.com) — check any org
+        .select("apps(slug)")
+        .eq("org_id", orgId);
+      return (data ?? []).map((r) => {
+        const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
+        return (app as { slug?: string } | null)?.slug ?? "";
+      }).filter(Boolean);
+    }
+
+    if (activeOrgId) {
+      enabledApps = await fetchEnabledApps(activeOrgId);
+    } else {
+      // No active org (e.g. super-admin on app.smrtesy.com) — check first org
       const { data: memberships } = await supabase
         .from("org_members")
         .select("org_id")
@@ -76,12 +82,7 @@ export default async function AppLayout({
         .limit(1);
       const firstOrgId = memberships?.[0]?.org_id;
       if (firstOrgId) {
-        const { data: appRows } = await supabase
-          .from("app_memberships")
-          .select("slug")
-          .eq("org_id", firstOrgId)
-          .eq("enabled", true);
-        enabledApps = (appRows ?? []).map((r) => r.slug);
+        enabledApps = await fetchEnabledApps(firstOrgId);
       }
     }
   }
