@@ -27,6 +27,25 @@ export default async function AdminUserDetailPage({
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
 
+  // Check if the user's org has smrtTask enabled
+  const { data: userOrg } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", id)
+    .limit(1)
+    .maybeSingle();
+  let hasSmrtTask = false;
+  if (userOrg) {
+    const { data: appRow } = await supabase
+      .from("app_memberships")
+      .select("id")
+      .eq("org_id", userOrg.org_id)
+      .eq("slug", "smrttask")
+      .eq("enabled", true)
+      .maybeSingle();
+    hasSmrtTask = !!appRow;
+  }
+
   let email = "";
   const admin = createAdminSupabaseClient();
   if (admin) {
@@ -51,8 +70,8 @@ export default async function AdminUserDetailPage({
 
       <UserMembershipsClient userId={id} locale={locale} />
 
-      {/* smrtTask-specific data — grouped separately from platform info */}
-      <div className="space-y-4">
+      {/* smrtTask-specific data — only shown when the user's org has smrtTask enabled */}
+      {hasSmrtTask && <div className="space-y-4">
         <div className="flex items-center gap-3">
           <div className="h-px flex-1 bg-border" />
           <span className="text-xs font-semibold text-muted-foreground tracking-widest uppercase px-2">
@@ -125,7 +144,7 @@ export default async function AdminUserDetailPage({
         </CardContent>
       </Card>
 
-      </div>{/* end smrtTask section */}
+      </div>}{/* end smrtTask section */}
     </div>
   );
 }
