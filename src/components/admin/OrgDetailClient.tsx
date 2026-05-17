@@ -273,7 +273,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
                 <div key={inv.id} className="flex items-center justify-between rounded border p-2 text-sm">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate text-sm">{inv.email}</span>
-                    <Badge variant="outline" className="text-[10px] shrink-0">{inv.role}</Badge>
+                    <Badge variant="outline" className="text-[10px] shrink-0">{t(`role${inv.role.charAt(0).toUpperCase() + inv.role.slice(1)}` as "roleMember" | "roleAdmin" | "roleOwner")}</Badge>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-muted-foreground">
@@ -305,11 +305,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
           ) : data.apps.map((a) => (
             <div key={a.id} className="flex items-center gap-3 rounded-lg border p-2.5">
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium flex items-center gap-2">
-                  {a.name}
-                  <span className="text-[10px] font-mono text-muted-foreground">{a.slug}</span>
-                </div>
-                {a.description && <div className="text-xs text-muted-foreground truncate">{a.description}</div>}
+                <div className="text-sm font-medium">{a.name}</div>
                 {a.enabled && a.enabled_at && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
                     {t("enabledAt", { date: new Date(a.enabled_at).toLocaleString() })}
