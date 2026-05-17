@@ -360,6 +360,38 @@
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
   },
+  "adminUserDetail": {
+    "connectionsSection": "Connections",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "syncState": "Sync State",
+    "statsSection": "Stats",
+    "totalTasks": "Total tasks: {count}",
+    "plan": "Plan: {plan}",
+    "language": "Language: {lang}",
+    "joined": "Joined: {date}",
+    "recentLogs": "Recent Logs ({count})",
+    "userNotFound": "User not found",
+    "failures": "Failures: {count}"
+  },
+  "adminUserMemberships": {
+    "effectiveAppAccess": "Effective App Access",
+    "noApps": "No apps — user has no org memberships or no orgs have apps enabled.",
+    "appAccessHint": "Apps are granted at the organization level. To change a user's access, toggle the app on/off for one of their orgs below — or add them to an org that already has the app.",
+    "organizationsCount": "Organizations ({count})",
+    "notMemberOfAny": "User is not a member of any organization.",
+    "manageApps": "Manage apps →",
+    "addToOrg": "Add user to an organization",
+    "searchOrgs": "Search orgs by name or slug…",
+    "noMatchingOrgs": "No matching orgs (or user is already a member).",
+    "add": "Add",
+    "roleMember": "member",
+    "roleAdmin": "admin",
+    "roleOwner": "owner",
+    "addedToOrg": "Added to org",
+    "removed": "Removed",
+    "roleUpdated": "Role updated"
+  },
   "admin": {
     "title": "Admin Dashboard",
     "overview": "Overview",

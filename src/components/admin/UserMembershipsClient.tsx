@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 interface Membership {
   role: "owner" | "admin" | "member";
@@ -31,6 +32,8 @@ interface OrgRow {
 const ROLE_ICONS = { owner: Crown, admin: Shield, member: User };
 
 export function UserMembershipsClient({ userId, locale }: { userId: string; locale: string }) {
+  const t = useTranslations("adminUserMemberships");
+  const isHe = locale === "he";
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [effectiveApps, setEffectiveApps] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +58,6 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
     }
   }, [userId]);
 
-  // Lazy-load all orgs once for the "add to org" picker
   async function loadAllOrgsIfNeeded() {
     if (allOrgs.length > 0) return;
     try {
@@ -76,7 +78,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
         body: { user_id: userId, role },
         noOrg: true,
       });
-      toast.success("Added to org");
+      toast.success(t("addedToOrg"));
       setSearch("");
       fetchMemberships();
     } catch (e) {
@@ -91,7 +93,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
     setRemoving(orgId);
     try {
       await api(`/api/admin/orgs/${orgId}/members/${userId}`, { method: "DELETE", noOrg: true });
-      toast.success("Removed");
+      toast.success(t("removed"));
       fetchMemberships();
     } catch (e) {
       toast.error((e as Error).message);
@@ -107,7 +109,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
         body: { role },
         noOrg: true,
       });
-      toast.success("Role updated");
+      toast.success(t("roleUpdated"));
       fetchMemberships();
     } catch (e) {
       toast.error((e as Error).message);
@@ -127,19 +129,18 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
 
   return (
     <div className="space-y-4">
-      {/* Effective app access (header card) */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
             <Layers className="h-4 w-4" />
-            Effective App Access
+            {t("effectiveAppAccess")}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
             <Skeleton className="h-6 w-48" />
           ) : effectiveApps.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">No apps — user has no org memberships or no orgs have apps enabled.</p>
+            <p className="text-sm text-muted-foreground italic">{t("noApps")}</p>
           ) : (
             <div className="flex gap-1.5 flex-wrap">
               {effectiveApps.map((slug) => (
@@ -147,19 +148,16 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
               ))}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground mt-2">
-            Apps are granted at the organization level. To change a user&apos;s access, toggle the app on/off for one of their orgs below — or add them to an org that already has the app.
-          </p>
+          <p className="text-[11px] text-muted-foreground mt-2">{t("appAccessHint")}</p>
         </CardContent>
       </Card>
 
-      {/* Memberships */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               <Building2 className="h-4 w-4" />
-              Organizations ({memberships.length})
+              {t("organizationsCount", { count: memberships.length })}
             </span>
           </CardTitle>
         </CardHeader>
@@ -167,9 +165,10 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
           {loading ? (
             <div className="space-y-2">{[1, 2].map((i) => <Skeleton key={i} className="h-20" />)}</div>
           ) : memberships.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">User is not a member of any organization.</p>
+            <p className="text-sm text-muted-foreground italic">{t("notMemberOfAny")}</p>
           ) : memberships.map((m) => {
             const Icon = ROLE_ICONS[m.role];
+            const orgName = isHe && m.org.name_he ? m.org.name_he : m.org.name;
             return (
               <div key={m.org.id} className="rounded-lg border p-3 space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -179,7 +178,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                     className="font-medium hover:underline flex items-center gap-1"
                     dir="auto"
                   >
-                    {m.org.name}
+                    {orgName}
                     <ExternalLink className="h-3 w-3 text-muted-foreground" />
                   </Link>
                   <span className="text-[10px] font-mono text-muted-foreground">{m.org.slug}</span>
@@ -188,16 +187,16 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                     onChange={(e) => handleChangeRole(m.org.id, e.target.value)}
                     className="rounded border px-2 py-0.5 text-xs bg-background ms-auto"
                   >
-                    <option value="member">member</option>
-                    <option value="admin">admin</option>
-                    <option value="owner">owner</option>
+                    <option value="member">{t("roleMember")}</option>
+                    <option value="admin">{t("roleAdmin")}</option>
+                    <option value="owner">{t("roleOwner")}</option>
                   </select>
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-red-500"
                     disabled={removing === m.org.id}
-                    onClick={() => handleRemoveFromOrg(m.org.id, m.org.name)}
+                    onClick={() => handleRemoveFromOrg(m.org.id, orgName)}
                   >
                     {removing === m.org.id
                       ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -206,17 +205,16 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap text-xs">
                   <Layers className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-muted-foreground">apps:</span>
                   {m.apps.length === 0 ? (
                     <span className="text-muted-foreground italic">none</span>
                   ) : m.apps.map((a) => (
-                    <Badge key={a.slug} variant="outline" className="text-[10px]">{a.slug}</Badge>
+                    <Badge key={a.slug} variant="outline" className="text-[10px]">{a.name || a.slug}</Badge>
                   ))}
                   <Link
                     href={`/${locale}/admin/orgs/${m.org.id}`}
                     className="ms-auto text-[11px] text-muted-foreground hover:text-foreground"
                   >
-                    Manage apps →
+                    {t("manageApps")}
                   </Link>
                 </div>
               </div>
@@ -225,12 +223,11 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
         </CardContent>
       </Card>
 
-      {/* Add to org */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
             <Plus className="h-4 w-4" />
-            Add user to an organization
+            {t("addToOrg")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -238,7 +235,8 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onFocus={loadAllOrgsIfNeeded}
-            placeholder="Search orgs by name or slug…"
+            placeholder={t("searchOrgs")}
+            dir="auto"
           />
           {candidates.length > 0 && (
             <div className="space-y-1 mt-1">
@@ -258,9 +256,9 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                     id={`role-${o.id}`}
                     className="rounded border px-2 py-1 text-xs bg-background"
                   >
-                    <option value="member">member</option>
-                    <option value="admin">admin</option>
-                    <option value="owner">owner</option>
+                    <option value="member">{t("roleMember")}</option>
+                    <option value="admin">{t("roleAdmin")}</option>
+                    <option value="owner">{t("roleOwner")}</option>
                   </select>
                   <Button
                     size="sm"
@@ -272,14 +270,14 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                     }}
                   >
                     {adding === o.id && <Loader2 className="h-3 w-3 animate-spin me-1" />}
-                    Add
+                    {t("add")}
                   </Button>
                 </div>
               ))}
             </div>
           )}
           {searchLower.length >= 1 && allOrgs.length > 0 && candidates.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">No matching orgs (or user is already a member).</p>
+            <p className="text-xs text-muted-foreground italic">{t("noMatchingOrgs")}</p>
           )}
         </CardContent>
       </Card>

@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+import { getTranslations } from "next-intl/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +12,7 @@ export default async function AdminUserDetailPage({
   params: Promise<{ locale: string; id: string }>;
 }) {
   const { locale, id } = await params;
+  const t = await getTranslations("adminUserDetail");
   const supabase = await createClient();
 
   const [settingsResult, syncResult, logsResult, tasksResult] = await Promise.all([
@@ -25,9 +27,6 @@ export default async function AdminUserDetailPage({
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
 
-  // Resolve email from auth.users via the shared admin helper.
-  // Returns empty if SUPABASE_SERVICE_ROLE_KEY is not configured — the
-  // helper logs a warning, the page just shows the UUID-only header.
   let email = "";
   const admin = createAdminSupabaseClient();
   if (admin) {
@@ -36,7 +35,7 @@ export default async function AdminUserDetailPage({
   }
 
   if (!settings) {
-    return <p>User not found</p>;
+    return <p>{t("userNotFound")}</p>;
   }
 
   return (
@@ -50,27 +49,24 @@ export default async function AdminUserDetailPage({
         </p>
       </div>
 
-      {/* Memberships + effective app access (new) */}
       <UserMembershipsClient userId={id} locale={locale} />
 
-      {/* Connections */}
       <Card>
-        <CardHeader><CardTitle>Connections</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{t("connectionsSection")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {["gmail", "drive", "whatsapp", "calendar"].map((service) => (
             <div key={service} className="flex items-center justify-between">
               <span className="capitalize">{service}</span>
               <Badge variant={settings[`${service}_connected` as keyof typeof settings] ? "default" : "destructive"}>
-                {settings[`${service}_connected` as keyof typeof settings] ? "Connected" : "Disconnected"}
+                {settings[`${service}_connected` as keyof typeof settings] ? t("connected") : t("disconnected")}
               </Badge>
             </div>
           ))}
         </CardContent>
       </Card>
 
-      {/* Sync State */}
       <Card>
-        <CardHeader><CardTitle>Sync State</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{t("syncState")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {syncStates.map((s) => (
             <div key={s.id} className="rounded border p-2 text-sm">
@@ -81,7 +77,7 @@ export default async function AdminUserDetailPage({
                 </span>
               </div>
               {s.consecutive_failures > 0 && (
-                <p className="text-xs text-red-500">Failures: {s.consecutive_failures}</p>
+                <p className="text-xs text-red-500">{t("failures", { count: s.consecutive_failures })}</p>
               )}
               {s.last_error && (
                 <p className="text-xs text-red-500 truncate">{s.last_error}</p>
@@ -91,20 +87,18 @@ export default async function AdminUserDetailPage({
         </CardContent>
       </Card>
 
-      {/* Stats */}
       <Card>
-        <CardHeader><CardTitle>Stats</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{t("statsSection")}</CardTitle></CardHeader>
         <CardContent>
-          <p>Total tasks: {taskCount}</p>
-          <p>Plan: {settings.plan}</p>
-          <p>Language: {settings.preferred_language}</p>
-          <p>Joined: {new Date(settings.created_at).toLocaleDateString()}</p>
+          <p>{t("totalTasks", { count: taskCount })}</p>
+          <p>{t("plan", { plan: settings.plan })}</p>
+          <p>{t("language", { lang: settings.preferred_language })}</p>
+          <p>{t("joined", { date: new Date(settings.created_at).toLocaleDateString() })}</p>
         </CardContent>
       </Card>
 
-      {/* Recent Logs */}
       <Card>
-        <CardHeader><CardTitle>Recent Logs ({logs.length})</CardTitle></CardHeader>
+        <CardHeader><CardTitle>{t("recentLogs", { count: logs.length })}</CardTitle></CardHeader>
         <CardContent className="max-h-96 overflow-y-auto space-y-1">
           {logs.slice(0, 20).map((log) => (
             <div key={log.id} className="flex gap-2 text-xs border-b py-1">

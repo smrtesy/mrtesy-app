@@ -360,6 +360,38 @@
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
   },
+  "adminUserDetail": {
+    "connectionsSection": "חיבורים",
+    "connected": "מחובר",
+    "disconnected": "מנותק",
+    "syncState": "סטטוס סנכרון",
+    "statsSection": "סטטיסטיקות",
+    "totalTasks": "סך משימות: {count}",
+    "plan": "תוכנית: {plan}",
+    "language": "שפה: {lang}",
+    "joined": "הצטרף: {date}",
+    "recentLogs": "לוגים אחרונים ({count})",
+    "userNotFound": "משתמש לא נמצא",
+    "failures": "כשלים: {count}"
+  },
+  "adminUserMemberships": {
+    "effectiveAppAccess": "גישה לאפליקציות",
+    "noApps": "אין אפליקציות — המשתמש אינו חבר בארגון כלשהו, או לאף ארגון אין אפליקציות מופעלות.",
+    "appAccessHint": "גישה לאפליקציות מוענקת ברמת הארגון. לשינוי גישת המשתמש, הפעל/כבה את האפליקציה בארגון שלהם — או הוסף אותם לארגון שכבר יש לו את האפליקציה.",
+    "organizationsCount": "ארגונים ({count})",
+    "notMemberOfAny": "המשתמש אינו חבר באף ארגון.",
+    "manageApps": "נהל אפליקציות ←",
+    "addToOrg": "הוסף משתמש לארגון",
+    "searchOrgs": "חפש ארגונים לפי שם או slug…",
+    "noMatchingOrgs": "אין ארגונים תואמים (או שהמשתמש כבר חבר).",
+    "add": "הוסף",
+    "roleMember": "חבר",
+    "roleAdmin": "מנהל",
+    "roleOwner": "בעלים",
+    "addedToOrg": "נוסף לארגון",
+    "removed": "הוסר",
+    "roleUpdated": "תפקיד עודכן"
+  },
   "admin": {
     "title": "ניהול מערכת",
     "appsRegistry": "רישום אפליקציות",
