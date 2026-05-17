@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Users, Layers, ExternalLink } from "lucide-react";
+import { Building2, Users, Layers, ExternalLink, Plus, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -22,26 +23,136 @@ interface AdminOrg {
   owner_email: string | null;
 }
 
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "org";
+}
+
+function CreateOrgDialog({
+  onCreated,
+  onClose,
+}: {
+  onCreated: (org: AdminOrg) => void;
+  onClose: () => void;
+}) {
+  const t = useTranslations("admin");
+  const [name, setName] = useState("");
+  const [nameHe, setNameHe] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugManual, setSlugManual] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!slugManual && name) setSlug(slugify(name));
+  }, [name, slugManual]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setSubmitting(true);
+    try {
+      const { org } = await api<{ org: AdminOrg }>("/api/admin/orgs", {
+        method: "POST",
+        body: { name: name.trim(), name_he: nameHe.trim() || undefined, slug: slug.trim() || undefined },
+        noOrg: true,
+      });
+      toast.success(t("createOrgSuccess"));
+      onCreated(org);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        toast.error(t("createOrgSlugTaken"));
+      } else {
+        toast.error(t("createOrgError"));
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-background rounded-xl border shadow-xl w-full max-w-md">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-base font-semibold">{t("createOrgTitle")}</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("createOrgNameEn")} *</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className="w-full rounded border px-3 py-2 text-sm bg-background"
+              placeholder="Acme Corp"
+              dir="ltr"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("createOrgNameHe")}</label>
+            <input
+              type="text"
+              value={nameHe}
+              onChange={(e) => setNameHe(e.target.value)}
+              className="w-full rounded border px-3 py-2 text-sm bg-background"
+              placeholder="אקמי קורפ"
+              dir="rtl"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("createOrgSlug")}</label>
+            <input
+              type="text"
+              value={slug}
+              onChange={(e) => { setSlug(e.target.value.toLowerCase()); setSlugManual(true); }}
+              className="w-full rounded border px-3 py-2 text-sm bg-background font-mono"
+              placeholder="acme-corp"
+              dir="ltr"
+            />
+            <p className="text-xs text-muted-foreground">{t("createOrgSlugHint")}</p>
+          </div>
+          <div className="flex gap-2 justify-end pt-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
+              {t("cancel") || "Cancel"}
+            </Button>
+            <Button type="submit" disabled={submitting || !name.trim()}>
+              {submitting ? "..." : t("createOrgSubmit")}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function OrgsListClient({ locale }: { locale: string }) {
   const t = useTranslations("admin");
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { orgs } = await api<{ orgs: AdminOrg[] }>("/api/admin/orgs", { noOrg: true });
-        setOrgs(orgs ?? []);
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 401)) {
-          toast.error((e as Error).message);
-        }
-      } finally {
-        setLoading(false);
+  const fetchOrgs = useCallback(async () => {
+    try {
+      const { orgs } = await api<{ orgs: AdminOrg[] }>("/api/admin/orgs", { noOrg: true });
+      setOrgs(orgs ?? []);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) {
+        toast.error((e as Error).message);
       }
-    })();
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { fetchOrgs(); }, [fetchOrgs]);
 
   const filtered = search.trim()
     ? orgs.filter((o) =>
@@ -52,18 +163,24 @@ export function OrgsListClient({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Building2 className="h-6 w-6" />
           {t("organizationsTitle")} <span className="text-muted-foreground text-base">({orgs.length})</span>
         </h1>
-        <input
-          type="search"
-          placeholder={t("searchOrgs")}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="rounded border px-3 py-1.5 text-sm bg-background w-72"
-        />
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            placeholder={t("searchOrgs")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="rounded border px-3 py-1.5 text-sm bg-background w-56"
+          />
+          <Button size="sm" className="gap-1.5" onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4" />
+            {t("createOrg")}
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -126,6 +243,16 @@ export function OrgsListClient({ locale }: { locale: string }) {
             </Card>
           ))}
         </div>
+      )}
+
+      {showCreate && (
+        <CreateOrgDialog
+          onCreated={(org) => {
+            setOrgs((prev) => [{ ...org, member_count: 0, apps_enabled: [], owner_user_id: null, owner_email: null }, ...prev]);
+            setShowCreate(false);
+          }}
+          onClose={() => setShowCreate(false)}
+        />
       )}
     </div>
   );
