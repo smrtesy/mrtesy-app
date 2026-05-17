@@ -80,15 +80,16 @@ export default function SettingsPage() {
 
       if (memberships && memberships.length > 0) {
         const orgIds = memberships.map((m: { org_id: string }) => m.org_id);
-        const { data: appRow } = await supabase
+        const { data: appRows } = await supabase
           .from("app_memberships")
-          .select("id")
+          .select("apps!inner(slug)")
           .in("org_id", orgIds)
-          .eq("slug", "smrttask")
-          .eq("enabled", true)
-          .limit(1)
-          .maybeSingle();
-        setHasSmrtTask(!!appRow);
+          .eq("apps.slug", "smrttask");
+        const found = (appRows ?? []).some((r: { apps: unknown }) => {
+          const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
+          return (app as { slug?: string } | null)?.slug === "smrttask";
+        });
+        setHasSmrtTask(found);
       }
     }
     load();
