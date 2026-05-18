@@ -29,7 +29,8 @@
     "admin": "פלטפורמה",
     "sectionManagement": "ניהול",
     "sectionPlatform": "פלטפורמה",
-    "newTask": "משימה חדשה"
+    "newTask": "משימה חדשה",
+    "inbox": "תיבה"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
@@ -272,7 +273,11 @@
     "roleMember": "חבר",
     "roleAdmin": "מנהל",
     "roleOwner": "בעלים",
-    "invite": "צרף"
+    "invite": "צרף",
+    "errorHandlerTitle": "אחראי שגיאות טכניות",
+    "errorHandlerDesc": "משתמש זה יקבל התראה (כהצעה למשימה) כאשר אפליקציה במערכת נכשלת טכנית.",
+    "errorHandlerOwnerDefault": "בעלים (ברירת מחדל)",
+    "errorHandlerSaved": "אחראי השגיאות עודכן"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",
@@ -523,6 +528,21 @@
     "inviteSendBtn": "שלח הזמנה",
     "inviteSent": "הזמנה נשלחה ל-{email}",
     "inviteRevoked": "ההזמנה בוטלה",
-    "inviteExpires": "פג תוקף ב-{date}"
+    "inviteExpires": "פג תוקף ב-{date}",
+    "addDirectSection": "הוסף ישירות",
+    "addDirectPlaceholder": "אימייל של משתמש קיים...",
+    "addDirectBtn": "הוסף",
+    "addDirectSuccess": "{email} נוסף לארגון",
+    "addDirectNotFound": "משתמש לא נמצא — שלח הזמנה במקום",
+    "addDirectAlreadyMember": "המשתמש כבר רשום בארגון"
+  },
+  "inbox": {
+    "title": "תיבה",
+    "tabSuggestions": "הצעות",
+    "tabNotifications": "התראות",
+    "noNotifications": "אין התראות חדשות",
+    "markRead": "סמן כנקרא",
+    "markAllRead": "סמן הכל כנקרא",
+    "allMarkedRead": "כל ההתראות סומנו כנקראו"
   }
 }

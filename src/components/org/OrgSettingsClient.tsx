@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2 } from "lucide-react";
+import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle } from "lucide-react";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
 import { api } from "@/lib/api/client";
@@ -37,16 +37,24 @@ export function OrgSettingsClient() {
   const [orgName, setOrgName] = useState("");
   const [orgNameHe, setOrgNameHe] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
+  const [errorHandlerUserId, setErrorHandlerUserId] = useState<string | null>(null);
+  const [savingErrorHandler, setSavingErrorHandler] = useState(false);
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<OrgMember["role"]>("member");
   const [inviting, setInviting] = useState(false);
 
-  // Populate the rename inputs once active is loaded
-  if (active && orgName === "" && orgNameHe === "") {
-    setOrgName(active.name);
-    setOrgNameHe(active.name_he ?? "");
-  }
+  // Populate inputs once active is loaded and fetch full org details (incl. error_handler_user_id)
+  useEffect(() => {
+    if (!active) return;
+    if (orgName === "") setOrgName(active.name);
+    if (orgNameHe === "") setOrgNameHe(active.name_he ?? "");
+
+    api<{ org: { error_handler_user_id: string | null } }>("/api/org")
+      .then(({ org }) => setErrorHandlerUserId(org.error_handler_user_id))
+      .catch(() => { /* non-critical, dropdown defaults to null = owner */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id]);
 
   // Role comes from the active org (the hook returns my role per org).
   const myRoleFromOrgs = active?.role;
@@ -95,6 +103,22 @@ export function OrgSettingsClient() {
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  }
+
+  async function handleSaveErrorHandler() {
+    setSavingErrorHandler(true);
+    try {
+      await api("/api/org", {
+        method: "PATCH",
+        body: { error_handler_user_id: errorHandlerUserId },
+      });
+      toast.success(tOrg("errorHandlerSaved"));
+      refreshOrgs();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSavingErrorHandler(false);
     }
   }
 
@@ -236,6 +260,41 @@ export function OrgSettingsClient() {
           )}
         </CardContent>
       </Card>
+      {/* Error handler */}
+      {canManage && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              {tOrg("errorHandlerTitle")}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">{tOrg("errorHandlerDesc")}</p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <select
+              value={errorHandlerUserId ?? ""}
+              onChange={(e) => setErrorHandlerUserId(e.target.value || null)}
+              className="w-full rounded border px-3 py-2 text-sm bg-background"
+            >
+              <option value="">{tOrg("errorHandlerOwnerDefault")}</option>
+              {members.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {m.email || m.name || m.user_id.slice(0, 8)}
+                  {m.role === "owner" ? ` (${tOrg("roleOwner")})` : ""}
+                </option>
+              ))}
+            </select>
+            <Button
+              onClick={handleSaveErrorHandler}
+              disabled={savingErrorHandler}
+              className="gap-2"
+            >
+              {savingErrorHandler && <Loader2 className="h-4 w-4 animate-spin" />}
+              {tOrg("save")}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

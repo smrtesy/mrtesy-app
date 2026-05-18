@@ -29,7 +29,8 @@
     "admin": "Platform",
     "sectionManagement": "Management",
     "sectionPlatform": "Platform",
-    "newTask": "New Task"
+    "newTask": "New Task",
+    "inbox": "Inbox"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
@@ -272,7 +273,11 @@
     "roleMember": "Member",
     "roleAdmin": "Admin",
     "roleOwner": "Owner",
-    "invite": "Invite"
+    "invite": "Invite",
+    "errorHandlerTitle": "Technical Error Handler",
+    "errorHandlerDesc": "This user receives a notification (as a task suggestion) whenever an app fails technically.",
+    "errorHandlerOwnerDefault": "Owner (default)",
+    "errorHandlerSaved": "Error handler updated"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",
@@ -524,5 +529,14 @@
     "joinedLabel": "Joined: {date}",
     "slugPlaceholder": "e.g. crm",
     "namePlaceholder": "e.g. CRM"
+  },
+  "inbox": {
+    "title": "Inbox",
+    "tabSuggestions": "Suggestions",
+    "tabNotifications": "Notifications",
+    "noNotifications": "No new notifications",
+    "markRead": "Mark as read",
+    "markAllRead": "Mark all as read",
+    "allMarkedRead": "All notifications marked as read"
   }
 }

@@ -22,24 +22,24 @@ import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 
 const smrtTaskItems = [
-  { key: "tasks", href: "/tasks", icon: CheckSquare },
-  { key: "projects", href: "/projects", icon: FolderOpen },
-  { key: "suggestions", href: "/suggestions", icon: Bell },
-  { key: "calendar", href: "/calendar", icon: Calendar },
-  { key: "log", href: "/log", icon: FileText },
+  { key: "tasks",    href: "/tasks",    icon: CheckSquare },
+  { key: "projects", href: "/projects", icon: FolderOpen  },
+  { key: "calendar", href: "/calendar", icon: Calendar    },
+  { key: "log",      href: "/log",      icon: FileText    },
 ] as const;
 
 const managementItems = [
+  { key: "inbox",    href: "/inbox",    icon: Bell     },
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
 // Mobile shows a flat list of the most-used items
 const mobileItems = [
-  { key: "tasks", href: "/tasks", icon: CheckSquare },
-  { key: "projects", href: "/projects", icon: FolderOpen },
-  { key: "suggestions", href: "/suggestions", icon: Bell },
-  { key: "calendar", href: "/calendar", icon: Calendar },
-  { key: "settings", href: "/settings", icon: Settings },
+  { key: "tasks",    href: "/tasks",    icon: CheckSquare },
+  { key: "projects", href: "/projects", icon: FolderOpen  },
+  { key: "inbox",    href: "/inbox",    icon: Bell        },
+  { key: "calendar", href: "/calendar", icon: Calendar    },
+  { key: "settings", href: "/settings", icon: Settings    },
 ] as const;
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -63,9 +63,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
     async function fetchCount() {
       try {
-        const { count } = await api<{ count: number }>(
-          "/api/tasks/count?status=inbox&verified=false&has_source=true",
-        );
+        const { count } = await api<{ count: number }>("/api/inbox/count");
         if (mounted) setPendingCount(count);
       } catch (e) {
         if (mounted && !(e instanceof ApiError && e.status === 401)) {
@@ -77,8 +75,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     fetchCount();
 
     const channel = supabase
-      .channel("sidebar-suggestions-count")
-      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, fetchCount)
+      .channel("sidebar-inbox-count")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" },         fetchCount)
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, fetchCount)
       .subscribe();
 
     const handleOrgChange = () => fetchCount();
@@ -120,7 +119,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       >
         <div className="relative">
           <Icon className="h-5 w-5" />
-          {itemKey === "suggestions" && pendingCount > 0 && (
+          {itemKey === "inbox" && pendingCount > 0 && (
             <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
               {pendingCount > 99 ? "99+" : pendingCount}
             </span>
@@ -205,7 +204,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             >
               <div className="relative">
                 <item.icon className="h-5 w-5 shrink-0" />
-                {item.key === "suggestions" && pendingCount > 0 && (
+                {item.key === "inbox" && pendingCount > 0 && (
                   <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
                     {pendingCount > 99 ? "99+" : pendingCount}
                   </span>

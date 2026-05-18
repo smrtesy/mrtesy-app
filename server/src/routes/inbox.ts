@@ -1,0 +1,83 @@
+import { Router, type Request, type Response } from "express";
+import { requireAuth, requireOrg } from "../middleware";
+import { db } from "../db";
+
+const router = Router();
+
+/**
+ * GET /api/inbox/count
+ * Returns total unread count: pending task suggestions + unread notifications.
+ */
+router.get("/count", requireAuth, requireOrg, async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const orgId  = req.org!.id;
+
+  const [tasksRes, notifRes] = await Promise.all([
+    db
+      .from("tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("status", "inbox")
+      .eq("verified", false)
+      .not("source_message_id", "is", null),
+    db
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("org_id", orgId)
+      .eq("is_read", false),
+  ]);
+
+  const suggestions   = tasksRes.count  ?? 0;
+  const notifications = notifRes.count  ?? 0;
+
+  res.json({ count: suggestions + notifications, suggestions, notifications });
+});
+
+/**
+ * PATCH /api/inbox/notifications/:id/read
+ * Marks a single notification as read.
+ */
+router.patch(
+  "/notifications/:id/read",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const userId = req.user!.id;
+
+    const { error } = await db
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  },
+);
+
+/**
+ * PATCH /api/inbox/notifications/read-all
+ * Marks all notifications for the user as read.
+ */
+router.patch(
+  "/notifications/read-all",
+  requireAuth,
+  requireOrg,
+  async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const orgId  = req.org!.id;
+
+    const { error } = await db
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("user_id", userId)
+      .eq("org_id", orgId)
+      .eq("is_read", false);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  },
+);
+
+export default router;

@@ -157,10 +157,23 @@ router.get("/org", requireAuth, requireOrg, async (req: Request, res: Response) 
 router.patch("/org",
   requireAuth, requireOrg, requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { name, name_he } = req.body ?? {};
+    const { name, name_he, error_handler_user_id } = req.body ?? {};
     const updates: Record<string, unknown> = {};
     if (typeof name === "string" && name.trim()) updates.name = name.trim();
     if (typeof name_he === "string") updates.name_he = name_he.trim() || null;
+    if (error_handler_user_id === null || typeof error_handler_user_id === "string") {
+      // Validate the user is a member of this org before assigning
+      if (error_handler_user_id !== null) {
+        const { data: member } = await db
+          .from("org_members")
+          .select("user_id")
+          .eq("org_id", req.org!.id)
+          .eq("user_id", error_handler_user_id)
+          .maybeSingle();
+        if (!member) return res.status(400).json({ error: "User is not a member of this org" });
+      }
+      updates.error_handler_user_id = error_handler_user_id;
+    }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "nothing to update" });
