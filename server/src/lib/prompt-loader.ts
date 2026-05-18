@@ -31,7 +31,13 @@ export async function loadPrompt(
 
   let content: string = data.content;
   if (ctx) {
+    // {{gmailLine}} renders the full sentence when an address exists, empty string otherwise —
+    // matches the conditional in buildDeepClassifierSystem exactly.
+    const gmailLine = ctx.gmailAddress
+      ? `Their primary Gmail address is ${ctx.gmailAddress}. `
+      : "";
     content = content
+      .replace(/\{\{gmailLine\}\}/g, gmailLine)
       .replace(/\{\{user\}\}/g, formatIdentity(ctx))
       .replace(/\{\{userName\}\}/g, ctx.userName)
       .replace(/\{\{gmailAddress\}\}/g, ctx.gmailAddress ?? "");

@@ -21,7 +21,7 @@ const DEFAULT_PROMPTS: Record<string, { label: string; description: string; defa
     label: "Deep Classifier (Part 3)",
     description: "Classifies all incoming content — emails, Drive files, Calendar events, and WhatsApp threads — into tasks. Changes take effect on the next Part 3 run. ⚠️ Do not change the JSON output structure.",
     default: `You are the task classifier and builder for {{user}}.
-Their primary Gmail address is {{gmailAddress}}. They use Gmail, Google Drive, and Google Calendar.
+{{gmailLine}}They use Gmail, Google Drive, and Google Calendar.
 
 ═══════════════════════════════════════════════════
 STEP 1 — IS THIS AN UPDATE TO AN EXISTING TASK?
