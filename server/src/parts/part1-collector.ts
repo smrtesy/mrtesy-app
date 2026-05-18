@@ -138,7 +138,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           // headers would otherwise produce concatenated garbage.
           const toEmail = (to.match(/<([^>]+)>/) ?? [])[1] ?? to.trim();
 
-          await db.from("source_messages").upsert(
+          const { error: gmailUpsertErr } = await db.from("source_messages").upsert(
             {
               user_id: userId,
               source_type: "gmail",
@@ -155,6 +155,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             },
             { onConflict: "user_id,source_type,source_id" },
           );
+          if (gmailUpsertErr) throw new Error(gmailUpsertErr.message);
           itemsProcessed++;
         } catch (e) {
           errors.push(`gmail msg ${id}: ${e}`);
@@ -188,7 +189,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
           const rawContent = `File: ${file.name}\nType: ${file.mimeType}\nModified: ${file.modifiedTime}\n\n${content}`.slice(0, 3000);
 
-          await db.from("source_messages").upsert(
+          const { error: driveUpsertErr } = await db.from("source_messages").upsert(
             {
               user_id: userId,
               source_type: "drive",
@@ -202,6 +203,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             },
             { onConflict: "user_id,source_type,source_id" },
           );
+          if (driveUpsertErr) throw new Error(driveUpsertErr.message);
           itemsProcessed++;
         } catch (e) {
           errors.push(`drive file ${file.id}: ${e}`);
@@ -268,7 +270,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             .join("\n")
             .slice(0, 3000);
 
-          await db.from("source_messages").upsert(
+          const { error: calUpsertErr } = await db.from("source_messages").upsert(
             {
               user_id: userId,
               source_type: "calendar",
@@ -283,6 +285,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             },
             { onConflict: "user_id,source_type,source_id" },
           );
+          if (calUpsertErr) throw new Error(calUpsertErr.message);
           itemsProcessed++;
         }
       }

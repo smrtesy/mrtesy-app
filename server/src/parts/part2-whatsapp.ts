@@ -211,7 +211,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       ].join("\n");
 
       try {
-        await db.from("source_messages").upsert(
+        const { error: waUpsertErr } = await db.from("source_messages").upsert(
           {
             user_id: userId,
             source_type: "whatsapp",
@@ -237,6 +237,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           },
           { onConflict: "user_id,source_type,source_id" },
         );
+        if (waUpsertErr) throw new Error(waUpsertErr.message);
       } catch (e) {
         errors.push(`upsert source_message for ${chatId}: ${e}`);
       }

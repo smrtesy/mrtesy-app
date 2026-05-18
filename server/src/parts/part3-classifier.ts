@@ -268,7 +268,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
       // ── Handle suggested rule ─────────────────────────────────────────────
       if (result.suggested_rule && (result.confidence ?? 0) >= 0.7) {
-        await db.from("rules_memory").insert({
+        const { error: ruleInsertErr } = await db.from("rules_memory").insert({
           user_id: userId,
           trigger: result.suggested_rule.trigger,
           rule_type: result.suggested_rule.rule_type,
@@ -279,7 +279,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           suggestion_confidence: result.confidence,
           suggested_by_run_id: sessionId,
         });
-        rulesAdded++;
+        if (!ruleInsertErr) rulesAdded++;
       }
 
       if (result.classification === "INFORMATIONAL") {
