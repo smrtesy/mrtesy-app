@@ -93,6 +93,32 @@ async function redirectUser(
     return NextResponse.redirect(`${origin}/${locale}/onboarding`);
   }
 
+  // Existing user: check for a pending invite (they may be joining a new org).
+  const { data: pendingInvites } = await supabase
+    .from("org_invites")
+    .select("id, org_id, role")
+    .eq("email", user.email?.toLowerCase() ?? "")
+    .is("accepted_at", null)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  const pendingInvite = pendingInvites?.[0] ?? null;
+
+  if (pendingInvite) {
+    const { error: memberErr } = await supabase
+      .from("org_members")
+      .insert({ org_id: pendingInvite.org_id, user_id: user.id, role: pendingInvite.role, invited_by: null });
+    if (memberErr && memberErr.code !== "23505") {
+      console.error("[auth/callback] org_members insert (existing user) failed:", memberErr.message);
+    }
+    const { error: acceptErr } = await supabase
+      .from("org_invites")
+      .update({ accepted_at: new Date().toISOString() })
+      .eq("id", pendingInvite.id);
+    if (acceptErr) console.warn("[auth/callback] invite accept (existing user) failed:", acceptErr.message);
+  }
+
   // Existing user but onboarding not finished.
   if (!settings.onboarding_completed) {
     const { data: membership } = await supabase

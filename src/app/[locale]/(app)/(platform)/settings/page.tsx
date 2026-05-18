@@ -40,6 +40,7 @@ export default function SettingsPage() {
     gmail: false, drive: false, calendar: false, whatsapp: false,
   });
   const [isAdmin, setIsAdmin] = useState(false);
+  const [hasSmrtTask, setHasSmrtTask] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resyncLoading, setResyncLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
@@ -69,6 +70,27 @@ export default function SettingsPage() {
       // Check admin
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
       setIsAdmin(adminEmails.includes(user.email?.toLowerCase() || ""));
+
+      // Check if active org has smrtTask enabled
+      const { data: memberships } = await supabase
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", user.id)
+        .limit(10);
+
+      if (memberships && memberships.length > 0) {
+        const orgIds = memberships.map((m: { org_id: string }) => m.org_id);
+        const { data: appRows } = await supabase
+          .from("app_memberships")
+          .select("apps!inner(slug)")
+          .in("org_id", orgIds)
+          .eq("apps.slug", "smrtesy");
+        const found = (appRows ?? []).some((r: { apps: unknown }) => {
+          const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
+          return (app as { slug?: string } | null)?.slug === "smrtesy";
+        });
+        setHasSmrtTask(found);
+      }
     }
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -101,7 +123,6 @@ export default function SettingsPage() {
       if (!user) throw new Error("Not authenticated");
       const uid = user.id;
 
-      // Delete in correct order (foreign keys)
       await supabase.from("task_activities").delete().eq("user_id", uid);
       await supabase.from("reminders").delete().eq("user_id", uid);
       await supabase.from("project_briefs").delete().eq("user_id", uid);
@@ -112,7 +133,6 @@ export default function SettingsPage() {
       await supabase.from("source_messages").delete().eq("user_id", uid);
       await supabase.from("sync_state").delete().eq("user_id", uid);
 
-      // Reset scan + onboarding flags
       await supabase.from("user_settings").update({
         initial_scan_started_at: null,
         initial_scan_completed_at: null,
@@ -122,7 +142,6 @@ export default function SettingsPage() {
 
       toast.success(t("dataDeletedRedirecting"));
       setResetConfirm(false);
-      // Redirect to onboarding after reset
       setTimeout(() => { window.location.href = `/${locale}/onboarding`; }, 1500);
     } catch (e) {
       toast.error((e as Error).message);
@@ -137,7 +156,6 @@ export default function SettingsPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Reset onboarding + scan flags → redirect to onboarding
       await supabase.from("user_settings").update({
         onboarding_completed: false,
         initial_scan_started_at: null,
@@ -145,7 +163,6 @@ export default function SettingsPage() {
         initial_setup_completed: false,
       }).eq("user_id", user.id);
 
-      // Redirect to onboarding step 1
       window.location.href = `/${locale}/onboarding`;
     } catch (e) {
       toast.error((e as Error).message);
@@ -184,120 +201,121 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* smrtTask section */}
-      <div className="pt-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-          {t("smrtTaskSection")}
-        </p>
-      </div>
+      {/* smrtTask-specific sections — only shown when org has smrtTask enabled */}
+      {hasSmrtTask && (
+        <>
+          <div className="pt-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+              {t("smrtTaskSection")}
+            </p>
+          </div>
 
-      {/* Connections */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("connections")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {connections.map((conn) => {
-            const connected = connStatus[conn.key];
-            return (
-              <div key={conn.key} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <conn.icon className={`h-5 w-5 ${conn.color}`} />
-                  <span className="text-sm font-medium">{conn.label}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {connected ? (
-                    <Badge variant="default" className="gap-1 bg-green-500">
-                      <CheckCircle2 className="h-3 w-3" />
-                      {t("connected")}
-                    </Badge>
-                  ) : (
-                    <>
-                      <Badge variant="secondary" className="gap-1">
-                        <XCircle className="h-3 w-3" />
-                        {t("disconnected")}
-                      </Badge>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1"
-                        onClick={() => {
-                          const serviceMap: Record<string, string> = {
-                            gmail: "gmail_calendar",
-                            drive: "drive",
-                            calendar: "gmail_calendar",
-                            whatsapp: "",
-                          };
-                          const svc = serviceMap[conn.key];
-                          if (conn.key === "whatsapp") {
-                            window.location.href = `/${locale}/onboarding/whatsapp?redirect=settings`;
-                          } else if (svc) {
-                            window.location.href = `/api/auth/google?service=${svc}&redirect=settings`;
-                          }
-                        }}
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                        {t("reconnect")}
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+          {/* Connections */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">{t("connections")}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {connections.map((conn) => {
+                const connected = connStatus[conn.key];
+                return (
+                  <div key={conn.key} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <conn.icon className={`h-5 w-5 ${conn.color}`} />
+                      <span className="text-sm font-medium">{conn.label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {connected ? (
+                        <Badge variant="default" className="gap-1 bg-green-500">
+                          <CheckCircle2 className="h-3 w-3" />
+                          {t("connected")}
+                        </Badge>
+                      ) : (
+                        <>
+                          <Badge variant="secondary" className="gap-1">
+                            <XCircle className="h-3 w-3" />
+                            {t("disconnected")}
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1"
+                            onClick={() => {
+                              const serviceMap: Record<string, string> = {
+                                gmail: "gmail_calendar",
+                                drive: "drive",
+                                calendar: "gmail_calendar",
+                                whatsapp: "",
+                              };
+                              const svc = serviceMap[conn.key];
+                              if (conn.key === "whatsapp") {
+                                window.location.href = `/${locale}/onboarding/whatsapp?redirect=settings`;
+                              } else if (svc) {
+                                window.location.href = `/api/auth/google?service=${svc}&redirect=settings`;
+                              }
+                            }}
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            {t("reconnect")}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
 
-      {/* Rules + Sync */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 sm:grid-cols-2">
-          <Link href={`/${locale}/settings/smrttask/rules`}>
-            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
-              <Filter className="h-4 w-4" />
-              {t("skipRulesAndStyle")}
-            </Button>
-          </Link>
-          <Link href={`/${locale}/settings/smrttask/sync`}>
-            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
-              <Repeat className="h-4 w-4" />
-              {t("syncSchedules")}
-            </Button>
-          </Link>
-        </CardContent>
-      </Card>
+          {/* Rules + Sync */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2 sm:grid-cols-2">
+              <Link href={`/${locale}/settings/smrttask/rules`}>
+                <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
+                  <Filter className="h-4 w-4" />
+                  {t("skipRulesAndStyle")}
+                </Button>
+              </Link>
+              <Link href={`/${locale}/settings/smrttask/sync`}>
+                <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
+                  <Repeat className="h-4 w-4" />
+                  {t("syncSchedules")}
+                </Button>
+              </Link>
+            </CardContent>
+          </Card>
 
-      {/* Data Management */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("dataManagement")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* Re-sync button */}
-          <Button
-            variant="outline"
-            onClick={handleResync}
-            disabled={resyncLoading}
-            className="w-full min-h-[48px] gap-2"
-          >
-            {resyncLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            {t("resync")}
-          </Button>
-
-          {/* Reset data button */}
-          <Button
-            variant={resetConfirm ? "destructive" : "outline"}
-            onClick={handleResetData}
-            disabled={resetLoading}
-            className="w-full min-h-[48px] gap-2"
-          >
-            {resetLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            {resetConfirm ? t("confirmDeletion") : t("deleteAllData")}
-          </Button>
-        </CardContent>
-      </Card>
+          {/* Data Management */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">{t("dataManagement")}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button
+                variant="outline"
+                onClick={handleResync}
+                disabled={resyncLoading}
+                className="w-full min-h-[48px] gap-2"
+              >
+                {resyncLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                {t("resync")}
+              </Button>
+              <Button
+                variant={resetConfirm ? "destructive" : "outline"}
+                onClick={handleResetData}
+                disabled={resetLoading}
+                className="w-full min-h-[48px] gap-2"
+              >
+                {resetLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {resetConfirm ? t("confirmDeletion") : t("deleteAllData")}
+              </Button>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {/* Admin link (mobile access) */}
       {isAdmin && (

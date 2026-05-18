@@ -19,6 +19,7 @@ import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireSuperAdmin, type Role } from "../../../middleware";
 import invitesRouter from "./invites";
+import { slugify } from "../../platform/organizations/routes";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
@@ -29,6 +30,51 @@ router.use("/admin/orgs/:id/invites", invitesRouter);
 const ROLES: Role[] = ["owner", "admin", "member"];
 
 // ── routes ─────────────────────────────────────────────────────────────────
+
+/** POST /admin/orgs — create a new org (super-admin, no owner assigned) */
+router.post("/admin/orgs", async (req: Request, res: Response) => {
+  const { name, name_he, slug } = req.body ?? {};
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ error: "name is required" });
+  }
+
+  const finalSlug = (typeof slug === "string" && slug.trim()) ? slug.trim().toLowerCase() : slugify(name);
+  if (!/^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(finalSlug) && !/^[a-z0-9]{2,40}$/.test(finalSlug)) {
+    return res.status(400).json({ error: "invalid slug format" });
+  }
+
+  const { data: org, error: orgErr } = await db
+    .from("organizations")
+    .insert({ slug: finalSlug, name: name.trim(), name_he: name_he?.trim() || null, created_by: req.user!.id })
+    .select("*")
+    .single();
+
+  if (orgErr) {
+    if (orgErr.code === "23505") return res.status(409).json({ error: "slug already taken" });
+    return res.status(500).json({ error: orgErr.message });
+  }
+
+  // Register subdomain with Vercel (fire-and-forget)
+  const appDomain = process.env.APP_DOMAIN;
+  const vercelToken = process.env.VERCEL_TOKEN;
+  const vercelProjectId = process.env.VERCEL_PROJECT_ID;
+  if (appDomain && vercelToken && vercelProjectId) {
+    const subdomain = `${finalSlug}.${appDomain}`;
+    fetch(`https://api.vercel.com/v10/projects/${vercelProjectId}/domains`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${vercelToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: subdomain }),
+    })
+      .then((r) => r.json())
+      .then((body) => {
+        if ((body as { error?: { code?: string } }).error?.code === "domain_already_in_use") return;
+        if ((body as { error?: unknown }).error) console.warn("[admin/orgs] Vercel domain failed:", subdomain, JSON.stringify(body));
+      })
+      .catch((e) => console.warn("[admin/orgs] Vercel domain error:", e));
+  }
+
+  res.status(201).json({ org });
+});
 
 /** GET /admin/orgs — list everything with quick counts for the table view */
 router.get("/admin/orgs", async (_req: Request, res: Response) => {

@@ -129,8 +129,8 @@ async function runScheduledJobs() {
         await runPart3({ userId: schedule.user_id, orgId: membership.org_id as string });
       }
 
-      // Advance next_run_at by 8 hours
-      const next = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+      // Advance next_run_at by 15 minutes
+      const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
       await db
         .from("sync_schedules")
         .update({ last_run_at: now, next_run_at: next })

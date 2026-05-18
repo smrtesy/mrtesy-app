@@ -1,7 +1,9 @@
 import type { AppManifest } from "../../lib/platform/types";
 
 export const manifest: AppManifest = {
-  slug: "smrttask",
+  // DB slug for the smrtTask app is "smrtesy" (legacy from when it was the only app).
+  // The folder name "smrttask" remains for code organization clarity.
+  slug: "smrtesy",
   name: "smrtTask",
 
   emits: [

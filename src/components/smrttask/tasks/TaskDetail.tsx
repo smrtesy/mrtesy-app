@@ -26,6 +26,7 @@ import {
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { translateActionLabel } from "@/lib/actionLabels";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -42,12 +43,14 @@ interface TaskDetailProps {
   onClose: () => void;
   onUpdate: () => void;
   onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
+  onDriveSearch?: (taskId: string, description: string) => void;
 }
 
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction }: TaskDetailProps) {
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction, onDriveSearch }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
+  const tActions = useTranslations("tasks.actions");
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -230,7 +233,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs font-medium">{t("priority.medium").replace(/.*/, "Priority")}</label>
+                    <label className="text-xs font-medium">{tDetail("priorityLabel")}</label>
                     <select
                       value={editPriority}
                       onChange={(e) => setEditPriority(e.target.value)}
@@ -243,7 +246,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs font-medium">Status</label>
+                    <label className="text-xs font-medium">{tDetail("statusLabel")}</label>
                     <select
                       value={editStatus}
                       onChange={(e) => setEditStatus(e.target.value)}
@@ -257,7 +260,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs font-medium">Due Date</label>
+                  <label className="text-xs font-medium">{tDetail("dueDateLabel")}</label>
                   <Input type="date" value={editDueDate} onChange={(e) => setEditDueDate(e.target.value)} />
                 </div>
                 <div>
@@ -355,7 +358,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     onClick={() => onQuickAction?.(task.id, action)}
                   >
                     <Zap className="h-3 w-3" />
-                    {action.label}
+                    {translateActionLabel(action.label, tActions)}
                   </Button>
                 ))}
               </div>
@@ -427,7 +430,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                     {generated.map((item) => (
                       <div key={item.id} className="rounded border p-2 text-xs">
                         <div className="flex justify-between mb-1">
-                          <Badge variant="outline" className="text-[10px]">{item.action_label}</Badge>
+                          <Badge variant="outline" className="text-[10px]">{translateActionLabel(item.action_label, tActions)}</Badge>
                           <span className="text-muted-foreground">
                             {new Date(item.created_at).toLocaleString()}
                           </span>
@@ -501,6 +504,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
               variant="ghost"
               size="icon"
               className="h-10 w-10"
+              onClick={() => onDriveSearch?.(task.id, task.description || title)}
+              disabled={!onDriveSearch}
               title={t("actions.searchDocs")}
             >
               <FolderSearch className="h-4 w-4" />

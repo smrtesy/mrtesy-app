@@ -17,6 +17,7 @@
 
 import { db, createRunSession, closeRunSession } from "../../../db";
 import { cachedCall, simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
+import { getUserPromptContext, formatIdentity } from "../../../lib/user-context";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ export async function runPart4(opts: Part4Options): Promise<{ sessionId: string 
 // ── Mode: suggest projects ─────────────────────────────────────────────────
 
 async function suggestProjects(userId: string, orgId: string, sessionId: string) {
+  const identity = formatIdentity(await getUserPromptContext(userId, orgId));
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
   // Fetch approved tasks in this org from the last 60 days
@@ -108,7 +110,7 @@ async function suggestProjects(userId: string, orgId: string, sessionId: string)
 
   const { content } = await simpleCall(
     "sonnet",
-    `You identify ongoing projects from a list of tasks for Chanoch Chaskind (Maor nonprofit director).
+    `You identify ongoing projects from a list of tasks for ${identity}.
 
 A "project" is a group of 3+ tasks that share a topic, contact, or goal and represent ongoing work — not one-off tasks.
 
@@ -182,6 +184,7 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
 // ── Mode: build brief ──────────────────────────────────────────────────────
 
 async function buildBrief(userId: string, orgId: string, projectId: string, sessionId: string) {
+  const identity = formatIdentity(await getUserPromptContext(userId, orgId));
   // Load project — must belong to active org
   const { data: project } = await db
     .from("projects")
@@ -235,7 +238,7 @@ async function buildBrief(userId: string, orgId: string, projectId: string, sess
 
   const { content } = await simpleCall(
     "sonnet",
-    `You extract structured facts about a project from tasks and messages, for Chanoch Chaskind (Maor nonprofit director).
+    `You extract structured facts about a project from tasks and messages, for ${identity}.
 
 Extract as many useful facts as possible. Each fact is ONE piece of information.
 Return ONLY valid JSON array:

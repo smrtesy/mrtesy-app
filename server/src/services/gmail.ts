@@ -67,6 +67,37 @@ export function extractEmailText(msg: ReturnType<typeof getMessage> extends Prom
   };
 }
 
+/**
+ * Fetch up to `maxMessages` most-recent messages from a Gmail thread.
+ * Used to build reply context when a message has an In-Reply-To header.
+ */
+export async function getThreadMessages(
+  userId: string,
+  threadId: string,
+  maxMessages = 3,
+): Promise<Array<{ from: string; date: string; snippet: string }>> {
+  const gmail = await getGmailClient(userId);
+  const res = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "metadata",
+    metadataHeaders: ["From", "Date", "Subject"],
+  });
+
+  const messages = (res.data.messages ?? []).slice(-maxMessages);
+  return messages.map((m) => {
+    const headers: { name?: string | null; value?: string | null }[] =
+      (m as { payload?: { headers?: { name?: string | null; value?: string | null }[] } }).payload?.headers ?? [];
+    const h = (name: string) =>
+      headers.find((hdr) => hdr.name?.toLowerCase() === name)?.value ?? "";
+    return {
+      from: h("from"),
+      date: h("date"),
+      snippet: (m as { snippet?: string }).snippet ?? "",
+    };
+  });
+}
+
 export async function createDraft(
   userId: string,
   to: string,

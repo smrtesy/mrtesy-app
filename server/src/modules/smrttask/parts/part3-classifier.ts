@@ -11,7 +11,9 @@
 
 import { db, loadRules, createRunSession, closeRunSession } from "../../../db";
 import { cachedCall, parseJsonResponse, MODELS } from "../../../anthropic";
-import { DEEP_CLASSIFIER_SYSTEM } from "../../../prompts/classifier";
+import { buildDeepClassifierSystem } from "../../../prompts/classifier";
+import { getUserPromptContext } from "../../../lib/user-context";
+import { loadPrompt } from "../../../lib/prompt-loader";
 
 const BATCH_SIZE = 5;
 
@@ -67,6 +69,14 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
   let itemsProcessed = 0;
 
   try {
+    // ── 0. Per-tenant identity used in the system prompt ─────────────────────
+    // DB-stored version (editable in /admin/apps/smrtesy/prompts) takes precedence;
+    // falls back to the hardcoded default so the pipeline always has a valid prompt.
+    const promptCtx = await getUserPromptContext(userId, orgId);
+    const systemPrompt =
+      (await loadPrompt(userId, "deep_classifier", promptCtx)) ??
+      buildDeepClassifierSystem(promptCtx);
+
     // ── 1. Load rules (cached in rulesContext) ────────────────────────────────
     const rules = await loadRules(userId);
     const skipRules = rules
@@ -77,12 +87,15 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
     const writingStyleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
 
     // ── 2. Load open tasks for update-threading (scoped to active org) ───────
+    // Include both verified and unverified (pending-approval) tasks so Claude
+    // can detect follow-ups to messages that arrived moments ago and haven't
+    // been approved yet — without this, a reply arriving before approval
+    // creates a duplicate task instead of appending to the existing one.
     const { data: openTasks } = await db
       .from("tasks")
       .select("id, title_he, title, related_contact, related_contact_email, related_contact_phone, tags, source_message_id")
       .eq("organization_id", orgId)
       .in("status", ["inbox", "in_progress"])
-      .eq("manually_verified", true)
       .order("created_at", { ascending: false })
       .limit(30);
 
@@ -146,12 +159,13 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .update({ processing_status: "processing" })
         .eq("id", msg.id);
 
-      // Check for existing task with same source_id (dedup — scoped to active org)
+      // Check for existing task linked to this source_message (dedup — scoped to active org).
+      // tasks.source_message_id is a UUID FK → source_messages.id, so use msg.id, not msg.source_id.
       const { data: existingTask } = await db
         .from("tasks")
         .select("id, status, updates")
         .eq("organization_id", orgId)
-        .eq("source_message_id", msg.source_id)
+        .eq("source_message_id", msg.id)
         .neq("status", "archived")
         .maybeSingle();
 
@@ -175,7 +189,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         try {
           const raw = await cachedCall({
             model: "sonnet",
-            systemPrompt: DEEP_CLASSIFIER_SYSTEM,
+            systemPrompt,
             rulesContext: rulesContext || undefined,
             userMessage: userMsg,
             maxTokens: 1024,
@@ -213,7 +227,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
             .single();
 
           const currentUpdates = (fullTask?.updates as object[] | null) ?? [];
-          await db.from("tasks").update({
+          const { error: appendErr } = await db.from("tasks").update({
             updates: [
               ...currentUpdates,
               {
@@ -222,7 +236,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
                 type: "ai_update",
                 actor: "claude",
                 content: result.update_he ?? "",
-                source_message_id: msg.source_id,
+                source_message_id: msg.id,
                 source_type: msg.source_type,
               },
             ],
@@ -231,13 +245,15 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           .eq("id", result.task_id)
           .eq("organization_id", orgId);
 
-          await db
-            .from("source_messages")
-            .update({ processing_status: "classified", ai_classification: "UPDATE" })
-            .eq("id", msg.id);
-
-          tasksUpdated++;
-          itemsProcessed++;
+          if (appendErr) {
+            errors.push(`append update to task ${result.task_id}: ${appendErr.message}`);
+          } else {
+            await db
+              .from("source_messages")
+              .update({ processing_status: "classified", ai_classification: "UPDATE" })
+              .eq("id", msg.id);
+            tasksUpdated++;
+          }
 
           if ((i + 1) % BATCH_SIZE === 0) {
             await db.from("run_sessions")
@@ -252,7 +268,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
       // ── Handle suggested rule ─────────────────────────────────────────────
       if (result.suggested_rule && (result.confidence ?? 0) >= 0.7) {
-        await db.from("rules_memory").insert({
+        const { error: ruleInsertErr } = await db.from("rules_memory").insert({
           user_id: userId,
           trigger: result.suggested_rule.trigger,
           rule_type: result.suggested_rule.rule_type,
@@ -263,24 +279,22 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           suggestion_confidence: result.confidence,
           suggested_by_run_id: sessionId,
         });
-        rulesAdded++;
+        if (!ruleInsertErr) rulesAdded++;
       }
-
-      // ── Update source_message status ──────────────────────────────────────
-      await db
-        .from("source_messages")
-        .update({
-          processing_status: "classified",
-          ai_classification: result.classification ?? "INFORMATIONAL",
-        })
-        .eq("id", msg.id);
 
       if (result.classification === "INFORMATIONAL") {
         informationalCount++;
+        await db
+          .from("source_messages")
+          .update({ processing_status: "classified", ai_classification: "INFORMATIONAL" })
+          .eq("id", msg.id);
         continue;
       }
 
       // ── Create or update task ─────────────────────────────────────────────
+      // Mark source_message classified ONLY after a successful task write so that
+      // a DB error on insert doesn't orphan the message in a permanent "classified"
+      // state where neither Part3 nor Part2 will ever retry it.
       actionableCount++;
       const task = result.task!;
 
@@ -292,6 +306,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           ? aiProjectId
           : null;
 
+      // For WhatsApp threads Part2 stored the wa.me URL and phone in the source_message.
+      // Carry them through to the task so TaskCard shows the link icon and the
+      // suggestions page can render the contact phone.
+      const isWhatsapp = msg.source_type === "whatsapp";
+
       const taskPayload = {
         user_id: userId,
         organization_id: orgId,
@@ -302,8 +321,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         status: "inbox" as const,
         task_type: "action" as const,
         due_date: task.due_date ?? null,
-        source_message_id: msg.source_id,
-        related_contact: task.contact_person ?? null,
+        // tasks.source_message_id is a UUID FK → source_messages.id; use msg.id, not msg.source_id
+        source_message_id: msg.id,
+        related_contact: task.contact_person ?? (isWhatsapp ? (msg as any).sender ?? null : null),
+        related_contact_phone: isWhatsapp ? (msg as any).reply_to_context ?? null : null,
+        source_link: isWhatsapp ? (msg as any).source_url ?? null : null,
         tags: task.tags,
         ai_actions: task.suggested_actions.map((a) => ({ label: a, prompt: a })),
         ai_confidence: result.confidence ?? null,
@@ -313,14 +335,31 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         project_confidence: resolvedProjectId ? result.project_confidence ?? null : null,
       };
 
+      let taskWriteOk = false;
       if (existingTask) {
-        await db.from("tasks").update(taskPayload)
+        const { error: updateErr } = await db.from("tasks").update(taskPayload)
           .eq("id", existingTask.id)
           .eq("organization_id", orgId);
-        tasksUpdated++;
+        if (updateErr) errors.push(`update task ${existingTask.id}: ${updateErr.message}`);
+        else { tasksUpdated++; taskWriteOk = true; }
       } else {
-        await db.from("tasks").insert(taskPayload);
-        tasksCreated++;
+        const { error: insertErr } = await db.from("tasks").insert(taskPayload);
+        if (insertErr) errors.push(`insert task for source_msg ${msg.id}: ${insertErr.message}`);
+        else { tasksCreated++; taskWriteOk = true; }
+      }
+
+      // Only mark classified once the task row is committed; on failure leave as
+      // "processing" so the next run can retry (processing_lock_at handles stale locks).
+      if (taskWriteOk) {
+        await db
+          .from("source_messages")
+          .update({ processing_status: "classified", ai_classification: result.classification })
+          .eq("id", msg.id);
+      } else {
+        await db
+          .from("source_messages")
+          .update({ processing_status: "pending" })
+          .eq("id", msg.id);
       }
 
       // Checkpoint every BATCH_SIZE

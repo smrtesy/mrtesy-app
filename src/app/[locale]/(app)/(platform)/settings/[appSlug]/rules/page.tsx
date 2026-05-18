@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,13 @@ interface Rule {
   created_at: string;
 }
 
+interface CalendarInfo {
+  id: string;
+  summary: string;
+  primary: boolean;
+  accessRole: string;
+}
+
 const RULE_TYPES = ["skip", "skip_spam", "bot", "action", "style", "preference", "financial"];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -46,6 +54,13 @@ const TYPE_LABELS: Record<string, string> = {
   financial:  "Financial",
 };
 
+const GMAIL_CATEGORIES = [
+  { key: "promotions", label: "Promotions", description: "Skip newsletters and deals", defaultOn: true },
+  { key: "social", label: "Social", description: "Skip social network notifications", defaultOn: true },
+  { key: "forums", label: "Forums", description: "Skip mailing lists", defaultOn: true },
+  { key: "updates", label: "Updates", description: "Skip receipts and confirmations", defaultOn: false },
+];
+
 export default function SettingsRulesPage() {
   const supabase = createClient();
   const { appSlug } = useParams<{ appSlug: string }>();
@@ -53,6 +68,8 @@ export default function SettingsRulesPage() {
   const [pendingSuggestions, setPendingSuggestions] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
+  const [calendarsLoading, setCalendarsLoading] = useState(true);
   const [newRule, setNewRule] = useState({
     trigger: "",
     rule_type: "skip",
@@ -81,6 +98,13 @@ export default function SettingsRulesPage() {
   useEffect(() => {
     loadRules();
   }, [loadRules]);
+
+  useEffect(() => {
+    api<{ calendars: CalendarInfo[] }>("/api/sync/calendars")
+      .then((res) => setCalendars(res.calendars))
+      .catch(() => setCalendars([]))
+      .finally(() => setCalendarsLoading(false));
+  }, []);
 
   async function approveRule(id: string) {
     const { error } = await supabase
@@ -112,7 +136,8 @@ export default function SettingsRulesPage() {
   }
 
   async function deleteRule(id: string) {
-    await supabase.from("rules_memory").delete().eq("id", id);
+    const { error } = await supabase.from("rules_memory").delete().eq("id", id);
+    if (error) { toast.error(error.message); return; }
     toast.success("Rule deleted");
     loadRules();
   }
@@ -142,6 +167,49 @@ export default function SettingsRulesPage() {
     loadRules();
   }
 
+  async function toggleGmailCategory(catKey: string, currentRule: Rule | undefined) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    if (currentRule) {
+      const { error } = await supabase
+        .from("rules_memory")
+        .update({ is_active: !currentRule.is_active })
+        .eq("id", currentRule.id);
+      if (error) { toast.error(error.message); return; }
+    } else {
+      const { error } = await supabase.from("rules_memory").insert({
+        user_id: user.id,
+        rule_type: "skip",
+        trigger: `category=${catKey}`,
+        is_active: true,
+        created_by: "system",
+        suggestion_status: "approved",
+      });
+      if (error) { toast.error(error.message); return; }
+    }
+    loadRules();
+  }
+
+  async function toggleCalendar(calId: string, currentRule: Rule | undefined) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    if (currentRule) {
+      const { error } = await supabase.from("rules_memory").delete().eq("id", currentRule.id);
+      if (error) { toast.error(error.message); return; }
+    } else {
+      const { error } = await supabase.from("rules_memory").insert({
+        user_id: user.id,
+        rule_type: "skip",
+        trigger: `calendar=${calId}`,
+        is_active: true,
+        created_by: "system",
+        suggestion_status: "approved",
+      });
+      if (error) { toast.error(error.message); return; }
+    }
+    loadRules();
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -151,6 +219,29 @@ export default function SettingsRulesPage() {
   }
 
   const activeRules = rules.filter((r) => r.suggestion_status !== "pending");
+  const categoryRules = activeRules.filter((r) => r.trigger.match(/^category=/i));
+  const calendarRules = activeRules.filter((r) => r.trigger.match(/^calendar=/i));
+  const skipAddressRules = activeRules.filter(
+    (r) => (r.rule_type === "skip" || r.rule_type === "skip_spam") &&
+      (r.trigger.match(/^from=/i) || r.trigger.match(/^domain=/i)),
+  );
+  const botRules = activeRules.filter((r) => r.rule_type === "bot");
+  const otherRules = activeRules.filter(
+    (r) =>
+      !categoryRules.includes(r) &&
+      !calendarRules.includes(r) &&
+      !skipAddressRules.includes(r) &&
+      !botRules.includes(r) &&
+      !["style", "preference", "financial"].includes(r.rule_type),
+  );
+
+  function getCategoryRule(catKey: string): Rule | undefined {
+    return categoryRules.find((r) => r.trigger.toLowerCase() === `category=${catKey}`);
+  }
+
+  function getCalendarSkipRule(calId: string): Rule | undefined {
+    return calendarRules.find((r) => r.trigger === `calendar=${calId}`);
+  }
 
   return (
     <div className="space-y-6">
@@ -214,6 +305,196 @@ export default function SettingsRulesPage() {
         </Card>
       )}
 
+      {/* Gmail Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Gmail Filters</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {GMAIL_CATEGORIES.map((cat) => {
+            const rule = getCategoryRule(cat.key);
+            const isActive = rule ? rule.is_active : false;
+            return (
+              <div key={cat.key} className="flex items-center gap-3 rounded-lg border p-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{cat.label}</p>
+                  <p className="text-xs text-muted-foreground">{cat.description}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => toggleGmailCategory(cat.key, rule)}
+                  title={isActive ? "Disable" : "Enable"}
+                >
+                  {isActive ? (
+                    <ToggleRight className="h-5 w-5 text-green-500" />
+                  ) : (
+                    <ToggleLeft className="h-5 w-5 text-muted-foreground" />
+                  )}
+                </Button>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* Calendar Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Calendar Filters</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {calendarsLoading ? (
+            <div className="space-y-2">
+              {[1, 2].map((i) => <div key={i} className="h-14 rounded-lg bg-muted animate-pulse" />)}
+            </div>
+          ) : calendars.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">Could not load calendars.</p>
+          ) : (
+            <div className="space-y-2">
+              {calendars.map((cal) => {
+                const skipRule = getCalendarSkipRule(cal.id);
+                const isIncluded = !skipRule;
+                return (
+                  <div key={cal.id} className="flex items-center gap-3 rounded-lg border p-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{cal.summary}</p>
+                      {cal.primary && (
+                        <p className="text-xs text-muted-foreground">Primary calendar</p>
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0"
+                      onClick={() => toggleCalendar(cal.id, skipRule)}
+                      title={isIncluded ? "Exclude calendar" : "Include calendar"}
+                    >
+                      {isIncluded ? (
+                        <ToggleRight className="h-5 w-5 text-green-500" />
+                      ) : (
+                        <ToggleLeft className="h-5 w-5 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Skip Addresses */}
+      {skipAddressRules.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Skip Addresses ({skipAddressRules.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {skipAddressRules.map((rule) => (
+              <div key={rule.id} className="flex items-center gap-3 rounded-lg border p-3">
+                <span className="flex-1 text-sm font-mono truncate">{rule.trigger}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-red-400 hover:text-red-600 shrink-0"
+                  onClick={() => deleteRule(rule.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bot Phones */}
+      {botRules.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Bot Phones ({botRules.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {botRules.map((rule) => (
+              <div key={rule.id} className="flex items-center gap-3 rounded-lg border p-3">
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-mono truncate">{rule.trigger}</span>
+                  {rule.reason && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{rule.reason}</p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-red-400 hover:text-red-600 shrink-0"
+                  onClick={() => deleteRule(rule.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Other Rules */}
+      {otherRules.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Other Rules ({otherRules.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {otherRules.map((rule) => (
+              <div
+                key={rule.id}
+                className={`flex items-start gap-3 rounded-lg border p-3 ${!rule.is_active ? "opacity-50" : ""}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline" className="text-xs">
+                      {TYPE_LABELS[rule.rule_type] ?? rule.rule_type}
+                    </Badge>
+                    {rule.created_by === "claude" && (
+                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600">
+                        AI
+                      </Badge>
+                    )}
+                    <span className="text-sm font-medium truncate">{rule.trigger}</span>
+                  </div>
+                  {rule.reason && (
+                    <p className="text-xs text-muted-foreground mt-1">{rule.reason}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => toggleRule(rule.id, rule.is_active)}
+                    title={rule.is_active ? "Disable" : "Enable"}
+                  >
+                    {rule.is_active ? (
+                      <ToggleRight className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-red-400 hover:text-red-600"
+                    onClick={() => deleteRule(rule.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Pending AI suggestions */}
       {pendingSuggestions.length > 0 && (
         <Card className="border-yellow-200 bg-yellow-50">
@@ -266,69 +547,6 @@ export default function SettingsRulesPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Active rules */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Active Rules ({activeRules.length})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {activeRules.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-6">
-              No rules yet. Add one or run the classifier to generate AI suggestions.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {activeRules.map((rule) => (
-                <div
-                  key={rule.id}
-                  className={`flex items-start gap-3 rounded-lg border p-3 ${!rule.is_active ? "opacity-50" : ""}`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="outline" className="text-xs">
-                        {TYPE_LABELS[rule.rule_type] ?? rule.rule_type}
-                      </Badge>
-                      {rule.created_by === "claude" && (
-                        <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600">
-                          AI
-                        </Badge>
-                      )}
-                      <span className="text-sm font-medium truncate">{rule.trigger}</span>
-                    </div>
-                    {rule.reason && (
-                      <p className="text-xs text-muted-foreground mt-1">{rule.reason}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={() => toggleRule(rule.id, rule.is_active)}
-                      title={rule.is_active ? "Disable" : "Enable"}
-                    >
-                      {rule.is_active ? (
-                        <ToggleRight className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <ToggleLeft className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-red-400 hover:text-red-600"
-                      onClick={() => deleteRule(rule.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [summarizing, setSummarizing] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const hasSearched = useRef(false);
 
   async function handleSearch() {
     setLoading(true);
@@ -93,40 +94,38 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
     }
   }
 
-  // Auto-search on open
-  if (open && !loading && !searched) {
-    // Use setTimeout to avoid calling during render
-    setTimeout(handleSearch, 0);
-  }
+  // Auto-search on open — keep render-side effects out of the body
+  useEffect(() => {
+    if (open && !hasSearched.current) {
+      hasSearched.current = true;
+      handleSearch();
+    }
+    if (!open) {
+      hasSearched.current = false;
+    }
+    // handleSearch is stable enough for this single-shot trigger
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   async function handleSummarize(file: DriveFile) {
     setSummarizing(file.id);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/quick-action`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            task_id: taskId,
-            action_label: "doc_summary",
-            prompt: `Read this document and provide a brief summary (2-3 sentences in Hebrew) of what it contains. Document name: "${file.name}" (${file.mimeType}). URL: ${file.webViewLink}`,
-          }),
-        }
-      );
-      const data = await resp.json();
-      if (data.error) throw new Error(data.error);
+      const { result } = await api<{ result: string }>("/api/quick-action", {
+        method: "POST",
+        body: {
+          prompt: `Briefly summarize this document in 2-3 sentences in Hebrew based on its name only (you cannot fetch the URL).
+Name: "${file.name}"
+Type: ${file.mimeType}
+URL: ${file.webViewLink}`,
+          max_tokens: 300,
+          model: "haiku",
+        },
+      });
 
       // Save summary to linked_drive_docs via Express
       const { task } = await api<{ task: { linked_drive_docs: Array<{ url: string; name: string; summary?: string }> | null } }>(`/api/tasks/${taskId}`);
       const docs = (task.linked_drive_docs ?? []).map((d) =>
-        d.url === file.webViewLink ? { ...d, summary: data.result } : d
+        d.url === file.webViewLink ? { ...d, summary: result } : d
       );
 
       await api(`/api/tasks/${taskId}`, {
