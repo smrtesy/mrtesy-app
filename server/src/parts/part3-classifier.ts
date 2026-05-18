@@ -82,12 +82,15 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
     const writingStyleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
 
     // ── 2. Load open tasks for update-threading (scoped to active org) ───────
+    // Include both verified and unverified (pending-approval) tasks so Claude
+    // can detect follow-ups to messages that arrived moments ago and haven't
+    // been approved yet — without this, a reply arriving before approval
+    // creates a duplicate task instead of appending to the existing one.
     const { data: openTasks } = await db
       .from("tasks")
       .select("id, title_he, title, related_contact, related_contact_email, related_contact_phone, tags, source_message_id")
       .eq("organization_id", orgId)
       .in("status", ["inbox", "in_progress"])
-      .eq("manually_verified", true)
       .order("created_at", { ascending: false })
       .limit(30);
 
