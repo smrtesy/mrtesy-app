@@ -18,6 +18,7 @@
 import { db, createRunSession, closeRunSession } from "../../../db";
 import { cachedCall, simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
 import { getUserPromptContext, formatIdentity } from "../../../lib/user-context";
+import { loadPrompt } from "../../../lib/prompt-loader";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -108,13 +109,11 @@ async function suggestProjects(userId: string, orgId: string, sessionId: string)
     )
     .join("\n");
 
-  const { content } = await simpleCall(
-    "sonnet",
-    `You identify ongoing projects from a list of tasks for ${identity}.
+  const defaultSuggestSystem = `You identify ongoing projects from a list of tasks for {{user}}.
 
 A "project" is a group of 3+ tasks that share a topic, contact, or goal and represent ongoing work — not one-off tasks.
 
-Existing projects (do NOT re-suggest these): ${existingNames || "none"}
+Existing projects (do NOT re-suggest these): {{existingProjects}}
 
 Return ONLY valid JSON array. Each entry:
 {
@@ -126,10 +125,13 @@ Return ONLY valid JSON array. Each entry:
   "confidence": 0.0-1.0
 }
 
-Return [] if no clear projects emerge. Do NOT invent projects. Only group what's clearly related.`,
-    `TASKS:\n${taskList}`,
-    2048,
-  );
+Return [] if no clear projects emerge. Do NOT invent projects. Only group what's clearly related.`;
+
+  const suggestSystem = ((await loadPrompt(userId, "project_suggester")) ?? defaultSuggestSystem)
+    .replace("{{user}}", identity)
+    .replace("{{existingProjects}}", existingNames || "none");
+
+  const { content } = await simpleCall("sonnet", suggestSystem, `TASKS:\n${taskList}`, 2048);
 
   const clusters = parseJsonResponse<ProjectCluster[]>(content) ?? [];
 
@@ -236,9 +238,7 @@ async function buildBrief(userId: string, orgId: string, projectId: string, sess
 
   const projectName = (project.name_he as string | null) ?? (project.name as string);
 
-  const { content } = await simpleCall(
-    "sonnet",
-    `You extract structured facts about a project from tasks and messages, for ${identity}.
+  const defaultBriefSystem = `You extract structured facts about a project from tasks and messages, for {{user}}.
 
 Extract as many useful facts as possible. Each fact is ONE piece of information.
 Return ONLY valid JSON array:
@@ -251,7 +251,14 @@ Return ONLY valid JSON array:
   { "type": "note",     "value": "any other useful context" }
 ]
 
-Be specific. Use Hebrew where appropriate. Do not repeat facts.`,
+Be specific. Use Hebrew where appropriate. Do not repeat facts.`;
+
+  const briefSystem = ((await loadPrompt(userId, "brief_builder")) ?? defaultBriefSystem)
+    .replace("{{user}}", identity);
+
+  const { content } = await simpleCall(
+    "sonnet",
+    briefSystem,
     `PROJECT: ${projectName}\n\nTASKS:\n${taskBlock}\n\nSOURCE MESSAGES:\n${sourceBlock}`,
     2048,
   );

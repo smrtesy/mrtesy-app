@@ -17,7 +17,7 @@ export async function loadPrompt(
   promptKey: string,
   ctx?: UserPromptContext,
 ): Promise<string | null> {
-  const { data } = await db
+  const { data, error } = await db
     .from("ai_prompts")
     .select("content")
     .eq("user_id", userId)
@@ -27,6 +27,7 @@ export async function loadPrompt(
     .limit(1)
     .maybeSingle();
 
+  if (error) console.error("[loadPrompt]", promptKey, error.message);
   if (!data?.content) return null;
 
   let content: string = data.content;

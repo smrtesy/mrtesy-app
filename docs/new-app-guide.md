@@ -693,12 +693,8 @@ await emitEvent(orgId, "smrtcrm", "deal.closed", "deal", dealId, { value: 5000 }
 
 // Cross-app entity link
 await linkEntities(orgId, {
-  source_app:         "smrtcrm",
-  source_entity_type: "contact",
-  source_id:          contactId,
-  target_app:         "smrttask",
-  target_entity_type: "task",
-  target_id:          taskId,
-  link_type:          "created_from",   // "created_from" | "related_to" | "duplicate_of"
+  from: { app: "smrtcrm",  entity: "contact", id: contactId },
+  to:   { app: "smrttask", entity: "task",    id: taskId    },
+  type: "created_from",   // "created_from" | "related_to" | "duplicate_of"
 });
 ```

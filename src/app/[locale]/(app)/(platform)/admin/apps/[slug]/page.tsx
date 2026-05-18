@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Sparkles, ArrowLeft } from "lucide-react";
+import { Activity, Sparkles, BookOpen, ArrowLeft } from "lucide-react";
 import { AppStatusCard } from "@/components/admin/AppStatusCard";
 
 interface AppRow {
@@ -14,6 +14,7 @@ interface AppRow {
   slug: string;
   name: string;
   description: string | null;
+  guide_url: string | null;
 }
 
 export default async function AdminAppDetailPage({
@@ -27,7 +28,7 @@ export default async function AdminAppDetailPage({
 
   const { data: app } = await supabase
     .from("apps")
-    .select("id, slug, name, description")
+    .select("id, slug, name, description, guide_url")
     .eq("slug", slug)
     .maybeSingle<AppRow>();
 
@@ -55,6 +56,15 @@ export default async function AdminAppDetailPage({
       icon: Sparkles,
       href: `${base}/prompts`,
     },
+    ...(app.guide_url
+      ? [{
+          key: "guide",
+          title: t("appGuideTitle"),
+          description: t("appGuideDesc"),
+          icon: BookOpen,
+          href: `/${locale}${app.guide_url}`,
+        }]
+      : []),
   ];
 
   return (

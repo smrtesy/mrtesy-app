@@ -494,6 +494,8 @@
     "appServicesDesc": "Connected user services (Gmail, Drive, Calendar, WhatsApp) and their sync state.",
     "appPromptsTitle": "Prompts",
     "appPromptsDesc": "AI prompt configuration for this app (classifier, project briefs, etc.).",
+    "appGuideTitle": "User Guide",
+    "appGuideDesc": "Open the user-facing guide page for this app.",
     "inviteSection": "Invite User",
     "inviteEmailPlaceholder": "Email address...",
     "inviteSendBtn": "Send Invite",

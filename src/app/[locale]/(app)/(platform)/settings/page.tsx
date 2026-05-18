@@ -273,13 +273,13 @@ export default function SettingsPage() {
               <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-2 sm:grid-cols-2">
-              <Link href={`/${locale}/settings/smrttask/rules`}>
+              <Link href={`/${locale}/settings/smrtesy/rules`}>
                 <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
                   <Filter className="h-4 w-4" />
                   {t("skipRulesAndStyle")}
                 </Button>
               </Link>
-              <Link href={`/${locale}/settings/smrttask/sync`}>
+              <Link href={`/${locale}/settings/smrtesy/sync`}>
                 <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
                   <Repeat className="h-4 w-4" />
                   {t("syncSchedules")}

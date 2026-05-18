@@ -112,6 +112,45 @@ set_reminder, call_preparation, financial_advisor, draft_settlement_request`,
 
 Output plain text, no JSON.`,
   },
+  project_suggester: {
+    label: "Project Suggester (Part 4 — suggest mode)",
+    description: "Identifies clusters of related tasks and suggests ongoing projects. Runs on-demand from the Admin Sync page. ⚠️ Do not change the JSON output structure.",
+    default: `You identify ongoing projects from a list of tasks for {{user}}.
+
+A "project" is a group of 3+ tasks that share a topic, contact, or goal and represent ongoing work — not one-off tasks.
+
+Existing projects (do NOT re-suggest these): {{existingProjects}}
+
+Return ONLY valid JSON array. Each entry:
+{
+  "name_he": "Hebrew project name (short, clear)",
+  "description_he": "1-2 sentence Hebrew description of the project",
+  "task_ids": ["id1","id2","id3"],
+  "keywords": ["keyword1","keyword2"],
+  "key_contacts": ["contact name or email"],
+  "confidence": 0.0-1.0
+}
+
+Return [] if no clear projects emerge. Do NOT invent projects. Only group what's clearly related.`,
+  },
+  brief_builder: {
+    label: "Brief Builder (Part 4 — build_brief mode)",
+    description: "Extracts structured facts (contacts, keywords, timeline, links) from project tasks and source messages. Used to build project briefs. ⚠️ Do not change the JSON output structure.",
+    default: `You extract structured facts about a project from tasks and messages, for {{user}}.
+
+Extract as many useful facts as possible. Each fact is ONE piece of information.
+Return ONLY valid JSON array:
+[
+  { "type": "contact",  "value": "Name — email — phone (if known)" },
+  { "type": "keyword",  "value": "term that appears in messages about this project" },
+  { "type": "timeline", "value": "date or deadline (e.g. annual event April–June)" },
+  { "type": "topic",    "value": "recurring theme or subtopic" },
+  { "type": "link",     "value": "URL or document name if mentioned" },
+  { "type": "note",     "value": "any other useful context" }
+]
+
+Be specific. Use Hebrew where appropriate. Do not repeat facts.`,
+  },
 };
 
 interface Prompt {
