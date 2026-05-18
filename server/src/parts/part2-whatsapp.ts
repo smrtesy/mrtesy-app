@@ -202,8 +202,8 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       itemsProcessed++;
 
       // Persist new messages to source_messages (dedup by source_id + received_at)
+      const sourceId = `wa:${chatId}`;
       for (const msg of msgs) {
-        const sourceId = `wa:${chatId}`;
         await db.from("source_messages").upsert(
           {
             user_id: userId,
@@ -225,6 +225,20 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           { onConflict: "user_id,source_type,source_id" },
         );
       }
+
+      // Fetch the UUID of the source_message row (needed for FK in tasks.source_message_id)
+      const { data: smRow, error: smFetchErr } = await db
+        .from("source_messages")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("source_type", "whatsapp")
+        .eq("source_id", sourceId)
+        .single();
+      if (smFetchErr) {
+        errors.push(`fetch source_message for ${chatId}: ${smFetchErr.message}`);
+        continue;
+      }
+      const smId: string = smRow!.id;
 
       // Build conversation context: last 20 messages combined
       const context = [
@@ -264,7 +278,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
         continue;
       }
 
-      // 8. Handle NOISE → suggest bot rule
+      // 8. Handle NOISE → suggest bot rule; mark source_message classified so Part3 skips it
       if (classification.status === "NOISE") {
         const alreadyBot = botPhones.has(lastMsg.fromPhone);
         if (!alreadyBot) {
@@ -281,10 +295,20 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           });
           rulesAdded++;
         }
+        const { error: noiseErr } = await db.from("source_messages")
+          .update({ processing_status: "classified", ai_classification: "NOISE" })
+          .eq("id", smId);
+        if (noiseErr) errors.push(`classify noise ${chatId}: ${noiseErr.message}`);
         continue;
       }
 
-      if (classification.status === "CLOSED") continue;
+      if (classification.status === "CLOSED") {
+        const { error: closedErr } = await db.from("source_messages")
+          .update({ processing_status: "classified", ai_classification: "CLOSED" })
+          .eq("id", smId);
+        if (closedErr) errors.push(`classify closed ${chatId}: ${closedErr.message}`);
+        continue;
+      }
 
       // 9. Create task for NEEDS_RESPONSE / WAITING_REPLY / PERSONAL_REMINDER
       const emoji =
@@ -310,17 +334,18 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
         `\nההודעה האחרונה:\n"${classification.last_msg_summary}"`,
       ].join("\n");
 
+      // tasks.source_message_id is a UUID FK → source_messages.id; use smId for dedup and insert
       const { data: existing } = await db
         .from("tasks")
         .select("id")
-        .eq("user_id", userId)
-        .eq("source_message_id", `wa:${chatId}`)
+        .eq("source_message_id", smId)
         .neq("status", "archived")
         .neq("status", "completed")
         .maybeSingle();
 
+      let taskWriteOk = false;
       if (existing) {
-        await db
+        const { error: updateErr } = await db
           .from("tasks")
           .update({
             description,
@@ -329,8 +354,10 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
             ai_actions: classification.suggested_actions.map((a) => ({ label: a, prompt: a })),
           })
           .eq("id", existing.id);
+        if (updateErr) errors.push(`update wa task ${existing.id}: ${updateErr.message}`);
+        else taskWriteOk = true;
       } else {
-        await db.from("tasks").insert({
+        const { error: insertErr } = await db.from("tasks").insert({
           user_id: userId,
           title: `${emoji} ${chatName} — ${classification.topic}`,
           title_he: `${emoji} ${chatName} — ${classification.topic}`,
@@ -339,7 +366,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           status: "inbox",
           task_type: "action",
           due_date: dueDate,
-          source_message_id: `wa:${chatId}`,
+          source_message_id: smId,
           source_link: `https://wa.me/${lastMsg.fromPhone.replace(/\D/g, "")}`,
           related_contact: chatName,
           related_contact_phone: lastMsg.fromPhone,
@@ -347,7 +374,16 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           ai_model_used: MODELS.sonnet,
           manually_verified: false,
         });
-        tasksCreated++;
+        if (insertErr) errors.push(`insert wa task ${chatId}: ${insertErr.message}`);
+        else { tasksCreated++; taskWriteOk = true; }
+      }
+
+      // Only mark classified once the task is committed so failures are retryable
+      if (taskWriteOk) {
+        const { error: classifyErr } = await db.from("source_messages")
+          .update({ processing_status: "classified", ai_classification: classification.status })
+          .eq("id", smId);
+        if (classifyErr) errors.push(`classify wa ${chatId}: ${classifyErr.message}`);
       }
     }
 

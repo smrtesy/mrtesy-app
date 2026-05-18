@@ -151,12 +151,13 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .update({ processing_status: "processing" })
         .eq("id", msg.id);
 
-      // Check for existing task with same source_id (dedup — scoped to active org)
+      // Check for existing task linked to this source_message (dedup — scoped to active org).
+      // tasks.source_message_id is a UUID FK → source_messages.id, so use msg.id, not msg.source_id.
       const { data: existingTask } = await db
         .from("tasks")
         .select("id, status, updates")
         .eq("organization_id", orgId)
-        .eq("source_message_id", msg.source_id)
+        .eq("source_message_id", msg.id)
         .neq("status", "archived")
         .maybeSingle();
 
@@ -218,7 +219,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
             .single();
 
           const currentUpdates = (fullTask?.updates as object[] | null) ?? [];
-          await db.from("tasks").update({
+          const { error: appendErr } = await db.from("tasks").update({
             updates: [
               ...currentUpdates,
               {
@@ -227,7 +228,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
                 type: "ai_update",
                 actor: "claude",
                 content: result.update_he ?? "",
-                source_message_id: msg.source_id,
+                source_message_id: msg.id,
                 source_type: msg.source_type,
               },
             ],
@@ -236,13 +237,15 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           .eq("id", result.task_id)
           .eq("organization_id", orgId);
 
-          await db
-            .from("source_messages")
-            .update({ processing_status: "classified", ai_classification: "UPDATE" })
-            .eq("id", msg.id);
-
-          tasksUpdated++;
-          itemsProcessed++;
+          if (appendErr) {
+            errors.push(`append update to task ${result.task_id}: ${appendErr.message}`);
+          } else {
+            await db
+              .from("source_messages")
+              .update({ processing_status: "classified", ai_classification: "UPDATE" })
+              .eq("id", msg.id);
+            tasksUpdated++;
+          }
 
           if ((i + 1) % BATCH_SIZE === 0) {
             await db.from("run_sessions")
@@ -271,21 +274,19 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         rulesAdded++;
       }
 
-      // ── Update source_message status ──────────────────────────────────────
-      await db
-        .from("source_messages")
-        .update({
-          processing_status: "classified",
-          ai_classification: result.classification ?? "INFORMATIONAL",
-        })
-        .eq("id", msg.id);
-
       if (result.classification === "INFORMATIONAL") {
         informationalCount++;
+        await db
+          .from("source_messages")
+          .update({ processing_status: "classified", ai_classification: "INFORMATIONAL" })
+          .eq("id", msg.id);
         continue;
       }
 
       // ── Create or update task ─────────────────────────────────────────────
+      // Mark source_message classified ONLY after a successful task write so that
+      // a DB error on insert doesn't orphan the message in a permanent "classified"
+      // state where neither Part3 nor Part2 will ever retry it.
       actionableCount++;
       const task = result.task!;
 
@@ -307,7 +308,8 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         status: "inbox" as const,
         task_type: "action" as const,
         due_date: task.due_date ?? null,
-        source_message_id: msg.source_id,
+        // tasks.source_message_id is a UUID FK → source_messages.id; use msg.id, not msg.source_id
+        source_message_id: msg.id,
         related_contact: task.contact_person ?? null,
         tags: task.tags,
         ai_actions: task.suggested_actions.map((a) => ({ label: a, prompt: a })),
@@ -318,14 +320,31 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         project_confidence: resolvedProjectId ? result.project_confidence ?? null : null,
       };
 
+      let taskWriteOk = false;
       if (existingTask) {
-        await db.from("tasks").update(taskPayload)
+        const { error: updateErr } = await db.from("tasks").update(taskPayload)
           .eq("id", existingTask.id)
           .eq("organization_id", orgId);
-        tasksUpdated++;
+        if (updateErr) errors.push(`update task ${existingTask.id}: ${updateErr.message}`);
+        else { tasksUpdated++; taskWriteOk = true; }
       } else {
-        await db.from("tasks").insert(taskPayload);
-        tasksCreated++;
+        const { error: insertErr } = await db.from("tasks").insert(taskPayload);
+        if (insertErr) errors.push(`insert task for source_msg ${msg.id}: ${insertErr.message}`);
+        else { tasksCreated++; taskWriteOk = true; }
+      }
+
+      // Only mark classified once the task row is committed; on failure leave as
+      // "processing" so the next run can retry (processing_lock_at handles stale locks).
+      if (taskWriteOk) {
+        await db
+          .from("source_messages")
+          .update({ processing_status: "classified", ai_classification: result.classification })
+          .eq("id", msg.id);
+      } else {
+        await db
+          .from("source_messages")
+          .update({ processing_status: "pending" })
+          .eq("id", msg.id);
       }
 
       // Checkpoint every BATCH_SIZE
