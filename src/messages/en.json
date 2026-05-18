@@ -233,7 +233,13 @@
     "eventsUnit": "events",
     "savingMessages": "Saving messages... Processing will continue in the background.",
     "backgroundProcessing": "The system will process messages in the background and create tasks automatically.",
-    "largeMailboxWarning": "Large mailbox ({count} messages) — background processing may take a few hours."
+    "largeMailboxWarning": "Large mailbox ({count} messages) — background processing may take a few hours.",
+    "gmailCategoriesLabel": "Gmail — content categories to skip",
+    "gmailCategoriesHint": "These Gmail categories will be filtered out before processing. Recommended defaults are pre-selected.",
+    "calendarSelectionLabel": "Calendar — which calendars to scan",
+    "calendarSelectionHint": "Only events from selected calendars will be processed.",
+    "calendarNotConnected": "Connect Google Calendar to select calendars.",
+    "calendarLoadError": "Could not load calendars. You can change this in Settings later."
   },
   "onboardingWhatsapp": {
     "sheetAccessSuccess": "Sheet access successful! {count} rows found",

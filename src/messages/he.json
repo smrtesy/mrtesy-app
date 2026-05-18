@@ -233,7 +233,13 @@
     "eventsUnit": "אירועים",
     "savingMessages": "שומר הודעות... העיבוד ימשיך ברקע.",
     "backgroundProcessing": "המערכת תעבד את ההודעות ברקע ותיצור משימות אוטומטית.",
-    "largeMailboxWarning": "יש הרבה הודעות ({count}) — העיבוד ברקע עשוי לקחת מספר שעות."
+    "largeMailboxWarning": "יש הרבה הודעות ({count}) — העיבוד ברקע עשוי לקחת מספר שעות.",
+    "gmailCategoriesLabel": "Gmail — קטגוריות תוכן לדלג",
+    "gmailCategoriesHint": "קטגוריות Gmail אלה יסוננו לפני העיבוד. ברירות המחדל המומלצות מסומנות מראש.",
+    "calendarSelectionLabel": "לוח שנה — אילו לוחות שנה לסרוק",
+    "calendarSelectionHint": "רק אירועים מהלוחות שנבחרו יועברו לעיבוד.",
+    "calendarNotConnected": "חבר Google Calendar כדי לבחור לוחות שנה.",
+    "calendarLoadError": "לא ניתן לטעון לוחות שנה. ניתן לשנות זאת בהגדרות מאוחר יותר."
   },
   "onboardingWhatsapp": {
     "sheetAccessSuccess": "גישה לSheet הצליחה! {count} שורות זוהו",

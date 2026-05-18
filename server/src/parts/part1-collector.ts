@@ -9,8 +9,8 @@
 import { db, createRunSession, closeRunSession, updateSyncState, loadRules } from "../db";
 import { searchGmail, getMessage, extractEmailText, getThreadMessages } from "../services/gmail";
 import { listNewFiles, getFileContent } from "../services/drive";
-import { listEvents } from "../services/calendar";
-import { parseSkipRules } from "../lib/rule-filters";
+import { listEvents, listCalendars } from "../services/calendar";
+import { parseSkipRules, parseCalendarSkips } from "../lib/rule-filters";
 
 export interface Part1Options {
   userId: string;
@@ -41,7 +41,6 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
   const errors: string[] = [];
   let itemsProcessed = 0;
-  let itemsSkipped = 0;
 
   try {
     // Load skip rules from rules_memory (single source of truth, managed via /admin/rules)
@@ -103,16 +102,6 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           // LAST `>` on multi-recipient headers, producing garbage like
           // `alice@a.com>, "Bob" <bob@b.com`.
           const fromEmail = (from.match(/<([^>]+)>/) ?? [])[1] ?? from;
-
-          if (
-            skipFilter.shouldSkip({ from, to, senderEmail: fromEmail }) ||
-            fromEmail.toLowerCase().includes("noreply") ||
-            fromEmail.toLowerCase().includes("no-reply") ||
-            body.toLowerCase().includes("unsubscribe")
-          ) {
-            itemsSkipped++;
-            continue;
-          }
 
           // If this is a reply (has In-Reply-To header), fetch thread history so
           // Part3 sees the full conversation context, not just the last message.
@@ -234,53 +223,68 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       const timeMin = new Date(now.getTime() - windowMs).toISOString();
       const timeMax = new Date(now.getTime() + windowMs).toISOString();
 
-      const events = await listEvents(userId, timeMin, timeMax);
+      const calendarSkips = parseCalendarSkips(rules);
+
+      let calendarIds: string[];
+      try {
+        const allCalendars = await listCalendars(userId);
+        calendarIds = allCalendars
+          .filter((c) => !calendarSkips.has(c.id))
+          .map((c) => c.id);
+        if (calendarIds.length === 0) calendarIds = ["primary"];
+      } catch {
+        calendarIds = ["primary"];
+      }
+
       const seenIds = new Set<string>();
 
-      for (const event of events) {
-        if (!event.id || seenIds.has(event.recurringEventId ?? event.id)) continue;
-        seenIds.add(event.recurringEventId ?? event.id);
+      for (const calendarId of calendarIds) {
+        let calEvents;
+        try {
+          calEvents = await listEvents(userId, timeMin, timeMax, 100, calendarId);
+        } catch {
+          continue;
+        }
 
-        // Skip private events
-        if (event.visibility === "private") continue;
+        for (const event of calEvents) {
+          if (!event.id || seenIds.has(event.recurringEventId ?? event.id)) continue;
+          seenIds.add(event.recurringEventId ?? event.id);
 
-        // Only events with attendees or task-like titles
-        const hasAttendees = (event.attendees?.length ?? 0) > 1;
-        const taskLike = /call|deadline|pay|meeting|שיחה|תשלום|פגישה/i.test(event.summary ?? "");
-        if (!hasAttendees && !taskLike) continue;
+          const hasAttendees = (event.attendees?.length ?? 0) > 1;
 
-        const attendeeList =
-          event.attendees?.map((a) => `${a.displayName ?? ""} <${a.email}>`).join(", ") ?? "";
-        const isPast = new Date(event.start?.dateTime ?? event.start?.date ?? "") < now;
+          const attendeeList =
+            event.attendees?.map((a) => `${a.displayName ?? ""} <${a.email}>`).join(", ") ?? "";
+          const isPast = new Date(event.start?.dateTime ?? event.start?.date ?? "") < now;
 
-        const rawContent = [
-          `Event: ${event.summary}`,
-          `Date: ${event.start?.dateTime ?? event.start?.date}`,
-          `Location: ${event.location ?? ""}`,
-          `Attendees: ${attendeeList}`,
-          isPast ? "NOTE: Past event — follow-up candidate" : "",
-          `Description: ${event.description ?? ""}`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-          .slice(0, 3000);
+          const rawContent = [
+            `Event: ${event.summary}`,
+            `Date: ${event.start?.dateTime ?? event.start?.date}`,
+            `Location: ${event.location ?? ""}`,
+            `Attendees: ${attendeeList}`,
+            isPast ? "NOTE: Past event — follow-up candidate" : "",
+            `Description: ${event.description ?? ""}`,
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .slice(0, 3000);
 
-        await db.from("source_messages").upsert(
-          {
-            user_id: userId,
-            source_type: "calendar",
-            source_id: event.id,
-            subject: event.summary ?? "Untitled event",
-            body_text: event.description?.slice(0, 1000) ?? "",
-            raw_content: rawContent,
-            received_at: event.start?.dateTime ?? event.start?.date ?? new Date().toISOString(),
-            processing_status: "pending",
-            reply_to_context: isPast ? "follow-up after meeting" : `${hasAttendees ? event.attendees?.length : 1} attendees`,
-            metadata: { eventId: event.id, recurringEventId: event.recurringEventId, isPast, hasAttendees },
-          },
-          { onConflict: "user_id,source_type,source_id" },
-        );
-        itemsProcessed++;
+          await db.from("source_messages").upsert(
+            {
+              user_id: userId,
+              source_type: "calendar",
+              source_id: event.id,
+              subject: event.summary ?? "Untitled event",
+              body_text: event.description?.slice(0, 1000) ?? "",
+              raw_content: rawContent,
+              received_at: event.start?.dateTime ?? event.start?.date ?? new Date().toISOString(),
+              processing_status: "pending",
+              reply_to_context: isPast ? "follow-up after meeting" : `${hasAttendees ? event.attendees?.length : 1} attendees`,
+              metadata: { eventId: event.id, recurringEventId: event.recurringEventId, isPast, hasAttendees },
+            },
+            { onConflict: "user_id,source_type,source_id" },
+          );
+          itemsProcessed++;
+        }
       }
 
       await updateSyncState(userId, "calendar", new Date().toISOString());
@@ -291,8 +295,8 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     await closeRunSession(
       sessionId,
       errors.length === 0 ? "completed" : "partial",
-      { items_processed: itemsProcessed, items_skipped: itemsSkipped, errors_count: errors.length },
-      `Collected ${itemsProcessed} items (${itemsSkipped} skipped). ${errors.length} errors.`,
+      { items_processed: itemsProcessed, errors_count: errors.length },
+      `Collected ${itemsProcessed} items. ${errors.length} errors.`,
       errors,
     );
   } catch (err) {

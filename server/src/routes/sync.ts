@@ -13,11 +13,22 @@ import { runPart1 } from "../parts/part1-collector";
 import { runPart2 } from "../parts/part2-whatsapp";
 import { runPart3 } from "../parts/part3-classifier";
 import { runPart4 } from "../parts/part4-projects";
+import { listCalendars } from "../services/calendar";
 
 const router = Router();
 
 // Every smrtesy route runs through this chain (except the cron webhook below).
 const smrtesyGate = [requireAuth, requireOrg, requireApp("smrtesy")];
+
+// ── Calendars list ────────────────────────────────────────────────────────
+router.get("/calendars", ...smrtesyGate, async (req: Request, res: Response) => {
+  try {
+    const calendars = await listCalendars(req.user!.id);
+    return res.json({ calendars });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
 
 // ── Part 0: style learner ─────────────────────────────────────────────────
 router.post("/part0", ...smrtesyGate, async (req: Request, res: Response) => {
