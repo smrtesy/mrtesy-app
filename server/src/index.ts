@@ -38,18 +38,40 @@ const HOST = process.env.HOST ?? "0.0.0.0"; // Bind to all interfaces — requir
 //
 // Allowed origins come from FRONTEND_URL (comma-separated). Falls back to
 // localhost:3000 for local development only — production hosts must set the env var.
+// We also accept any *.<APP_DOMAIN> subdomain (the multi-tenant model gives each
+// org its own subdomain, plus app.<APP_DOMAIN> for the platform). Otherwise we'd
+// need to update FRONTEND_URL on every new tenant.
 const allowedOrigins = (process.env.FRONTEND_URL ?? "http://localhost:3000")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
 
-console.log("[cors] allowed origins:", allowedOrigins.join(", "));
+const appDomain = (process.env.APP_DOMAIN ?? process.env.NEXT_PUBLIC_APP_DOMAIN ?? "")
+  .trim()
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
+
+console.log("[cors] allowed origins:", allowedOrigins.join(", "), appDomain ? `| wildcard: *.${appDomain}` : "");
+
+function isAllowedOrigin(origin: string): boolean {
+  if (allowedOrigins.includes(origin)) return true;
+  if (!appDomain) return false;
+  try {
+    const host = new URL(origin).hostname;
+    // Match the apex (smrtesy.com) and any subdomain (app.smrtesy.com,
+    // <tenant>.smrtesy.com). Guards against suffix tricks like
+    // "evilsmrtesy.com" by requiring an exact host match or "<x>.<appDomain>".
+    return host === appDomain || host.endsWith(`.${appDomain}`);
+  } catch {
+    return false;
+  }
+}
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, cb) => {
     // Server-to-server or curl/Postman calls have no Origin header — allow.
     if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     console.warn(`[cors] rejected origin: ${origin}`);
     cb(null, false);
   },

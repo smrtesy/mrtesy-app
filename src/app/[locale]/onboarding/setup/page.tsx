@@ -68,10 +68,17 @@ export default function OnboardingSetup() {
   const [selectedFolderName, setSelectedFolderName] = useState<string>("");
   const [driveConnected, setDriveConnected] = useState(false);
   const [driveToken, setDriveToken] = useState<string>("");
-  // Skip-rules state: addresses that should never be turned into tasks.
-  // Each entry becomes a row in rules_memory with rule_type='skip'.
-  const [skipAddresses, setSkipAddresses] = useState<string[]>([]);
+  // Skip-rules state: addresses or domains that should never be turned into
+  // tasks. `direction` controls trigger format:
+  //   "from"  → from=<addr>          (incoming only)
+  //   "to"    → to=<addr>            (outgoing only)
+  //   "both"  → from=<addr> + to=<addr>  (two rules, bidirectional)
+  // For domains (no @), direction is ignored — domain=<dom> is already
+  // bidirectional in parseSkipRules.
+  type SkipEntry = { value: string; direction: "from" | "to" | "both" };
+  const [skipAddresses, setSkipAddresses] = useState<SkipEntry[]>([]);
   const [skipInput, setSkipInput] = useState("");
+  const [skipDirection, setSkipDirection] = useState<SkipEntry["direction"]>("from");
   const [gmailCategories, setGmailCategories] = useState<Record<string, boolean>>(GMAIL_CATEGORY_DEFAULTS);
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarList, setCalendarList] = useState<CalendarInfo[]>([]);
@@ -109,12 +116,16 @@ export default function OnboardingSetup() {
     async function checkCalendar() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // Service column stores "gmail" (paired with "google_calendar"); the
+      // "gmail_calendar" label is only the OAuth-flow identifier, never written
+      // to user_credentials. Using it here returned PostgREST 406 (zero rows
+      // with .single()) so the calendar list never rendered during onboarding.
       const { data: creds } = await supabase
         .from("user_credentials")
         .select("access_token")
         .eq("user_id", user.id)
-        .eq("service", "gmail_calendar")
-        .single();
+        .eq("service", "gmail")
+        .maybeSingle();
       if (!creds) return;
       setCalendarConnected(true);
       try {
@@ -229,13 +240,13 @@ export default function OnboardingSetup() {
       toast.error(tSetup("invalidAddress"));
       return;
     }
-    if (skipAddresses.includes(v)) return;
-    setSkipAddresses([...skipAddresses, v]);
+    if (skipAddresses.some((a) => a.value === v)) return;
+    setSkipAddresses([...skipAddresses, { value: v, direction: skipDirection }]);
     setSkipInput("");
   }
 
   function removeSkipAddress(addr: string) {
-    setSkipAddresses(skipAddresses.filter((a) => a !== addr));
+    setSkipAddresses(skipAddresses.filter((a) => a.value !== addr));
   }
 
   // Poll DB for progress while scanning
@@ -305,17 +316,19 @@ export default function OnboardingSetup() {
       //
       // Trigger semantics (matches parseSkipRules + the user-scope
       // /settings/rules page):
-      //   - Bare email     → from=<email>   (skip mail SENT BY that address)
-      //   - Bare domain    → domain=<dom>   (already bidirectional: -from: AND -to:)
-      // The UI copy promises "messages from these addresses" — sender filtering
-      // is what users intuit and what the admin rules UI uses canonically.
+      //   - Email + direction=from → from=<email>            (incoming)
+      //   - Email + direction=to   → to=<email>              (outgoing)
+      //   - Email + direction=both → from=<email> AND to=<email>
+      //   - Bare domain            → domain=<dom>            (already bidir)
       // created_by must be one of ('user','claude','system') per the CHECK
       // constraint on rules_memory; 'user' is the right bucket for a manually
       // entered rule during onboarding.
       if (skipAddresses.length > 0) {
-        const triggers = skipAddresses.map((addr) =>
-          addr.includes("@") ? `from=${addr}` : `domain=${addr}`,
-        );
+        const triggers = skipAddresses.flatMap((entry) => {
+          if (!entry.value.includes("@")) return [`domain=${entry.value}`];
+          if (entry.direction === "both") return [`from=${entry.value}`, `to=${entry.value}`];
+          return [`${entry.direction}=${entry.value}`];
+        });
         const { data: existing } = await supabase
           .from("rules_memory")
           .select("trigger")
@@ -329,6 +342,7 @@ export default function OnboardingSetup() {
           .filter((t) => !existingSet.has(t))
           .map((trigger) => ({
             user_id: user.id,
+            app_slug: "smrtesy",
             rule_type: "skip",
             trigger,
             is_active: true,
@@ -359,6 +373,7 @@ export default function OnboardingSetup() {
           .filter((t) => !existingCatSet.has(t))
           .map((trigger) => ({
             user_id: user.id,
+            app_slug: "smrtesy",
             rule_type: "skip",
             trigger,
             is_active: true,
@@ -388,6 +403,7 @@ export default function OnboardingSetup() {
           .filter((t) => !existingCalSet.has(t))
           .map((trigger) => ({
             user_id: user.id,
+            app_slug: "smrtesy",
             rule_type: "skip",
             trigger,
             is_active: true,
@@ -684,9 +700,17 @@ export default function OnboardingSetup() {
                     }
                   }}
                   placeholder={tSetup("skipAddressPlaceholder")}
-                  dir="ltr"
-                  className="font-mono text-xs"
                 />
+                <select
+                  value={skipDirection}
+                  onChange={(e) => setSkipDirection(e.target.value as SkipEntry["direction"])}
+                  className="h-10 rounded-md border bg-background px-2 text-sm shrink-0"
+                  aria-label={tSetup("skipDirectionLabel")}
+                >
+                  <option value="from">{tSetup("skipDirectionFrom")}</option>
+                  <option value="to">{tSetup("skipDirectionTo")}</option>
+                  <option value="both">{tSetup("skipDirectionBoth")}</option>
+                </select>
                 <Button
                   type="button"
                   variant="outline"
@@ -700,21 +724,30 @@ export default function OnboardingSetup() {
               </div>
               {skipAddresses.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 pt-1">
-                  {skipAddresses.map((addr) => (
-                    <span
-                      key={addr}
-                      className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-xs font-mono"
-                    >
-                      {addr}
-                      <button
-                        onClick={() => removeSkipAddress(addr)}
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label="remove"
+                  {skipAddresses.map((entry) => {
+                    const isDomain = !entry.value.includes("@");
+                    const dirLabel = isDomain
+                      ? tSetup("skipDirectionBoth")
+                      : tSetup(
+                          (`skipDirection${entry.direction.charAt(0).toUpperCase()}${entry.direction.slice(1)}`) as Parameters<typeof tSetup>[0],
+                        );
+                    return (
+                      <span
+                        key={entry.value}
+                        className="inline-flex items-center gap-1.5 rounded-full border bg-muted px-2 py-0.5 text-xs"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
+                        <span dir="ltr">{entry.value}</span>
+                        <span className="text-[10px] text-muted-foreground">· {dirLabel}</span>
+                        <button
+                          onClick={() => removeSkipAddress(entry.value)}
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label="remove"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
