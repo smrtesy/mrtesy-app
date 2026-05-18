@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,24 +45,15 @@ interface CalendarInfo {
 
 const RULE_TYPES = ["skip", "skip_spam", "bot", "action", "style", "preference", "financial"];
 
-const TYPE_LABELS: Record<string, string> = {
-  skip:       "Skip",
-  skip_spam:  "Skip Spam",
-  bot:        "Bot",
-  action:     "Action",
-  style:      "Style",
-  preference: "Preference",
-  financial:  "Financial",
-};
-
 const GMAIL_CATEGORIES = [
-  { key: "promotions", label: "Promotions", description: "Skip newsletters and deals", defaultOn: true },
-  { key: "social", label: "Social", description: "Skip social network notifications", defaultOn: true },
-  { key: "forums", label: "Forums", description: "Skip mailing lists", defaultOn: true },
-  { key: "updates", label: "Updates", description: "Skip receipts and confirmations", defaultOn: false },
-];
+  { key: "promotions", labelKey: "categoryPromotions", descKey: "categoryPromotionsDesc" },
+  { key: "social",     labelKey: "categorySocial",     descKey: "categorySocialDesc" },
+  { key: "forums",     labelKey: "categoryForums",     descKey: "categoryForumsDesc" },
+  { key: "updates",    labelKey: "categoryUpdates",    descKey: "categoryUpdatesDesc" },
+] as const;
 
 export default function SettingsRulesPage() {
+  const t = useTranslations("settingsRules");
   const supabase = createClient();
   const { appSlug } = useParams<{ appSlug: string }>();
   const [rules, setRules] = useState<Rule[]>([]);
@@ -77,6 +69,18 @@ export default function SettingsRulesPage() {
     action: "",
     reason: "",
   });
+
+  const typeLabel = useCallback(
+    (rt: string) => {
+      const key = `type${rt.charAt(0).toUpperCase() + rt.slice(1).replace(/_(.)/g, (_, c) => c.toUpperCase())}`;
+      try {
+        return t(key as Parameters<typeof t>[0]);
+      } catch {
+        return rt;
+      }
+    },
+    [t],
+  );
 
   const loadRules = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -112,7 +116,7 @@ export default function SettingsRulesPage() {
       .update({ suggestion_status: "approved", is_active: true })
       .eq("id", id);
     if (error) { toast.error(error.message); return; }
-    toast.success("Rule approved and activated");
+    toast.success(t("ruleApproved"));
     loadRules();
   }
 
@@ -122,7 +126,7 @@ export default function SettingsRulesPage() {
       .update({ suggestion_status: "rejected", is_active: false })
       .eq("id", id);
     if (error) { toast.error(error.message); return; }
-    toast.success("Rule rejected");
+    toast.success(t("ruleRejected"));
     loadRules();
   }
 
@@ -138,12 +142,12 @@ export default function SettingsRulesPage() {
   async function deleteRule(id: string) {
     const { error } = await supabase.from("rules_memory").delete().eq("id", id);
     if (error) { toast.error(error.message); return; }
-    toast.success("Rule deleted");
+    toast.success(t("ruleDeleted"));
     loadRules();
   }
 
   async function addRule() {
-    if (!newRule.trigger) { toast.error("Trigger is required"); return; }
+    if (!newRule.trigger) { toast.error(t("triggerRequired")); return; }
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -161,7 +165,7 @@ export default function SettingsRulesPage() {
     });
 
     if (error) { toast.error(error.message); return; }
-    toast.success("Rule added");
+    toast.success(t("ruleAdded"));
     setNewRule({ trigger: "", rule_type: "skip", category: "", action: "", reason: "" });
     setShowAddForm(false);
     loadRules();
@@ -179,6 +183,7 @@ export default function SettingsRulesPage() {
     } else {
       const { error } = await supabase.from("rules_memory").insert({
         user_id: user.id,
+        app_slug: appSlug,
         rule_type: "skip",
         trigger: `category=${catKey}`,
         is_active: true,
@@ -199,6 +204,7 @@ export default function SettingsRulesPage() {
     } else {
       const { error } = await supabase.from("rules_memory").insert({
         user_id: user.id,
+        app_slug: appSlug,
         rule_type: "skip",
         trigger: `calendar=${calId}`,
         is_active: true,
@@ -221,9 +227,13 @@ export default function SettingsRulesPage() {
   const activeRules = rules.filter((r) => r.suggestion_status !== "pending");
   const categoryRules = activeRules.filter((r) => r.trigger.match(/^category=/i));
   const calendarRules = activeRules.filter((r) => r.trigger.match(/^calendar=/i));
+  // Unified address rules — match from=, to=, domain= triggers under one heading
+  // so the user doesn't see "Skip Addresses" and "Other Rules" with what looks
+  // like the same thing in both.
   const skipAddressRules = activeRules.filter(
-    (r) => (r.rule_type === "skip" || r.rule_type === "skip_spam") &&
-      (r.trigger.match(/^from=/i) || r.trigger.match(/^domain=/i)),
+    (r) =>
+      (r.rule_type === "skip" || r.rule_type === "skip_spam") &&
+      /^(from|to|domain)=/i.test(r.trigger),
   );
   const botRules = activeRules.filter((r) => r.rule_type === "bot");
   const otherRules = activeRules.filter(
@@ -246,10 +256,10 @@ export default function SettingsRulesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Filter Rules</h1>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
         <Button size="sm" onClick={() => setShowAddForm((v) => !v)}>
           <Plus className="h-4 w-4 mr-2" />
-          Add Rule
+          {t("addRule")}
         </Button>
       </div>
 
@@ -257,20 +267,20 @@ export default function SettingsRulesPage() {
       {showAddForm && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">New Rule</CardTitle>
+            <CardTitle className="text-base">{t("newRule")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-xs font-medium mb-1 block">Trigger *</label>
+                <label className="text-xs font-medium mb-1 block">{t("triggerLabel")}</label>
                 <Input
-                  placeholder="e.g. sender = noreply@example.com"
+                  placeholder={t("triggerPlaceholder")}
                   value={newRule.trigger}
                   onChange={(e) => setNewRule((r) => ({ ...r, trigger: e.target.value }))}
                 />
               </div>
               <div>
-                <label className="text-xs font-medium mb-1 block">Type</label>
+                <label className="text-xs font-medium mb-1 block">{t("typeLabel")}</label>
                 <Select
                   value={newRule.rule_type}
                   onValueChange={(v) => setNewRule((r) => ({ ...r, rule_type: v }))}
@@ -279,17 +289,17 @@ export default function SettingsRulesPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {RULE_TYPES.map((t) => (
-                      <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
+                    {RULE_TYPES.map((rt) => (
+                      <SelectItem key={rt} value={rt}>{typeLabel(rt)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div>
-              <label className="text-xs font-medium mb-1 block">Reason</label>
+              <label className="text-xs font-medium mb-1 block">{t("reasonLabel")}</label>
               <Textarea
-                placeholder="Why this rule exists"
+                placeholder={t("reasonPlaceholder")}
                 rows={2}
                 value={newRule.reason}
                 onChange={(e) => setNewRule((r) => ({ ...r, reason: e.target.value }))}
@@ -297,9 +307,9 @@ export default function SettingsRulesPage() {
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" size="sm" onClick={() => setShowAddForm(false)}>
-                Cancel
+                {t("cancel")}
               </Button>
-              <Button size="sm" onClick={addRule}>Save Rule</Button>
+              <Button size="sm" onClick={addRule}>{t("saveRule")}</Button>
             </div>
           </CardContent>
         </Card>
@@ -308,7 +318,7 @@ export default function SettingsRulesPage() {
       {/* Gmail Filters */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Gmail Filters</CardTitle>
+          <CardTitle className="text-base">{t("gmailFilters")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {GMAIL_CATEGORIES.map((cat) => {
@@ -317,15 +327,15 @@ export default function SettingsRulesPage() {
             return (
               <div key={cat.key} className="flex items-center gap-3 rounded-lg border p-3">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{cat.label}</p>
-                  <p className="text-xs text-muted-foreground">{cat.description}</p>
+                  <p className="text-sm font-medium">{t(cat.labelKey)}</p>
+                  <p className="text-xs text-muted-foreground">{t(cat.descKey)}</p>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   onClick={() => toggleGmailCategory(cat.key, rule)}
-                  title={isActive ? "Disable" : "Enable"}
+                  title={isActive ? t("disable") : t("enable")}
                 >
                   {isActive ? (
                     <ToggleRight className="h-5 w-5 text-green-500" />
@@ -342,7 +352,7 @@ export default function SettingsRulesPage() {
       {/* Calendar Filters */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Calendar Filters</CardTitle>
+          <CardTitle className="text-base">{t("calendarFilters")}</CardTitle>
         </CardHeader>
         <CardContent>
           {calendarsLoading ? (
@@ -350,7 +360,7 @@ export default function SettingsRulesPage() {
               {[1, 2].map((i) => <div key={i} className="h-14 rounded-lg bg-muted animate-pulse" />)}
             </div>
           ) : calendars.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-2">Could not load calendars.</p>
+            <p className="text-sm text-muted-foreground py-2">{t("calendarsLoadError")}</p>
           ) : (
             <div className="space-y-2">
               {calendars.map((cal) => {
@@ -361,7 +371,7 @@ export default function SettingsRulesPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{cal.summary}</p>
                       {cal.primary && (
-                        <p className="text-xs text-muted-foreground">Primary calendar</p>
+                        <p className="text-xs text-muted-foreground">{t("primaryCalendar")}</p>
                       )}
                     </div>
                     <Button
@@ -369,7 +379,7 @@ export default function SettingsRulesPage() {
                       size="icon"
                       className="h-8 w-8 shrink-0"
                       onClick={() => toggleCalendar(cal.id, skipRule)}
-                      title={isIncluded ? "Exclude calendar" : "Include calendar"}
+                      title={isIncluded ? t("excludeCalendar") : t("includeCalendar")}
                     >
                       {isIncluded ? (
                         <ToggleRight className="h-5 w-5 text-green-500" />
@@ -385,35 +395,60 @@ export default function SettingsRulesPage() {
         </CardContent>
       </Card>
 
-      {/* Skip Addresses */}
-      {skipAddressRules.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Skip Addresses ({skipAddressRules.length})</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {skipAddressRules.map((rule) => (
-              <div key={rule.id} className="flex items-center gap-3 rounded-lg border p-3">
-                <span className="flex-1 text-sm font-mono truncate">{rule.trigger}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-red-400 hover:text-red-600 shrink-0"
-                  onClick={() => deleteRule(rule.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+      {/* Skip Addresses — unified from=, to=, domain= */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t("skipAddresses", { count: skipAddressRules.length })}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {skipAddressRules.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1">{t("skipAddressesEmpty")}</p>
+          ) : (
+            skipAddressRules.map((rule) => (
+              <div
+                key={rule.id}
+                className={`flex items-start gap-3 rounded-lg border p-3 ${!rule.is_active ? "opacity-50" : ""}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-mono truncate">{rule.trigger}</span>
+                  {rule.reason && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{rule.reason}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => toggleRule(rule.id, rule.is_active)}
+                    title={rule.is_active ? t("disable") : t("enable")}
+                  >
+                    {rule.is_active ? (
+                      <ToggleRight className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-red-400 hover:text-red-600"
+                    onClick={() => deleteRule(rule.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+            ))
+          )}
+        </CardContent>
+      </Card>
 
       {/* Bot Phones */}
       {botRules.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Bot Phones ({botRules.length})</CardTitle>
+            <CardTitle className="text-base">{t("botPhones", { count: botRules.length })}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {botRules.map((rule) => (
@@ -438,11 +473,11 @@ export default function SettingsRulesPage() {
         </Card>
       )}
 
-      {/* Other Rules */}
+      {/* Other Rules — non-skip, non-bot, non-style/preference/financial */}
       {otherRules.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Other Rules ({otherRules.length})</CardTitle>
+            <CardTitle className="text-base">{t("otherRules", { count: otherRules.length })}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {otherRules.map((rule) => (
@@ -453,7 +488,7 @@ export default function SettingsRulesPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline" className="text-xs">
-                      {TYPE_LABELS[rule.rule_type] ?? rule.rule_type}
+                      {typeLabel(rule.rule_type)}
                     </Badge>
                     {rule.created_by === "claude" && (
                       <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600">
@@ -472,7 +507,7 @@ export default function SettingsRulesPage() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => toggleRule(rule.id, rule.is_active)}
-                    title={rule.is_active ? "Disable" : "Enable"}
+                    title={rule.is_active ? t("disable") : t("enable")}
                   >
                     {rule.is_active ? (
                       <ToggleRight className="h-4 w-4 text-green-500" />
@@ -501,7 +536,7 @@ export default function SettingsRulesPage() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Lightbulb className="h-4 w-4 text-yellow-600" />
-              Pending AI Suggestions ({pendingSuggestions.length})
+              {t("pendingSuggestions", { count: pendingSuggestions.length })}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -509,7 +544,7 @@ export default function SettingsRulesPage() {
               <div key={rule.id} className="rounded-lg bg-white border p-3 space-y-2">
                 <div className="flex items-start gap-2">
                   <Badge variant="outline" className="shrink-0">
-                    {TYPE_LABELS[rule.rule_type] ?? rule.rule_type}
+                    {typeLabel(rule.rule_type)}
                   </Badge>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{rule.trigger}</p>
@@ -518,7 +553,7 @@ export default function SettingsRulesPage() {
                     )}
                     {rule.suggestion_confidence != null && (
                       <p className="text-xs text-muted-foreground">
-                        Confidence: {Math.round(rule.suggestion_confidence * 100)}%
+                        {t("confidence", { percent: Math.round(rule.suggestion_confidence * 100) })}
                       </p>
                     )}
                   </div>
@@ -531,7 +566,7 @@ export default function SettingsRulesPage() {
                     onClick={() => rejectRule(rule.id)}
                   >
                     <XCircle className="h-3.5 w-3.5" />
-                    Reject
+                    {t("reject")}
                   </Button>
                   <Button
                     size="sm"
@@ -539,7 +574,7 @@ export default function SettingsRulesPage() {
                     onClick={() => approveRule(rule.id)}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Approve
+                    {t("approve")}
                   </Button>
                 </div>
               </div>
