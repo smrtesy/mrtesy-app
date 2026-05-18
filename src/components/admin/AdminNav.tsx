@@ -11,6 +11,7 @@ import {
   Layers,
   Crown,
   FileText,
+  BookOpen,
 } from "lucide-react";
 
 // Platform-level only. Per-app concerns (services, prompts) now live
@@ -24,6 +25,7 @@ const items = [
   { key: "apps",         href: "apps",           labelKey: "apps",         icon: Layers },
   { key: "super-admins", href: "super-admins",   labelKey: "superAdmins",  icon: Crown },
   { key: "logs",         href: "logs",           labelKey: "logs",         icon: FileText },
+  { key: "docs",         href: "docs",           labelKey: "docs",         icon: BookOpen },
 ];
 
 export function AdminNav() {

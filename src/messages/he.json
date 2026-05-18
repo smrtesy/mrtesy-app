@@ -385,7 +385,8 @@
     "orgs": "ארגונים",
     "apps": "אפליקציות",
     "superAdmins": "מנהלי-על",
-    "logs": "לוגים"
+    "logs": "לוגים",
+    "docs": "מסמכים"
   },
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
