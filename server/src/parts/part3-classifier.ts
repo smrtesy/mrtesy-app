@@ -298,6 +298,11 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           ? aiProjectId
           : null;
 
+      // For WhatsApp threads Part2 stored the wa.me URL and phone in the source_message.
+      // Carry them through to the task so TaskCard shows the link icon and the
+      // suggestions page can render the contact phone.
+      const isWhatsapp = msg.source_type === "whatsapp";
+
       const taskPayload = {
         user_id: userId,
         organization_id: orgId,
@@ -310,7 +315,9 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         due_date: task.due_date ?? null,
         // tasks.source_message_id is a UUID FK → source_messages.id; use msg.id, not msg.source_id
         source_message_id: msg.id,
-        related_contact: task.contact_person ?? null,
+        related_contact: task.contact_person ?? (isWhatsapp ? (msg as any).sender ?? null : null),
+        related_contact_phone: isWhatsapp ? (msg as any).reply_to_context ?? null : null,
+        source_link: isWhatsapp ? (msg as any).source_url ?? null : null,
         tags: task.tags,
         ai_actions: task.suggested_actions.map((a) => ({ label: a, prompt: a })),
         ai_confidence: result.confidence ?? null,
