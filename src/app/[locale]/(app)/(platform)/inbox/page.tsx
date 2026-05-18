@@ -13,14 +13,30 @@ export default async function InboxPage({
   const { locale } = await params;
   const t = await getTranslations("inbox");
 
-  // Check if the active org has smrtTask enabled
+  // Check if smrtTask is enabled for the user's active org. On app.smrtesy.com
+  // the middleware strips smrt_org_id (no org context on the platform domain),
+  // so the cookie is undefined here. Mirror the (app)/layout.tsx behavior:
+  // fall back to the user's first org_members row. Without this, the inbox
+  // page on app.* always hid the Suggestions tab, while the sidebar badge
+  // (which goes through the Express backend with the localStorage X-Org-Id)
+  // happily counted suggestions across that org — so the user saw "90" but
+  // an empty tab.
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   let hasSmrtTask = false;
 
   if (user) {
     const cookieStore = await cookies();
-    const activeOrgId = cookieStore.get("smrt_org_id")?.value;
+    let activeOrgId = cookieStore.get("smrt_org_id")?.value ?? null;
+    if (!activeOrgId) {
+      const { data: memberships } = await supabase
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", user.id)
+        .limit(1);
+      activeOrgId = memberships?.[0]?.org_id ?? null;
+    }
+
     if (activeOrgId) {
       const { data: app } = await supabase
         .from("apps")
