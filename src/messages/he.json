@@ -543,6 +543,10 @@
     "noNotifications": "אין התראות חדשות",
     "markRead": "סמן כנקרא",
     "markAllRead": "סמן הכל כנקרא",
-    "allMarkedRead": "כל ההתראות סומנו כנקראו"
+    "allMarkedRead": "כל ההתראות סומנו כנקראו",
+    "timeJustNow": "עכשיו",
+    "timeMinsAgo": "לפני {n} דק'",
+    "timeHoursAgo": "לפני {n} שע'",
+    "timeDaysAgo": "לפני {n} ימים"
   }
 }

@@ -84,9 +84,10 @@ export async function emitEvent(
   }
 
   if (processed.length > 0) {
-    await db
+    const { error: updateErr } = await db
       .from("app_events")
       .update({ processed_by: processed })
       .eq("id", event.id);
+    if (updateErr) console.error("[platform.emit] processed_by update failed:", updateErr.message);
   }
 }

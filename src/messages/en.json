@@ -537,6 +537,10 @@
     "noNotifications": "No new notifications",
     "markRead": "Mark as read",
     "markAllRead": "Mark all as read",
-    "allMarkedRead": "All notifications marked as read"
+    "allMarkedRead": "All notifications marked as read",
+    "timeJustNow": "just now",
+    "timeMinsAgo": "{n}m ago",
+    "timeHoursAgo": "{n}h ago",
+    "timeDaysAgo": "{n}d ago"
   }
 }

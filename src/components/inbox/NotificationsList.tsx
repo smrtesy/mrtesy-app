@@ -9,8 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-
 interface Notification {
   id: string;
   app_slug: string;
@@ -30,20 +28,8 @@ const TYPE_CONFIG = {
   info:            { icon: Info,          color: "text-blue-500",   bg: "bg-blue-50   border-blue-200"   },
 } as const;
 
-function timeAgo(iso: string, locale: string) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1)  return locale === "he" ? "עכשיו" : "just now";
-  if (mins < 60) return locale === "he" ? `לפני ${mins} דק'` : `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return locale === "he" ? `לפני ${hrs} שע'` : `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return locale === "he" ? `לפני ${days} ימים` : `${days}d ago`;
-}
-
 export function NotificationsList() {
   const t = useTranslations("inbox");
-  const { locale } = useParams<{ locale: string }>();
   const supabase = createClient();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,7 +133,15 @@ export function NotificationsList() {
                     <p className="text-xs text-muted-foreground mt-0.5">{n.body}</p>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-1">
-                    {timeAgo(n.created_at, locale)}
+                    {(() => {
+                      const diff = Date.now() - new Date(n.created_at).getTime();
+                      const mins = Math.floor(diff / 60000);
+                      if (mins < 1)  return t("timeJustNow");
+                      if (mins < 60) return t("timeMinsAgo", { n: mins });
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24)  return t("timeHoursAgo", { n: hrs });
+                      return t("timeDaysAgo", { n: Math.floor(hrs / 24) });
+                    })()}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
