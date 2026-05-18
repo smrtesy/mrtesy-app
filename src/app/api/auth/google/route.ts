@@ -2,13 +2,26 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 // OAuth initiate for Gmail/Calendar/Drive (separate from login)
+function resolveAppOrigin(request: Request): string {
+  // Prefer the request's own origin — this works on any subdomain (app.smrtesy.com,
+  // <tenant>.smrtesy.com, localhost). NEXT_PUBLIC_APP_URL is used as a fallback
+  // only, and we tolerate it being set without the scheme.
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    const raw = process.env.NEXT_PUBLIC_APP_URL || "";
+    if (!raw) return "";
+    return /^https?:\/\//.test(raw) ? raw.replace(/\/+$/, "") : `https://${raw.replace(/\/+$/, "")}`;
+  }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const service = searchParams.get("service"); // 'gmail_calendar' | 'drive'
   const redirect = searchParams.get("redirect"); // 'settings' when reconnecting
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google/callback`;
+  const redirectUri = `${resolveAppOrigin(request)}/api/auth/google/callback`;
 
   let scopes: string;
 

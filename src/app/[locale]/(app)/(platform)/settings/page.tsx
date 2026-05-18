@@ -59,11 +59,14 @@ export default function SettingsPage() {
         .select("service")
         .eq("user_id", user.id);
 
+      // Credentials are the source of truth — the user_settings booleans drift
+      // (e.g. Drive creds exist but drive_connected is false). Service names
+      // stored in user_credentials are: "gmail", "google_calendar", "google_drive".
       const serviceTypes = (creds || []).map((c: { service: string }) => c.service);
       setConnStatus({
-        gmail: serviceTypes.includes("gmail_calendar") || data?.gmail_connected,
-        drive: serviceTypes.includes("drive") || data?.drive_connected,
-        calendar: serviceTypes.includes("gmail_calendar") || data?.calendar_connected,
+        gmail: serviceTypes.includes("gmail"),
+        drive: serviceTypes.includes("google_drive"),
+        calendar: serviceTypes.includes("google_calendar"),
         whatsapp: data?.whatsapp_connected ?? false,
       });
 
