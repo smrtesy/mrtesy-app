@@ -285,6 +285,110 @@ Otherwise, org subdomains (`maor.smrtesy.com`) already work — the org context 
 
 ---
 
+## Step 11 — Platform Integration (events, inbox, errors)
+
+Every app must define a manifest so the platform can route events, notifications, and errors
+correctly. Full spec: [`docs/platform-integration.md`](./platform-integration.md).
+
+### 11a — Answer these questions before writing code
+
+Before touching the manifest, answer these with the team:
+
+1. **What does this app know about the world?**
+   Which entities does it create (customers, orders, conversations...)?
+   Which already exist in the platform (`contacts`) and which are new?
+
+2. **What happens in this app that other apps would want to know?**
+   These become `emits`. For each: is it actionable (→ smrtTask) or informational (→ info notification)?
+
+3. **What do you need from other apps?**
+   These become `subscribes`. For each: which event, from which app, what should you do?
+
+4. **What technical failures can this app produce?**
+   List them in `errors.examples` — they guide the error handler configuration.
+
+### 11b — Write the manifest
+
+File: `server/src/apps/<slug>/manifest.ts`
+
+```typescript
+import type { AppManifest } from "../../lib/platform/types";
+
+export const manifest: AppManifest = {
+  slug: "smrtbot",
+  name: "smrtBot",
+
+  emits: [
+    "message.unhandled",
+    "lead.detected",
+  ],
+
+  subscribes: [
+    {
+      event:   "task.completed",
+      source:  "smrttask",
+      handler: "./handlers/on-task-completed",
+    },
+  ],
+
+  notifications: {
+    "message.unhandled": {
+      type:  "action_required",
+      title: (p) => `פנייה שלא טופלה — ${p.customer}`,
+      link:  (p) => `/smrtbot/conversations/${p.conv_id}`,
+    },
+  },
+
+  entities: {
+    reads:  ["contacts"],
+    writes: ["contacts"],
+  },
+
+  errors: {
+    default_handler_role: "owner",
+    examples: ["Webhook לא מגיב", "Rate limit חורג"],
+  },
+};
+```
+
+### 11c — Use the platform SDK in your handlers
+
+```typescript
+import { emitEvent, notify, notifyError, linkEntities } from "@/lib/platform";
+
+// When something actionable happens
+await emitEvent(orgId, "smrtbot", "message.unhandled", "conversation", convId, payload);
+
+// When a technical failure occurs (routes to org error handler automatically)
+await notifyError(orgId, "smrtbot", {
+  title: "Webhook לא מגיב",
+  body:  `POST ${url} → 503`,
+  link:  "/settings/smrtbot/connections",
+});
+
+// After creating a task in response to a conversation
+await linkEntities(orgId, {
+  from: { app: "smrtbot",  entity: "conversation", id: convId },
+  to:   { app: "smrttask", entity: "task",         id: taskId },
+  type: "created_from",
+});
+```
+
+### 11d — Register the manifest in the event router
+
+File: `server/src/lib/platform/registry.ts`
+
+```typescript
+import { manifest as smrtbotManifest } from "../../apps/smrtbot/manifest";
+
+export const APP_REGISTRY = [
+  smrtbotManifest,
+  // add new manifests here
+];
+```
+
+---
+
 ## Checklist: New App Launch
 
 - [ ] Migration: `INSERT INTO apps (slug, name, description)`
@@ -296,6 +400,11 @@ Otherwise, org subdomains (`maor.smrtesy.com`) already work — the org context 
 - [ ] Frontend: Use `api()` client for all backend calls
 - [ ] Admin UI: App will appear automatically in **Platform → Apps** after DB insert
 - [ ] Org access: Toggle on via admin UI or seed `app_memberships` in migration
+- [ ] **Integration: Answer the 4 questions in Step 11a**
+- [ ] **Integration: Write `server/src/apps/<slug>/manifest.ts`**
+- [ ] **Integration: Register manifest in `server/src/lib/platform/registry.ts`**
+- [ ] **Integration: Write handlers for each subscribed event**
+- [ ] **Integration: Use `notifyError()` for all technical failures**
 
 ---
 
