@@ -56,7 +56,22 @@ export async function getOAuthClient(userId: string, service: string) {
   // Refresh proactively if within 5 minutes of expiry
   const expiresAt = c.expires_at ? new Date(c.expires_at).getTime() : 0;
   if (expiresAt - Date.now() < 5 * 60 * 1000) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
+    let credentials;
+    try {
+      const refreshed = await oauth2Client.refreshAccessToken();
+      credentials = refreshed.credentials;
+    } catch (err) {
+      // `invalid_grant` is Google's permanent error — refresh_token was
+      // revoked (user removed app access, inactivity timeout, scope change,
+      // etc.). Wipe the credential row so connection indicators flip to
+      // "disconnected" instead of staying green forever. Transient errors
+      // (network, 5xx) just bubble up; we leave the row alone.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/invalid_grant/i.test(msg)) {
+        await db.from("user_credentials").delete().eq("id", c.id);
+      }
+      throw err;
+    }
     oauth2Client.setCredentials(credentials);
 
     await db

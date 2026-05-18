@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { api, ApiError } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -54,15 +55,29 @@ export default function SettingsPage() {
         .select("*")
         .eq("user_id", user.id)
         .single();
-      const { data: creds } = await supabase
-        .from("user_credentials")
-        .select("service")
-        .eq("user_id", user.id);
+      // Source of truth: probe the backend, which tries to refresh each
+      // credential and deletes rows whose refresh_token Google has revoked
+      // (invalid_grant). That way the indicators don't stay green forever
+      // when the underlying token is actually dead. Falls back to a direct
+      // read of user_credentials if the probe call fails (e.g. no active org
+      // header — /me/credentials/health requires auth but not org).
+      let serviceTypes: string[] = [];
+      try {
+        const health = await api<{ services: string[] }>(
+          "/api/me/credentials/health",
+          { noOrg: true },
+        );
+        serviceTypes = health.services ?? [];
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 401)) {
+          const { data: creds } = await supabase
+            .from("user_credentials")
+            .select("service")
+            .eq("user_id", user.id);
+          serviceTypes = (creds || []).map((c: { service: string }) => c.service);
+        }
+      }
 
-      // Credentials are the source of truth — the user_settings booleans drift
-      // (e.g. Drive creds exist but drive_connected is false). Service names
-      // stored in user_credentials are: "gmail", "google_calendar", "google_drive".
-      const serviceTypes = (creds || []).map((c: { service: string }) => c.service);
       setConnStatus({
         gmail: serviceTypes.includes("gmail"),
         drive: serviceTypes.includes("google_drive"),

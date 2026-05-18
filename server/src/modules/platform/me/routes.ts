@@ -126,4 +126,34 @@ router.get("/me/credentials", requireAuth, async (req: Request, res: Response) =
   res.json({ credentials: data ?? [] });
 });
 
+/**
+ * GET /me/credentials/health
+ * Probes each connected service by attempting a token refresh. If Google
+ * returns `invalid_grant` (the user revoked access / refresh_token expired),
+ * getOAuthClient deletes the credential row, so the returned list reflects
+ * the post-cleanup truth. Used by the Settings page so the connection
+ * indicators stop saying "connected" forever when the token is dead.
+ */
+router.get("/me/credentials/health", requireAuth, async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const { data: creds } = await db
+    .from("user_credentials")
+    .select("service")
+    .eq("user_id", userId);
+
+  if (!creds || creds.length === 0) return res.json({ services: [] });
+
+  const results = await Promise.allSettled(
+    creds.map(async (c) => {
+      await getOAuthClient(userId, c.service as string);
+      return c.service as string;
+    }),
+  );
+  const services = results
+    .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
+    .map((r) => r.value);
+
+  return res.json({ services });
+});
+
 export default router;

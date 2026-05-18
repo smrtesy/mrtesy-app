@@ -111,39 +111,65 @@ export default function SettingsRulesPage() {
   }, []);
 
   async function approveRule(id: string) {
+    const prev = pendingSuggestions;
+    const target = prev.find((r) => r.id === id);
+    setPendingSuggestions((ps) => ps.filter((r) => r.id !== id));
+    if (target) setRules((rs) => [{ ...target, suggestion_status: "approved", is_active: true }, ...rs]);
     const { error } = await supabase
       .from("rules_memory")
       .update({ suggestion_status: "approved", is_active: true })
       .eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      setPendingSuggestions(prev);
+      setRules((rs) => rs.filter((r) => r.id !== id));
+      toast.error(error.message);
+      return;
+    }
     toast.success(t("ruleApproved"));
-    loadRules();
   }
 
   async function rejectRule(id: string) {
+    const prev = pendingSuggestions;
+    setPendingSuggestions((ps) => ps.filter((r) => r.id !== id));
     const { error } = await supabase
       .from("rules_memory")
       .update({ suggestion_status: "rejected", is_active: false })
       .eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      setPendingSuggestions(prev);
+      toast.error(error.message);
+      return;
+    }
     toast.success(t("ruleRejected"));
-    loadRules();
   }
 
+  // Optimistic updates keep the DOM stable on every click. We previously
+  // reloaded the entire rules list on each toggle, which forced React to
+  // remount cards in a new order — the user saw items "jump" as sections
+  // shrank/grew between the click and the re-fetch landing.
+
   async function toggleRule(id: string, currentActive: boolean) {
+    setRules((prev) => prev.map((r) => (r.id === id ? { ...r, is_active: !currentActive } : r)));
     const { error } = await supabase
       .from("rules_memory")
       .update({ is_active: !currentActive })
       .eq("id", id);
-    if (error) { toast.error(error.message); return; }
-    loadRules();
+    if (error) {
+      setRules((prev) => prev.map((r) => (r.id === id ? { ...r, is_active: currentActive } : r)));
+      toast.error(error.message);
+    }
   }
 
   async function deleteRule(id: string) {
+    const prev = rules;
+    setRules((rs) => rs.filter((r) => r.id !== id));
     const { error } = await supabase.from("rules_memory").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      setRules(prev);
+      toast.error(error.message);
+      return;
+    }
     toast.success(t("ruleDeleted"));
-    loadRules();
   }
 
   async function addRule() {
@@ -151,37 +177,54 @@ export default function SettingsRulesPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { error } = await supabase.from("rules_memory").insert({
-      user_id: user.id,
-      app_slug: appSlug,
-      trigger: newRule.trigger,
-      rule_type: newRule.rule_type,
-      category: newRule.category || null,
-      action: newRule.action || null,
-      reason: newRule.reason || null,
-      is_active: true,
-      created_by: "user",
-      suggestion_status: "approved",
-    });
+    const { data, error } = await supabase
+      .from("rules_memory")
+      .insert({
+        user_id: user.id,
+        app_slug: appSlug,
+        trigger: newRule.trigger,
+        rule_type: newRule.rule_type,
+        category: newRule.category || null,
+        action: newRule.action || null,
+        reason: newRule.reason || null,
+        is_active: true,
+        created_by: "user",
+        suggestion_status: "approved",
+      })
+      .select()
+      .single();
 
     if (error) { toast.error(error.message); return; }
+    if (data) setRules((rs) => [data as Rule, ...rs]);
     toast.success(t("ruleAdded"));
     setNewRule({ trigger: "", rule_type: "skip", category: "", action: "", reason: "" });
     setShowAddForm(false);
-    loadRules();
   }
 
   async function toggleGmailCategory(catKey: string, currentRule: Rule | undefined) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+
     if (currentRule) {
+      setRules((prev) =>
+        prev.map((r) => (r.id === currentRule.id ? { ...r, is_active: !currentRule.is_active } : r)),
+      );
       const { error } = await supabase
         .from("rules_memory")
         .update({ is_active: !currentRule.is_active })
         .eq("id", currentRule.id);
-      if (error) { toast.error(error.message); return; }
-    } else {
-      const { error } = await supabase.from("rules_memory").insert({
+      if (error) {
+        setRules((prev) =>
+          prev.map((r) => (r.id === currentRule.id ? { ...r, is_active: currentRule.is_active } : r)),
+        );
+        toast.error(error.message);
+      }
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("rules_memory")
+      .insert({
         user_id: user.id,
         app_slug: appSlug,
         rule_type: "skip",
@@ -189,20 +232,31 @@ export default function SettingsRulesPage() {
         is_active: true,
         created_by: "system",
         suggestion_status: "approved",
-      });
-      if (error) { toast.error(error.message); return; }
-    }
-    loadRules();
+      })
+      .select()
+      .single();
+    if (error) { toast.error(error.message); return; }
+    if (data) setRules((rs) => [data as Rule, ...rs]);
   }
 
   async function toggleCalendar(calId: string, currentRule: Rule | undefined) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+
     if (currentRule) {
+      const prev = rules;
+      setRules((rs) => rs.filter((r) => r.id !== currentRule.id));
       const { error } = await supabase.from("rules_memory").delete().eq("id", currentRule.id);
-      if (error) { toast.error(error.message); return; }
-    } else {
-      const { error } = await supabase.from("rules_memory").insert({
+      if (error) {
+        setRules(prev);
+        toast.error(error.message);
+      }
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("rules_memory")
+      .insert({
         user_id: user.id,
         app_slug: appSlug,
         rule_type: "skip",
@@ -210,10 +264,11 @@ export default function SettingsRulesPage() {
         is_active: true,
         created_by: "system",
         suggestion_status: "approved",
-      });
-      if (error) { toast.error(error.message); return; }
-    }
-    loadRules();
+      })
+      .select()
+      .single();
+    if (error) { toast.error(error.message); return; }
+    if (data) setRules((rs) => [data as Rule, ...rs]);
   }
 
   if (loading) {
