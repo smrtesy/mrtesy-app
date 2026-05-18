@@ -7,7 +7,7 @@
  */
 
 import { db, createRunSession, closeRunSession, updateSyncState, loadRules } from "../db";
-import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
+import { searchGmail, getMessage, extractEmailText, getThreadMessages } from "../services/gmail";
 import { listNewFiles, getFileContent } from "../services/drive";
 import { listEvents } from "../services/calendar";
 import { parseSkipRules } from "../lib/rule-filters";
@@ -114,7 +114,34 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
             continue;
           }
 
-          const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`.slice(0, 3000);
+          // If this is a reply (has In-Reply-To header), fetch thread history so
+          // Part3 sees the full conversation context, not just the last message.
+          const headers: { name?: string | null; value?: string | null }[] =
+            ((msg as { payload?: { headers?: { name?: string | null; value?: string | null }[] } })
+              .payload?.headers ?? []);
+          const isReply = headers.some(
+            (h) => h.name?.toLowerCase() === "in-reply-to",
+          );
+
+          let threadContext = "";
+          if (isReply) {
+            try {
+              const prior = await getThreadMessages(userId, threadId, 3);
+              // Exclude the current message (last in the thread) — it's already in body
+              const history = prior.slice(0, -1);
+              if (history.length > 0) {
+                threadContext =
+                  "\n\n--- THREAD HISTORY (oldest first) ---\n" +
+                  history
+                    .map((m) => `[${m.date}] From: ${m.from}\n${m.snippet}`)
+                    .join("\n\n");
+              }
+            } catch {
+              // Thread fetch failing is non-fatal; classify without context
+            }
+          }
+
+          const rawContent = `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}${threadContext}`.slice(0, 3000);
 
           // Derive the actual recipient alias from the To: header so the
           // classifier has it without the collector having to loop on aliases.
