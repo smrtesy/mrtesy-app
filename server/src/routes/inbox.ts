@@ -18,7 +18,7 @@ router.get("/count", requireAuth, requireOrg, async (req: Request, res: Response
       .select("*", { count: "exact", head: true })
       .eq("user_id", userId)
       .eq("status", "inbox")
-      .eq("verified", false)
+      .eq("manually_verified", false)
       .not("source_message_id", "is", null),
     db
       .from("notifications")
