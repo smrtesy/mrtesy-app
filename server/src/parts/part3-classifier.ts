@@ -13,6 +13,7 @@ import { db, loadRules, createRunSession, closeRunSession } from "../db";
 import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
 import { buildDeepClassifierSystem } from "../prompts/classifier";
 import { getUserPromptContext } from "../lib/user-context";
+import { loadPrompt } from "../lib/prompt-loader";
 
 const BATCH_SIZE = 5;
 
@@ -69,8 +70,12 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
   try {
     // ── 0. Per-tenant identity used in the system prompt ─────────────────────
+    // DB-stored version (editable in /admin/apps/smrtesy/prompts) takes precedence;
+    // falls back to the hardcoded default so the pipeline always has a valid prompt.
     const promptCtx = await getUserPromptContext(userId, orgId);
-    const systemPrompt = buildDeepClassifierSystem(promptCtx);
+    const systemPrompt =
+      (await loadPrompt(userId, "deep_classifier", promptCtx)) ??
+      buildDeepClassifierSystem(promptCtx);
 
     // ── 1. Load rules (cached in rulesContext) ────────────────────────────────
     const rules = await loadRules(userId);

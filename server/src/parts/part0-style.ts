@@ -10,6 +10,7 @@ import { db, loadRules, createRunSession, closeRunSession } from "../db";
 import { simpleCall } from "../anthropic";
 import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
 import { getUserPromptContext } from "../lib/user-context";
+import { loadPrompt } from "../lib/prompt-loader";
 
 const STYLE_SYSTEM = `You analyze email writing style. Given sample sent emails, extract a concise style profile (~150 words) describing:
 - Tone (formal/informal/warm)
@@ -67,9 +68,12 @@ export async function runPart0(opts: { userId: string; language: "he" | "en" }) 
       return { sessionId, skipped: true };
     }
 
+    // DB-stored version (editable in /admin/apps/smrtesy/prompts) takes precedence
+    const styleSystem = (await loadPrompt(userId, "style_learning")) ?? STYLE_SYSTEM;
+
     const { content } = await simpleCall(
       "sonnet",
-      STYLE_SYSTEM,
+      styleSystem,
       `Language: ${language}\n\nSample emails:\n\n${samples.join("\n\n===\n\n")}`,
       400,
     );

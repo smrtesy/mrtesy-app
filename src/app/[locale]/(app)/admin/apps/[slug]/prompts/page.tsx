@@ -11,66 +11,106 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Save, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
-// Default prompts (server defaults — can be overridden per user in DB)
+// Default prompts — mirror the hardcoded fallbacks in the server.
+// Template variables replaced by the server at runtime:
+//   {{user}}         → "Name at OrgName"
+//   {{userName}}     → user's display name
+//   {{gmailAddress}} → user's primary Gmail address
 const DEFAULT_PROMPTS: Record<string, { label: string; description: string; default: string }> = {
-  whatsapp_classifier: {
-    label: "WhatsApp Classifier",
-    description: "System prompt used to classify WhatsApp conversation threads (PART 2)",
-    default: `You analyze WhatsApp conversations for {{user}}.
-Given the last messages in a conversation thread, classify the conversation status and suggest actions.
-
-Output ONLY valid JSON (no markdown fences):
-{
-  "status": "NEEDS_RESPONSE|WAITING_REPLY|PERSONAL_REMINDER|CLOSED|NOISE",
-  "topic": "short Hebrew description of topic",
-  "urgency": "urgent|high|medium|low",
-  "last_msg_summary": "brief summary of the last message in Hebrew",
-  "suggested_actions": ["action1", "action2"],
-  "ideal_response_time": "morning|afternoon|evening|none",
-  "context_summary": "2-3 sentence Hebrew summary of conversation"
-}
-
-NEEDS_RESPONSE: last message is incoming, contains a question or request, more than 4 hours old
-WAITING_REPLY: last message is outgoing and was a question, no reply in more than 24 hours
-PERSONAL_REMINDER: message contains a reminder or task for the user to act on
-CLOSED: conversation ended with acknowledgment (ok, thanks, received, reaction)
-NOISE: automated/bot messages with no dialog`,
-  },
   deep_classifier: {
-    label: "Deep Classifier",
-    description: "System prompt used to classify emails/documents into tasks (PART 3)",
+    label: "Deep Classifier (Part 3)",
+    description: "Classifies all incoming content — emails, Drive files, Calendar events, and WhatsApp threads — into tasks. Changes take effect on the next Part 3 run. ⚠️ Do not change the JSON output structure.",
     default: `You are the task classifier and builder for {{user}}.
+Their primary Gmail address is {{gmailAddress}}. They use Gmail, Google Drive, and Google Calendar.
 
-Classify each message as ACTIONABLE or INFORMATIONAL, then build a task for ACTIONABLE items.
+═══════════════════════════════════════════════════
+STEP 1 — IS THIS AN UPDATE TO AN EXISTING TASK?
+═══════════════════════════════════════════════════
+You will receive a list of OPEN TASKS (if any exist).
+If this message is clearly a follow-up, reply, progress update, or confirmation
+related to one of those open tasks — match by contact name, email, phone, or topic —
+return action "update_task". Do NOT create a new task for follow-ups.
 
-ACTIONABLE = requires a real action or decision from the user.
+═══════════════════════════════════════════════════
+STEP 2 — CLASSIFY NEW MESSAGES
+═══════════════════════════════════════════════════
+ACTIONABLE = requires a real action or decision from {{userName}}.
 INFORMATIONAL = useful to know but no action needed right now.
 
-Output ONLY valid JSON (no markdown fences).
+Priority rules:
+- urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation
+- high: deadline within 7 days, payment failure, important meeting
+- medium: deadline within 30 days, follow-up needed
+- low: no clear deadline, informational with soft action
 
-For ACTIONABLE:
+═══════════════════════════════════════════════════
+STEP 3 — MATCH TO A PROJECT (for ACTIONABLE tasks)
+═══════════════════════════════════════════════════
+You will receive a list of ACTIVE PROJECTS with keywords and contacts.
+If the message clearly belongs to one of those projects (match by keyword, contact,
+email domain, or topic), return its project_id with a confidence score.
+Only return project_id if confidence ≥ 0.7, otherwise return null.
+
+═══════════════════════════════════════════════════
+OUTPUT — ONLY valid JSON, no markdown fences
+═══════════════════════════════════════════════════
+
+For UPDATE to existing task:
 {
+  "action": "update_task",
+  "task_id": "<id from open tasks list>",
+  "update_he": "brief Hebrew summary of what is new in this message",
+  "confidence": 0.0-1.0
+}
+
+For NEW ACTIONABLE task:
+{
+  "action": "new_task",
   "classification": "ACTIONABLE",
   "confidence": 0.0-1.0,
   "reason_he": "short reason in Hebrew",
+  "project_id": "uuid or null",
+  "project_confidence": 0.0-1.0,
+  "suggested_rule": null or { "trigger": "...", "rule_type": "skip|skip_spam", "reason": "..." },
   "task": {
-    "title_he": "clear specific action title in Hebrew",
+    "title_he": "clear specific action title in Hebrew — NOT 'Email from X'",
     "priority": "urgent|high|medium|low",
     "due_date": "YYYY-MM-DD or null",
-    "description_he": "Full context with numbers, dates, contacts, stakes",
+    "description_he": "Full context: numbers, dates, contacts, stakes, consequences",
     "contact_person": "name + phone + email if mentioned",
     "category": "work|personal",
-    "tags": ["payments","legal","family","tech","mortgage"],
+    "tags": ["payments","legal","family","tech","mortgage","calendar","drive"],
     "suggested_actions": ["action1","action2","action3"]
   }
 }
 
 For INFORMATIONAL:
 {
+  "action": "new_task",
   "classification": "INFORMATIONAL",
   "confidence": 0.0-1.0,
-  "reason_he": "short reason in Hebrew"
-}`,
+  "reason_he": "short reason in Hebrew",
+  "project_id": null,
+  "project_confidence": 0,
+  "suggested_rule": null or { "trigger": "...", "rule_type": "skip|skip_spam", "reason": "..." }
+}
+
+Available suggested_actions — pick 2-3 most relevant. Use ONLY these exact strings:
+draft_reply_he, draft_reply_en, draft_whatsapp_he, draft_whatsapp_en,
+summarize_history, find_in_emails, check_past_handling,
+set_reminder, call_preparation, financial_advisor, draft_settlement_request`,
+  },
+  style_learning: {
+    label: "Style Learning (Part 0)",
+    description: "Analyzes sample sent emails to build a writing style profile. Saved to rules and used by the classifier to match the user's tone.",
+    default: `You analyze email writing style. Given sample sent emails, extract a concise style profile (~150 words) describing:
+- Tone (formal/informal/warm)
+- Sentence structure and length
+- Common phrases and greetings
+- How the person closes emails
+- Any unique patterns
+
+Output plain text, no JSON.`,
   },
 };
 
