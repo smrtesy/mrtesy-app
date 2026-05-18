@@ -7,6 +7,7 @@ import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Activity, Sparkles, ArrowLeft } from "lucide-react";
+import { AppStatusCard } from "@/components/admin/AppStatusCard";
 
 interface AppRow {
   id: string;
@@ -77,6 +78,8 @@ export default async function AdminAppDetailPage({
           <p className="text-sm text-muted-foreground">{app.description}</p>
         )}
       </div>
+
+      <AppStatusCard slug={slug} />
 
       <div className="grid gap-3 sm:grid-cols-2">
         {sections.map((s) => {

@@ -1,11 +1,13 @@
 /**
  * Admin: apps registry routes. All require requireSuperAdmin.
  *
- *   GET    /admin/apps              list all apps + #orgs that have each enabled
- *   POST   /admin/apps              register a new app  body: { slug, name, description? }
- *   GET    /admin/apps/:slug        single app + list of orgs that have it enabled
- *   PATCH  /admin/apps/:slug        update name/description  body: { name?, description? }
- *   DELETE /admin/apps/:slug        unregister (CASCADE drops all app_memberships rows)
+ *   GET    /admin/apps                    list all apps + #orgs + stage from app_status
+ *   POST   /admin/apps                    register a new app  body: { slug, name, description? }
+ *   GET    /admin/apps/:slug              single app + list of orgs that have it enabled
+ *   PATCH  /admin/apps/:slug             update name/description  body: { name?, description? }
+ *   DELETE /admin/apps/:slug             unregister (CASCADE drops all app_memberships rows)
+ *   GET    /admin/apps/:slug/status       get dev status
+ *   PATCH  /admin/apps/:slug/status       update dev status  body: { stage?, summary?, next_steps?, blockers? }
  */
 
 import { Router } from "express";
@@ -23,20 +25,23 @@ const SLUG_RE = /^[a-z][a-z0-9-]{1,39}$/;
 
 /** GET /admin/apps */
 router.get("/admin/apps", async (_req: Request, res: Response) => {
-  const [{ data: apps, error }, { data: mems }] = await Promise.all([
+  const [{ data: apps, error }, { data: mems }, { data: statuses }] = await Promise.all([
     db.from("apps").select("*").order("created_at", { ascending: true }),
     db.from("app_memberships").select("app_id"),
+    db.from("app_status").select("app_slug, stage"),
   ]);
   if (error) return res.status(500).json({ error: error.message });
 
-  const orgCount = new Map<string, number>();
-  for (const m of mems ?? []) {
-    orgCount.set(m.app_id, (orgCount.get(m.app_id) ?? 0) + 1);
-  }
+  const orgCount  = new Map<string, number>();
+  for (const m of mems ?? []) orgCount.set(m.app_id, (orgCount.get(m.app_id) ?? 0) + 1);
+
+  const stageMap = new Map<string, string>();
+  for (const s of statuses ?? []) stageMap.set(s.app_slug, s.stage);
 
   const result = (apps ?? []).map((a) => ({
     ...a,
     org_count: orgCount.get(a.id) ?? 0,
+    stage:     stageMap.get(a.slug)  ?? null,
   }));
   res.json({ apps: result });
 });
@@ -123,6 +128,43 @@ router.delete("/admin/apps/:slug", async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: error.message });
   if (count === 0) return res.status(404).json({ error: "app not found" });
   res.json({ ok: true });
+});
+
+const VALID_STAGES = ["רעיון", "בניה", "טסט", "מאור", "לקוחות"] as const;
+
+/** GET /admin/apps/:slug/status */
+router.get("/admin/apps/:slug/status", async (req: Request, res: Response) => {
+  const { data } = await db
+    .from("app_status")
+    .select("*")
+    .eq("app_slug", req.params.slug)
+    .maybeSingle();
+  res.json({ status: data ?? { app_slug: req.params.slug, stage: "רעיון", summary: null, next_steps: [], blockers: [], updated_at: null } });
+});
+
+/** PATCH /admin/apps/:slug/status  body: { stage?, summary?, next_steps?, blockers? } */
+router.patch("/admin/apps/:slug/status", async (req: Request, res: Response) => {
+  const { stage, summary, next_steps, blockers } = req.body ?? {};
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+  if (stage !== undefined) {
+    if (!VALID_STAGES.includes(stage)) {
+      return res.status(400).json({ error: `stage must be one of: ${VALID_STAGES.join(", ")}` });
+    }
+    updates.stage = stage;
+  }
+  if (summary !== undefined)     updates.summary     = typeof summary === "string" ? summary.trim() || null : null;
+  if (next_steps !== undefined)  updates.next_steps  = Array.isArray(next_steps)  ? next_steps.map(String).filter(Boolean)  : [];
+  if (blockers   !== undefined)  updates.blockers    = Array.isArray(blockers)    ? blockers.map(String).filter(Boolean)    : [];
+
+  const { data, error } = await db
+    .from("app_status")
+    .upsert({ app_slug: req.params.slug, ...updates }, { onConflict: "app_slug" })
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ status: data });
 });
 
 export default router;

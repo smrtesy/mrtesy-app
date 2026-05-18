@@ -84,7 +84,28 @@ Spawn an `Explore` or `general-purpose` agent with a focused prompt:
 Treat any HIGH or MED finding as a blocker. Fix it in the same branch
 before push. LOW is judgment — fix if cheap, ignore if not.
 
-### Step 4 — Self-check on commit hygiene
+### Step 4 — Update app status if you touched an app's files
+
+If this push includes changes to `server/src/apps/<slug>/` or any feature
+clearly owned by a specific app, update that app's status via:
+
+```
+PATCH /api/admin/apps/<slug>/status
+body: {
+  stage:      "<שלב נוכחי: רעיון|בניה|טסט|מאור|לקוחות>",
+  summary:    "<מה המצב עכשיו — בעברית פשוטה, משפט-שניים>",
+  next_steps: ["<מה הבא 1>", "<מה הבא 2>"],
+  blockers:   ["<חוסם אם יש>"]
+}
+```
+
+Valid stages (in order): `רעיון` → `בניה` → `טסט` → `מאור` → `לקוחות`
+
+Use the `api()` helper or call the endpoint directly. If the status hasn't
+materially changed (e.g. a one-line bugfix), skip this step. If you added a
+significant feature, milestone, or changed direction — update it.
+
+### Step 5 — Self-check on commit hygiene
 
 - Are there 3+ commits where each fixes the previous? Squash before push,
   or at least keep the noise out of `main` (use `git rebase -i` only if user

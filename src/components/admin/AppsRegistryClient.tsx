@@ -15,6 +15,16 @@ import { Layers, Plus, Pencil, Trash2, Loader2, ChevronRight } from "lucide-reac
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
+export type AppStage = "רעיון" | "בניה" | "טסט" | "מאור" | "לקוחות";
+
+export const STAGE_COLORS: Record<AppStage, string> = {
+  "רעיון":   "bg-gray-100   text-gray-600   border-gray-200",
+  "בניה":    "bg-blue-50    text-blue-700   border-blue-200",
+  "טסט":     "bg-amber-50   text-amber-700  border-amber-200",
+  "מאור":    "bg-purple-50  text-purple-700 border-purple-200",
+  "לקוחות": "bg-green-50   text-green-700  border-green-200",
+};
+
 interface AdminApp {
   id: string;
   slug: string;
@@ -22,6 +32,7 @@ interface AdminApp {
   description: string | null;
   created_at: string;
   org_count: number;
+  stage: AppStage | null;
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,39}$/;
@@ -162,7 +173,12 @@ export function AppsRegistryClient() {
                 {a.description && (
                   <p className="text-xs text-muted-foreground mb-2">{a.description}</p>
                 )}
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                  {a.stage && (
+                    <span className={`inline-flex items-center rounded border px-2 py-0.5 text-[11px] font-medium ${STAGE_COLORS[a.stage]}`}>
+                      {a.stage}
+                    </span>
+                  )}
                   <Badge variant="outline" className="text-[10px]">
                     {t("orgsEnabled", { count: a.org_count })}
                   </Badge>
