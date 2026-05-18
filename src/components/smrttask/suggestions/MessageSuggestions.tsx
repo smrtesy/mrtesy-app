@@ -7,22 +7,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Mail, MessageCircle, FolderOpen, Calendar, ExternalLink } from "lucide-react";
+import { CheckCircle2, X, Bell } from "lucide-react";
 import { toast } from "sonner";
+import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 
-const sourceIcons = {
-  gmail: Mail,
-  whatsapp: MessageCircle,
-  drive: FolderOpen,
-  calendar: Calendar,
-} as const;
-
-function inferSourceType(sourceMessageId: string | null): keyof typeof sourceIcons {
-  if (!sourceMessageId) return "gmail";
-  if (sourceMessageId.startsWith("wa:")) return "whatsapp";
-  if (sourceMessageId.startsWith("drive:")) return "drive";
-  if (sourceMessageId.startsWith("cal:")) return "calendar";
-  return "gmail";
+interface SourceJoin {
+  source_type: string | null;
+  source_url: string | null;
+  serial_display: string | null;
 }
 
 export function MessageSuggestions({ locale }: { locale: string }) {
@@ -40,7 +33,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
 
     const { data } = await supabase
       .from("tasks")
-      .select("*")
+      .select("*, source_messages(source_type, source_url, serial_display)")
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -98,8 +91,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   return (
     <div className="space-y-3">
       {suggestions.map((task) => {
-        const sourceType = inferSourceType(task.source_message_id as string | null);
-        const Icon = sourceIcons[sourceType];
+        const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
         const dueDate = task.due_date
           ? new Date(task.due_date as string).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
@@ -110,11 +102,13 @@ export function MessageSuggestions({ locale }: { locale: string }) {
             <CardContent className="p-4">
               <div className="flex items-start gap-3">
                 <div className="mt-1 rounded-full bg-blue-100 p-2">
-                  <Icon className="h-4 w-4 text-blue-600" />
+                  <Bell className="h-4 w-4 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                    <SerialBadge serial={task.serial_display as string | null} />
+                    <SourceLink source={source} />
                     {dueDate && (
                       <Badge variant="outline" className="text-[10px] bg-blue-50 shrink-0">
                         {dueDate}
@@ -146,16 +140,6 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 </div>
               </div>
               <div className="flex gap-2 mt-3 justify-end">
-                {task.source_link && (
-                  <a
-                    href={task.source_link as string}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 h-9 px-2 text-xs text-muted-foreground hover:text-primary"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
-                )}
                 <Button
                   size="sm"
                   variant="ghost"

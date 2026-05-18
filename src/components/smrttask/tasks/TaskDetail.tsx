@@ -27,6 +27,8 @@ import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
+import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -204,12 +206,14 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
               <Pencil className="h-4 w-4" />
             </Button>
           </div>
-          {/* Linked project pill — data comes from the join, no extra fetch needed */}
-          {task.projects && (() => {
-            const proj = task.projects!;
-            const projName = locale === "he" && proj.name_he ? proj.name_he : proj.name;
-            return (
-              <div className="flex items-center gap-1.5 mt-0.5">
+          {/* Serial + source + linked project — all sourced from the joined data */}
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+            <SerialBadge serial={task.serial_display} />
+            <SourceLink source={task.source_messages} />
+            {task.projects && (() => {
+              const proj = task.projects!;
+              const projName = locale === "he" && proj.name_he ? proj.name_he : proj.name;
+              return (
                 <span
                   className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
                   style={proj.color ? { borderColor: proj.color, color: proj.color } : undefined}
@@ -217,9 +221,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                   <Folder className="h-3 w-3" />
                   {projName}
                 </span>
-              </div>
-            );
-          })()}
+              );
+            })()}
+          </div>
         </SheetHeader>
 
         <ScrollArea className="flex-1 px-4 py-4">

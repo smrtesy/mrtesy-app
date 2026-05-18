@@ -9,14 +9,12 @@ import {
   FolderSearch,
   Clock,
   CheckCircle2,
-  Mail,
-  FolderOpen,
-  Calendar,
-  ExternalLink,
   Folder,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
+import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import type { Task } from "@/types/task";
 
 interface TaskCardProps {
@@ -28,13 +26,6 @@ interface TaskCardProps {
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
 }
-
-const sourceIcons: Record<string, typeof Mail> = {
-  gmail: Mail,
-  whatsapp: MessageCircle,
-  google_drive: FolderOpen,
-  google_calendar: Calendar,
-};
 
 const priorityColors: Record<string, string> = {
   urgent: "bg-red-500 text-white",
@@ -58,8 +49,7 @@ export function TaskCard({
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
   const aiActions = (task.ai_actions || []).slice(0, 2);
-  const source = (task as any).source_messages as { source_type?: string; source_url?: string } | null; // eslint-disable-line @typescript-eslint/no-explicit-any
-  const SourceIcon = sourceIcons[source?.source_type || ""] || null;
+  const source = task.source_messages ?? null;
 
   return (
     <div
@@ -74,9 +64,12 @@ export function TaskCard({
         <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir="auto">
           {title}
         </h3>
-        <Badge className={cn("text-[10px] shrink-0", priorityColors[task.priority])}>
-          {t(`priority.${task.priority}`)}
-        </Badge>
+        <div className="flex items-center gap-1 shrink-0">
+          <SerialBadge serial={task.serial_display} stopPropagation />
+          <Badge className={cn("text-[10px]", priorityColors[task.priority])}>
+            {t(`priority.${task.priority}`)}
+          </Badge>
+        </div>
       </div>
 
       {/* Description preview */}
@@ -88,22 +81,7 @@ export function TaskCard({
 
       {/* Due date + Contact + Source */}
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-        {SourceIcon && (
-          source?.source_url ? (
-            <a
-              href={source.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <SourceIcon className="h-3 w-3" />
-              <ExternalLink className="h-2.5 w-2.5" />
-            </a>
-          ) : (
-            <SourceIcon className="h-3 w-3" />
-          )
-        )}
+        <SourceLink source={source} stopPropagation />
         {task.due_date && (
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />

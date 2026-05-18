@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Lightbulb, CheckCircle2, X } from "lucide-react";
 import { toast } from "sonner";
+import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 
 interface SuggestionTask {
   id: string;
   title: string;
   title_he: string | null;
   description: string | null;
+  serial_display: string | null;
 }
 
 export function ProjectSuggestions({ locale }: { locale: string }) {
@@ -92,7 +94,10 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                   <Lightbulb className="h-4 w-4 text-yellow-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                    <SerialBadge serial={task.serial_display} />
+                  </div>
                   {task.description && (
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir="auto">
                       {task.description}
