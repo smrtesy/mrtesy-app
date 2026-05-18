@@ -160,6 +160,7 @@ export type Database = {
           sender_email: string | null
           source_id: string
           source_type: string
+          source_url: string | null
           subject: string | null
           updated_at: string | null
           user_id: string | null

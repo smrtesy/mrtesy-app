@@ -31,6 +31,27 @@ interface DriveFolder {
   name: string;
 }
 
+interface CalendarInfo {
+  id: string;
+  summary: string;
+  primary: boolean;
+  accessRole: string;
+}
+
+const GMAIL_CATEGORY_DEFAULTS: Record<string, boolean> = {
+  promotions: true,
+  social: true,
+  forums: true,
+  updates: false,
+};
+
+const GMAIL_CATEGORY_META: Array<{ key: string; label: string; description: string }> = [
+  { key: "promotions", label: "Promotions", description: "Newsletters and deals" },
+  { key: "social", label: "Social", description: "Social network notifications" },
+  { key: "forums", label: "Forums", description: "Mailing lists" },
+  { key: "updates", label: "Updates", description: "Receipts and confirmations" },
+];
+
 export default function OnboardingSetup() {
   const t = useTranslations("onboarding");
   const tSetup = useTranslations("onboardingSetup");
@@ -51,6 +72,10 @@ export default function OnboardingSetup() {
   // Each entry becomes a row in rules_memory with rule_type='skip'.
   const [skipAddresses, setSkipAddresses] = useState<string[]>([]);
   const [skipInput, setSkipInput] = useState("");
+  const [gmailCategories, setGmailCategories] = useState<Record<string, boolean>>(GMAIL_CATEGORY_DEFAULTS);
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [calendarList, setCalendarList] = useState<CalendarInfo[]>([]);
+  const [selectedCalendars, setSelectedCalendars] = useState<Set<string>>(new Set());
   // Drive search state
   const [folderSearch, setFolderSearch] = useState("");
   const [searchResults, setSearchResults] = useState<DriveFolder[]>([]);
@@ -77,6 +102,31 @@ export default function OnboardingSetup() {
       }
     }
     checkDrive();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Check calendar connection and load calendar list
+  useEffect(() => {
+    async function checkCalendar() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: creds } = await supabase
+        .from("user_credentials")
+        .select("access_token")
+        .eq("user_id", user.id)
+        .eq("service", "gmail_calendar")
+        .single();
+      if (!creds) return;
+      setCalendarConnected(true);
+      try {
+        const res = await api<{ calendars: CalendarInfo[] }>("/api/sync/calendars");
+        setCalendarList(res.calendars);
+        const primaryId = res.calendars.find((c) => c.primary)?.id ?? "primary";
+        setSelectedCalendars(new Set([primaryId]));
+      } catch {
+        // Non-fatal — user can adjust in settings
+      }
+    }
+    checkCalendar();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close search results on click outside
@@ -292,6 +342,64 @@ export default function OnboardingSetup() {
         }
       }
 
+      // Save Gmail category skip rules
+      const categoryTriggers = Object.entries(gmailCategories)
+        .filter(([, enabled]) => enabled)
+        .map(([key]) => `category=${key}`);
+      if (categoryTriggers.length > 0) {
+        const { data: existingCats } = await supabase
+          .from("rules_memory")
+          .select("trigger")
+          .eq("user_id", user.id)
+          .in("trigger", categoryTriggers);
+        const existingCatSet = new Set(
+          ((existingCats ?? []) as Array<{ trigger: string }>).map((r) => r.trigger),
+        );
+        const catRows = categoryTriggers
+          .filter((t) => !existingCatSet.has(t))
+          .map((trigger) => ({
+            user_id: user.id,
+            rule_type: "skip",
+            trigger,
+            is_active: true,
+            created_by: "system",
+            suggestion_status: "approved",
+          }));
+        if (catRows.length > 0) {
+          const { error: catErr } = await supabase.from("rules_memory").insert(catRows);
+          if (catErr) throw new Error(`Failed to save category rules: ${catErr.message}`);
+        }
+      }
+
+      // Save calendar skip rules (for calendars NOT in selectedCalendars)
+      const calSkipTriggers = calendarList
+        .filter((c) => !selectedCalendars.has(c.id))
+        .map((c) => `calendar=${c.id}`);
+      if (calSkipTriggers.length > 0) {
+        const { data: existingCalSkips } = await supabase
+          .from("rules_memory")
+          .select("trigger")
+          .eq("user_id", user.id)
+          .in("trigger", calSkipTriggers);
+        const existingCalSet = new Set(
+          ((existingCalSkips ?? []) as Array<{ trigger: string }>).map((r) => r.trigger),
+        );
+        const calRows = calSkipTriggers
+          .filter((t) => !existingCalSet.has(t))
+          .map((trigger) => ({
+            user_id: user.id,
+            rule_type: "skip",
+            trigger,
+            is_active: true,
+            created_by: "system",
+            suggestion_status: "approved",
+          }));
+        if (calRows.length > 0) {
+          const { error: calErr } = await supabase.from("rules_memory").insert(calRows);
+          if (calErr) throw new Error(`Failed to save calendar skip rules: ${calErr.message}`);
+        }
+      }
+
       // api() auto-attaches Authorization + X-Org-Id from the active org in localStorage.
       const data = await api<{ ok: true; session_id: string }>("/api/sync/part1", {
         method: "POST",
@@ -315,13 +423,14 @@ export default function OnboardingSetup() {
       setStats({ gmail: runSession?.items_processed ?? 0, calendar: 0 });
       toast.success(t("step4.complete"));
 
-      await supabase
+      const { error: completionErr } = await supabase
         .from("user_settings")
         .update({
           onboarding_completed: true,
           initial_scan_completed_at: new Date().toISOString(),
         })
         .eq("user_id", user.id);
+      if (completionErr) throw new Error(`Failed to mark onboarding complete: ${completionErr.message}`);
 
       setDone(true);
     } catch (e) {
@@ -468,6 +577,87 @@ export default function OnboardingSetup() {
                   <p className="text-xs text-muted-foreground">
                     {tSetup("driveEmptyHint")}
                   </p>
+                )}
+              </div>
+            )}
+
+            {/* Gmail Categories */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4 text-red-500" />
+                <label className="text-sm font-medium">
+                  {tSetup("gmailCategoriesLabel")}
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {tSetup("gmailCategoriesHint")}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {GMAIL_CATEGORY_META.map((cat) => (
+                  <label
+                    key={cat.key}
+                    className="flex items-start gap-2 rounded-lg border p-3 cursor-pointer hover:bg-muted/50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 shrink-0"
+                      checked={gmailCategories[cat.key] ?? false}
+                      onChange={(e) =>
+                        setGmailCategories((prev) => ({ ...prev, [cat.key]: e.target.checked }))
+                      }
+                    />
+                    <div>
+                      <p className="text-sm font-medium">{cat.label}</p>
+                      <p className="text-xs text-muted-foreground">{cat.description}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Calendar Selection */}
+            {calendarConnected && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-blue-500" />
+                  <label className="text-sm font-medium">
+                    {tSetup("calendarSelectionLabel")}
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {tSetup("calendarSelectionHint")}
+                </p>
+                {calendarList.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">{tSetup("calendarLoadError")}</p>
+                ) : (
+                  <div className="space-y-2">
+                    {calendarList.map((cal) => (
+                      <label
+                        key={cal.id}
+                        className="flex items-center gap-2 rounded-lg border p-3 cursor-pointer hover:bg-muted/50"
+                      >
+                        <input
+                          type="checkbox"
+                          className="shrink-0"
+                          checked={selectedCalendars.has(cal.id)}
+                          onChange={(e) => {
+                            setSelectedCalendars((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(cal.id);
+                              else next.delete(cal.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{cal.summary}</p>
+                          {cal.primary && (
+                            <p className="text-xs text-muted-foreground">Primary calendar</p>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
                 )}
               </div>
             )}

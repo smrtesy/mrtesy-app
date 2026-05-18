@@ -15,7 +15,8 @@ export interface ParsedSkipRules {
   shouldSkip(msg: MessageHeaders): boolean;
 }
 
-const TRIGGER_RE = /^(from|sender|to|domain)\s*=\s*(.+)$/i;
+const TRIGGER_RE = /^(from|sender|to|domain|category)\s*=\s*(.+)$/i;
+const CALENDAR_TRIGGER_RE = /^calendar\s*=\s*(.+)$/i;
 
 function extractEmail(field: string): string {
   const m = field.match(/<([^>]+)>/);
@@ -48,6 +49,8 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
       queryFilters.push(`-to:${value}`);
       const suffix = `@${value}`;
       checks.push((from, to) => from.endsWith(suffix) || to.includes(suffix));
+    } else if (key === "category") {
+      queryFilters.push(`-category:${value}`);
     }
   }
 
@@ -59,4 +62,15 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
       return checks.some((check) => check(fromVal, toVal));
     },
   };
+}
+
+export function parseCalendarSkips(rules: SkipRuleRow[]): Set<string> {
+  const skips = new Set<string>();
+  for (const r of rules) {
+    if ((r.rule_type === "skip" || r.rule_type === "skip_spam") && r.is_active) {
+      const m = r.trigger.match(CALENDAR_TRIGGER_RE);
+      if (m) skips.add(m[1].trim());
+    }
+  }
+  return skips;
 }

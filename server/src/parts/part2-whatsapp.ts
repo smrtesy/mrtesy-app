@@ -1,25 +1,22 @@
 /**
- * PART 2 — WhatsApp Conversation Analyzer
+ * PART 2 — WhatsApp Collector
  *
  * Reads messages from a Google Sheet (written by Dualhook), groups them into
- * conversation threads, classifies each thread with Claude, and creates tasks
- * in Supabase for threads that need attention.
+ * conversation threads, and writes ONE source_message per chat to Supabase
+ * with processing_status='pending' for PART 3 to classify.
  *
- * Checkpoint: stored in sync_state.checkpoint as the last processed Sheets row
- * index, so re-runs skip already-processed rows.
+ * Part 2 intentionally does NOT call Claude and does NOT create tasks.
+ * All classification happens in Part 3 so every source gets the same
+ * deep-classifier treatment (open-task dedup, project matching, full task fields).
+ *
+ * Bot filtering: phones already marked as bots in rules_memory are skipped
+ * without an AI call, keeping this step fast and cheap.
  */
 
 import { google } from "googleapis";
 import { db, loadRules, createRunSession, closeRunSession, updateSyncState } from "../db";
-import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
 import { getOAuthClient } from "../services/token-refresh";
-import { buildWhatsappClassifierSystem } from "../prompts/whatsapp";
-import { getUserPromptContext } from "../lib/user-context";
 
-// Env-level fallbacks; the per-user Sheet ID resolved inside runPart2 takes
-// precedence (it lives on user_settings.whatsapp_sheet_id, written during
-// onboarding step 3). Without that resolution, every tenant would silently
-// pull rows from the operator's single Sheet.
 const ENV_SHEET_ID = process.env.WHATSAPP_SHEET_ID;
 const SHEET_TAB = process.env.WHATSAPP_SHEET_TAB ?? "Messages";
 
@@ -59,16 +56,6 @@ interface SheetRow {
   isGroup: boolean;
 }
 
-interface Classification {
-  status: "NEEDS_RESPONSE" | "WAITING_REPLY" | "PERSONAL_REMINDER" | "CLOSED" | "NOISE";
-  topic: string;
-  urgency: "urgent" | "high" | "medium" | "low";
-  last_msg_summary: string;
-  suggested_actions: string[];
-  ideal_response_time: "morning" | "afternoon" | "evening" | "none";
-  context_summary: string;
-}
-
 export interface Part2Options {
   userId: string;
   /** How many hours back to look. Default: 48. First run: use 168 (7 days). */
@@ -79,16 +66,13 @@ export interface Part2Options {
 
 export async function runPart2(opts: Part2Options): Promise<{ sessionId: string }> {
   const { userId, lookbackHours = 48, force = false } = opts;
-  const sessionId = await createRunSession(userId, "part2", "whatsapp", MODELS.sonnet);
-  const systemPrompt = buildWhatsappClassifierSystem(await getUserPromptContext(userId));
+  const sessionId = await createRunSession(userId, "part2", "whatsapp");
 
   const errors: string[] = [];
-  let tasksCreated = 0;
   let itemsProcessed = 0;
-  let rulesAdded = 0;
 
   try {
-    // 1. Load bot/spam rules
+    // 1. Load bot rules — skip known-spam phones without any AI call
     const rules = await loadRules(userId);
     const botPhones = new Set(
       rules
@@ -106,8 +90,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
 
     const lastRow = force ? 0 : parseInt(syncStateRow?.checkpoint ?? "0", 10);
 
-    // 2b. Resolve per-user Sheet ID (set during onboarding); fall back to
-    // the env-level operator Sheet only if the tenant hasn't configured one.
+    // 3. Resolve per-user Sheet ID
     const { data: settingsRow } = await db
       .from("user_settings")
       .select("whatsapp_sheet_id")
@@ -119,11 +102,11 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       return { sessionId };
     }
 
-    // 3. Authenticate with Google Sheets (uses gmail_calendar credential which includes sheets.readonly)
+    // 4. Authenticate with Google Sheets
     const auth = await getOAuthClient(userId, "gmail_calendar");
     const sheets = google.sheets({ version: "v4", auth });
 
-    // 4. Fetch new rows from the Sheet
+    // 5. Fetch new rows from the Sheet
     const sheetsResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: `${SHEET_TAB}!A2:S`,
@@ -143,7 +126,7 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       if (isNaN(ts.getTime()) || ts.getTime() < cutoffTime) continue;
 
       const messageType = (row[COL.MESSAGE_TYPE] ?? "").toLowerCase();
-      if (messageType === "reaction") continue; // skip emoji reactions
+      if (messageType === "reaction") continue;
 
       const fromPhone = row[COL.FROM_PHONE] ?? "";
       if (botPhones.has(fromPhone)) continue;
@@ -164,15 +147,14 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       if (rowIndex > maxRowIndex) maxRowIndex = rowIndex;
     }
 
-    // 5. Group by chatId, keep last 20 messages
+    // 6. Group by chatId, keep last 20 messages
     const threads = new Map<string, SheetRow[]>();
     for (const row of newRows) {
       if (!threads.has(row.chatId)) threads.set(row.chatId, []);
       threads.get(row.chatId)!.push(row);
     }
 
-    // Also load previous messages for context (up to 20 total)
-    // We do this by querying source_messages for existing whatsapp threads
+    // 7. Load previous messages from source_messages for thread context
     const chatIds = [...threads.keys()];
     const { data: existingMsgs } = chatIds.length
       ? await db
@@ -185,49 +167,28 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
           .limit(500)
       : { data: [] };
 
-    // Build context map from existing messages
     const existingContext = new Map<string, { text: string; direction: string; ts: string }[]>();
     for (const msg of existingMsgs ?? []) {
       const chatId = (msg.source_id as string).replace(/^wa:/, "");
       if (!existingContext.has(chatId)) existingContext.set(chatId, []);
       existingContext.get(chatId)!.push({
         text: msg.body_text ?? "",
-        direction: (msg.metadata as Record<string,string> | null)?.direction ?? "incoming",
+        direction: (msg.metadata as Record<string, string> | null)?.direction ?? "incoming",
         ts: msg.received_at ?? "",
       });
     }
 
-    // 6. Process each thread
+    // 8. Store each thread as a single source_message for Part 3 to classify
     for (const [chatId, msgs] of threads.entries()) {
       itemsProcessed++;
 
-      // Persist new messages to source_messages (dedup by source_id + received_at)
-      for (const msg of msgs) {
-        const sourceId = `wa:${chatId}`;
-        await db.from("source_messages").upsert(
-          {
-            user_id: userId,
-            source_type: "whatsapp",
-            source_id: sourceId,
-            sender: msg.fromName,
-            sender_email: null,
-            body_text: msg.message,
-            received_at: msg.timestamp.toISOString(),
-            processing_status: "pending",
-            metadata: {
-              direction: msg.direction,
-              fromPhone: msg.fromPhone,
-              chatName: msg.chatName,
-              isGroup: msg.isGroup,
-              rowIndex: msg.rowIndex,
-            },
-          },
-          { onConflict: "user_id,source_type,source_id" },
-        );
-      }
+      const lastMsg = msgs[msgs.length - 1];
+      const chatName = lastMsg.chatName || lastMsg.fromName;
+      const sourceId = `wa:${chatId}`;
 
-      // Build conversation context: last 20 messages combined
-      const context = [
+      // Build the full conversation thread (last 20 messages) as raw_content.
+      // Part 3's deep classifier receives this exactly as-is.
+      const conversationLines = [
         ...(existingContext.get(chatId) ?? [])
           .slice(0, 10)
           .map((m) => ({ dir: m.direction, text: m.text, ts: m.ts })),
@@ -241,117 +202,48 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
         .map((m) => `[${m.dir.toUpperCase()} ${m.ts.slice(0, 16)}] ${m.text}`)
         .join("\n");
 
-      const lastMsg = msgs[msgs.length - 1];
-      const chatName = lastMsg.chatName || lastMsg.fromName;
-
-      // 7. Classify with Claude (system prompt is cached across iterations)
-      let classification: Classification | null = null;
-      try {
-        const result = await cachedCall({
-          model: "sonnet",
-          systemPrompt,
-          userMessage: `Chat: ${chatName}\nPhone: ${lastMsg.fromPhone}\nLast 20 messages:\n${context}`,
-          maxTokens: 512,
-        });
-        classification = parseJsonResponse<Classification>(result.content);
-      } catch (e) {
-        errors.push(`classify ${chatId}: ${e}`);
-        continue;
-      }
-
-      if (!classification) {
-        errors.push(`invalid JSON for ${chatId}`);
-        continue;
-      }
-
-      // 8. Handle NOISE → suggest bot rule
-      if (classification.status === "NOISE") {
-        const alreadyBot = botPhones.has(lastMsg.fromPhone);
-        if (!alreadyBot) {
-          await db.from("rules_memory").insert({
-            user_id: userId,
-            trigger: `WhatsApp sender = ${lastMsg.fromPhone}`,
-            rule_type: "bot",
-            category: "bot",
-            reason: "Auto-detected: one-sided automated messages",
-            is_active: false,
-            created_by: "claude",
-            suggestion_status: "pending",
-            suggestion_confidence: 0.8,
-          });
-          rulesAdded++;
-        }
-        continue;
-      }
-
-      if (classification.status === "CLOSED") continue;
-
-      // 9. Create task for NEEDS_RESPONSE / WAITING_REPLY / PERSONAL_REMINDER
-      const emoji =
-        classification.status === "NEEDS_RESPONSE"
-          ? "🔴"
-          : classification.status === "WAITING_REPLY"
-            ? "🟠"
-            : "💡";
-
-      const now = new Date();
-      let dueDate: string;
-      if (classification.status === "NEEDS_RESPONSE") {
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(9, 0, 0, 0);
-        dueDate = tomorrow.toISOString().slice(0, 10);
-      } else {
-        dueDate = now.toISOString().slice(0, 10);
-      }
-
-      const description = [
-        `הקשר:\n${classification.context_summary}`,
-        `\nההודעה האחרונה:\n"${classification.last_msg_summary}"`,
+      const rawContent = [
+        `Chat: ${chatName}`,
+        `Phone: ${lastMsg.fromPhone}`,
+        `Group: ${lastMsg.isGroup}`,
+        `\n--- CONVERSATION (last 20 messages) ---`,
+        conversationLines,
       ].join("\n");
 
-      const { data: existing } = await db
-        .from("tasks")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("source_message_id", `wa:${chatId}`)
-        .neq("status", "archived")
-        .neq("status", "completed")
-        .maybeSingle();
-
-      if (existing) {
-        await db
-          .from("tasks")
-          .update({
-            description,
-            priority: classification.urgency,
-            due_date: dueDate,
-            ai_actions: classification.suggested_actions.map((a) => ({ label: a, prompt: a })),
-          })
-          .eq("id", existing.id);
-      } else {
-        await db.from("tasks").insert({
-          user_id: userId,
-          title: `${emoji} ${chatName} — ${classification.topic}`,
-          title_he: `${emoji} ${chatName} — ${classification.topic}`,
-          description,
-          priority: classification.urgency,
-          status: "inbox",
-          task_type: "action",
-          due_date: dueDate,
-          source_message_id: `wa:${chatId}`,
-          source_link: `https://wa.me/${lastMsg.fromPhone.replace(/\D/g, "")}`,
-          related_contact: chatName,
-          related_contact_phone: lastMsg.fromPhone,
-          ai_actions: classification.suggested_actions.map((a) => ({ label: a, prompt: a })),
-          ai_model_used: MODELS.sonnet,
-          manually_verified: false,
-        });
-        tasksCreated++;
+      try {
+        const { error: waUpsertErr } = await db.from("source_messages").upsert(
+          {
+            user_id: userId,
+            source_type: "whatsapp",
+            source_id: sourceId,
+            sender: chatName,
+            sender_email: null,
+            subject: chatName,
+            body_text: lastMsg.message.slice(0, 1000),
+            raw_content: rawContent.slice(0, 3000),
+            received_at: lastMsg.timestamp.toISOString(),
+            // source_url used by TaskCard to render the WhatsApp link icon
+            source_url: `https://wa.me/${lastMsg.fromPhone.replace(/\D/g, "")}`,
+            // reply_to_context stores the phone for Part 3 to set related_contact_phone on the task
+            reply_to_context: lastMsg.fromPhone,
+            processing_status: "pending",
+            metadata: {
+              chatId,
+              chatName,
+              fromPhone: lastMsg.fromPhone,
+              isGroup: lastMsg.isGroup,
+              lastRowIndex: lastMsg.rowIndex,
+            },
+          },
+          { onConflict: "user_id,source_type,source_id" },
+        );
+        if (waUpsertErr) throw new Error(waUpsertErr.message);
+      } catch (e) {
+        errors.push(`upsert source_message for ${chatId}: ${e}`);
       }
     }
 
-    // 10. Update checkpoint
+    // 9. Advance checkpoint
     if (maxRowIndex > lastRow) {
       await updateSyncState(userId, "whatsapp", String(maxRowIndex));
     }
@@ -361,23 +253,15 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       errors.length === 0 ? "completed" : "partial",
       {
         items_processed: itemsProcessed,
-        tasks_created: tasksCreated,
-        rules_added: rulesAdded,
         errors_count: errors.length,
       },
-      `Processed ${threads.size} threads. Created ${tasksCreated} tasks.`,
+      `Collected ${threads.size} WhatsApp threads into source_messages (pending for Part 3).`,
       errors,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(msg);
-    await closeRunSession(
-      sessionId,
-      "failed",
-      { errors_count: 1 },
-      `Fatal: ${msg}`,
-      errors,
-    );
+    await closeRunSession(sessionId, "failed", { errors_count: 1 }, `Fatal: ${msg}`, errors);
     throw err;
   }
 
