@@ -9,6 +9,7 @@ import {
   Clock,
   FolderOpen,
   Sliders,
+  HardDrive,
 } from "lucide-react";
 import { AppGuideLayout } from "@/components/platform/AppGuideLayout";
 import type { GuideFeature, GuideStep, GuideFAQ } from "@/components/platform/AppGuideLayout";
@@ -62,13 +63,19 @@ const features: GuideFeature[] = [
     description:
       "אפשר להגדיר כתובות מייל, תחומים או שולחים שיתעלמו מהם — כך שניוזלטרים ומיילים שיווקיים לא יהפכו למשימות.",
   },
+  {
+    icon: HardDrive,
+    title: "תיקיית Google Drive",
+    description:
+      "אפשר לחבר תיקייה ב-Drive — smrtTask יזהה קבצים חדשים או מעודכנים שם וייצור מהם משימות (למשל מסמך לבדיקה או קובץ שהועלה לתיקיית פרויקט). אופציונלי, בוחרים תיקייה בהגדרות.",
+  },
 ];
 
 const steps: GuideStep[] = [
   {
     title: "smrtTask מתחבר לחשבונות שלך",
     description:
-      "בהגדרת החשבון, אתה מחבר את ג'ימייל, היומן ואופציונלית גיליון וואטסאפ. הנתונים נשמרים בצורה מאובטחת ומשמשים רק לצורך חילוץ משימות.",
+      "בהגדרת החשבון, אתה מחבר את ג'ימייל והיומן, ואופציונלית גם תיקיית Google Drive וגיליון וואטסאפ. הנתונים נשמרים בצורה מאובטחת ומשמשים רק לצורך חילוץ משימות.",
   },
   {
     title: "המערכת סורקת ומנתחת",
@@ -122,6 +129,11 @@ const faqs: GuideFAQ[] = [
     question: "האם smrtTask עובד עם חשבון גוגל ארגוני (Workspace)?",
     answer:
       "כן. smrtTask עובד עם כל חשבון גוגל — אישי או Workspace — כל עוד הרשאות ה-OAuth מאושרות.",
+  },
+  {
+    question: "איך smrtTask משתמש ב-Google Drive?",
+    answer:
+      "אם בחרת תיקייה ב-Drive (בהגדרות → סנכרון), smrtTask סורק את התיקייה הזו בלבד ומזהה קבצים חדשים או מעודכנים שיכולים לדרוש פעולה — למשל מסמך שהשותף שלח לבדיקה. אם לא בחרת תיקייה, סריקת ה-Drive פשוט מדולגת — אין סריקה דיפולטית של כל ה-Drive.",
   },
 ];
 
