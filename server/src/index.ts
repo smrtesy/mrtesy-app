@@ -101,7 +101,7 @@ async function runScheduledJobs() {
         await runPart2({ userId: schedule.user_id });
       } else if (schedule.part === "part3") {
         // Part 3 is org-aware: use the user's primary org (oldest membership).
-        // Skip the schedule entry if the user has no org or smrtesy isn't enabled there.
+        // Skip the schedule entry if the user has no org or smrttask isn't enabled there.
         const { data: membership } = await db
           .from("org_members")
           .select("org_id")
@@ -114,7 +114,7 @@ async function runScheduledJobs() {
           continue;
         }
 
-        const { data: app } = await db.from("apps").select("id").eq("slug", "smrtesy").maybeSingle();
+        const { data: app } = await db.from("apps").select("id").eq("slug", "smrttask").maybeSingle();
         const { data: entitled } = await db
           .from("app_memberships")
           .select("org_id")
@@ -122,7 +122,7 @@ async function runScheduledJobs() {
           .eq("app_id", app?.id ?? "")
           .maybeSingle();
         if (!entitled) {
-          console.warn(`[cron] part3 skipped — smrtesy not enabled for org ${membership.org_id}`);
+          console.warn(`[cron] part3 skipped — smrttask not enabled for org ${membership.org_id}`);
           continue;
         }
 

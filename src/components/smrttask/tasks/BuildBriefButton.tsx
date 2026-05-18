@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api/client";
 import { Sparkles, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,7 +14,6 @@ interface BuildBriefButtonProps {
 
 export function BuildBriefButton({ projectName, projectId }: BuildBriefButtonProps) {
   const [loading, setLoading] = useState(false);
-  const supabase = createClient();
 
   async function handleClick() {
     if (!projectId) {
@@ -30,21 +29,10 @@ export function BuildBriefButton({ projectName, projectId }: BuildBriefButtonPro
 
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { toast.error("Not signed in"); return; }
-
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-      const res = await fetch(`${backendUrl}/api/sync/part4/build_brief`, {
+      await api<{ ok: boolean }>("/api/sync/part4/build_brief", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ project_id: projectId }),
+        body: { project_id: projectId },
       });
-
-      const json = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok || !json.ok) throw new Error(json.error ?? "Failed");
 
       toast.success("Brief building started — refresh in a moment to see extracted facts");
       // Refresh to show new pending_facts

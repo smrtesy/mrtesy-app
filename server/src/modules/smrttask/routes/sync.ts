@@ -1,5 +1,5 @@
 /**
- * smrtesy AI sync routes — gated by app_memberships ("smrtesy" must be enabled
+ * smrtTask sync routes — gated by app_memberships ("smrttask" must be enabled
  * for the active org). The cron webhook (/run-scheduled) is exempted: it uses a
  * shared secret, runs for any user, and the runners themselves can be made
  * org-aware later (Phase 6.5).
@@ -14,14 +14,15 @@ import { runPart2 } from "../parts/part2-whatsapp";
 import { runPart3 } from "../parts/part3-classifier";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
+import { notifyError } from "../../../lib/platform";
 
 const router = Router();
 
-// Every smrtesy route runs through this chain (except the cron webhook below).
-const smrtesyGate = [requireAuth, requireOrg, requireApp("smrtesy")];
+// Every smrtTask route runs through this chain (except the cron webhook below).
+const smrttaskGate = [requireAuth, requireOrg, requireApp("smrttask")];
 
 // ── Calendars list ────────────────────────────────────────────────────────
-router.get("/calendars", ...smrtesyGate, async (req: Request, res: Response) => {
+router.get("/calendars", ...smrttaskGate, async (req: Request, res: Response) => {
   try {
     const calendars = await listCalendars(req.user!.id);
     return res.json({ calendars });
@@ -31,7 +32,7 @@ router.get("/calendars", ...smrtesyGate, async (req: Request, res: Response) => 
 });
 
 // ── Part 0: style learner ─────────────────────────────────────────────────
-router.post("/part0", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part0", ...smrttaskGate, async (req: Request, res: Response) => {
   const { language = "he" } = req.body ?? {};
   try {
     const result = await runPart0({ userId: req.user!.id, language });
@@ -42,7 +43,7 @@ router.post("/part0", ...smrtesyGate, async (req: Request, res: Response) => {
 });
 
 // ── Part 1: collector (Gmail/Drive/Calendar) ──────────────────────────────
-router.post("/part1", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
   const { gmail_days, drive_hours, cal_months, drive_folder_id } = req.body ?? {};
   try {
     const result = await runPart1({
@@ -59,7 +60,7 @@ router.post("/part1", ...smrtesyGate, async (req: Request, res: Response) => {
 });
 
 // ── Part 2: WhatsApp ──────────────────────────────────────────────────────
-router.post("/part2", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part2", ...smrttaskGate, async (req: Request, res: Response) => {
   const { lookback_hours, force } = req.body ?? {};
   try {
     const result = await runPart2({
@@ -74,7 +75,7 @@ router.post("/part2", ...smrtesyGate, async (req: Request, res: Response) => {
 });
 
 // ── Part 3: classifier ────────────────────────────────────────────────────
-router.post("/part3", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part3", ...smrttaskGate, async (req: Request, res: Response) => {
   const { limit } = req.body ?? {};
   try {
     const result = await runPart3({
@@ -89,7 +90,7 @@ router.post("/part3", ...smrtesyGate, async (req: Request, res: Response) => {
 });
 
 // ── Part 4: project suggester + brief builder ─────────────────────────────
-router.post("/part4/suggest", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part4/suggest", ...smrttaskGate, async (req: Request, res: Response) => {
   try {
     const result = await runPart4({
       userId: req.user!.id,
@@ -102,7 +103,7 @@ router.post("/part4/suggest", ...smrtesyGate, async (req: Request, res: Response
   }
 });
 
-router.post("/part4/build_brief", ...smrtesyGate, async (req: Request, res: Response) => {
+router.post("/part4/build_brief", ...smrttaskGate, async (req: Request, res: Response) => {
   const { project_id } = req.body ?? {};
   if (!project_id) return res.status(400).json({ error: "project_id required" });
   try {
@@ -143,7 +144,7 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
   const { part, user_id } = req.body ?? {};
   if (!part || !user_id) return res.status(400).json({ error: "part and user_id required" });
 
-  // Check that the user's org has smrtesy enabled before running.
+  // Check that the user's org has smrttask enabled before running.
   // Picks the user's primary org (same logic as the auto-fill trigger).
   const { data: membership } = await db
     .from("org_members")
@@ -155,7 +156,7 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
 
   if (!membership) return res.status(403).json({ error: "user has no org" });
 
-  const { data: app } = await db.from("apps").select("id").eq("slug", "smrtesy").maybeSingle();
+  const { data: app } = await db.from("apps").select("id").eq("slug", "smrttask").maybeSingle();
   const { data: entitled } = await db
     .from("app_memberships")
     .select("org_id")
@@ -164,7 +165,7 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
     .maybeSingle();
 
   if (!entitled) {
-    return res.status(403).json({ error: "smrtesy not enabled for user's org" });
+    return res.status(403).json({ error: "smrttask not enabled for user's org" });
   }
 
   try {
@@ -180,7 +181,14 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
     }
     return res.json({ ok: true });
   } catch (e) {
-    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    const message = e instanceof Error ? e.message : String(e);
+    // Cron failure — no interactive caller, so surface to the org error handler.
+    await notifyError(membership.org_id as string, "smrttask", {
+      title: `smrtTask ${part} sync failed`,
+      body:  message,
+      link:  "/log",
+    });
+    return res.status(500).json({ error: message });
   }
 });
 

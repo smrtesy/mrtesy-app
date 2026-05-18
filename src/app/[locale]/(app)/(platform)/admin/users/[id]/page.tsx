@@ -40,10 +40,10 @@ export default async function AdminUserDetailPage({
       .from("app_memberships")
       .select("apps!inner(slug)")
       .eq("org_id", userOrg.org_id)
-      .eq("apps.slug", "smrtesy");
+      .eq("apps.slug", "smrttask");
     hasSmrtTask = (appRows ?? []).some((r) => {
       const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
-      return (app as { slug?: string } | null)?.slug === "smrtesy";
+      return (app as { slug?: string } | null)?.slug === "smrttask";
     });
   }
 

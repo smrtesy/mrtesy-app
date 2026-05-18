@@ -70,7 +70,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
   try {
     // ── 0. Per-tenant identity used in the system prompt ─────────────────────
-    // DB-stored version (editable in /admin/apps/smrtesy/prompts) takes precedence;
+    // DB-stored version (editable in /admin/apps/smrttask/prompts) takes precedence;
     // falls back to the hardcoded default so the pipeline always has a valid prompt.
     const promptCtx = await getUserPromptContext(userId, orgId);
     const systemPrompt =

@@ -1,5 +1,5 @@
 /**
- * Load a prompt from ai_prompts table (user-editable via /admin/apps/smrtesy/prompts).
+ * Load a prompt from ai_prompts table (user-editable via /admin/apps/smrttask/prompts).
  * Falls back to null so callers can use their hardcoded default when nothing is saved.
  *
  * Supported template variables replaced before returning:

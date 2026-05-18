@@ -102,10 +102,10 @@ export default function SettingsPage() {
           .from("app_memberships")
           .select("apps!inner(slug)")
           .in("org_id", orgIds)
-          .eq("apps.slug", "smrtesy");
+          .eq("apps.slug", "smrttask");
         const found = (appRows ?? []).some((r: { apps: unknown }) => {
           const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
-          return (app as { slug?: string } | null)?.slug === "smrtesy";
+          return (app as { slug?: string } | null)?.slug === "smrttask";
         });
         setHasSmrtTask(found);
       }
@@ -291,13 +291,13 @@ export default function SettingsPage() {
               <CardTitle className="text-base">{t("rulesAndAutomation")}</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-2 sm:grid-cols-2">
-              <Link href={`/${locale}/settings/smrtesy/rules`}>
+              <Link href={`/${locale}/settings/smrttask/rules`}>
                 <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
                   <Filter className="h-4 w-4" />
                   {t("skipRulesAndStyle")}
                 </Button>
               </Link>
-              <Link href={`/${locale}/settings/smrtesy/sync`}>
+              <Link href={`/${locale}/settings/smrttask/sync`}>
                 <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
                   <Repeat className="h-4 w-4" />
                   {t("syncSchedules")}

@@ -68,7 +68,7 @@ export async function runPart0(opts: { userId: string; language: "he" | "en" }) 
       return { sessionId, skipped: true };
     }
 
-    // DB-stored version (editable in /admin/apps/smrtesy/prompts) takes precedence
+    // DB-stored version (editable in /admin/apps/smrttask/prompts) takes precedence
     const styleSystem = (await loadPrompt(userId, "style_learning")) ?? STYLE_SYSTEM;
 
     const { content } = await simpleCall(

@@ -2,7 +2,7 @@
  * requireApp — factory that returns middleware enforcing an app entitlement.
  *
  * Usage:
- *   router.post("/sync/part3", requireAuth, requireOrg, requireApp("smrtesy"), handler);
+ *   router.post("/sync/part3", requireAuth, requireOrg, requireApp("smrttask"), handler);
  *
  * Looks up `app_memberships` for the active org and the given app slug.
  * Returns 403 if the app isn't enabled for the org.

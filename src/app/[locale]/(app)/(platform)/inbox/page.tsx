@@ -25,7 +25,7 @@ export default async function InboxPage({
       const { data: app } = await supabase
         .from("apps")
         .select("id")
-        .eq("slug", "smrtesy")
+        .eq("slug", "smrttask")
         .maybeSingle();
       if (app) {
         const { data: membership } = await supabase

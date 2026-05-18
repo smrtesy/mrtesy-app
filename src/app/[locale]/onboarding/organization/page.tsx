@@ -107,9 +107,9 @@ export default function OnboardingOrganizationStep() {
       setActiveOrgId(org.id);
 
       try {
-        await api(`/api/org/apps/smrtesy`, { method: "POST" });
+        await api(`/api/org/apps/smrttask`, { method: "POST" });
       } catch (e) {
-        console.warn("[onboarding] failed to enable smrtesy app:", e);
+        console.warn("[onboarding] failed to enable smrttask app:", e);
       }
 
       toast.success(tOrg("workspaceCreated"));

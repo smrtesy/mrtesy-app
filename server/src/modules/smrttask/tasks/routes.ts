@@ -21,9 +21,13 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
-import { requireAuth, requireOrg } from "../../../middleware";
+import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { emitEvent } from "../../../lib/platform";
 
 const router = Router();
+
+// Every task route requires auth + active org + smrtTask enabled for that org.
+router.use(requireAuth, requireOrg, requireApp("smrttask"));
 
 // ── fields whitelisted for PATCH ───────────────────────────────────────────
 const UPDATABLE_FIELDS = new Set([
@@ -93,7 +97,7 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
 }
 
 /** GET /tasks?status=inbox&verified=true&project_id=...&assigned_to=...&has_source=true&task_type=action&limit=50 */
-router.get("/tasks", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/tasks", async (req: Request, res: Response) => {
   const { limit } = req.query;
 
   let q = db
@@ -112,7 +116,7 @@ router.get("/tasks", requireAuth, requireOrg, async (req: Request, res: Response
 });
 
 /** GET /tasks/count — same filters as /tasks, returns just `{ count: number }` */
-router.get("/tasks/count", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/tasks/count", async (req: Request, res: Response) => {
   let q = db
     .from("tasks")
     .select("id", { count: "exact", head: true })
@@ -125,7 +129,7 @@ router.get("/tasks/count", requireAuth, requireOrg, async (req: Request, res: Re
 });
 
 /** GET /tasks/:id */
-router.get("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("tasks")
     .select("*, source_messages(source_type, source_url), projects(id, name, name_he, color)")
@@ -139,7 +143,7 @@ router.get("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: Resp
 });
 
 /** POST /tasks — create manual task */
-router.post("/tasks", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/tasks", async (req: Request, res: Response) => {
   const body = req.body ?? {};
   if (!body.title || typeof body.title !== "string") {
     return res.status(400).json({ error: "title is required" });
@@ -166,11 +170,17 @@ router.post("/tasks", requireAuth, requireOrg, async (req: Request, res: Respons
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
+  await emitEvent(req.org!.id, "smrttask", "task.created", "task", data.id, {
+    title: data.title,
+    priority: data.priority,
+  });
+
   res.status(201).json({ task: data });
 });
 
 /** PATCH /tasks/:id */
-router.patch("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.patch("/tasks/:id", async (req: Request, res: Response) => {
   let updates: Record<string, unknown>;
   try { updates = pickUpdates(req.body ?? {}); }
   catch (e) { return res.status(400).json({ error: (e as Error).message }); }
@@ -197,7 +207,7 @@ router.patch("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: Re
 });
 
 /** DELETE /tasks/:id */
-router.delete("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.delete("/tasks/:id", async (req: Request, res: Response) => {
   const { error, count } = await db
     .from("tasks")
     .delete({ count: "exact" })
@@ -210,7 +220,7 @@ router.delete("/tasks/:id", requireAuth, requireOrg, async (req: Request, res: R
 });
 
 /** POST /tasks/:id/complete */
-router.post("/tasks/:id/complete", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
   const { data, error } = await db
     .from("tasks")
@@ -221,11 +231,16 @@ router.post("/tasks/:id/complete", requireAuth, requireOrg, async (req: Request,
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
+
+  await emitEvent(req.org!.id, "smrttask", "task.completed", "task", data.id, {
+    completed_at: data.completed_at,
+  });
+
   res.json({ task: data });
 });
 
 /** POST /tasks/:id/snooze */
-router.post("/tasks/:id/snooze", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   // Default: tomorrow at 9am. Body can pass { until: ISO } to override.
   let until: string;
   if (req.body?.until && typeof req.body.until === "string") {
@@ -264,7 +279,7 @@ router.post("/tasks/:id/snooze", requireAuth, requireOrg, async (req: Request, r
 });
 
 /** POST /tasks/:id/seen */
-router.post("/tasks/:id/seen", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/tasks/:id/seen", async (req: Request, res: Response) => {
   const { error } = await db
     .from("tasks")
     .update({ seen_at: new Date().toISOString() })
@@ -275,7 +290,7 @@ router.post("/tasks/:id/seen", requireAuth, requireOrg, async (req: Request, res
 });
 
 /** POST /tasks/:id/updates — append a manual note to updates[] */
-router.post("/tasks/:id/updates", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
   const { content, type = "note" } = req.body ?? {};
   if (!content || typeof content !== "string" || !content.trim()) {
     return res.status(400).json({ error: "content is required" });
@@ -321,7 +336,6 @@ router.post("/tasks/:id/updates", requireAuth, requireOrg, async (req: Request, 
  *   [{ action_label: "project_cluster", clustered_task_ids: [...], keywords: [...], key_contacts: [...] }]
  */
 router.post("/tasks/:id/approve-as-project",
-  requireAuth, requireOrg,
   async (req: Request, res: Response) => {
     const { data: task, error: tErr } = await db
       .from("tasks")
@@ -359,7 +373,7 @@ router.post("/tasks/:id/approve-as-project",
     if (pErr) return res.status(500).json({ error: `project create: ${pErr.message}` });
 
     // 2. Archive the suggestion task & stamp the project_id
-    await db
+    const { error: archiveErr } = await db
       .from("tasks")
       .update({
         status: "archived",
@@ -369,6 +383,7 @@ router.post("/tasks/:id/approve-as-project",
         status_changed_at: new Date().toISOString(),
       })
       .eq("id", task.id);
+    if (archiveErr) console.error("[approve-as-project] archive error:", archiveErr.message);
 
     // 3. Bulk-link clustered tasks to the new project
     let linkedCount = 0;

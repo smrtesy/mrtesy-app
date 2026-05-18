@@ -16,9 +16,12 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
-import { requireAuth, requireOrg } from "../../../middleware";
+import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 
 const router = Router();
+
+// Every project route requires auth + active org + smrtTask enabled for that org.
+router.use(requireAuth, requireOrg, requireApp("smrttask"));
 
 const UPDATABLE_PROJECT_FIELDS = new Set([
   "name", "name_he", "color", "keywords", "key_contacts",
@@ -41,7 +44,7 @@ function pick(body: Record<string, unknown>, allowed: Set<string>) {
 // ── /projects ──────────────────────────────────────────────────────────────
 
 /** GET /projects?include_brief=true */
-router.get("/projects", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/projects", async (req: Request, res: Response) => {
   const includeBrief = req.query.include_brief === "true";
   const select = includeBrief
     ? "*, project_briefs(id, purpose, current_status)"
@@ -59,7 +62,7 @@ router.get("/projects", requireAuth, requireOrg, async (req: Request, res: Respo
 });
 
 /** GET /projects/:id  — full project with brief */
-router.get("/projects/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/projects/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("projects")
     .select("*, project_briefs(*)")
@@ -73,7 +76,7 @@ router.get("/projects/:id", requireAuth, requireOrg, async (req: Request, res: R
 });
 
 /** POST /projects */
-router.post("/projects", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.post("/projects", async (req: Request, res: Response) => {
   const body = req.body ?? {};
   if (!body.name || typeof body.name !== "string") {
     return res.status(400).json({ error: "name is required" });
@@ -98,7 +101,7 @@ router.post("/projects", requireAuth, requireOrg, async (req: Request, res: Resp
 });
 
 /** PATCH /projects/:id */
-router.patch("/projects/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.patch("/projects/:id", async (req: Request, res: Response) => {
   const updates = pick(req.body ?? {}, UPDATABLE_PROJECT_FIELDS);
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "nothing to update" });
@@ -118,7 +121,7 @@ router.patch("/projects/:id", requireAuth, requireOrg, async (req: Request, res:
 });
 
 /** DELETE /projects/:id — soft delete */
-router.delete("/projects/:id", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.delete("/projects/:id", async (req: Request, res: Response) => {
   const { error, count } = await db
     .from("projects")
     .update({ is_active: false }, { count: "exact" })
@@ -144,7 +147,7 @@ async function verifyProjectInOrg(projectId: string, orgId: string): Promise<boo
 }
 
 /** GET /projects/:id/brief */
-router.get("/projects/:id/brief", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.get("/projects/:id/brief", async (req: Request, res: Response) => {
   if (!await verifyProjectInOrg(req.params.id, req.org!.id)) {
     return res.status(404).json({ error: "project not found in this org" });
   }
@@ -158,7 +161,7 @@ router.get("/projects/:id/brief", requireAuth, requireOrg, async (req: Request, 
 });
 
 /** PUT /projects/:id/brief — upsert */
-router.put("/projects/:id/brief", requireAuth, requireOrg, async (req: Request, res: Response) => {
+router.put("/projects/:id/brief", async (req: Request, res: Response) => {
   if (!await verifyProjectInOrg(req.params.id, req.org!.id)) {
     return res.status(404).json({ error: "project not found in this org" });
   }
@@ -209,7 +212,6 @@ interface PendingFact {
 
 /** PATCH /projects/:id/brief/verify-fact  body: { fact_id, approve: boolean } */
 router.patch("/projects/:id/brief/verify-fact",
-  requireAuth, requireOrg,
   async (req: Request, res: Response) => {
     const { fact_id, approve } = req.body ?? {};
     if (!fact_id || typeof approve !== "boolean") {
@@ -240,7 +242,7 @@ router.patch("/projects/:id/brief/verify-fact",
     const newRejected = approve ? rejected : [...rejected, fact];
 
     // Write brief update
-    await db
+    const { error: briefErr } = await db
       .from("project_briefs")
       .update({
         pending_facts: remaining,
@@ -248,6 +250,7 @@ router.patch("/projects/:id/brief/verify-fact",
         rejected_facts: newRejected,
       })
       .eq("id", brief.id);
+    if (briefErr) return res.status(500).json({ error: briefErr.message });
 
     // If approving a keyword or contact, also append to project's arrays
     if (approve && (fact.type === "keyword" || fact.type === "contact")) {
@@ -259,10 +262,11 @@ router.patch("/projects/:id/brief/verify-fact",
         .single();
       const list = (((proj as Record<string, unknown> | null)?.[col] as string[] | null) ?? []);
       if (!list.includes(fact.value)) {
-        await db
+        const { error: arrErr } = await db
           .from("projects")
           .update({ [col]: [...list, fact.value] })
           .eq("id", req.params.id);
+        if (arrErr) console.error("[verify-fact] array update error:", arrErr.message);
       }
     }
 
