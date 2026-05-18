@@ -44,11 +44,11 @@ export function OrgSettingsClient() {
   const [inviteRole, setInviteRole] = useState<OrgMember["role"]>("member");
   const [inviting, setInviting] = useState(false);
 
-  // Populate inputs once active is loaded and fetch full org details (incl. error_handler_user_id)
+  // Populate inputs when active org loads or switches
   useEffect(() => {
     if (!active) return;
-    if (orgName === "") setOrgName(active.name);
-    if (orgNameHe === "") setOrgNameHe(active.name_he ?? "");
+    setOrgName(active.name);
+    setOrgNameHe(active.name_he ?? "");
 
     api<{ org: { error_handler_user_id: string | null } }>("/api/org")
       .then(({ org }) => setErrorHandlerUserId(org.error_handler_user_id))

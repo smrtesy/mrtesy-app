@@ -193,7 +193,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       {/* Mobile Bottom Tab Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
-          {(hasSmrtTask ? mobileItems : mobileItems.filter((i) => i.key === "settings")).map((item) => (
+          {(hasSmrtTask ? mobileItems : mobileItems.filter((i) => i.key === "inbox" || i.key === "settings")).map((item) => (
             <Link
               key={item.key}
               href={`${basePath}${item.href}`}

@@ -285,6 +285,86 @@ Otherwise, org subdomains (`maor.smrtesy.com`) already work — the org context 
 
 ---
 
+## Step 11 — Platform Integration (Cross-App & Notifications)
+
+Before writing code, answer these 4 questions about your app's integration surface:
+
+**1. What events does this app publish?**
+List significant domain actions (e.g. `contact.created`, `deal.closed`). These go in `manifest.emits`.
+
+**2. What events from other apps does this app need to react to?**
+(e.g. smrtCRM wants to know when a task is completed so it can update the deal stage). Goes in `manifest.subscribes`.
+
+**3. Who should receive technical error notifications?**
+Default: org owner. Can be reassigned per-org in Settings → Organization. Just call `notifyError()` in every catch block.
+
+**4. Does this app create or reference entities from other apps?**
+(e.g. a CRM contact that spawns a smrtTask task — that's a `created_from` link). Use `linkEntities()`.
+
+### Manifest template
+
+Create `server/src/apps/<slug>/manifest.ts`:
+
+```typescript
+import type { AppManifest } from "../../lib/platform/types";
+
+export const manifest: AppManifest = {
+  slug: "smrtcrm",
+  name: "smrtCRM",
+  emits: ["contact.created", "deal.closed"],
+  subscribes: [],
+  notifications: {
+    "deal.closed": {
+      type:  "success",
+      title: "Deal closed",
+      body:  "A deal was marked closed in smrtCRM",
+    },
+  },
+  entities: {
+    reads:  [],
+    writes: ["contacts"],
+  },
+  errors: {
+    default_handler_role: "owner",
+    examples: ["API sync failed", "Webhook parse error"],
+  },
+};
+```
+
+Then register in `server/src/lib/platform/registry.ts`:
+
+```typescript
+import { manifest as smrtcrmManifest } from "../../apps/smrtcrm/manifest";
+export const APP_REGISTRY: AppManifest[] = [smrttaskManifest, smrtcrmManifest];
+```
+
+### SDK usage in route handlers
+
+```typescript
+import { notify, notifyError, emitEvent, linkEntities } from "../lib/platform";
+
+// After a significant action:
+await emitEvent(orgId, "smrtcrm", "deal.closed", "deal", dealId, { value });
+
+// In every catch block:
+await notifyError(orgId, "smrtcrm", {
+  title: "CRM sync failed",
+  body:  err.message,
+  link:  "/settings/smrtcrm/sync",
+});
+
+// When creating a cross-app reference:
+await linkEntities(orgId, {
+  source_app: "smrtcrm", source_entity_type: "contact", source_id: contactId,
+  target_app: "smrttask", target_entity_type: "task",   target_id: taskId,
+  link_type:  "created_from",
+});
+```
+
+Full reference: `docs/platform-integration.md`
+
+---
+
 ## Checklist: New App Launch
 
 - [ ] Migration: `INSERT INTO apps (slug, name, description)`
@@ -296,6 +376,10 @@ Otherwise, org subdomains (`maor.smrtesy.com`) already work — the org context 
 - [ ] Frontend: Use `api()` client for all backend calls
 - [ ] Admin UI: App will appear automatically in **Platform → Apps** after DB insert
 - [ ] Org access: Toggle on via admin UI or seed `app_memberships` in migration
+- [ ] Platform: Create `server/src/apps/<slug>/manifest.ts` and register in `APP_REGISTRY`
+- [ ] Platform: Call `notifyError()` in every catch block
+- [ ] Platform: Call `emitEvent()` for significant domain actions
+- [ ] Platform: Call `linkEntities()` for any cross-app entity references
 
 ---
 
