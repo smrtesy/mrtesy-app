@@ -30,7 +30,8 @@
     "sectionManagement": "Management",
     "sectionPlatform": "Platform",
     "newTask": "New Task",
-    "inbox": "Inbox"
+    "inbox": "Inbox",
+    "guide": "Guide"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

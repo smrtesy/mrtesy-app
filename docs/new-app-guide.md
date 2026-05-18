@@ -443,7 +443,96 @@ Keep the status updated on each significant push (this is Step 4 of the pre-push
 
 ---
 
-## STEP 13 — Environment Variables
+## STEP 13 — User Guide Page
+
+Every app must have a guide page at `/{locale}/{main-route}/guide` so users can understand what the app does and how to use it, without needing technical knowledge.
+
+### Create the page
+
+`src/app/[locale]/(app)/(smrtcrm)/crm/guide/page.tsx`:
+
+```typescript
+import { Users, BarChart2, Mail } from "lucide-react";
+import { AppGuideLayout } from "@/components/platform/AppGuideLayout";
+import type { GuideFeature, GuideStep, GuideFAQ } from "@/components/platform/AppGuideLayout";
+
+const features: GuideFeature[] = [
+  {
+    icon: Users,
+    title: "ניהול אנשי קשר",
+    description: "כל הלקוחות והגורמים הרלוונטיים במקום אחד, עם היסטוריית תקשורת.",
+  },
+  {
+    icon: BarChart2,
+    title: "צינור עסקאות",
+    description: "עקוב אחרי עסקאות משלב ראשוני ועד סגירה, עם סטטוס ועדכון בזמן אמת.",
+  },
+  {
+    icon: Mail,
+    title: "שילוב ג'ימייל",
+    description: "כל מייל שקשור ללקוח מוצמד אוטומטית לכרטיס שלו ב-CRM.",
+  },
+];
+
+const steps: GuideStep[] = [
+  {
+    title: "מוסיפים איש קשר",
+    description: "מחפשים לקוח קיים או יוצרים חדש עם שם, אימייל וארגון.",
+  },
+  {
+    title: "עוקבים אחרי העסקה",
+    description: "פותחים עסקה, מגדירים שלב ועדכון — smrtCRM מעדכן את הצינור בזמן אמת.",
+  },
+  {
+    title: "המערכת מזכירה ומתריעה",
+    description: "כשנפתחת עסקה חדשה או כשצריך לפעול, תקבל התראה בתיבה הפנימית.",
+  },
+];
+
+const faqs: GuideFAQ[] = [
+  {
+    question: "האם smrtCRM מתחבר לג'ימייל?",
+    answer: "כן — כל מייל לכתובת של איש קשר רשום מוצמד אוטומטית לכרטיס שלו.",
+  },
+];
+
+export default function SmrtCRMGuidePage() {
+  return (
+    <AppGuideLayout
+      appName="smrtCRM"
+      tagline="ניהול קשרי לקוחות חכם"
+      description="smrtCRM עוזר לך לעקוב אחרי לקוחות, עסקאות ותקשורת — הכל במקום אחד, מחובר לשאר הכלים שלך."
+      features={features}
+      steps={steps}
+      faqs={faqs}
+    />
+  );
+}
+```
+
+### Add nav entry in Sidebar
+
+In `src/components/platform/layout/Sidebar.tsx`, add to the app's items array:
+```typescript
+{ key: "guide", href: "/crm/guide", icon: BookOpen },
+```
+
+Add `BookOpen` to lucide imports and `"guide": "מדריך"` / `"guide": "Guide"` to `nav` in both i18n files (if not already there — it's shared across all apps).
+
+### Content guidelines
+
+Write the guide as if explaining to a busy, non-technical manager:
+- **Tagline**: one short sentence, what the app does at a glance
+- **Description**: 2 sentences max, what problem it solves
+- **Features**: 4–8 items, each with a title + 1-sentence description. No jargon.
+- **Steps**: 3–6 steps, each describes one concrete thing that happens. Use present tense.
+- **FAQ**: 4–8 questions about things users actually ask (privacy, frequency, edge cases)
+
+**Verify:** Navigate to `/{locale}/{route}/guide` in the browser and confirm the page renders with all 4 sections.
+
+---
+
+## STEP 14 — Environment Variables
 
 No new env vars are needed unless the app calls an external API.
 
@@ -513,6 +602,8 @@ Use this before considering the new app "done" for a sprint:
 - [ ] All strings in `src/messages/en.json` + `src/messages/he.json` under `"smrtCRM"` namespace
 - [ ] All API calls use `api()` from `@/lib/api/client` — zero raw `fetch()` to `/api/*`
 - [ ] Sidebar nav entry added with `appSlug: "smrtcrm"` gate
+- [ ] Guide page created at `src/app/[locale]/(app)/(smrtcrm)/crm/guide/page.tsx` using `AppGuideLayout`
+- [ ] Guide page linked from sidebar (`{ key: "guide", href: "/crm/guide", icon: BookOpen }`)
 
 ### Admin
 - [ ] App visible in `/admin/apps` (automatic after DB insert)
@@ -552,6 +643,7 @@ src/
     (smrttask)/                     ← tasks, projects, calendar, log
     (smrtcrm)/                      ← NEW: your app pages
       crm/page.tsx
+      crm/guide/page.tsx            ← NEW: user guide (AppGuideLayout)
   components/
     ui/                             ← shared primitives
     platform/                       ← layout, org, inbox, onboarding

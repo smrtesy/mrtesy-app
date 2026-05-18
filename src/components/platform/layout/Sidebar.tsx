@@ -13,6 +13,7 @@ import {
   FolderOpen,
   Plus,
   Shield,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,10 +23,11 @@ import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 
 const smrtTaskItems = [
-  { key: "tasks",    href: "/tasks",    icon: CheckSquare },
-  { key: "projects", href: "/projects", icon: FolderOpen  },
-  { key: "calendar", href: "/calendar", icon: Calendar    },
-  { key: "log",      href: "/log",      icon: FileText    },
+  { key: "tasks",    href: "/tasks",       icon: CheckSquare },
+  { key: "projects", href: "/projects",    icon: FolderOpen  },
+  { key: "calendar", href: "/calendar",    icon: Calendar    },
+  { key: "log",      href: "/log",         icon: FileText    },
+  { key: "guide",    href: "/tasks/guide", icon: BookOpen    },
 ] as const;
 
 const managementItems = [

@@ -30,7 +30,8 @@
     "sectionManagement": "ניהול",
     "sectionPlatform": "פלטפורמה",
     "newTask": "משימה חדשה",
-    "inbox": "תיבה"
+    "inbox": "תיבה",
+    "guide": "מדריך"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
