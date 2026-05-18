@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { FolderOpen } from "lucide-react";
-import { NewProjectButton } from "@/components/projects/NewProjectButton";
+import { NewProjectButton } from "@/components/smrttask/projects/NewProjectButton";
 
 export default async function ProjectsPage({
   params,

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { getTranslations } from "next-intl/server";
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
-import { InboxTabs } from "@/components/inbox/InboxTabs";
+import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
 
 export default async function InboxPage({
   params,

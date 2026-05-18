@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { OnboardingHeader } from "@/components/onboarding/OnboardingHeader";
+import { OnboardingHeader } from "@/components/platform/onboarding/OnboardingHeader";
 
 export default async function OnboardingLayout({
   children,

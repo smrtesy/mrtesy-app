@@ -7,10 +7,10 @@
  */
 
 import { Router, Request, Response } from "express";
-import { db, loadRules } from "../db";
-import { simpleCall, cachedCall } from "../anthropic";
-import { createDraft, searchGmail, getMessage, extractEmailText } from "../services/gmail";
-import { createCalendarEvent } from "../services/calendar";
+import { db, loadRules } from "../../../db";
+import { simpleCall, cachedCall } from "../../../anthropic";
+import { createDraft, searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
+import { createCalendarEvent } from "../../../services/calendar";
 
 const router = Router();
 

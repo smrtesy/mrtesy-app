@@ -9,9 +9,9 @@
  * Processes in batches of 5 to keep the Claude prompt cache warm.
  */
 
-import { db, loadRules, createRunSession, closeRunSession } from "../db";
-import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
-import { DEEP_CLASSIFIER_SYSTEM } from "../prompts/classifier";
+import { db, loadRules, createRunSession, closeRunSession } from "../../../db";
+import { cachedCall, parseJsonResponse, MODELS } from "../../../anthropic";
+import { DEEP_CLASSIFIER_SYSTEM } from "../../../prompts/classifier";
 
 const BATCH_SIZE = 5;
 

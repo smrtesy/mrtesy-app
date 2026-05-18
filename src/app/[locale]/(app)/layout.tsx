@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { Sidebar } from "@/components/layout/Sidebar";
+import { Sidebar } from "@/components/platform/layout/Sidebar";
 
 export default async function AppLayout({
   children,

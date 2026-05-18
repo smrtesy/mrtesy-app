@@ -6,9 +6,9 @@
  * Once both exist, PART 3 uses them automatically — no need to re-run.
  */
 
-import { db, loadRules, createRunSession, closeRunSession } from "../db";
-import { simpleCall } from "../anthropic";
-import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
+import { db, loadRules, createRunSession, closeRunSession } from "../../../db";
+import { simpleCall } from "../../../anthropic";
+import { searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
 
 const STYLE_SYSTEM = `You analyze email writing style. Given sample sent emails, extract a concise style profile (~150 words) describing:
 - Tone (formal/informal/warm)

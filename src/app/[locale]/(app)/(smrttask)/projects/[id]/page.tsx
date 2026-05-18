@@ -6,9 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, CheckCircle2, Tag, User } from "lucide-react";
 import { notFound } from "next/navigation";
-import { BuildBriefButton } from "@/components/tasks/BuildBriefButton";
-import { BriefFactVerifier } from "@/components/projects/BriefFactVerifier";
-import { EditProjectSheet } from "@/components/projects/EditProjectSheet";
+import { BuildBriefButton } from "@/components/smrttask/tasks/BuildBriefButton";
+import { BriefFactVerifier } from "@/components/smrttask/projects/BriefFactVerifier";
+import { EditProjectSheet } from "@/components/smrttask/projects/EditProjectSheet";
 
 export default async function ProjectDetailPage({
   params,

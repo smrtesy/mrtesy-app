@@ -6,10 +6,10 @@
  * Uses sync_state.checkpoint to avoid reprocessing.
  */
 
-import { db, createRunSession, closeRunSession, updateSyncState, loadRules } from "../db";
-import { searchGmail, getMessage, extractEmailText } from "../services/gmail";
-import { listNewFiles, getFileContent } from "../services/drive";
-import { listEvents } from "../services/calendar";
+import { db, createRunSession, closeRunSession, updateSyncState, loadRules } from "../../../db";
+import { searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
+import { listNewFiles, getFileContent } from "../../../services/drive";
+import { listEvents } from "../../../services/calendar";
 import { parseSkipRules } from "../lib/rule-filters";
 
 export interface Part1Options {

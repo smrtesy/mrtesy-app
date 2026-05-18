@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { SuggestionTabs } from "@/components/suggestions/SuggestionTabs";
-import { NotificationsList } from "@/components/inbox/NotificationsList";
+import { SuggestionTabs } from "@/components/smrttask/suggestions/SuggestionTabs";
+import { NotificationsList } from "@/components/platform/inbox/NotificationsList";
 import { cn } from "@/lib/utils";
 
 interface Props {

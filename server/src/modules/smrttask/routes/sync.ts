@@ -6,8 +6,8 @@
  */
 
 import { Router, Request, Response } from "express";
-import { db } from "../db";
-import { requireAuth, requireOrg, requireApp } from "../middleware";
+import { db } from "../../../db";
+import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
 import { runPart2 } from "../parts/part2-whatsapp";

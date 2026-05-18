@@ -10,10 +10,10 @@
  */
 
 import { google } from "googleapis";
-import { db, loadRules, createRunSession, closeRunSession, updateSyncState } from "../db";
-import { cachedCall, parseJsonResponse, MODELS } from "../anthropic";
-import { getOAuthClient } from "../services/token-refresh";
-import { WHATSAPP_CLASSIFIER_SYSTEM } from "../prompts/whatsapp";
+import { db, loadRules, createRunSession, closeRunSession, updateSyncState } from "../../../db";
+import { cachedCall, parseJsonResponse, MODELS } from "../../../anthropic";
+import { getOAuthClient } from "../../../services/token-refresh";
+import { WHATSAPP_CLASSIFIER_SYSTEM } from "../../../prompts/whatsapp";
 
 // Env-level fallbacks; the per-user Sheet ID resolved inside runPart2 takes
 // precedence (it lives on user_settings.whatsapp_sheet_id, written during

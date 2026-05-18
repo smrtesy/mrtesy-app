@@ -16,8 +16,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { SmartTaskInput } from "@/components/tasks/SmartTaskInput";
-import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
+import { SmartTaskInput } from "@/components/smrttask/tasks/SmartTaskInput";
+import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 

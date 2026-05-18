@@ -20,16 +20,12 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { db } from "./db";
-import syncRouter from "./routes/sync";
-import actionsRouter from "./routes/actions";
 import quickActionRouter from "./routes/quick-action";
 import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
-import baseRouter from "./modules/base";
+import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import { runPart1 } from "./parts/part1-collector";
-import { runPart2 } from "./parts/part2-whatsapp";
-import { runPart3 } from "./parts/part3-classifier";
+import smrttaskRouter, { runPart1, runPart2, runPart3 } from "./modules/smrttask";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -74,10 +70,9 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-app.use("/api", baseRouter);
+app.use("/api", platformRouter);
 app.use("/api", adminRouter);
-app.use("/api/sync", syncRouter);
-app.use("/api/actions", actionsRouter);
+app.use("/api", smrttaskRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
