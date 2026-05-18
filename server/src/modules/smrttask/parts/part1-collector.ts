@@ -151,6 +151,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
               received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
               processing_status: "pending",
               reply_to_context: toEmail,
+              // Deep-link the user back to the original message. `#all/<id>` works
+              // regardless of which label the message is filed under.
+              source_url: `https://mail.google.com/mail/u/0/#all/${id}`,
               metadata: { threadId, to: toEmail },
             },
             { onConflict: "user_id,source_type,source_id" },
@@ -192,13 +195,15 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           const { error: driveUpsertErr } = await db.from("source_messages").upsert(
             {
               user_id: userId,
-              source_type: "drive",
+              source_type: "google_drive",
               source_id: file.id,
               subject: file.name,
               body_text: content.slice(0, 1000),
               raw_content: rawContent,
               received_at: file.modifiedTime ?? new Date().toISOString(),
               processing_status: "pending",
+              source_url: (file as { webViewLink?: string | null }).webViewLink
+                ?? `https://drive.google.com/file/d/${file.id}/view`,
               metadata: { mimeType: file.mimeType, size: file.size },
             },
             { onConflict: "user_id,source_type,source_id" },
@@ -273,7 +278,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           const { error: calUpsertErr } = await db.from("source_messages").upsert(
             {
               user_id: userId,
-              source_type: "calendar",
+              source_type: "google_calendar",
               source_id: event.id,
               subject: event.summary ?? "Untitled event",
               body_text: event.description?.slice(0, 1000) ?? "",
@@ -281,6 +286,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
               received_at: event.start?.dateTime ?? event.start?.date ?? new Date().toISOString(),
               processing_status: "pending",
               reply_to_context: isPast ? "follow-up after meeting" : `${hasAttendees ? event.attendees?.length : 1} attendees`,
+              source_url: event.htmlLink ?? null,
               metadata: { eventId: event.id, recurringEventId: event.recurringEventId, isPast, hasAttendees },
             },
             { onConflict: "user_id,source_type,source_id" },

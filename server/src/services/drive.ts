@@ -40,7 +40,7 @@ export async function listNewFiles(
   const res = await drive.files.list({
     q: `'${folder}' in parents and modifiedTime >= '${since}' and trashed = false`,
     pageSize,
-    fields: "files(id, name, mimeType, modifiedTime, size)",
+    fields: "files(id, name, mimeType, modifiedTime, size, webViewLink)",
     orderBy: "modifiedTime desc",
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
