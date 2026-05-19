@@ -26,6 +26,7 @@ import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter, { runPart1, runPart3 } from "./modules/smrttask";
+import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -102,6 +103,16 @@ app.use(
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
+
+// Public webhook FIRST — mounted at app level, before any auth-guarded
+// routers. Several sub-routers downstream (admin/users, admin/orgs,
+// admin/apps, smrttask/tasks, etc.) open with
+// `router.use(requireAuth, ...)` at root, which Express runs for EVERY
+// path that enters that router — including /api/webhooks/whatsapp. Even
+// after we put the webhook first inside smrttaskRouter, adminRouter is
+// still mounted earlier and was 401'ing the request. Mounting the webhook
+// at the app level gets it picked up before anything else.
+app.use("/api", whatsappWebhookRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
