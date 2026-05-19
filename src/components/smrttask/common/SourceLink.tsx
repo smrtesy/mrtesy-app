@@ -3,23 +3,6 @@
 import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/**
- * Rewrite a web URL into something the OS can hand off to the installed
- * native app (Gmail, WhatsApp, Drive, Calendar). On mobile we also avoid
- * `target="_blank"` (see handleClick below) because some iOS Safari builds
- * skip Universal-Link interception when the link opens a new tab.
- */
-function toAppFriendlyUrl(sourceType: string | null, webUrl: string): string {
-  // WhatsApp: switch wa.me → whatsapp:// so the app opens directly when installed.
-  // The official wa.me URL also opens the app, but the explicit scheme skips a redirect.
-  if (sourceType === "whatsapp" || sourceType === "whatsapp_echo") {
-    const m = webUrl.match(/wa\.me\/(\d+)/);
-    if (m) return `whatsapp://send?phone=${m[1]}`;
-  }
-  // Gmail / Drive / Calendar: web URL already triggers Universal Links / App Links
-  // when the user has the app installed. No rewrite needed.
-  return webUrl;
-}
 
 const SOURCE_ICONS: Record<string, typeof Mail> = {
   gmail:           Mail,
@@ -63,15 +46,43 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       if (stopPropagation) e.stopPropagation();
 
-      // Mobile path: navigate in the same tab to a possibly app-scheme URL.
-      // Same-tab nav lets iOS/Android intercept the URL and open the native
-      // app — `target="_blank"` breaks Universal Links on some iOS builds.
-      if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
-        e.preventDefault();
-        const target = toAppFriendlyUrl(row.source_type, row.source_url!);
-        window.location.href = target;
+      if (typeof window === "undefined") return;
+      if (!window.matchMedia("(max-width: 767px)").matches) return;
+
+      const ua = navigator.userAgent;
+      const isAndroid = /Android/i.test(ua);
+
+      // WhatsApp: custom URL scheme works on both Android and iOS with JS navigation.
+      if (row.source_type === "whatsapp" || row.source_type === "whatsapp_echo") {
+        const m = (row.source_url ?? "").match(/wa\.me\/(\d+)/);
+        if (m) {
+          e.preventDefault();
+          window.location.href = `whatsapp://send?phone=${m[1]}`;
+          return;
+        }
       }
-      // Desktop path: let the anchor's target="_blank" open a new tab.
+
+      // Android Gmail: Intent URL opens Gmail app directly, bypassing the
+      // "Open supported links" App Links setting. Falls back to the web URL
+      // in Chrome if Gmail is not installed.
+      if (isAndroid && (row.source_type === "gmail" || row.source_type === "gmail_sent")) {
+        const webUrl = row.source_url!;
+        // Extract path + fragment from https://mail.google.com/<path>#<fragment>
+        const m = webUrl.match(/mail\.google\.com(\/[^#]*)(#.*)?$/);
+        if (m) {
+          const intentPath = (m[1] ?? "/mail/u/0/") + (m[2] ?? "");
+          const fallback = encodeURIComponent(webUrl);
+          e.preventDefault();
+          window.location.href =
+            `intent:/${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
+          return;
+        }
+      }
+
+      // iOS and other platforms: App / Universal Links fire ONLY on native
+      // anchor-clicks, never on window.location.href. Switching to _self lets
+      // the browser follow the href natively so the OS can intercept it.
+      e.currentTarget.target = "_self";
     };
 
     return (
