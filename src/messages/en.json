@@ -26,12 +26,24 @@
     "calendar": "Calendar",
     "settings": "Settings",
     "projects": "Projects",
+    "whatsapp": "WhatsApp",
     "admin": "Platform",
     "sectionManagement": "Management",
     "sectionPlatform": "Platform",
     "newTask": "New Task",
     "inbox": "Inbox",
     "guide": "Guide"
+  },
+  "whatsappPage": {
+    "title": "WhatsApp Messages",
+    "threadCount": "{count, plural, one {1 chat} other {# chats}}",
+    "noThreads": "No messages yet. They'll show up here once they arrive.",
+    "selectAThread": "Select a chat to view its messages",
+    "emptyChat": "No messages in this chat",
+    "outgoing": "Outgoing",
+    "history": "History",
+    "back": "Back",
+    "openDocument": "Open document"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

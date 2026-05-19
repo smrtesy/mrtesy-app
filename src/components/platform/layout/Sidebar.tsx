@@ -14,6 +14,7 @@ import {
   Plus,
   Shield,
   BookOpen,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,11 +25,12 @@ import { api, ApiError } from "@/lib/api/client";
 
 // Sidebar gates the whole smrtTask section via hasSmrtTask below — no per-item appSlug needed.
 const smrtTaskItems = [
-  { key: "tasks",    href: "/tasks",       icon: CheckSquare },
-  { key: "projects", href: "/projects",    icon: FolderOpen  },
-  { key: "calendar", href: "/calendar",    icon: Calendar    },
-  { key: "log",      href: "/log",         icon: FileText    },
-  { key: "guide",    href: "/tasks/guide", icon: BookOpen    },
+  { key: "tasks",    href: "/tasks",       icon: CheckSquare   },
+  { key: "projects", href: "/projects",    icon: FolderOpen    },
+  { key: "whatsapp", href: "/whatsapp",    icon: MessageCircle },
+  { key: "calendar", href: "/calendar",    icon: Calendar      },
+  { key: "log",      href: "/log",         icon: FileText      },
+  { key: "guide",    href: "/tasks/guide", icon: BookOpen      },
 ] as const;
 
 const managementItems = [

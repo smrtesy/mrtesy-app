@@ -26,12 +26,24 @@
     "calendar": "לוח שנה",
     "settings": "הגדרות",
     "projects": "פרויקטים",
+    "whatsapp": "WhatsApp",
     "admin": "פלטפורמה",
     "sectionManagement": "ניהול",
     "sectionPlatform": "פלטפורמה",
     "newTask": "משימה חדשה",
     "inbox": "תיבה",
     "guide": "מדריך"
+  },
+  "whatsappPage": {
+    "title": "הודעות WhatsApp",
+    "threadCount": "{count, plural, one {שיחה אחת} other {# שיחות}}",
+    "noThreads": "אין עדיין הודעות. ברגע שיגיעו, הן יופיעו כאן.",
+    "selectAThread": "בחר שיחה כדי לצפות בהודעות",
+    "emptyChat": "אין הודעות בשיחה הזו",
+    "outgoing": "יוצא",
+    "history": "היסטוריה",
+    "back": "חזרה",
+    "openDocument": "פתח מסמך"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

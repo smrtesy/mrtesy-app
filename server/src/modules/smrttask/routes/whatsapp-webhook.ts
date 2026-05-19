@@ -460,6 +460,9 @@ interface WhatsappMessageRow {
   body_text: string | null;
   media_id: string | null;
   media_mime: string | null;
+  media_url: string | null;
+  media_filename: string | null;
+  media_size: number | null;
   reply_to_wamid: string | null;
   reaction_emoji: string | null;
   is_reaction: boolean;
@@ -477,6 +480,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
   let body = "";
   let mediaId: string | null = null;
   let mediaMime: string | null = null;
+  let mediaUrl: string | null = null;
+  let mediaFilename: string | null = null;
+  let mediaSize: number | null = null;
   let replyTo = m.context?.id ?? null;
   let reactionEmoji: string | null = null;
   let isReaction = false;
@@ -542,6 +548,18 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
         body = caption || "[מסמך ישן - לא ניתן להורדה]";
       } else if (nm.isHistory) {
         body = caption || `[מסמך מהיסטוריה: ${filename}]`;
+      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN) {
+        try {
+          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime);
+          mediaUrl = stored.path;
+          mediaFilename = stored.filename;
+          mediaSize = stored.size;
+          body = caption || `[מסמך: ${filename}]`;
+        } catch (e) {
+          body =
+            caption ||
+            `[מסמך: ${filename}] [שגיאת שמירה: ${e instanceof Error ? e.message : String(e)}]`;
+        }
       } else {
         body = caption || `[מסמך: ${filename}]`;
       }
@@ -615,6 +633,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
     body_text: body,
     media_id: mediaId,
     media_mime: mediaMime,
+    media_url: mediaUrl,
+    media_filename: mediaFilename,
+    media_size: mediaSize,
     reply_to_wamid: replyTo,
     reaction_emoji: reactionEmoji,
     is_reaction: isReaction,
@@ -623,6 +644,57 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
     received_at: ts.toISOString(),
     raw_payload: m,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Document persistence — fetch from Meta, push to Supabase Storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PersistedDoc {
+  /** Storage path inside the `whatsapp-media` bucket. */
+  path: string;
+  filename: string;
+  size: number;
+}
+
+async function persistDocumentToStorage(
+  userId: string,
+  wamid: string,
+  mediaId: string,
+  filename: string,
+  declaredMime: string | null,
+): Promise<PersistedDoc> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN not set");
+
+  // Step 1 — resolve the signed download URL from Meta.
+  const metaRes = await fetch(`https://graph.facebook.com/${META_API_VERSION}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!metaRes.ok) {
+    throw new Error(`Meta media metadata ${metaRes.status}`);
+  }
+  const meta = (await metaRes.json()) as { url?: string; mime_type?: string; file_size?: number };
+  if (!meta.url) throw new Error("Meta media response missing url");
+
+  // Step 2 — download the bytes (Bearer required on the signed URL too).
+  const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
+  const buf = Buffer.from(await fileRes.arrayBuffer());
+
+  // Path convention: <user_id>/<wamid>-<filename>. Both segments are safe
+  // inputs (uuid + wamid + sanitized filename); the filename can still
+  // carry odd characters from WhatsApp so strip path separators.
+  const safeName = filename.replace(/[/\\]+/g, "_").slice(0, 200);
+  const path = `${userId}/${wamid}-${safeName}`;
+
+  const { error: uploadErr } = await db.storage.from("whatsapp-media").upload(path, buf, {
+    contentType: meta.mime_type ?? declaredMime ?? "application/octet-stream",
+    upsert: true,
+  });
+  if (uploadErr) throw new Error(`storage upload: ${uploadErr.message}`);
+
+  return { path, filename: safeName, size: buf.length };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import remindersRouter from "./reminders/routes";
 import actionsRouter from "./routes/actions";
 import syncRouter from "./routes/sync";
 import whatsappWebhookRouter from "./routes/whatsapp-webhook";
+import whatsappViewRouter from "./routes/whatsapp-view";
 
 const router = Router();
 
@@ -22,6 +23,8 @@ router.use("/sync", syncRouter);
 // Public webhook (Meta → us via DualHook Webhook Override). No auth middleware:
 // the verify token + HMAC signature are the auth.
 router.use(whatsappWebhookRouter);
+// Authenticated read API powering /[locale]/whatsapp.
+router.use(whatsappViewRouter);
 
 export default router;
 
