@@ -26,12 +26,25 @@
     "calendar": "Calendar",
     "settings": "Settings",
     "projects": "Projects",
+    "whatsapp": "WhatsApp",
     "admin": "Platform",
     "sectionManagement": "Management",
     "sectionPlatform": "Platform",
+    "sectionViews": "Views",
     "newTask": "New Task",
     "inbox": "Inbox",
     "guide": "Guide"
+  },
+  "whatsappPage": {
+    "title": "WhatsApp Messages",
+    "threadCount": "{count, plural, one {1 chat} other {# chats}}",
+    "noThreads": "No messages yet. They'll show up here once they arrive.",
+    "selectAThread": "Select a chat to view its messages",
+    "emptyChat": "No messages in this chat",
+    "outgoing": "Outgoing",
+    "history": "History",
+    "back": "Back",
+    "openDocument": "Open document"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
@@ -59,10 +72,21 @@
   "tasks": {
     "title": "Active Tasks",
     "new": "New Task",
-    "inbox": "Inbox",
+    "inbox": "Pending",
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "view": {
+      "list": "List",
+      "calendar": "Timeline"
+    },
+    "calendar": {
+      "noDateSection": "No date",
+      "noDateHint": "{count, plural, one {1 task without a date} other {# tasks without a date}}",
+      "today": "Today",
+      "emptyTimeline": "No scheduled tasks or events",
+      "loading": "Loading timeline…"
+    },
     "noTasksInView": "No tasks in this view",
     "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
@@ -303,21 +327,29 @@
     "calendarLoadError": "Could not load calendars. You can change this in Settings later."
   },
   "onboardingWhatsapp": {
-    "sheetAccessSuccess": "Sheet access successful! {count} rows found",
     "whatsappConnected": "WhatsApp connected",
     "title": "WhatsApp Connection",
-    "description": "The system reads WhatsApp messages from a Google Sheet updated by Dualhook",
+    "description": "Messages reach smrtTask directly from Meta via DualHook — real-time, no Google Sheet.",
     "howItWorks": "How it works:",
-    "step1": "Dualhook copies WhatsApp messages to your own Google Sheet",
-    "step2": "The server reads from the Sheet every few hours",
-    "step3": "AI analyzes conversations and creates tasks",
-    "sheetIdLabel": "Google Sheet ID",
-    "sheetIdHint": "Your own Sheet's ID (from its URL)",
-    "testingAccess": "Testing access…",
-    "testSheetAccess": "Test Sheet Access",
-    "sheetAccessConfirmed": "✓ Sheet access confirmed — {count} messages found",
-    "sheetAccessError": "Sheet access failed. Make sure Google is connected and the Sheet is properly shared.",
-    "confirmConnection": "Confirm Connection"
+    "step1": "DualHook routes Meta's webhook straight to the smrtTask backend",
+    "step2": "Every incoming/outgoing message is captured instantly; audio is transcribed and images are OCR'd",
+    "step3": "AI analyzes the conversations and creates tasks",
+    "dualhookSetup": "One-time DualHook setup:",
+    "dualhookStep1": "Open DualHook → Webhook Override",
+    "dualhookStep2": "Paste the webhook URL and Verify Token shown below, click Save Changes then Test Connection",
+    "dualhookStep3": "After saving, fill in the Phone Number ID and WABA ID from the same DualHook screen here",
+    "webhookUrlLabel": "Webhook URL",
+    "verifyTokenLabel": "Verify Token",
+    "copyToClipboard": "Copy",
+    "copied": "Copied",
+    "phoneNumberIdLabel": "Phone Number ID",
+    "phoneNumberIdHint": "From DualHook → Account Details → Phone Number ID",
+    "wabaIdLabel": "WABA ID",
+    "wabaIdHint": "From DualHook → Account Details → WABA ID",
+    "displayPhoneLabel": "Display phone number (optional)",
+    "confirmConnection": "Confirm Connection",
+    "connectError": "Connection failed: {error}",
+    "missingConfig": "Server config missing — contact admin"
   },
   "onboardingOrg": {
     "defaultWorkspaceName": "{fullName}'s Workspace",

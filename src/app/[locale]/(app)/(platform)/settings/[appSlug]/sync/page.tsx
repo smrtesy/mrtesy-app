@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Play, RefreshCw, CheckCircle2, XCircle, Clock,
-  MessageSquare, FileSearch, Zap,
+  FileSearch, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,14 +57,8 @@ const PARTS = [
     color: "text-orange-500",
     manualOnly: false,
   },
-  {
-    key: "part2",
-    label: "PART 2 — WhatsApp",
-    description: "Read new messages from Google Sheet and create tasks",
-    icon: MessageSquare,
-    color: "text-emerald-500",
-    manualOnly: false,
-  },
+  // Part 2 (WhatsApp) is now event-driven via /api/webhooks/whatsapp,
+  // not cron-pulled, so it's intentionally absent from this sync UI.
   {
     key: "part3",
     label: "PART 3 — Classifier",
@@ -132,7 +126,7 @@ export default function SettingsSyncPage() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  async function triggerPart(part: "part0" | "part1" | "part2" | "part3") {
+  async function triggerPart(part: "part0" | "part1" | "part3") {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { toast.error("Not authenticated"); return; }
 
@@ -146,7 +140,6 @@ export default function SettingsSyncPage() {
         },
         body: JSON.stringify(
           part === "part0" ? { language: "he" } :
-          part === "part2" ? { lookback_hours: 48 } :
           part === "part3" ? { limit: 50 } : {}
         ),
       });
@@ -248,7 +241,7 @@ export default function SettingsSyncPage() {
                     size="sm"
                     className="flex-1"
                     disabled={isRunning}
-                    onClick={() => triggerPart(part.key as "part0" | "part1" | "part2" | "part3")}
+                    onClick={() => triggerPart(part.key as "part0" | "part1" | "part3")}
                   >
                     {isRunning ? (
                       <RefreshCw className="h-4 w-4 me-2 animate-spin" />
