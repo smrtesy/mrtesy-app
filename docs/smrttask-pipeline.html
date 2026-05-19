@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>smrtTask — מסמך הצינור המלא של ייבוא וסיווג</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --fg: #1c1917;
+    --muted: #78716c;
+    --border: #d6d3d1;
+    --card: #fff;
+    --code-bg: #f4f4f5;
+    --accent: #2563eb;
+    --green: #16a34a;
+    --orange: #ea580c;
+    --red: #dc2626;
+    --purple: #9333ea;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Heebo", sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 0; line-height: 1.6; }
+  .container { max-width: 980px; margin: 0 auto; padding: 32px 24px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; }
+  h2 { font-size: 1.4rem; margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 0.95rem; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .subtitle { color: var(--muted); margin-bottom: 32px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: start; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 0.92rem; }
+  th { background: #f5f5f4; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85em; direction: ltr; display: inline-block; }
+  pre { background: #1c1917; color: #fafaf9; padding: 16px; border-radius: 8px; overflow-x: auto; direction: ltr; text-align: left; font-size: 0.85rem; line-height: 1.5; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
+  .badge.edge { background: #ddd6fe; color: #5b21b6; }
+  .badge.express { background: #fed7aa; color: #9a3412; }
+  .badge.cron { background: #bbf7d0; color: #166534; }
+  .badge.client { background: #bfdbfe; color: #1e40af; }
+  .badge.deleted { background: #fecaca; color: #991b1b; text-decoration: line-through; }
+  .badge.active { background: #bbf7d0; color: #166534; }
+  .callout { padding: 12px 16px; border-radius: 6px; margin: 12px 0; border-inline-start: 4px solid; }
+  .callout.info { background: #eff6ff; border-color: var(--accent); }
+  .callout.warn { background: #fffbeb; border-color: var(--orange); }
+  .callout.bad { background: #fef2f2; border-color: var(--red); }
+  .callout.ok { background: #f0fdf4; border-color: var(--green); }
+  .callout .label { font-weight: 600; font-size: 0.85rem; text-transform: uppercase; margin-bottom: 4px; }
+  .source { color: var(--muted); font-size: 0.78rem; font-family: ui-monospace, monospace; direction: ltr; display: inline-block; }
+  .pipeline { font-family: ui-monospace, monospace; direction: ltr; text-align: left; background: var(--code-bg); padding: 16px; border-radius: 8px; font-size: 0.78rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; margin: 24px 0; }
+  .toc ol { margin: 0; padding-inline-start: 20px; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+  @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
+  details { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin: 8px 0; }
+  details[open] summary { margin-bottom: 8px; }
+  summary { cursor: pointer; font-weight: 500; }
+  .footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+  .ltr { direction: ltr; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>smrtTask — הצינור המלא של ייבוא וסיווג</h1>
+<p class="subtitle">מסמך אימות לאחר ענף <code>claude/refine-task-classification-B5vQI</code>. כל מספר, כל קונפיגורציה, וכל קובץ — מאומת מקריאה בקוד או מהנתונים החיים בפרודקשן.</p>
+
+<div class="callout info">
+<div class="label">איך לקרוא את המסמך</div>
+המסמך מסודר לפי הזרימה הלוגית: מקור הודעה → איסוף → סיווג מקדים → סיווג AI → יצירת משימה → תצוגה → לחיצת כפתור. בכל סעיף ציינתי מאיזה קובץ ומאיזו שורה הנתון מגיע. בסוף יש סעיף "ההגדרות בקיצור" עם כל הקנובים שניתן להזיז.
+</div>
+
+<div class="toc">
+<h4 style="margin-top:0">תוכן עניינים</h4>
+<ol>
+  <li><a href="#overview">תמונה כללית של רכיבים</a></li>
+  <li><a href="#sources">מקורות הייבוא — Gmail, Drive, Calendar, WhatsApp</a></li>
+  <li><a href="#cron">לוח הזמנים של ה-cron בפרודקשן</a></li>
+  <li><a href="#preclassify">שלב 1 — סיווג מקדים (preClassify)</a></li>
+  <li><a href="#classify">שלב 2 — סיווג עמוק (Haiku)</a></li>
+  <li><a href="#followup">שלב 3 — זיהוי המשך לשרשור (threadId)</a></li>
+  <li><a href="#detectproject">שלב 4 — שיוך לפרויקט</a></li>
+  <li><a href="#createtask">שלב 5 — יצירת המשימה (Sonnet)</a></li>
+  <li><a href="#executor">שלב 6 — לחיצת כפתור AI Action</a></li>
+  <li><a href="#settings">ההגדרות בקיצור — מי מנהל מה</a></li>
+  <li><a href="#dead">קוד שכתוב אבל לא רץ בפועל</a></li>
+</ol>
+</div>
+
+<!-- =============================================================== -->
+<h2 id="overview">1. תמונה כללית של רכיבים</h2>
+
+<p>שלושה מקומות שבהם רץ קוד:</p>
+
+<table>
+<thead><tr><th>מיקום</th><th>מה רץ שם</th><th>פרוטוקול הפעלה</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="badge edge">Supabase Edge Functions</span></td>
+  <td>כל לוגיקת הייבוא והסיווג: <code>ai-process</code>, <code>gmail-sync</code>, <code>drive-sync</code>, <code>calendar-webhook</code>, <code>initial-scan</code>, <code>reminders-check</code> ועוד</td>
+  <td>pg_cron של Postgres + push webhooks</td>
+</tr>
+<tr>
+  <td><span class="badge express">Express server (Railway)</span></td>
+  <td>ה-API שהפרונט מדבר איתו: <code>/api/tasks</code>, <code>/api/actions/execute</code>, <code>/api/admin/*</code>, <code>/api/sync/*</code></td>
+  <td>HTTP requests מהפרונט</td>
+</tr>
+<tr>
+  <td><span class="badge client">Next.js (Vercel)</span></td>
+  <td>UI לכל הדפים — משימות, הצעות, הגדרות, אדמין</td>
+  <td>דפדפן המשתמש</td>
+</tr>
+</tbody>
+</table>
+
+<p>ה-DB אחד לכולם — <code>exjnlghuzuvqedlltztz</code> ב-Supabase.</p>
+
+<!-- =============================================================== -->
+<h2 id="sources">2. מקורות הייבוא</h2>
+
+<p>כל הודעה נכנסת לטבלת <code>source_messages</code> עם <code>processing_status='pending'</code>. ארבעה מקורות, כל אחד עם מנגנון משלו:</p>
+
+<h3>א. Gmail</h3>
+<table>
+<tr><th>פעולה</th><td>שואב הודעות חדשות דרך Gmail History API (Incremental sync לפי <code>historyId</code> שמור ב-<code>sync_state</code>)</td></tr>
+<tr><th>מיקום</th><td><span class="badge edge">Edge Function</span> <code>gmail-sync</code> <span class="badge active">v5 ACTIVE</span></td></tr>
+<tr><th>תזמון</th><td>pg_cron כל 2 דקות <span class="ltr">(<code>*/2 * * * *</code>)</span></td></tr>
+<tr><th>סינון בייבוא</th><td>חוקים מ-<code>rules_memory</code> (skip rules) — מסונן כבר בשאילתה ל-Gmail וגם לאחר השליפה</td></tr>
+<tr><th>שדות נשמרים</th><td><code>sender, sender_email, recipient, subject, body_text</code> (חתוך ל-10,000 תווים), <code>received_at</code>, <code>has_attachments</code></td></tr>
+<tr><th>source_type</th><td><code>gmail</code> להודעות נכנסות, <code>gmail_sent</code> להודעות שיוצאות (יש להן label <code>SENT</code>)</td></tr>
+<tr><th>metadata</th><td><code>{threadId, to}</code> — ה-threadId משמש בשלב 3 לזיהוי המשך</td></tr>
+<tr><th>קוד</th><td><span class="source">supabase/functions/gmail-sync/index.ts:233-253</span></td></tr>
+</table>
+
+<h3>ב. Google Drive</h3>
+<table>
+<tr><th>פעולה</th><td>שואב קבצים חדשים מתיקייה מוגדרת ב-<code>user_settings.drive_folder_id</code></td></tr>
+<tr><th>מיקום</th><td><span class="badge edge">Edge Function</span> <code>drive-sync</code> <span class="badge active">v5 ACTIVE</span></td></tr>
+<tr><th>תזמון</th><td>pg_cron כל 6 שעות <span class="ltr">(<code>0 */6 * * *</code>)</span></td></tr>
+<tr><th>source_type</th><td><code>google_drive</code></td></tr>
+</table>
+
+<h3>ג. Google Calendar</h3>
+<table>
+<tr><th>פעולה</th><td>Push notifications ב-Calendar API. כל שינוי באירוע (יצירה/עדכון/מחיקה) דוחף webhook ל-Supabase</td></tr>
+<tr><th>מיקום</th><td><span class="badge edge">Edge Function</span> <code>calendar-webhook</code> <span class="badge active">v3 ACTIVE</span></td></tr>
+<tr><th>חידוש הרשמה</th><td><code>calendar-renew-watch</code> כל 6 ימים <span class="ltr">(<code>0 0 */6 * *</code>)</span> — Calendar Watch פג בכל 7 ימים</td></tr>
+<tr><th>source_type</th><td><code>google_calendar</code></td></tr>
+</table>
+
+<h3>ד. WhatsApp (DualHook → Webhook)</h3>
+<table>
+<tr><th>פעולה</th><td>הודעות מ-WhatsApp Cloud API מועברות דרך DualHook → webhook ב-Express</td></tr>
+<tr><th>מיקום</th><td><span class="badge express">Express</span> <code>POST /api/whatsapp-webhook</code></td></tr>
+<tr><th>קוד</th><td><span class="source">server/src/modules/smrttask/routes/whatsapp-webhook.ts</span> (803 שורות)</td></tr>
+<tr><th>source_type</th><td><code>whatsapp</code> להודעות נכנסות, <code>whatsapp_echo</code> להודעות שיוצאות</td></tr>
+<tr><th>קיבוץ</th><td>שורה אחת ב-<code>source_messages</code> לכל "שיחה" (<code>chatId</code>), עם <code>raw_content</code> שמכיל 20 הודעות אחרונות</td></tr>
+<tr><th>אימות</th><td>HMAC signature + verify token (לא JWT)</td></tr>
+</table>
+
+<div class="callout warn">
+<div class="label">חשוב לדעת</div>
+ה-collector של Express (<code>part1-collector.ts</code>) עדיין קיים אבל <strong>לא רץ ב-cron</strong>. הוא נקרא רק אם המשתמש לוחץ ידנית "סנכרן" בעמוד <code>/settings/smrttask/sync</code> או בעמוד ה-onboarding. הסנכרון האוטומטי נעשה ע"י Edge Functions.
+</div>
+
+<!-- =============================================================== -->
+<h2 id="cron">3. לוח הזמנים של ה-cron בפרודקשן</h2>
+
+<p>מאומת ע"י שאילתה אמיתית ל-<code>cron.job</code> ב-Postgres:</p>
+
+<table>
+<thead><tr><th>שם</th><th>תדירות</th><th>מה זה עושה</th></tr></thead>
+<tbody>
+<tr><td><code>ai-process-every-minute</code></td><td><code>* * * * *</code></td><td>מסווג כל הודעות pending ב-source_messages</td></tr>
+<tr><td><code>gmail-sync</code></td><td><code>*/2 * * * *</code></td><td>שואב הודעות חדשות מ-Gmail</td></tr>
+<tr><td><code>batch-details</code></td><td><code>* * * * *</code></td><td>שואב פרטים נוספים לעבודה ברקע</td></tr>
+<tr><td><code>reminders-check</code></td><td><code>*/5 * * * *</code></td><td>בודק תזכורות לשליחה</td></tr>
+<tr><td><code>drive-sync</code></td><td><code>0 */6 * * *</code></td><td>שואב קבצים חדשים מ-Google Drive</td></tr>
+<tr><td><code>calendar-renew</code></td><td><code>0 0 */6 * *</code></td><td>מחדש את ה-Calendar Watch</td></tr>
+<tr><td><code>project-detection</code></td><td><code>0 2 * * *</code></td><td>זיהוי פרויקטים חדשים — פעם ביום</td></tr>
+<tr><td><code>gmail-reconcile</code></td><td><code>0 3 * * 0</code></td><td>פעם בשבוע, ראשון 03:00 — recovery אם historyId פג</td></tr>
+</tbody>
+</table>
+
+<!-- =============================================================== -->
+<h2 id="preclassify">4. שלב 1 — סיווג מקדים (preClassify)</h2>
+
+<p>ai-process מקבל הודעה מ-<code>source_messages</code> ומריץ עליה <strong>סיווג ללא AI</strong> כדי לחסוך עלות. <span class="source">supabase/functions/ai-process/index.ts:62-100</span></p>
+
+<p>הכללים נבדקים בסדר הזה — הראשון שמתאים מנצח:</p>
+
+<table>
+<thead><tr><th>#</th><th>כלל</th><th>תוצאה</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>הנמען (<code>recipient</code>) מכיל ערך מ-<code>user_settings.skip_recipients</code></td><td><code>skip</code> — ההודעה מסומנת processed בלי שום עיבוד נוסף</td></tr>
+<tr><td>2</td><td>אירוע יומן בעבר מעבר ל-<code>calendar_past_days</code> (כברירת מחדל 1 יום)</td><td><code>skip</code> — past_calendar_event</td></tr>
+<tr><td>3</td><td>אירוע יומן בעתיד מעבר ל-<code>calendar_future_days</code> (1 יום)</td><td><code>defer</code> — הנעילה משוחררת, יחזור אחרי שיהיה קרוב</td></tr>
+<tr><td>4</td><td><code>source_type='whatsapp_echo'</code> או <code>'gmail_sent'</code></td><td><code>check_followup</code> — קריאה ל-Haiku לבדוק האם זו הודעה יוצאת שדורשת מעקב</td></tr>
+<tr><td>5</td><td>השולח (<code>sender_email</code>) מכיל ערך מ-<code>user_settings.my_emails</code></td><td><code>check_followup</code> — כנ"ל, זוהו כהודעה שלך</td></tr>
+<tr><td>6</td><td>השולח מכיל ערך מ-<code>user_settings.office_addresses</code></td><td><code>customer_inquiry</code> — מסווגת actionable אוטומטית כפנייה מלקוח</td></tr>
+<tr><td>7</td><td>השולח מכיל ערך מ-<code>user_settings.skip_senders</code></td><td><code>informational</code> — בלי AI, לא יווצרו הצעות</td></tr>
+<tr><td>8</td><td>הגוף או השולח מכילים: <code>unsubscribe</code>, <code>no-reply</code>, <code>noreply</code>, <code>newsletter</code>, <code>marketing</code></td><td><code>informational</code> — סינון שיווק זול</td></tr>
+<tr><td>9</td><td>אחרת</td><td><code>needs_claude</code> — ממשיך לשלב 2</td></tr>
+</tbody>
+</table>
+
+<div class="callout info">
+<div class="label">קבועי החלון</div>
+<code>calendar_past_days</code> ו-<code>calendar_future_days</code> נטענים מטבלת <code>smrttask_system_params</code> (סופר-מנהל). ברירת המחדל לשניהם היא 1. ניתן לערוך ב-<code>/admin/apps/smrttask/parameters</code>.
+</div>
+
+<div class="callout warn">
+<div class="label">מה לא ניתן לקונפיגורציה</div>
+רשימת מילות-המפתח השיווקיות (<code>unsubscribe</code>, <code>no-reply</code>, וכו') <strong>קשיחה בקוד</strong>. ניתן לנהל אותה רק ע"י עריכת <code>ai-process</code> ופריסה מחדש. אם תרצה להוסיף מילה (לדוגמה <code>promo</code>), זה דורש עדכון קוד.
+</div>
+
+<!-- =============================================================== -->
+<h2 id="classify">5. שלב 2 — סיווג עמוק (Haiku)</h2>
+
+<p>רק אם preClassify החזיר <code>needs_claude</code> או <code>check_followup</code>, ai-process קורא ל-Claude Haiku. <span class="source">supabase/functions/ai-process/index.ts:115-125</span></p>
+
+<h4>הפרומפט שנשלח ל-Haiku</h4>
+<pre><code>You are a message classifier for a personal task management system.
+Rules: outbox@maor.org→informational | Payment confirmations→informational
+       | maor.org emails→classify by content (NOT spam!)
+Respond: WORD | reason in Hebrew. WORD: ACTIONABLE | INFORMATIONAL | SPAM</code></pre>
+
+<h4>קלט</h4>
+<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה חתוך ל-<code>body_truncate_classify</code> תווים (כברירת מחדל 2000).</p>
+
+<h4>פלט</h4>
+<table>
+<tr><th>תווית</th><th>משמעות</th><th>מה קורה הלאה</th></tr>
+<tr><td><code>ACTIONABLE</code></td><td>נדרשת פעולה</td><td>ממשיך לשלב 3 (threadId follow-up) ושלב 5 (יצירת משימה)</td></tr>
+<tr><td><code>INFORMATIONAL</code></td><td>רק לידיעה</td><td>מסומן processed עם classification='informational'. לא יווצרו משימות</td></tr>
+<tr><td><code>SPAM</code></td><td>זבל</td><td>מסומן processed עם classification='spam'. לא יווצרו משימות</td></tr>
+</table>
+
+<div class="callout bad">
+<div class="label">המגבלה של הפרומפט הזה</div>
+הפרומפט מכיל את הקשיחות <code>outbox@maor.org</code> ו-<code>maor.org</code>. זה רק עבור המופע הנוכחי של Maor, ולא יתאים ללקוח אחר בלי לערוך את הקוד. צריך להגיע ממנו לתבנית מבוססת-משתנה (<code>userName</code>, <code>userOrg</code>) כמו שעשינו ב-Sonnet, אבל זה לא הוסדר בענף הזה. <span class="source">supabase/functions/ai-process/index.ts:117</span>
+</div>
+
+<!-- =============================================================== -->
+<h2 id="followup">6. שלב 3 — זיהוי המשך לשרשור (threadId)</h2>
+
+<p>חידוש שהוסף בקומיט <code>28bb2ff</code> כדי לפתור את בעיית הכפילויות (46% מהמשימות בעבר). <span class="source">supabase/functions/ai-process/index.ts:284-316</span></p>
+
+<p>רק אחרי שסונט אמר ACTIONABLE, ai-process בודק:</p>
+
+<div class="pipeline">if (source_type === "gmail" && msg.metadata.threadId) {
+  // חיפוש 1: כל ההודעות באותו thread של המשתמש
+  siblings = source_messages
+    WHERE user_id = userId
+      AND source_type = 'gmail'
+      AND metadata->>'threadId' = msg.metadata.threadId
+      AND id != msg.id;
+
+  // חיפוש 2: משימה פתוחה ששייכת לאחת מההודעות האלה
+  openTask = tasks
+    WHERE user_id = userId
+      AND status IN ('inbox', 'in_progress')
+      AND source_message_id IN siblings
+    ORDER BY created_at DESC LIMIT 1;
+
+  if (openTask) {
+    // append ל-tasks.updates[] במקום יצירת משימה חדשה
+    // משימה זו לא תופיע יותר ברשימת ההצעות
+    // חוסך קריאה ל-Sonnet
+  }
+}</div>
+
+<p>אם נמצאה משימה לקישור — ההודעה נכנסת כעדכון ל-<code>tasks.updates</code> וה-classification מסומנת <code>actionable_followup</code> ב-<code>log_entries</code>. אחרת — ממשיך לשלב 4.</p>
+
+<!-- =============================================================== -->
+<h2 id="detectproject">7. שלב 4 — שיוך לפרויקט (detectProject)</h2>
+
+<p>רק להודעות actionable שלא נקשרו לשרשור קיים. <span class="source">supabase/functions/ai-process/index.ts:127-136</span></p>
+
+<table>
+<tr><th>שאילתה</th><td><code>SELECT id, name, name_he FROM projects WHERE user_id = ? AND is_active = true</code></td></tr>
+<tr><th>אם 0 פרויקטים</th><td>מדלגים — <code>project_id = null</code></td></tr>
+<tr><th>אחרת</th><td>שולח רשימת פרויקטים ל-Haiku ומבקש project_id (או 'none')</td></tr>
+<tr><th>חיתוך גוף</th><td><code>body_truncate_project</code> תווים (ברירת מחדל 500)</td></tr>
+</table>
+
+<p>אם נמצא פרויקט, ai-process טוען גם את ה-brief שלו (<code>project_briefs</code>) כדי לתת ל-Sonnet הקשר רחב יותר.</p>
+
+<!-- =============================================================== -->
+<h2 id="createtask">8. שלב 5 — יצירת המשימה (Sonnet)</h2>
+
+<p>הקריאה היקרה ביותר בכל הצינור. <span class="source">supabase/functions/ai-process/index.ts:149-235</span></p>
+
+<h4>הפרומפט המלא ל-Sonnet</h4>
+<details>
+<summary>לחץ להצגת הפרומפט המלא (74 שורות)</summary>
+<pre><code>You are a task builder for a personal task system.
+Extract concrete actionable tasks from this message.
+Return ONLY a JSON Array, no markdown, no commentary.
+
+═══ EMPTY-ARRAY RULE ═══
+Return [] (empty array) when the message is purely informational:
+  • Marketing / newsletter / sale / promotion
+  • Bank/payment confirmation of an already-completed transaction
+  • System receipts already handled by the recipient
+  • Status updates that need no human action
+The caller will record an empty result as informational.
+
+═══ TASK SHAPE ═══
+{
+  "title_he":     "Hebrew, starts with action verb",
+  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",
+  "priority":     "urgent|high|medium|low",
+  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",
+  "due_date":     "YYYY-MM-DD or null",
+  "ai_actions": [
+    { "label":  "3-7 Hebrew words naming recipient or next step",
+      "prompt": "Full instruction for the AI to run, in English or Hebrew" }
+  ],
+  "owner_contact": "name + phone + email or null"
+}
+
+═══ TITLE RULES (mandatory) ═══
+Verb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /
+לפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.
+
+BAD:  "תיאום פגישה"     (noun, not a command)
+BAD:  "מייל מ-X"         (passive)
+GOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"
+GOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"
+
+═══ PRIORITY RULES (mandatory) ═══
+urgent : deadline today/tomorrow AND a concrete fact (amount, named
+         person, blocked system).
+high   : deadline within 7 days AND impacts people other than the user.
+medium : deadline within 30 days OR routine follow-up.
+low    : no clear deadline OR soft/optional action OR upcoming auto-renewal.
+
+Never default to urgent. If you can't cite a concrete urgency fact, drop
+to medium.
+
+Auto-system notifications (Vercel, Railway, GitHub, monitoring services)
+→ max medium, unless production is currently down.
+
+═══ CONTENT-SPECIFIC RULES ═══
+1. Subscription renewal notice ("your X plan renews on Y for $Z"):
+   priority: "low". description MUST list, in this order:
+     • מה מתחדש (service + plan)
+     • כמה ייחויב (amount + currency)
+     • מתי (date)
+     • איך לבטל / לשנות (link or step from the message)
+   ai_actions should include "draft cancel" or "review subscription".
+
+2. Bank / payment confirmation of a completed transaction → return [].
+
+═══ AI_ACTIONS RULES ═══
+2-3 actions per task. The label is the button text the user sees — it
+MUST name the recipient or the concrete next step, not the generic
+action name. The prompt is what the AI will run on click; include enough
+context that the AI doesn't need to re-read this message.</code></pre>
+</details>
+
+<h4>קלט</h4>
+<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה חתוך ל-<code>body_truncate_task</code> (ברירת מחדל 6000) + הקשר פרויקט (אם נמצא).</p>
+
+<h4>פלט וטיפול</h4>
+<table>
+<tr><th>אם Sonnet החזיר <code>[]</code></th><td>ההודעה מסווגת בחזרה ל-<code>informational</code> — לא נוצרת משימה</td></tr>
+<tr><th>אם Sonnet החזיר משימה אחת או יותר</th><td>כל אחת נשמרת ב-<code>tasks</code> עם <code>status='inbox'</code>, <code>manually_verified=false</code></td></tr>
+<tr><th>אם Sonnet החזיר טקסט שלא ניתן לפרס</th><td>נוצרת משימה אחת עם הטקסט הגולמי כתיאור, priority='medium', והערה ב-reason_he</td></tr>
+<tr><th>שדות משימה שנשמרים</th><td><code>title_he, description, priority, due_date, ai_actions, related_contact, ai_confidence=0.8, ai_model_used</code></td></tr>
+<tr><th>תיעוד</th><td>שורה ב-<code>log_entries</code> עם category='ai_process', ה-reason_he של סונט (במקום ה-reason של היייקו), עלות כוללת ב-USD, וטוקנים</td></tr>
+</table>
+
+<!-- =============================================================== -->
+<h2 id="executor">9. שלב 6 — לחיצת כפתור AI Action</h2>
+
+<p>זה לא חלק מהצינור האוטומטי — זה מה שקורה כשהמשתמש לוחץ על כפתור בכרטיס משימה. <span class="source">server/src/modules/smrttask/routes/actions.ts</span></p>
+
+<div class="pipeline">User clicks button → POST /api/actions/execute
+  Body: { task_id, action_type, custom_action }
+
+[1] Authorize via JWT cookie  → server/src/.../actions.ts:54-56
+[2] Validate task exists       → 404 if missing
+[3] Daily budget check         → 429 if exceeded
+[4] Load source message context, writing-style rules, user profile
+[5] switch (action_type):
+      case "draft_reply_he"        → Sonnet draft + Gmail draft URL
+      case "draft_reply_en"        → Sonnet draft + Gmail draft URL
+      case "draft_whatsapp_he/en"  → Sonnet, short conversational
+      case "summarize_history"     → Sonnet summary of past emails with the contact
+      case "find_in_emails"        → Gmail search, no AI
+      case "check_past_handling"   → Local DB lookup, no AI
+      case "set_reminder"          → Calendar event creation
+      case "call_preparation"      → Sonnet talking points
+      case "financial_advisor"     → Opus deep analysis
+      case "draft_settlement_request" → Opus + Gmail draft
+      case "custom"                → Sonnet with the custom_action prompt
+      default                      → NEW: Sonnet with custom_action (if provided)
+
+[6] Save result to tasks.action_result + ai_generated_content + draft_link
+[7] Log to action_history</div>
+
+<h4>איך המסלול ה-default עובד עכשיו</h4>
+<p>הקלאסיפייר (סונט) מייצר <code>ai_actions = [{label: "כתוב מייל לדינה", prompt: "Write a reply to Dina confirming the Monday slot..."}]</code>. בעבר, ה-executor הכיר רק 12 מפתחות קשיחים — אז כל תווית עברית חופשית נפלה ל-"not implemented". מקומיט <code>e464dc1</code>, ה-default case מקבל את <code>custom_action</code> (ה-prompt שהפרונט שולח עכשיו) ומריץ אותו דרך Sonnet עם הקשר המשימה. <span class="source">server/src/modules/smrttask/routes/actions.ts:333-360</span></p>
+
+<div class="callout ok">
+<div class="label">תקציב יומי</div>
+לפני כל קריאה ל-AI, ה-executor סוכם את <code>log_entries.ai_cost_usd</code> של היום עבור המשתמש. אם עבר את <code>user_settings.daily_ai_budget_usd</code> (ברירת מחדל $1) → 429. הפרונט מציג טוסט עם הסבר ולינק לדף הפרמטרים. <span class="source">server/src/modules/smrttask/routes/actions.ts:33-50</span>
+</div>
+
+<!-- =============================================================== -->
+<h2 id="settings">10. ההגדרות בקיצור — מי מנהל מה</h2>
+
+<h3>סופר-מנהל בלבד: <code>smrttask_system_params</code></h3>
+<p>טבלה חדשה, שורה אחת. RLS חוסם לכל מי שלא סופר-מנהל. UI ב-<code>/admin/apps/smrttask/parameters</code>.</p>
+<table>
+<thead><tr><th>שדה</th><th>ברירת מחדל</th><th>השפעה</th></tr></thead>
+<tbody>
+<tr><td><code>classification_model</code></td><td><code>claude-haiku-4-5-20251001</code></td><td>המודל לסיווג מקדים (שלב 2)</td></tr>
+<tr><td><code>summary_model</code></td><td><code>claude-sonnet-4-6</code></td><td>המודל ליצירת משימה (שלב 5)</td></tr>
+<tr><td><code>batch_size</code></td><td><code>40</code></td><td>כמה הודעות ai-process מעבד בכל ריצה</td></tr>
+<tr><td><code>processing_lock_minutes</code></td><td><code>10</code></td><td>כמה זמן נעילה לפני שחרור — אם הודעה ננעלה ולא הסתיימה</td></tr>
+<tr><td><code>calendar_past_days</code></td><td><code>1</code></td><td>אירועי יומן בעבר → לדלג</td></tr>
+<tr><td><code>calendar_future_days</code></td><td><code>1</code></td><td>אירועי יומן רחוקים → לדחות</td></tr>
+<tr><td><code>body_truncate_classify</code></td><td><code>2000</code></td><td>חיתוך גוף הודעה ל-Haiku בסיווג</td></tr>
+<tr><td><code>body_truncate_project</code></td><td><code>500</code></td><td>חיתוך גוף הודעה ל-Haiku בזיהוי פרויקט</td></tr>
+<tr><td><code>body_truncate_task</code></td><td><code>6000</code></td><td>חיתוך גוף הודעה ל-Sonnet ביצירת משימה</td></tr>
+</tbody>
+</table>
+
+<h3>סופר-מנהל מנהל בעבור המשתמש: <code>user_settings.daily_ai_budget_usd</code></h3>
+<p>UI ב-<code>/admin/users/[id]</code> בסקציית smrtTask. ברירת מחדל $1. תקרת חוקיות עליונה $100.</p>
+<table>
+<tr><th>מה זה עושה</th><td>כשסכום העלויות של המשתמש היום עובר את התקרה: ai-process מפסיק לעבד עבורו הודעות חדשות, וכפתורי AI Action מחזירים 429</td></tr>
+<tr><th>איפה הספירה</th><td><code>log_entries.ai_cost_usd</code> מקטגוריה <code>ai_process</code> או <code>ai_action</code>, מאז 00:00 של היום</td></tr>
+</table>
+
+<h3>המשתמש מנהל לעצמו: <code>user_settings</code></h3>
+<p>UI ב-<code>/settings/smrttask/parameters</code>. כל המערכים chip-input.</p>
+<table>
+<thead><tr><th>שדה</th><th>סוג</th><th>השפעה</th></tr></thead>
+<tbody>
+<tr><td><code>my_emails</code></td><td>text[]</td><td>זיהוי הודעות יוצאות (preClassify כלל 5)</td></tr>
+<tr><td><code>office_addresses</code></td><td>text[]</td><td>זיהוי פניות לקוחות (preClassify כלל 6)</td></tr>
+<tr><td><code>skip_senders</code></td><td>text[]</td><td>חסימת שולחים — מסומן informational (preClassify כלל 7)</td></tr>
+<tr><td><code>skip_recipients</code></td><td>text[]</td><td>דילוג נמענים — מסומן skip (preClassify כלל 1)</td></tr>
+</tbody>
+</table>
+
+<h3>חוקי skip מתקדמים: <code>rules_memory</code></h3>
+<p>UI ב-<code>/settings/smrttask/rules</code>. בעיקר משמש ל-Gmail (gmail-sync מפעיל אותם בשלב הייבוא, לפני ש-source_messages נכתב).</p>
+<table>
+<tr><th>שדות</th><td><code>trigger</code> (למשל "from=spammer@bad.com"), <code>rule_type</code> (skip | skip_spam | bot), <code>is_active</code></td></tr>
+<tr><th>קוד מפעיל</th><td><span class="source">supabase/functions/_shared/rule-filters.ts</span> — מפרס triggers ל-Gmail query filters</td></tr>
+</table>
+
+<!-- =============================================================== -->
+<h2 id="dead">11. קוד שכתוב אבל לא רץ בפועל</h2>
+
+<p>בשביל שתדע מה לא חי, גם אם תראה אותו בקוד:</p>
+
+<table>
+<thead><tr><th>מה</th><th>סטטוס</th><th>למה</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>server/src/modules/smrttask/parts/part3-classifier.ts</code></td>
+  <td><span class="badge deleted">נמחק</span></td>
+  <td>נמחק בקומיט <code>f4f7a3b</code>. הוחלף ב-<code>ai-process</code> Edge Function</td>
+</tr>
+<tr>
+  <td><code>server/src/modules/smrttask/parts/part1-collector.ts</code></td>
+  <td>קוד פעיל אבל לא רץ ב-cron</td>
+  <td>טבלת <code>sync_schedules</code> ריקה. נקרא רק אם המשתמש לוחץ ידנית "סנכרן עכשיו"</td>
+</tr>
+<tr>
+  <td><code>server/src/modules/smrttask/parts/part0-style.ts</code></td>
+  <td>פעיל אבל manual-only</td>
+  <td>תכנן ללמוד סגנון כתיבה. נקרא רק מהדף <code>/settings/smrttask/sync</code> ע"י המשתמש</td>
+</tr>
+<tr>
+  <td><code>server/src/modules/smrttask/parts/part4-projects.ts</code></td>
+  <td>פעיל, אבל ב-pg_cron יש <code>project-detection</code> שזה Edge Function אחר</td>
+  <td>שתי גרסאות מקבילות שעושות דברים דומים. ה-Edge Function רץ פעם ביום (02:00). Express רץ רק לפי בקשה</td>
+</tr>
+<tr>
+  <td><code>server/src/prompts/classifier.ts</code></td>
+  <td>הפרומפט קשור ל-part3-classifier שנמחק — הפונקציה הזו לא נקראת יותר</td>
+  <td>הקובץ עצמו עוד בשימוש (יובא ע"י admin/apps/.../prompts UI), אבל הפרומפט שלו לא נשלח ל-Claude</td>
+</tr>
+<tr>
+  <td>טבלת <code>sync_schedules</code> רשומות עם <code>part='part3'</code></td>
+  <td>no-op בסילנט</td>
+  <td>ה-cron ב-Express מדלג עליהן כי part3 לא קיים יותר. מיגרציית ניקוי תגיע בעתיד</td>
+</tr>
+</tbody>
+</table>
+
+<!-- =============================================================== -->
+<h2>נקודות שכדאי להחליט עליהן בהמשך</h2>
+
+<ul>
+<li><strong>הפרומפט של Haiku</strong> עדיין מכיל <code>maor.org</code> קשיח. אם תרצה להוסיף עוד לקוחות — צריך לתבנת אותו.</li>
+<li><strong>מילות מפתח שיווקיות</strong> ב-preClassify קשיחות בקוד. שווה לחשוף לקונפיגורציה (טבלה או עמודה ב-system_params)?</li>
+<li><strong>4 פעולות AI דורשות Sonnet</strong> בלי תיעוד עלות ב-log_entries (רק ה-default והקלאסיפייר מתעדים). זה משאיר חור ב-budget tracker עבור 11 הקייסים המקוריים.</li>
+<li><strong>part0-style ו-part1-collector</strong> ב-Express — האם להשאיר כ"כפתור סנכרון ידני", או למחוק לחלוטין?</li>
+<li><strong>part4-projects</strong> כפול — האם לבחור Edge או Express ולמחוק את השני?</li>
+<li><strong>WhatsApp ב-Edge Function v10</strong> ו-WhatsApp ב-Express webhook v?  — שניהם פעילים. צריך לוודא שאין כפילות.</li>
+</ul>
+
+<div class="footer">
+מסמך זה משקף את מצב הקוד בענף <code>claude/refine-task-classification-B5vQI</code> אחרי קומיט <code>f4f7a3b</code> ואת ההגדרות הרצות ב-Supabase ב-19/5/2026. כל הצהרה במסמך מקושרת לקובץ ושורה. אם משהו אינו תואם — זו תקלה במסמך, לא בקוד.
+</div>
+
+</div>
+</body>
+</html>
