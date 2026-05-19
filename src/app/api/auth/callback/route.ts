@@ -42,7 +42,9 @@ async function redirectUser(
         .insert({ user_id: user.id, preferred_language: "he" });
       if (error) console.warn("[auth/callback] user_settings insert (admin path) failed:", error.message);
     }
-    const redirectPath = next === "/" ? `/${locale}/admin` : next;
+    // Land super-admins on /tasks like everyone else — /admin is reachable
+    // from the sidebar. Daily working surface > ops dashboard on every device.
+    const redirectPath = next === "/" ? `/${locale}/tasks` : next;
     return NextResponse.redirect(`${origin}${redirectPath}`);
   }
 
