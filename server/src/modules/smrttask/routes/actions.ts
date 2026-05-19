@@ -23,6 +23,34 @@ async function getUserId(req: Request): Promise<string | null> {
   return data.user.id;
 }
 
+/**
+ * Daily AI cost cap. Sums today's log_entries.ai_cost_usd for the user
+ * and refuses to run another action once the per-user budget is reached.
+ * Returns null when under budget; returns the {used, budget} object when
+ * over so the caller can build a clear error response. The classifier
+ * uses the same setting (user_settings.daily_ai_budget_usd), so a single
+ * limit governs both background sync and on-demand actions.
+ */
+async function checkDailyBudget(userId: string): Promise<{ used: number; budget: number } | null> {
+  const { data: settings } = await db
+    .from("user_settings")
+    .select("daily_ai_budget_usd")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const budget = Number(settings?.daily_ai_budget_usd) || 1.0;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const { data } = await db
+    .from("log_entries")
+    .select("ai_cost_usd")
+    .eq("user_id", userId)
+    .gte("created_at", todayStart.toISOString())
+    .not("ai_cost_usd", "is", null);
+  const used = (data ?? []).reduce((sum, r) => sum + (Number(r.ai_cost_usd) || 0), 0);
+  return used >= budget ? { used, budget } : null;
+}
+
 router.post("/execute", async (req: Request, res: Response) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -32,7 +60,8 @@ router.post("/execute", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "task_id and action_type required" });
   }
 
-  // Load task
+  // Load task FIRST so a stale task_id surfaces a 404 rather than a 429 — a
+  // budget message in response to a missing task is confusing UX.
   const { data: task, error: taskErr } = await db
     .from("tasks")
     .select("*")
@@ -41,6 +70,14 @@ router.post("/execute", async (req: Request, res: Response) => {
     .single();
 
   if (taskErr || !task) return res.status(404).json({ error: "Task not found" });
+
+  // Then check today's AI spend against the per-user budget.
+  const over = await checkDailyBudget(userId);
+  if (over) {
+    return res.status(429).json({
+      error: `Daily AI budget reached (used $${over.used.toFixed(4)} of $${over.budget.toFixed(2)}). Increase it in /settings/smrttask/parameters or wait until tomorrow.`,
+    });
+  }
 
   // Load source message for context
   const { data: sourceMsg } = task.source_message_id
@@ -296,8 +333,36 @@ Be professional, factual, and constructive.`,
         break;
       }
 
-      default:
-        result = `Action "${action_type}" is not yet implemented. Coming soon.`;
+      // Unknown action_type — fall through to the generic free-form path.
+      // ai-process produces ai_actions with Hebrew labels and free-form
+      // prompts; the classifier doesn't constrain itself to the 12 cases
+      // above. Route those through Sonnet with the provided custom_action
+      // so the button actually does something instead of stalling.
+      default: {
+        if (!custom_action) {
+          result = `Action "${action_type}" needs a prompt and none was provided.`;
+          break;
+        }
+        const { content, costUsd } = await simpleCall(
+          "sonnet",
+          `You are an AI assistant for ${userName}. Run the requested task. Match the user's writing style if a sample is provided in the context.`,
+          `Task context:\n${taskContext}\n\nOriginal message:\n${originalContent}\n\nRequest:\n${custom_action}`,
+          1500,
+        );
+        result = content;
+        // Persist the cost so checkDailyBudget sees this spend. The 11 known
+        // cases above don't log cost yet — pre-existing gap, separate fix.
+        await db.from("log_entries").insert({
+          user_id: userId,
+          category: "ai_action",
+          status: "ok",
+          task_id,
+          task_title: task.title_he ?? task.title,
+          task_action: action_type,
+          ai_model_used: "claude-sonnet-4-6",
+          ai_cost_usd: costUsd,
+        });
+      }
     }
 
     // Save result to task + ai_generated_content

@@ -23,6 +23,7 @@ interface QuickActionProps {
 export function QuickAction({
   taskId,
   actionLabel,
+  actionPrompt,
   open,
   onClose,
   onDone,
@@ -70,6 +71,11 @@ export function QuickAction({
           body: JSON.stringify({
             task_id: taskId,
             action_type: actionLabel,
+            // Forwards the free-form prompt the classifier produced alongside
+            // the label. The backend's default switch case executes this via
+            // Sonnet, so contextual buttons (e.g. "טיוטת תשובה לדינה") run
+            // instead of falling into "not yet implemented".
+            custom_action: actionPrompt,
           }),
         }
       );
