@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { ArrowLeftRight, Loader2, MessageSquare } from "lucide-react";
+import { detectMessageDir } from "./utils";
 
 export interface Thread {
   chat_id: string;
@@ -53,6 +54,12 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
         const isSelected = th.chat_id === selectedChatId;
         const displayName = th.from_name?.trim() || th.from_phone || th.chat_id;
         const preview = th.last_body_text?.trim() || `[${th.last_message_type}]`;
+        // Align the preview line per the language of THIS specific message
+        // (Hebrew → right edge, English → left edge). The contact name on
+        // the line above stays left-aligned with the rest of the row chrome
+        // so it always lines up with the timestamp on the opposite side.
+        const previewDir = detectMessageDir(preview);
+        const nameDir = detectMessageDir(displayName);
 
         return (
           <li key={th.chat_id}>
@@ -66,7 +73,9 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
               <div className="flex items-center gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-sm truncate">{displayName}</span>
+                    <span className="font-medium text-sm truncate" dir={nameDir}>
+                      {displayName}
+                    </span>
                     {th.last_direction === "outgoing" && (
                       <ArrowLeftRight className="h-3 w-3 text-muted-foreground shrink-0" aria-label={t("outgoing")} />
                     )}
@@ -76,7 +85,10 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">
+                  <p
+                    className="text-xs text-muted-foreground truncate mt-0.5"
+                    dir={previewDir}
+                  >
                     {preview.slice(0, 120)}
                   </p>
                 </div>

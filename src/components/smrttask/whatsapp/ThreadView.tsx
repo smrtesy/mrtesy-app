@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import type { Thread } from "./ThreadList";
+import { detectMessageDir } from "./utils";
 
 export interface Message {
   id: string;
@@ -368,17 +369,4 @@ function MessageBubble({
       </div>
     </div>
   );
-}
-
-/**
- * Decide whether a message body should render right-to-left (Hebrew /
- * Arabic / Yiddish) or left-to-right (everything else). We don't run a
- * full language detector — checking for the first script character in
- * the Hebrew or Arabic Unicode blocks is enough for our content.
- */
-function detectMessageDir(text: string | null | undefined): "ltr" | "rtl" {
-  if (!text) return "ltr";
-  // Hebrew (0x0590-0x05FF) + Arabic (0x0600-0x06FF). The Unicode ranges
-  // cover the script characters; emoji / numbers don't trip the check.
-  return /[֐-ۿ]/.test(text) ? "rtl" : "ltr";
 }
