@@ -27,6 +27,7 @@ export default function OnboardingWhatsApp() {
 
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [wabaId, setWabaId] = useState("");
+  const [businessId, setBusinessId] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [appSecret, setAppSecret] = useState("");
@@ -61,6 +62,7 @@ export default function OnboardingWhatsApp() {
         body: JSON.stringify({
           phone_number_id: phoneNumberId.trim(),
           waba_id: wabaId.trim() || undefined,
+          business_id: businessId.trim() || undefined,
           display_phone_number: displayPhone.trim() || undefined,
           access_token: accessToken.trim() || undefined,
           app_secret: appSecret.trim() || undefined,
@@ -155,6 +157,19 @@ export default function OnboardingWhatsApp() {
             placeholder="905538528840620"
           />
           <p className="text-xs text-muted-foreground">{tWa("wabaIdHint")}</p>
+        </div>
+
+        {/* Business ID — kept for completeness; not used by the message/media flow today. */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("businessIdLabel")}</label>
+          <Input
+            value={businessId}
+            onChange={(e) => setBusinessId(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="2156077741835869"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("businessIdHint")}</p>
         </div>
 
         {/* Display phone (optional) */}

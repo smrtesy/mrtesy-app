@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check, Edit2, Eye, EyeOff, Loader2, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Edit2, Eye, EyeOff, Loader2, Webhook, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 
@@ -24,6 +24,7 @@ interface WhatsAppConnection {
   user_id: string;
   phone_number_id: string;
   waba_id: string | null;
+  business_id: string | null;
   display_phone_number: string | null;
   connected_at: string | null;
   disconnected_at: string | null;
@@ -37,12 +38,26 @@ interface SecretsResponse {
   connections: WhatsAppConnection[];
 }
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
+const WEBHOOK_URL = `${BACKEND_URL}/api/webhooks/whatsapp`;
+
 export default function AdminAppSecretsPage() {
   const t = useTranslations("adminSecrets");
   const { locale, slug } = useParams<{ locale: string; slug: string }>();
 
   const [data, setData] = useState<SecretsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  function copyWebhook() {
+    navigator.clipboard.writeText(WEBHOOK_URL).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => toast.error("Clipboard error"),
+    );
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +98,34 @@ export default function AdminAppSecretsPage() {
 
       {!loading && data && (
         <>
+          {/* Webhook URL — the value the operator pastes into DualHook's
+              Webhook Override field. Read-only, copyable. Shown here as
+              well as in /onboarding/whatsapp so a super-admin debugging a
+              tenant doesn't have to leave the admin surface. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Webhook className="h-4 w-4 text-muted-foreground" />
+                {t("webhookUrlSection")}
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">{t("webhookUrlHint")}</p>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-2">
+                <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={copyWebhook}
+                  aria-label={t("copy")}
+                >
+                  {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
           <PlatformSection slug={slug} platform={data.platform} onSaved={load} />
           <ConnectionsSection slug={slug} connections={data.connections} onSaved={load} />
         </>
@@ -319,6 +362,7 @@ function ConnectionRow({
           <p className="text-xs text-muted-foreground font-mono break-all">
             phone_number_id: {connection.phone_number_id}
             {connection.waba_id ? ` · waba_id: ${connection.waba_id}` : ""}
+            {connection.business_id ? ` · business_id: ${connection.business_id}` : ""}
           </p>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <SecretChip label="access_token" set={connection.access_token_set} />

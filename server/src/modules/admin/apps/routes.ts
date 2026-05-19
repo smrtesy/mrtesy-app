@@ -234,7 +234,7 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
   const { data: conns, error: connsErr } = await db
     .from("whatsapp_connections")
     .select(
-      "id, user_id, phone_number_id, waba_id, display_phone_number, access_token_secret_id, app_secret_id, verify_token_id, connected_at, disconnected_at",
+      "id, user_id, phone_number_id, waba_id, business_id, display_phone_number, access_token_secret_id, app_secret_id, verify_token_id, connected_at, disconnected_at",
     )
     .order("connected_at", { ascending: false });
   if (connsErr) return res.status(500).json({ error: connsErr.message });
@@ -244,6 +244,7 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
     user_id: c.user_id,
     phone_number_id: c.phone_number_id,
     waba_id: c.waba_id,
+    business_id: c.business_id,
     display_phone_number: c.display_phone_number,
     connected_at: c.connected_at,
     disconnected_at: c.disconnected_at,

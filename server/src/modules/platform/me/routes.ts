@@ -130,6 +130,7 @@ async function upsertVaultSecret(
  * Body: {
  *   phone_number_id:      string,
  *   waba_id?:             string,
+ *   business_id?:         string,
  *   display_phone_number?: string,
  *   access_token?:        string,
  *   app_secret?:          string,
@@ -141,6 +142,7 @@ router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Respo
   const {
     phone_number_id,
     waba_id,
+    business_id,
     display_phone_number,
     access_token,
     app_secret,
@@ -148,6 +150,7 @@ router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Respo
   } = (req.body ?? {}) as {
     phone_number_id?: string;
     waba_id?: string;
+    business_id?: string;
     display_phone_number?: string;
     access_token?: string;
     app_secret?: string;
@@ -179,6 +182,7 @@ router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Respo
     user_id: req.user!.id,
     phone_number_id,
     waba_id: waba_id ?? null,
+    business_id: business_id ?? null,
     display_phone_number: display_phone_number ?? null,
     disconnected_at: null,
   };
