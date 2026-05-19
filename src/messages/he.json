@@ -71,10 +71,21 @@
   "tasks": {
     "title": "משימות פעילות",
     "new": "משימה חדשה",
-    "inbox": "תיבת דואר",
+    "inbox": "ממתינות",
     "active": "פעילות",
     "completed": "הושלמו",
     "archived": "ארכיון",
+    "view": {
+      "list": "רשימה",
+      "calendar": "לוח זמנים"
+    },
+    "calendar": {
+      "noDateSection": "ללא תאריך",
+      "noDateHint": "{count, plural, one {משימה אחת ללא תאריך} other {# משימות ללא תאריך}}",
+      "today": "היום",
+      "emptyTimeline": "אין משימות או אירועים מתוזמנים",
+      "loading": "טוען לוח זמנים…"
+    },
     "noTasksInView": "אין משימות בתצוגה זו",
     "noTasksYet": "עדיין אין משימות. הן יופיעו כאן אחרי שה-AI יעבד את ההודעות שלך.",
     "priority": {

@@ -71,10 +71,21 @@
   "tasks": {
     "title": "Active Tasks",
     "new": "New Task",
-    "inbox": "Inbox",
+    "inbox": "Pending",
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "view": {
+      "list": "List",
+      "calendar": "Timeline"
+    },
+    "calendar": {
+      "noDateSection": "No date",
+      "noDateHint": "{count, plural, one {1 task without a date} other {# tasks without a date}}",
+      "today": "Today",
+      "emptyTimeline": "No scheduled tasks or events",
+      "loading": "Loading timeline…"
+    },
     "noTasksInView": "No tasks in this view",
     "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
