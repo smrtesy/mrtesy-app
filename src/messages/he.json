@@ -127,6 +127,7 @@
     "dismiss": "דחה",
     "postpone": "דחה לפעם הבאה",
     "noSuggestions": "אין הצעות חדשות",
+    "countLabel": "מציג {shown} מתוך {total} הצעות",
     "noScheduled": "אין תזכורות מתוזמנות",
     "noProjects": "אין הצעות פרויקט",
     "projectsDetectedNightly": "פרויקטים מזוהים אוטומטית מהודעות שלך",

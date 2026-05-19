@@ -24,6 +24,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const supabase = createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const fetchSuggestions = useCallback(async () => {
@@ -31,21 +32,22 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data } = await supabase
+    const { data, count } = await supabase
       .from("tasks")
-      .select("*, source_messages(source_type, source_url, serial_display)")
+      .select("*, source_messages(source_type, source_url, serial_display)", { count: "exact" })
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
       .not("source_message_id", "is", null)
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(1000);  // PostgREST default cap; the user wants to see every pending suggestion
 
     const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
     const sorted = (data || []).sort(
       (a: any, b: any) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2) // eslint-disable-line @typescript-eslint/no-explicit-any
     );
     setSuggestions(sorted);
+    setTotalCount(count ?? sorted.length);
     setLoading(false);
   }, [supabase]);
 
@@ -90,6 +92,11 @@ export function MessageSuggestions({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-3">
+      {totalCount > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+          <span>{t("countLabel", { shown: suggestions.length, total: totalCount })}</span>
+        </div>
+      )}
       {suggestions.map((task) => {
         const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;

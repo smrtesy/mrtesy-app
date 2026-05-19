@@ -127,6 +127,7 @@
     "dismiss": "Dismiss",
     "postpone": "Postpone",
     "noSuggestions": "No new suggestions",
+    "countLabel": "Showing {shown} of {total} suggestions",
     "noScheduled": "No scheduled reminders",
     "noProjects": "No project suggestions",
     "projectsDetectedNightly": "Projects are detected nightly from your message patterns",
