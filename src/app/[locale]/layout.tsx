@@ -15,18 +15,11 @@ export default async function LocaleLayout({
   const dir = locale === "he" ? "rtl" : "ltr";
 
   return (
-    <>
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `document.documentElement.lang="${locale}";document.documentElement.dir="${dir}";`,
-        }}
-      />
-      <NextIntlClientProvider messages={messages}>
-        <TooltipProvider>
-          {children}
-          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
-        </TooltipProvider>
-      </NextIntlClientProvider>
-    </>
+    <NextIntlClientProvider messages={messages}>
+      <TooltipProvider>
+        {children}
+        <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
+      </TooltipProvider>
+    </NextIntlClientProvider>
   );
 }
