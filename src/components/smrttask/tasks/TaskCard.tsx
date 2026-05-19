@@ -25,6 +25,9 @@ interface TaskCardProps {
   onSnooze: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
+  /** Optional bulk-select integration. When provided, a checkbox is shown. */
+  selected?: boolean;
+  onToggleSelect?: (taskId: string) => void;
 }
 
 const priorityColors: Record<string, string> = {
@@ -42,6 +45,8 @@ export function TaskCard({
   onSnooze,
   onQuickAction,
   onDriveSearch,
+  selected,
+  onToggleSelect,
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
@@ -55,12 +60,23 @@ export function TaskCard({
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
-        isNew && "border-s-4 border-s-blue-500"
+        isNew && "border-s-4 border-s-blue-500",
+        selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
     >
       {/* Title + Priority */}
       <div className="flex items-start justify-between gap-2">
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect(task.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 shrink-0 h-4 w-4 cursor-pointer"
+            aria-label="select"
+          />
+        )}
         <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir="auto">
           {title}
         </h3>

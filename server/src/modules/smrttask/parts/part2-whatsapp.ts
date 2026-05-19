@@ -65,7 +65,7 @@ export interface Part2Options {
 }
 
 export async function runPart2(opts: Part2Options): Promise<{ sessionId: string }> {
-  const { userId, lookbackHours = 48, force = false } = opts;
+  const { userId, force = false } = opts;
   const sessionId = await createRunSession(userId, "part2", "whatsapp");
 
   const errors: string[] = [];
@@ -90,10 +90,10 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
 
     const lastRow = force ? 0 : parseInt(syncStateRow?.checkpoint ?? "0", 10);
 
-    // 3. Resolve per-user Sheet ID
+    // 3. Resolve per-user Sheet ID + lookback window
     const { data: settingsRow } = await db
       .from("user_settings")
-      .select("whatsapp_sheet_id")
+      .select("whatsapp_sheet_id, whatsapp_lookback_hours")
       .eq("user_id", userId)
       .maybeSingle();
     const sheetId = (settingsRow?.whatsapp_sheet_id as string | null | undefined) || ENV_SHEET_ID;
@@ -101,6 +101,9 @@ export async function runPart2(opts: Part2Options): Promise<{ sessionId: string 
       await closeRunSession(sessionId, "completed", { items_skipped: 0 }, "No WhatsApp Sheet configured for this user.");
       return { sessionId };
     }
+    // Caller's `opts.lookbackHours` wins; otherwise user_settings; otherwise 48h.
+    const lookbackHours = opts.lookbackHours
+      ?? (typeof settingsRow?.whatsapp_lookback_hours === "number" ? settingsRow.whatsapp_lookback_hours : 48);
 
     // 4. Authenticate with Google Sheets
     const auth = await getOAuthClient(userId, "gmail_calendar");
