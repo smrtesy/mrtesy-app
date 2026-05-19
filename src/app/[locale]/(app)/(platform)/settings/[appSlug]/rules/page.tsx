@@ -205,13 +205,22 @@ export default function SettingsRulesPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
+    // Flip is_active when a rule already exists; otherwise create with the
+    // opposite of the smart default — promotions/social/forums default to
+    // filtered, so clicking ON a fresh-state "ON" toggle disables them; the
+    // toggle for updates defaults OFF, so first click enables it. Upsert is
+    // safe because rules_memory now has a UNIQUE (user_id, trigger) constraint.
+    const defaultFiltered = catKey === "promotions" || catKey === "social" || catKey === "forums";
+    const currentlyOn = currentRule ? currentRule.is_active : defaultFiltered;
+    const nextIsActive = !currentlyOn;
+
     if (currentRule) {
       setRules((prev) =>
-        prev.map((r) => (r.id === currentRule.id ? { ...r, is_active: !currentRule.is_active } : r)),
+        prev.map((r) => (r.id === currentRule.id ? { ...r, is_active: nextIsActive } : r)),
       );
       const { error } = await supabase
         .from("rules_memory")
-        .update({ is_active: !currentRule.is_active })
+        .update({ is_active: nextIsActive })
         .eq("id", currentRule.id);
       if (error) {
         setRules((prev) =>
@@ -224,15 +233,18 @@ export default function SettingsRulesPage() {
 
     const { data, error } = await supabase
       .from("rules_memory")
-      .insert({
-        user_id: user.id,
-        app_slug: appSlug,
-        rule_type: "skip",
-        trigger: `category=${catKey}`,
-        is_active: true,
-        created_by: "system",
-        suggestion_status: "approved",
-      })
+      .upsert(
+        {
+          user_id: user.id,
+          app_slug: appSlug,
+          rule_type: "skip",
+          trigger: `category=${catKey}`,
+          is_active: nextIsActive,
+          created_by: "system",
+          suggestion_status: "approved",
+        },
+        { onConflict: "user_id,trigger" },
+      )
       .select()
       .single();
     if (error) { toast.error(error.message); return; }
@@ -378,7 +390,11 @@ export default function SettingsRulesPage() {
         <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
           {GMAIL_CATEGORIES.map((cat) => {
             const rule = getCategoryRule(cat.key);
-            const isActive = rule ? rule.is_active : false;
+            // Effective state: rule wins. No rule → fall back to the smart
+            // default (promotions/social/forums filtered, updates not). The
+            // ai-process Edge Function applies the exact same logic.
+            const defaultFiltered = cat.key === "promotions" || cat.key === "social" || cat.key === "forums";
+            const isActive = rule ? rule.is_active : defaultFiltered;
             return (
               <div key={cat.key} className="flex items-center gap-3 rounded-lg border p-3">
                 <div className="flex-1 min-w-0">

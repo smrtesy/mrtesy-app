@@ -287,20 +287,6 @@
     "skipSendersHint": "Any message from these senders is auto-marked informational. Use to silence newsletters, recurring system alerts, etc.",
     "skipRecipientsLabel": "Recipients to skip",
     "skipRecipientsHint": "If the message went to this address (CC/BCC), it's skipped entirely. Typically mailing lists.",
-    "gmailCategoriesSection": "Filter by Gmail category",
-    "gmailCategoriesHint": "Pick which Gmail tabs are treated as informational — no task gets created from them. We respect Gmail's own categorisation. Uncheck any tab if you do want it to become a task.",
-    "gmailCategory": {
-      "CATEGORY_PROMOTIONS": "Promotions",
-      "CATEGORY_SOCIAL": "Social",
-      "CATEGORY_UPDATES": "Updates",
-      "CATEGORY_FORUMS": "Forums"
-    },
-    "gmailCategoryDesc": {
-      "CATEGORY_PROMOTIONS": "Sales, coupons, marketing newsletters",
-      "CATEGORY_SOCIAL": "Facebook, LinkedIn, Twitter and similar",
-      "CATEGORY_UPDATES": "Order confirmations, receipts, system notifications",
-      "CATEGORY_FORUMS": "Mailing lists and discussion groups"
-    },
     "save": "Save",
     "saved": "Saved"
   },

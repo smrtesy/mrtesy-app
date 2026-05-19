@@ -59,16 +59,55 @@ const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "google_calendar", "google
 
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
-// Gmail's own categorisation. Defaults match user_settings.gmail_skip_categories,
-// which the user controls from /settings/smrttask/parameters. Listed here only
-// as a fallback for users whose settings row hasn't been migrated yet — in
-// steady state the per-user array wins.
-const GMAIL_CATEGORY_FALLBACK = new Set([
-  "CATEGORY_PROMOTIONS",
-  "CATEGORY_SOCIAL",
-  "CATEGORY_UPDATES",
-  "CATEGORY_FORUMS",
-]);
+// Default: filter promotions, social, forums. Updates ARE actionable by
+// default (per user spec). When the user has rows in rules_memory with
+// trigger='category=<key>', those override these defaults.
+const DEFAULT_FILTERED_CATEGORY_KEYS = new Set(["promotions", "social", "forums"]);
+const CATEGORY_KEY_TO_GMAIL_LABEL: Record<string, string> = {
+  promotions: "CATEGORY_PROMOTIONS",
+  social:     "CATEGORY_SOCIAL",
+  updates:    "CATEGORY_UPDATES",
+  forums:     "CATEGORY_FORUMS",
+};
+const ALL_CATEGORY_KEYS = Object.keys(CATEGORY_KEY_TO_GMAIL_LABEL);
+
+interface CategoryRuleRow { trigger: string; is_active: boolean }
+
+/**
+ * Build the per-user "treat as informational" Gmail label set. For each of
+ * the four categories: if rules_memory has a row, respect is_active. If no
+ * row, apply the default (promotions/social/forums = filter; updates = not).
+ * The user toggles these from /settings/smrttask/rules.
+ */
+function buildCategoryFilter(rules: CategoryRuleRow[]): Set<string> {
+  const ruleByKey = new Map<string, boolean>();
+  for (const r of rules) {
+    const m = r.trigger.match(/^category=(.+)$/i);
+    if (!m) continue;
+    ruleByKey.set(m[1].toLowerCase(), r.is_active);
+  }
+  const labels = new Set<string>();
+  for (const key of ALL_CATEGORY_KEYS) {
+    const ruleValue = ruleByKey.get(key);
+    const shouldFilter = ruleValue !== undefined ? ruleValue : DEFAULT_FILTERED_CATEGORY_KEYS.has(key);
+    if (shouldFilter) labels.add(CATEGORY_KEY_TO_GMAIL_LABEL[key]);
+  }
+  return labels;
+}
+
+/**
+ * For WhatsApp source_messages the conversation history (last 20 messages)
+ * is stored in raw_content, while body_text holds only the last single
+ * message. Classification needs the conversation context, otherwise it
+ * builds tasks blind. For Gmail/Drive/Calendar the body_text IS the full
+ * content.
+ */
+function bodyForAI(msg: any): string {
+  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+    return String(msg.raw_content ?? msg.body_text ?? "");
+  }
+  return String(msg.body_text ?? "");
+}
 
 function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
   const sender = (msg.sender_email || msg.sender || "").toLowerCase();
@@ -80,14 +119,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
   const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
 
-  // Per-user Gmail category filter. NULL = no row yet → use fallback so the
-  // feature is on by default. Empty array = user explicitly opted out, no
-  // Gmail category is treated as informational.
-  const userCategorySetting = settings.gmail_skip_categories;
+  // Gmail category filter — built once per cron tick per user (see Deno.serve
+  // below) and attached to settings as a Set. It already reflects rules_memory
+  // category= rules + smart defaults.
   const categoryFilter: Set<string> =
-    userCategorySetting === null || userCategorySetting === undefined
-      ? GMAIL_CATEGORY_FALLBACK
-      : new Set(userCategorySetting);
+    settings.__category_filter instanceof Set ? settings.__category_filter : new Set();
 
   for (const sr of skipRecipients) {
     if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
@@ -167,7 +203,7 @@ Rules:
 
 Respond: WORD | reason in Hebrew. WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM`;
 
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, sys.body_truncate_classify)}`;
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 100);
   const text = result.text.trim().toUpperCase();
   let classification = "informational";
@@ -181,7 +217,7 @@ async function detectProject(msg: any, sys: SystemParams, userId: string) {
   if (!projects || projects.length === 0) return null;
   const model = sys.classification_model;
   const projectList = projects.map((p: any) => `${p.id}: ${p.name_he || p.name}`).join("\n");
-  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${(msg.body_text || "").substring(0, sys.body_truncate_project)}`, 50);
+  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${bodyForAI(msg).substring(0, sys.body_truncate_project)}`, 50);
   const projectId = result.text.trim();
   const matched = projects.find((p: any) => p.id === projectId);
   return matched ? { projectId: matched.id, inputTokens: result.inputTokens, outputTokens: result.outputTokens } : null;
@@ -268,7 +304,7 @@ context that the AI doesn't need to re-read this message.`;
   if (projectContext?.brief) {
     systemPrompt += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   }
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, truncate)}`;
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, truncate)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 2048);
   let tasks: any[] = [];
   let parsed = true;
@@ -288,7 +324,7 @@ context that the AI doesn't need to re-read this message.`;
 
 async function checkFollowup(msg: any, sys: SystemParams) {
   const model = sys.classification_model;
-  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -337,6 +373,29 @@ async function tryLinkToExistingTask(
   msg: any,
   userId: string,
 ): Promise<{ id: string; updates: any[] } | null> {
+  // ── WhatsApp path ─────────────────────────────────────────────────────
+  // whatsapp-webhook upserts ONE source_message per chat and resets
+  // processing_status='pending' on every incoming message. Without this
+  // dedup, ai-process would create a fresh task for every chat reply.
+  // Match on the same source_message_id and append to the existing task.
+  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+    const { data: openTask, error: taskErr } = await supabase
+      .from("tasks")
+      .select("id, updates")
+      .eq("user_id", userId)
+      .in("status", ["inbox", "in_progress"])
+      .eq("source_message_id", msg.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (taskErr || !openTask) return null;
+    return {
+      id: openTask.id as string,
+      updates: Array.isArray(openTask.updates) ? openTask.updates : [],
+    };
+  }
+
+  // ── Gmail path: match by threadId across sibling source_messages ──────
   if (msg.source_type !== "gmail") return null;
   const threadId = msg.metadata?.threadId;
   if (!threadId) return null;
@@ -585,8 +644,17 @@ Deno.serve(async (req) => {
     let totalDeferred = 0;
 
     for (const userId of uniqueUserIds) {
-      const { data: settings } = await supabase.from("user_settings").select("*").eq("user_id", userId).single();
+      // Load settings + the user's category= skip rules in parallel.
+      const [settingsRes, categoryRulesRes] = await Promise.all([
+        supabase.from("user_settings").select("*").eq("user_id", userId).single(),
+        supabase.from("rules_memory").select("trigger, is_active").eq("user_id", userId).ilike("trigger", "category=%"),
+      ]);
+      const settings = settingsRes.data;
       if (!settings) continue;
+
+      // Compute the effective Gmail label set once per user per tick.
+      // preClassify reads it from settings.__category_filter.
+      settings.__category_filter = buildCategoryFilter(categoryRulesRes.data ?? []);
 
       const withinBudget = await checkDailyBudget(userId, settings.daily_ai_budget_usd || 1.0);
       if (!withinBudget) continue;
