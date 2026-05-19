@@ -79,14 +79,26 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
     },
   };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
-    },
-    body: JSON.stringify(body),
-  });
+  // Single retry on transient 5xx (Gemini regularly returns 503 "model
+  // currently experiencing high demand" — a short backoff usually clears it).
+  // We don't loop forever: webhook responses must stay quick and a failed
+  // OCR/transcription falls back to a placeholder upstream rather than
+  // blocking the message.
+  const fetchOnce = async () =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+  let res = await fetchOnce();
+  if (!res.ok && res.status >= 500 && res.status < 600) {
+    await new Promise((r) => setTimeout(r, 3000));
+    res = await fetchOnce();
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");

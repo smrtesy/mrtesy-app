@@ -668,7 +668,10 @@ async function buildMessageRow(
           const transcript = await transcribeAudio(blob.base64, blob.mimeType);
           body = "[תמלול אודיו]\n" + transcript;
         } catch (e) {
-          body = "[שגיאת תמלול: " + (e instanceof Error ? e.message : String(e)) + "]";
+          // Don't pollute the conversation with the raw Gemini error.
+          // Log it and fall back to a clean placeholder.
+          console.warn("[whatsapp-webhook] audio transcription failed:", e);
+          body = "[אודיו - לא ניתן לתמלל כרגע]";
         }
       } else {
         body = "[אודיו - אין מפתחות לתמלול]";
@@ -684,16 +687,43 @@ async function buildMessageRow(
       if (nm.isHistory) {
         body = caption || "[תמונה מהיסטוריה - לא בוצע OCR]";
       } else if (mediaId && accessToken) {
+        // 1) Fetch the bytes once and store them in Supabase Storage so
+        //    the frontend can render the image directly (not just the OCR).
+        //    OCR failure shouldn't lose the picture.
+        // 2) Try OCR for body_text. If Gemini is rate-limited or fails,
+        //    keep the caption (or a generic placeholder) — we don't want
+        //    the raw error in the conversation log.
+        let blob: MetaMediaBlob | null = null;
         try {
-          const blob = await downloadMetaMedia(mediaId, accessToken);
-          const ocr = await performImageOcr(blob.base64, blob.mimeType);
-          body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
+          blob = await downloadMetaMedia(mediaId, accessToken);
         } catch (e) {
-          body =
-            (caption ? "כיתוב: " + caption + "\n\n" : "") +
-            "[שגיאת OCR: " +
-            (e instanceof Error ? e.message : String(e)) +
-            "]";
+          console.error("[whatsapp-webhook] image download failed:", e);
+        }
+
+        if (blob) {
+          try {
+            const stored = await persistMediaBlobToStorage(
+              userId,
+              m.id!,
+              blob,
+              filenameForImage(m.id!, blob.mimeType),
+            );
+            mediaUrl = stored.path;
+            mediaFilename = stored.filename;
+            mediaSize = stored.size;
+          } catch (e) {
+            console.error("[whatsapp-webhook] image storage upload failed:", e);
+          }
+
+          try {
+            const ocr = await performImageOcr(blob.base64, blob.mimeType);
+            body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
+          } catch (e) {
+            console.warn("[whatsapp-webhook] image OCR failed, using caption only:", e);
+            body = caption || "[תמונה]";
+          }
+        } else {
+          body = caption || "[תמונה - שגיאת הורדה]";
         }
       } else {
         body = caption || "[תמונה - אין מפתחות ל-OCR]";
@@ -828,21 +858,23 @@ async function persistDocumentToStorage(
   declaredMime: string | null,
   token: string,
 ): Promise<PersistedDoc> {
-  // Step 1 — resolve the signed download URL from Meta.
-  const apiVersion = await getMetaApiVersion();
-  const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!metaRes.ok) {
-    throw new Error(`Meta media metadata ${metaRes.status}`);
-  }
-  const meta = (await metaRes.json()) as { url?: string; mime_type?: string; file_size?: number };
-  if (!meta.url) throw new Error("Meta media response missing url");
+  const blob = await downloadMetaMedia(mediaId, token);
+  return persistMediaBlobToStorage(userId, wamid, blob, filename, declaredMime);
+}
 
-  // Step 2 — download the bytes (Bearer required on the signed URL too).
-  const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
-  const buf = Buffer.from(await fileRes.arrayBuffer());
+/**
+ * Upload an already-downloaded blob to the `whatsapp-media` bucket. Used
+ * for images (where we already have the bytes in memory after the OCR
+ * call) and as the inner step of persistDocumentToStorage.
+ */
+async function persistMediaBlobToStorage(
+  userId: string,
+  wamid: string,
+  blob: MetaMediaBlob,
+  filename: string,
+  declaredMime: string | null = null,
+): Promise<PersistedDoc> {
+  const buf = Buffer.from(blob.base64, "base64");
 
   // Path convention: <user_id>/<wamid>-<filename>. Both segments are safe
   // inputs (uuid + wamid + sanitized filename); the filename can still
@@ -851,12 +883,32 @@ async function persistDocumentToStorage(
   const path = `${userId}/${wamid}-${safeName}`;
 
   const { error: uploadErr } = await db.storage.from("whatsapp-media").upload(path, buf, {
-    contentType: meta.mime_type ?? declaredMime ?? "application/octet-stream",
+    contentType: blob.mimeType || declaredMime || "application/octet-stream",
     upsert: true,
   });
   if (uploadErr) throw new Error(`storage upload: ${uploadErr.message}`);
 
   return { path, filename: safeName, size: buf.length };
+}
+
+/**
+ * Build a safe filename for an image, since Meta doesn't supply one.
+ * We use the wamid (already unique per message) plus an extension derived
+ * from the mime type. Falls back to `.bin` if the mime is unknown.
+ */
+function filenameForImage(wamid: string, mime: string): string {
+  const map: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg":  "jpg",
+    "image/png":  "png",
+    "image/webp": "webp",
+    "image/gif":  "gif",
+  };
+  const ext = map[mime.toLowerCase().split(";")[0].trim()] ?? "bin";
+  // The wamid already contains its own segments — collapse non-alnum to keep
+  // the filename portable.
+  const safeBase = wamid.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60);
+  return `${safeBase}.${ext}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
