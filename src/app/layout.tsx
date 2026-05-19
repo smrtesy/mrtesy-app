@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -6,13 +7,17 @@ export const metadata: Metadata = {
   description: "Personal AI Brain",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const heads = await headers();
+  const locale = heads.get("x-next-intl-locale") ?? "he";
+  const dir = locale === "he" ? "rtl" : "ltr";
+
   return (
-    <html suppressHydrationWarning>
+    <html lang={locale} dir={dir} suppressHydrationWarning>
       <body className="min-h-screen bg-background font-sans antialiased">
         {children}
       </body>

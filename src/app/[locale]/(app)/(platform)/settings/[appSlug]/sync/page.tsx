@@ -196,10 +196,10 @@ export default function SettingsSyncPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Sync Control</h1>
-        <Button variant="outline" size="sm" onClick={loadData}>
-          <RefreshCw className="h-4 w-4 mr-2" />
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold min-w-0 truncate">Sync Control</h1>
+        <Button variant="outline" size="sm" onClick={loadData} className="shrink-0 gap-1.5">
+          <RefreshCw className="h-4 w-4" />
           Refresh
         </Button>
       </div>
@@ -251,9 +251,9 @@ export default function SettingsSyncPage() {
                     onClick={() => triggerPart(part.key as "part0" | "part1" | "part2" | "part3")}
                   >
                     {isRunning ? (
-                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      <RefreshCw className="h-4 w-4 me-2 animate-spin" />
                     ) : (
-                      <Play className="h-4 w-4 mr-2" />
+                      <Play className="h-4 w-4 me-2" />
                     )}
                     {isRunning ? "Running…" : "Run Now"}
                   </Button>
@@ -322,7 +322,7 @@ export default function SettingsSyncPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0 ml-3">
+                  <div className="flex items-center gap-3 shrink-0 ms-3">
                     <span className="text-xs text-muted-foreground">
                       {formatDuration(s.duration_seconds)}
                     </span>

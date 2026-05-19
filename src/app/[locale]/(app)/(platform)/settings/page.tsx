@@ -237,12 +237,12 @@ export default function SettingsPage() {
               {connections.map((conn) => {
                 const connected = connStatus[conn.key];
                 return (
-                  <div key={conn.key} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <conn.icon className={`h-5 w-5 ${conn.color}`} />
-                      <span className="text-sm font-medium">{conn.label}</span>
+                  <div key={conn.key} className="flex items-center justify-between gap-2 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <conn.icon className={`h-5 w-5 shrink-0 ${conn.color}`} />
+                      <span className="text-sm font-medium truncate">{conn.label}</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       {connected ? (
                         <Badge variant="default" className="gap-1 bg-green-500">
                           <CheckCircle2 className="h-3 w-3" />
