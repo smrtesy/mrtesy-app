@@ -108,6 +108,13 @@ export function WhatsAppPageClient({ title }: { title: string }) {
               onBack={() => setSelectedChatId(null)}
               chatId={selectedChatId}
               thread={threads.find((t) => t.chat_id === selectedChatId)}
+              onMessageSent={() => {
+                // Re-fetch immediately rather than waiting for the next
+                // poll tick — the optimistic insert on the backend already
+                // wrote the row, so this just refreshes the list.
+                if (selectedChatId) loadMessages(selectedChatId);
+                loadThreads();
+              }}
             />
           ) : (
             <div className="flex h-full items-center justify-center rounded-lg border bg-muted/30 text-sm text-muted-foreground">
