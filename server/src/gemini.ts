@@ -7,12 +7,15 @@
  * don't accept audio, and Gemini Flash gives us cheap, accurate Hebrew
  * transcription with multi-speaker handling — same model and prompts the
  * existing Apps Script uses, so behavior is identical post-migration.
+ *
+ * The API key + model + thinking level all come from `app_secrets` for the
+ * smrttask app (admin UI). Env vars (GEMINI_API_KEY etc.) serve as fallback
+ * during the transition window.
  */
 
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+import { getAppSecret } from "./db";
 
-export const DEFAULT_MODEL = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
-export const DEFAULT_THINKING_LEVEL = process.env.GEMINI_THINKING_LEVEL ?? "low";
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 interface GeminiCallOptions {
   /** Prompt text shown to the model. */
@@ -45,10 +48,19 @@ interface GeminiResponse {
  * than crashing on missing text.
  */
 export async function callGemini(opts: GeminiCallOptions): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+  const apiKey = await getAppSecret("smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
 
-  const model = opts.model ?? DEFAULT_MODEL;
+  const model =
+    opts.model ??
+    (await getAppSecret("smrttask", "GEMINI_MODEL", "GEMINI_MODEL")) ??
+    "gemini-3-flash-preview";
+
+  const thinkingLevel =
+    opts.thinkingLevel ??
+    (await getAppSecret("smrttask", "GEMINI_THINKING_LEVEL", "GEMINI_THINKING_LEVEL")) ??
+    "low";
+
   const url = `${GEMINI_API_BASE}/${model}:generateContent`;
 
   const body = {
@@ -63,7 +75,7 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: opts.maxOutputTokens ?? 4096,
-      thinkingConfig: { thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL },
+      thinkingConfig: { thinkingLevel },
     },
   };
 

@@ -31,12 +31,15 @@
 
 import crypto from "node:crypto";
 import { Router, Request, Response } from "express";
-import { db, createRunSession, closeRunSession, loadRules } from "../../../db";
+import { db, createRunSession, closeRunSession, loadRules, getAppSecret } from "../../../db";
 import { transcribeAudio, performImageOcr } from "../../../gemini";
 
 const router = Router();
 
-const META_API_VERSION = process.env.META_API_VERSION ?? "v21.0";
+/** Meta API version — read from app_secrets (admin UI), env fallback. */
+async function getMetaApiVersion(): Promise<string> {
+  return (await getAppSecret("smrttask", "META_API_VERSION", "META_API_VERSION")) ?? "v21.0";
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types — minimal shape of the Meta Cloud API webhook payload we read
@@ -128,22 +131,41 @@ interface NormalizedMessage {
 // GET — Meta verify handshake
 // ─────────────────────────────────────────────────────────────────────────────
 
-router.get("/webhooks/whatsapp", (req: Request, res: Response) => {
+router.get("/webhooks/whatsapp", async (req: Request, res: Response) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
-  if (!expected) {
-    console.error("[whatsapp-webhook] WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set");
-    return res.status(500).type("text/plain").send("verify token not configured");
+  if (mode !== "subscribe" || typeof token !== "string") {
+    console.warn(`[whatsapp-webhook] verify failed (mode=${String(mode)})`);
+    return res.status(403).type("text/plain").send("forbidden");
   }
 
-  if (mode === "subscribe" && typeof token === "string" && token === expected) {
-    return res.status(200).type("text/plain").send(typeof challenge === "string" ? challenge : "");
+  // Match the verify token against every connection's vaulted token.
+  // For single-tenant this is trivially "the only one"; for multi-tenant
+  // it accepts any active connection's token. (URL-scoping comes later.)
+  // Env fallback during transition: if a connection has no vaulted token
+  // yet, we still allow the legacy WHATSAPP_WEBHOOK_VERIFY_TOKEN.
+  const envToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  if (envToken && token === envToken) {
+    return res.status(200).type("text/plain").send(challenge ?? "");
   }
 
-  console.warn(`[whatsapp-webhook] verify failed (mode=${String(mode)})`);
+  const { data: rows } = await db
+    .from("whatsapp_connections")
+    .select("verify_token_id")
+    .is("disconnected_at", null);
+
+  for (const row of rows ?? []) {
+    const id = (row.verify_token_id as string | null) ?? null;
+    if (!id) continue;
+    const { data: plaintext } = await db.rpc("vault_read_secret", { secret_id: id });
+    if (typeof plaintext === "string" && plaintext === token) {
+      return res.status(200).type("text/plain").send(challenge ?? "");
+    }
+  }
+
+  console.warn("[whatsapp-webhook] verify token did not match any connection");
   return res.status(403).type("text/plain").send("forbidden");
 });
 
@@ -163,10 +185,38 @@ router.post("/webhooks/whatsapp", async (req: Request, res: Response) => {
   const rawBuf = (req as RawBodyRequest).rawBody;
   const rawBody = rawBuf ? rawBuf.toString("utf8") : JSON.stringify(req.body ?? {});
 
-  // Validate signature when META_APP_SECRET is configured. We allow skipping
-  // it during initial rollout because the value isn't surfaced in DualHook's
-  // UI yet — the URL itself is unguessable until we hook it up.
-  const appSecret = process.env.META_APP_SECRET;
+  // Parse JSON FIRST (without trusting it), so we can find the phone_number_id
+  // → connection → app_secret needed to validate the HMAC. The shape guard
+  // below makes sure malformed or non-Meta payloads short-circuit to 200.
+  let payload: MetaWebhookBody;
+  try {
+    const raw =
+      typeof req.body === "object" && req.body !== null
+        ? (req.body as MetaWebhookBody)
+        : (JSON.parse(rawBody) as MetaWebhookBody);
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.entry)) {
+      return res.status(200).json({ ok: false, error: "shape_invalid" });
+    }
+    payload = raw;
+  } catch {
+    return res.status(200).json({ ok: false, error: "invalid_json" });
+  }
+
+  // Pick the first phone_number_id we can find. Meta sends one signature
+  // per request, so all entries must come from the same app secret — a
+  // multi-WABA payload from Meta is implausible. (We still walk every entry
+  // when *processing*, just not when picking the secret.)
+  const firstPhoneNumberId = findFirstPhoneNumberId(payload);
+
+  // Resolve the App Secret for this WABA. Env fallback covers the brief
+  // window between deploying this code and the user pasting their secret
+  // into onboarding — both can run in parallel.
+  let appSecret: string | null = process.env.META_APP_SECRET ?? null;
+  if (firstPhoneNumberId) {
+    const fromVault = await resolveAppSecret(firstPhoneNumberId);
+    if (fromVault) appSecret = fromVault;
+  }
+
   if (appSecret) {
     const header = req.headers["x-hub-signature-256"];
     const sig = typeof header === "string" ? header : "";
@@ -176,23 +226,6 @@ router.post("/webhooks/whatsapp", async (req: Request, res: Response) => {
       // Return 200 anyway so Meta doesn't retry forever on a misconfig.
       return res.status(200).json({ ok: false, error: "signature_mismatch" });
     }
-  }
-
-  let payload: MetaWebhookBody;
-  try {
-    const raw =
-      typeof req.body === "object" && req.body !== null
-        ? (req.body as MetaWebhookBody)
-        : (JSON.parse(rawBody) as MetaWebhookBody);
-    // Shape guard — Meta payloads are stable but bot crawlers / misrouted
-    // traffic can hit this URL with arbitrary JSON; we'd rather no-op than
-    // throw on missing fields when we walk entry[].changes[] later.
-    if (!raw || typeof raw !== "object" || !Array.isArray(raw.entry)) {
-      return res.status(200).json({ ok: false, error: "shape_invalid" });
-    }
-    payload = raw;
-  } catch {
-    return res.status(200).json({ ok: false, error: "invalid_json" });
   }
 
   // Process synchronously: the heavy work here is Gemini calls for live
@@ -221,6 +254,39 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
+/**
+ * Look through a Meta webhook body and return the first
+ * `entry[i].changes[j].value.metadata.phone_number_id` we find. We use it
+ * to identify which WABA the payload is for before HMAC validation.
+ */
+function findFirstPhoneNumberId(payload: MetaWebhookBody): string | null {
+  for (const entry of payload.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      const id = change.value?.metadata?.phone_number_id;
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+/** Resolve the per-WABA Meta App Secret from Vault, or null if not set. */
+async function resolveAppSecret(phoneNumberId: string): Promise<string | null> {
+  const { data } = await db
+    .from("whatsapp_connections")
+    .select("app_secret_id")
+    .eq("phone_number_id", phoneNumberId)
+    .is("disconnected_at", null)
+    .maybeSingle();
+  const id = (data?.app_secret_id as string | null | undefined) ?? null;
+  if (!id) return null;
+  const { data: plaintext, error } = await db.rpc("vault_read_secret", { secret_id: id });
+  if (error) {
+    console.error(`[whatsapp-webhook] vault_read_secret(${id}) failed:`, error.message);
+    return null;
+  }
+  return typeof plaintext === "string" ? plaintext : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Payload walker
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,6 +298,12 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
   // refresh per (user_id, chat_id) instead of one refresh per message —
   // history chunks can carry hundreds of messages across many chats.
   const perUser = new Map<string, NormalizedMessage[]>();
+  // Resolved access tokens, also keyed by user_id, so we Vault-read once
+  // per batch even if the payload spans multiple changes for the same user.
+  const tokenByUser = new Map<string, string | null>();
+  // Cache phone_number_id → resolved connection within the request so we
+  // never run resolveConnection twice for the same Meta number.
+  const connectionByPhone = new Map<string, ResolvedConnection | null>();
 
   for (const entry of payload.entry) {
     for (const change of entry.changes ?? []) {
@@ -245,12 +317,18 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
         continue;
       }
 
-      // Look up the smrtTask user for this Meta phone number.
-      const userId = await resolveUserId(phoneNumberId);
-      if (!userId) {
+      // Look up the smrtTask user and access token for this Meta phone number.
+      let conn = connectionByPhone.get(phoneNumberId);
+      if (conn === undefined) {
+        conn = await resolveConnection(phoneNumberId);
+        connectionByPhone.set(phoneNumberId, conn);
+      }
+      if (!conn) {
         console.warn(`[whatsapp-webhook] no connection for phone_number_id=${phoneNumberId}, skipping`);
         continue;
       }
+      const userId = conn.userId;
+      tokenByUser.set(userId, conn.accessToken);
 
       const contacts = value.contacts ?? [];
       const list = perUser.get(userId) ?? [];
@@ -289,18 +367,44 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
   // Process each user's batch in its own run session for auditability.
   for (const [userId, messages] of perUser.entries()) {
     if (messages.length === 0) continue;
-    await processUserBatch(userId, messages);
+    const accessToken = tokenByUser.get(userId) ?? null;
+    await processUserBatch(userId, messages, accessToken);
   }
 }
 
-async function resolveUserId(phoneNumberId: string): Promise<string | null> {
+interface ResolvedConnection {
+  userId: string;
+  /** Decrypted Meta Cloud API Bearer token, or null if the user hasn't
+   *  pasted one yet — in which case we still log incoming messages, but
+   *  can't fetch media (audio transcripts, images, documents). */
+  accessToken: string | null;
+}
+
+async function resolveConnection(phoneNumberId: string): Promise<ResolvedConnection | null> {
   const { data } = await db
     .from("whatsapp_connections")
-    .select("user_id")
+    .select("user_id, access_token_secret_id")
     .eq("phone_number_id", phoneNumberId)
     .is("disconnected_at", null)
     .maybeSingle();
-  return (data?.user_id as string | undefined) ?? null;
+
+  const userId = (data?.user_id as string | undefined) ?? null;
+  if (!userId) return null;
+
+  const secretId = (data?.access_token_secret_id as string | null | undefined) ?? null;
+  let accessToken: string | null = null;
+  if (secretId) {
+    const { data: plaintext, error } = await db.rpc("vault_read_secret", {
+      secret_id: secretId,
+    });
+    if (error) {
+      console.error(`[whatsapp-webhook] vault_read_secret(${secretId}) failed:`, error.message);
+    } else {
+      accessToken = (plaintext as string | null) ?? null;
+    }
+  }
+
+  return { userId, accessToken };
 }
 
 function normalizeLive(
@@ -377,7 +481,11 @@ function normalizeHistory(
 // Per-user batch
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function processUserBatch(userId: string, messages: NormalizedMessage[]): Promise<void> {
+async function processUserBatch(
+  userId: string,
+  messages: NormalizedMessage[],
+  accessToken: string | null,
+): Promise<void> {
   const isHistoryBatch = messages.some((m) => m.isHistory);
   const sessionId = await createRunSession(userId, "part2", "whatsapp").catch(() => null);
 
@@ -405,7 +513,7 @@ async function processUserBatch(userId: string, messages: NormalizedMessage[]): 
     }
 
     try {
-      const built = await buildMessageRow(userId, nm);
+      const built = await buildMessageRow(userId, nm, accessToken);
       const { error } = await db
         .from("whatsapp_messages")
         .upsert(built, { onConflict: "user_id,wamid" });
@@ -472,7 +580,11 @@ interface WhatsappMessageRow {
   raw_payload: MetaMessage;
 }
 
-async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<WhatsappMessageRow> {
+async function buildMessageRow(
+  userId: string,
+  nm: NormalizedMessage,
+  accessToken: string | null,
+): Promise<WhatsappMessageRow> {
   const m = nm.meta;
   const type = (m.type ?? "unknown").toLowerCase();
   const ts = m.timestamp ? new Date(parseInt(m.timestamp, 10) * 1000) : new Date();
@@ -499,9 +611,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
       mediaMime = a.mime_type ?? null;
       if (nm.isHistory) {
         body = mediaId ? "[אודיו מהיסטוריה - לא תומלל]" : "[אודיו ישן - לא ניתן להורדה]";
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN && process.env.GEMINI_API_KEY) {
+      } else if (mediaId && accessToken) {
         try {
-          const blob = await downloadMetaMedia(mediaId);
+          const blob = await downloadMetaMedia(mediaId, accessToken);
           const transcript = await transcribeAudio(blob.base64, blob.mimeType);
           body = "[תמלול אודיו]\n" + transcript;
         } catch (e) {
@@ -520,9 +632,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
       const caption = img.caption ?? "";
       if (nm.isHistory) {
         body = caption || "[תמונה מהיסטוריה - לא בוצע OCR]";
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN && process.env.GEMINI_API_KEY) {
+      } else if (mediaId && accessToken) {
         try {
-          const blob = await downloadMetaMedia(mediaId);
+          const blob = await downloadMetaMedia(mediaId, accessToken);
           const ocr = await performImageOcr(blob.base64, blob.mimeType);
           body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
         } catch (e) {
@@ -548,9 +660,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
         body = caption || "[מסמך ישן - לא ניתן להורדה]";
       } else if (nm.isHistory) {
         body = caption || `[מסמך מהיסטוריה: ${filename}]`;
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN) {
+      } else if (mediaId && accessToken) {
         try {
-          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime);
+          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime, accessToken);
           mediaUrl = stored.path;
           mediaFilename = stored.filename;
           mediaSize = stored.size;
@@ -663,12 +775,11 @@ async function persistDocumentToStorage(
   mediaId: string,
   filename: string,
   declaredMime: string | null,
+  token: string,
 ): Promise<PersistedDoc> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN not set");
-
   // Step 1 — resolve the signed download URL from Meta.
-  const metaRes = await fetch(`https://graph.facebook.com/${META_API_VERSION}/${mediaId}`, {
+  const apiVersion = await getMetaApiVersion();
+  const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!metaRes.ok) {
@@ -706,11 +817,9 @@ interface MetaMediaBlob {
   mimeType: string;
 }
 
-async function downloadMetaMedia(mediaId: string): Promise<MetaMediaBlob> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN not set");
-
-  const metaRes = await fetch(`https://graph.facebook.com/${META_API_VERSION}/${mediaId}`, {
+async function downloadMetaMedia(mediaId: string, token: string): Promise<MetaMediaBlob> {
+  const apiVersion = await getMetaApiVersion();
+  const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!metaRes.ok) {

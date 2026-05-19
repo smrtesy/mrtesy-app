@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Sparkles, BookOpen, ArrowLeft } from "lucide-react";
+import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound } from "lucide-react";
 import { AppStatusCard } from "@/components/admin/AppStatusCard";
 
 interface AppRow {
@@ -55,6 +55,13 @@ export default async function AdminAppDetailPage({
       description: t("appPromptsDesc"),
       icon: Sparkles,
       href: `${base}/prompts`,
+    },
+    {
+      key: "secrets",
+      title: t("appSecretsTitle"),
+      description: t("appSecretsDesc"),
+      icon: KeyRound,
+      href: `${base}/secrets`,
     },
     ...(app.guide_url
       ? [{
