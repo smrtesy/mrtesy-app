@@ -102,17 +102,89 @@ async function getProjectBrief(projectId: string): Promise<string> {
 
 async function createTasksFromMessage(msg: any, settings: any, projectContext?: { projectId: string; brief: string }) {
   const model = settings.summary_model || "claude-sonnet-4-6";
-  let systemPrompt = `You are a task extraction AI. Always return a JSON Array.\nFor each task: {"title_he":"Hebrew title","description":"detailed summary","priority":"urgent|high|medium|low","due_date":"YYYY-MM-DD or null","ai_actions":[{"label":"string","prompt":"string"}],"owner_contact":"string or null"}\nRespond with ONLY the JSON array.`;
+  const truncate = settings.smrttask_body_truncate_task ?? 6000;
+  let systemPrompt = `You are a task builder for a personal task system.
+Extract concrete actionable tasks from this message.
+Return ONLY a JSON Array, no markdown, no commentary.
+
+═══ EMPTY-ARRAY RULE ═══
+Return [] (empty array) when the message is purely informational:
+  • Marketing / newsletter / sale / promotion
+  • Bank/payment confirmation of an already-completed transaction
+  • System receipts already handled by the recipient
+  • Status updates that need no human action
+The caller will record an empty result as informational.
+
+═══ TASK SHAPE ═══
+{
+  "title_he":     "Hebrew, starts with action verb",
+  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",
+  "priority":     "urgent|high|medium|low",
+  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",
+  "due_date":     "YYYY-MM-DD or null",
+  "ai_actions": [
+    { "label":  "3-7 Hebrew words naming recipient or next step",
+      "prompt": "Full instruction for the AI to run, in English or Hebrew" }
+  ],
+  "owner_contact": "name + phone + email or null"
+}
+
+═══ TITLE RULES (mandatory) ═══
+Verb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /
+לפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.
+
+BAD:  "תיאום פגישה"     (noun, not a command)
+BAD:  "מייל מ-X"         (passive)
+GOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"
+GOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"
+
+═══ PRIORITY RULES (mandatory) ═══
+urgent : deadline today/tomorrow AND a concrete fact (amount, named
+         person, blocked system).
+high   : deadline within 7 days AND impacts people other than the user.
+medium : deadline within 30 days OR routine follow-up.
+low    : no clear deadline OR soft/optional action OR upcoming auto-renewal.
+
+Never default to urgent. If you can't cite a concrete urgency fact, drop
+to medium.
+
+Auto-system notifications (Vercel, Railway, GitHub, monitoring services)
+→ max medium, unless production is currently down.
+
+═══ CONTENT-SPECIFIC RULES ═══
+1. Subscription renewal notice ("your X plan renews on Y for $Z"):
+   priority: "low". description MUST list, in this order:
+     • מה מתחדש (service + plan)
+     • כמה ייחויב (amount + currency)
+     • מתי (date)
+     • איך לבטל / לשנות (link or step from the message)
+   ai_actions should include "draft cancel" or "review subscription".
+
+2. Bank / payment confirmation of a completed transaction → return [].
+
+═══ AI_ACTIONS RULES ═══
+2-3 actions per task. The label is the button text the user sees — it
+MUST name the recipient or the concrete next step, not the generic
+action name. The prompt is what the AI will run on click; include enough
+context that the AI doesn't need to re-read this message.`;
   if (projectContext?.brief) {
-    systemPrompt += `\n\nProject context (use for better task extraction):\n${projectContext.brief}`;
+    systemPrompt += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   }
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, 4000)}`;
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, truncate)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 2048);
   let tasks: any[] = [];
+  let parsed = true;
   try {
     const jsonMatch = result.text.match(/\[[\s\S]*\]/);
     if (jsonMatch) tasks = JSON.parse(jsonMatch[0]);
-  } catch { tasks = [{ title_he: msg.subject || "משימה חדשה", description: result.text, priority: "medium", due_date: null, ai_actions: [], owner_contact: null }]; }
+    else parsed = false;
+  } catch { parsed = false; }
+  if (!parsed) {
+    // Parse failure — preserve the raw text as the description so the user can
+    // still see what the AI tried to say. Priority is medium; the prompt rules
+    // forbid defaulting to urgent.
+    tasks = [{ title_he: msg.subject || "משימה חדשה", description: result.text, priority: "medium", reason_he: "Sonnet output failed to parse — raw text preserved", due_date: null, ai_actions: [], owner_contact: null }];
+  }
   return { tasks, inputTokens: result.inputTokens, outputTokens: result.outputTokens, model, projectId: projectContext?.projectId || null };
 }
 
@@ -322,25 +394,41 @@ async function processMessage(msg: any, settings: any) {
       const taskResult = await createTasksFromMessage(msg, settings, projectContext);
       totalInputTokens += taskResult.inputTokens; totalOutputTokens += taskResult.outputTokens;
 
-      for (const task of taskResult.tasks) {
-        const { data: newTask } = await supabase.from("tasks").insert({
-          user_id: msg.user_id, source_message_id: msg.id,
-          title: task.title_he || msg.subject || "New task", title_he: task.title_he,
-          description: task.description, task_type: "action", priority: task.priority || "medium",
-          status: "inbox", manually_verified: false,
-          due_date: task.due_date,
-          project_id: taskResult.projectId,
-          ai_actions: task.ai_actions || [], related_contact: task.owner_contact,
-          related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
-          updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
-        }).select("id").single();
-        if (newTask) {
-          await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
-        }
-      }
+      // Sonnet returned no tasks — message is informational despite Haiku's
+      // initial guess. Flip classification so the final log_entries reflects
+      // the true outcome and the UI doesn't show an empty actionable.
+      if (taskResult.tasks.length === 0) {
+        classification = "informational";
+        classificationReason = "Sonnet returned no actionable tasks (marketing, receipt, or status update).";
+        aiModel = taskResult.model;
+      } else {
+        // Sonnet's reason_he is task-specific; prefer it over the brief Haiku
+        // classification reason for the AI Trail block.
+        const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
+        if (firstReason) classificationReason = firstReason;
+        // Sonnet dominates the cost; record its model for the final log row.
+        aiModel = taskResult.model;
 
-      if (!projectContext) {
-        await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+        for (const task of taskResult.tasks) {
+          const { data: newTask } = await supabase.from("tasks").insert({
+            user_id: msg.user_id, source_message_id: msg.id,
+            title: task.title_he || msg.subject || "New task", title_he: task.title_he,
+            description: task.description, task_type: "action", priority: task.priority || "medium",
+            status: "inbox", manually_verified: false,
+            due_date: task.due_date,
+            project_id: taskResult.projectId,
+            ai_actions: task.ai_actions || [], related_contact: task.owner_contact,
+            related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
+            updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
+          }).select("id").single();
+          if (newTask) {
+            await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+          }
+        }
+
+        if (!projectContext) {
+          await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+        }
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
