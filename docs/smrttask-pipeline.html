@@ -125,13 +125,13 @@
 <h3>א. Gmail</h3>
 <table>
 <tr><th>פעולה</th><td>שואב הודעות חדשות דרך Gmail History API (Incremental sync לפי <code>historyId</code> שמור ב-<code>sync_state</code>)</td></tr>
-<tr><th>מיקום</th><td><span class="badge edge">Edge Function</span> <code>gmail-sync</code> <span class="badge active">v5 ACTIVE</span></td></tr>
+<tr><th>מיקום</th><td><span class="badge edge">Edge Function</span> <code>gmail-sync</code> <span class="badge active">v6 ACTIVE</span></td></tr>
 <tr><th>תזמון</th><td>pg_cron כל 2 דקות <span class="ltr">(<code>*/2 * * * *</code>)</span></td></tr>
-<tr><th>סינון בייבוא</th><td>חוקים מ-<code>rules_memory</code> (skip rules) — מסונן כבר בשאילתה ל-Gmail וגם לאחר השליפה</td></tr>
+<tr><th>סינון בייבוא</th><td>חוקים מ-<code>rules_memory</code> (skip rules עם trigger=from/sender/to/domain) — מסונן כבר בשאילתה ל-Gmail וגם לאחר השליפה</td></tr>
 <tr><th>שדות נשמרים</th><td><code>sender, sender_email, recipient, subject, body_text</code> (חתוך ל-10,000 תווים), <code>received_at</code>, <code>has_attachments</code></td></tr>
 <tr><th>source_type</th><td><code>gmail</code> להודעות נכנסות, <code>gmail_sent</code> להודעות שיוצאות (יש להן label <code>SENT</code>)</td></tr>
-<tr><th>metadata</th><td><code>{threadId, to}</code> — ה-threadId משמש בשלב 3 לזיהוי המשך</td></tr>
-<tr><th>קוד</th><td><span class="source">supabase/functions/gmail-sync/index.ts:233-253</span></td></tr>
+<tr><th>metadata</th><td><code>{threadId, to, labels}</code> — ה-threadId משמש בשלב 3 לזיהוי המשך; ה-labels (CATEGORY_PROMOTIONS וכו') משמשים בשלב 1 לסינון לפי קטגוריה</td></tr>
+<tr><th>קוד</th><td><span class="source">supabase/functions/gmail-sync/index.ts:233-264</span></td></tr>
 </table>
 
 <h3>ב. Google Drive</h3>
@@ -201,7 +201,7 @@
 <tr><td>5</td><td>השולח (<code>sender_email</code>) מכיל ערך מ-<code>user_settings.my_emails</code></td><td><code>check_followup</code> — כנ"ל, זוהו כהודעה שלך</td></tr>
 <tr><td>6</td><td>השולח מכיל ערך מ-<code>user_settings.office_addresses</code></td><td><code>customer_inquiry</code> — מסווגת actionable אוטומטית כפנייה מלקוח</td></tr>
 <tr><td>7</td><td>השולח מכיל ערך מ-<code>user_settings.skip_senders</code></td><td><code>informational</code> — בלי AI, לא יווצרו הצעות</td></tr>
-<tr><td>8</td><td>הגוף או השולח מכילים: <code>unsubscribe</code>, <code>no-reply</code>, <code>noreply</code>, <code>newsletter</code>, <code>marketing</code></td><td><code>informational</code> — סינון שיווק זול</td></tr>
+<tr><td>8</td><td>אחת מתוויות Gmail של ההודעה (<code>metadata.labels</code>) שייכת לקטגוריה ש"מסוננת" עבור המשתמש — <code>CATEGORY_PROMOTIONS / SOCIAL / FORUMS / UPDATES</code></td><td><code>informational</code> — סינון מבוסס הסיווג של Gmail עצמו (במקום סריקת מילות מפתח)</td></tr>
 <tr><td>9</td><td>אחרת</td><td><code>needs_claude</code> — ממשיך לשלב 2</td></tr>
 </tbody>
 </table>
@@ -211,9 +211,9 @@
 <code>calendar_past_days</code> ו-<code>calendar_future_days</code> נטענים מטבלת <code>smrttask_system_params</code> (סופר-מנהל). ברירת המחדל לשניהם היא 1. ניתן לערוך ב-<code>/admin/apps/smrttask/parameters</code>.
 </div>
 
-<div class="callout warn">
-<div class="label">מה לא ניתן לקונפיגורציה</div>
-רשימת מילות-המפתח השיווקיות (<code>unsubscribe</code>, <code>no-reply</code>, וכו') <strong>קשיחה בקוד</strong>. ניתן לנהל אותה רק ע"י עריכת <code>ai-process</code> ופריסה מחדש. אם תרצה להוסיף מילה (לדוגמה <code>promo</code>), זה דורש עדכון קוד.
+<div class="callout ok">
+<div class="label">איך נקבע כלל 8 (קטגוריות Gmail) פר-משתמש</div>
+ai-process קורא מ-<code>rules_memory</code> את כל השורות עם <code>trigger='category=&lt;key&gt;'</code> (4 ערכים: <code>promotions / social / forums / updates</code>). אם יש שורה — היא מנצחת. אם לא קיימת — חל ברירת המחדל החכמה: <strong>promotions, social, forums מסוננים. updates עוברים לסונט</strong>. המשתמש שולט בזה דרך הדף <code>/settings/smrttask/rules</code> תחת "Gmail Filters" (4 toggles).
 </div>
 
 <!-- =============================================================== -->
@@ -221,58 +221,76 @@
 
 <p>רק אם preClassify החזיר <code>needs_claude</code> או <code>check_followup</code>, ai-process קורא ל-Claude Haiku. <span class="source">supabase/functions/ai-process/index.ts:115-125</span></p>
 
-<h4>הפרומפט שנשלח ל-Haiku</h4>
+<h4>הפרומפט שנשלח ל-Haiku (תבנית פר-משתמש)</h4>
 <pre><code>You are a message classifier for a personal task management system.
-Rules: outbox@maor.org→informational | Payment confirmations→informational
-       | maor.org emails→classify by content (NOT spam!)
-Respond: WORD | reason in Hebrew. WORD: ACTIONABLE | INFORMATIONAL | SPAM</code></pre>
+
+User's own addresses (outgoing): &lt;user_settings.my_emails&gt;
+User's office/customer-facing addresses: &lt;user_settings.office_addresses&gt;.
+Mail addressed to or from these is business correspondence —
+classify by content, never spam.
+
+Rules:
+- Outgoing mail (from the user's own addresses) → informational
+- Payment confirmations of completed transactions → informational
+- Mail to/from the user's office addresses → classify by content (NOT spam)
+
+Respond: WORD | reason in Hebrew.
+WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM</code></pre>
+
+<div class="callout ok">
+<div class="label">תבנית, לא קשיחות</div>
+הפרומפט בנוי דינמית מ-<code>user_settings.my_emails</code> ו-<code>user_settings.office_addresses</code> של המשתמש שמטפלים בהודעה. אם המערכים ריקים, הקטעים מושמטים — הפרומפט עובד גם לטננטים שטרם הגדירו כלום. <span class="source">supabase/functions/ai-process/index.ts:140-162</span>
+</div>
 
 <h4>קלט</h4>
-<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה חתוך ל-<code>body_truncate_classify</code> תווים (כברירת מחדל 2000).</p>
+<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה חתוך ל-<code>body_truncate_classify</code> תווים (כברירת מחדל 2000). לוואטסאפ — ההיסטוריה המלאה של 20 ההודעות האחרונות (<code>raw_content</code>) במקום הודעה אחרונה בלבד, דרך פונקציית <code>bodyForAI(msg)</code>.</p>
 
 <h4>פלט</h4>
 <table>
 <tr><th>תווית</th><th>משמעות</th><th>מה קורה הלאה</th></tr>
-<tr><td><code>ACTIONABLE</code></td><td>נדרשת פעולה</td><td>ממשיך לשלב 3 (threadId follow-up) ושלב 5 (יצירת משימה)</td></tr>
+<tr><td><code>ACTIONABLE</code></td><td>נדרשת פעולה</td><td>ממשיך לשלב 3 (threadId/WhatsApp follow-up) ושלב 5 (יצירת משימה)</td></tr>
 <tr><td><code>INFORMATIONAL</code></td><td>רק לידיעה</td><td>מסומן processed עם classification='informational'. לא יווצרו משימות</td></tr>
 <tr><td><code>SPAM</code></td><td>זבל</td><td>מסומן processed עם classification='spam'. לא יווצרו משימות</td></tr>
 </table>
 
-<div class="callout bad">
-<div class="label">המגבלה של הפרומפט הזה</div>
-הפרומפט מכיל את הקשיחות <code>outbox@maor.org</code> ו-<code>maor.org</code>. זה רק עבור המופע הנוכחי של Maor, ולא יתאים ללקוח אחר בלי לערוך את הקוד. צריך להגיע ממנו לתבנית מבוססת-משתנה (<code>userName</code>, <code>userOrg</code>) כמו שעשינו ב-Sonnet, אבל זה לא הוסדר בענף הזה. <span class="source">supabase/functions/ai-process/index.ts:117</span>
-</div>
-
 <!-- =============================================================== -->
-<h2 id="followup">6. שלב 3 — זיהוי המשך לשרשור (threadId)</h2>
+<h2 id="followup">6. שלב 3 — זיהוי המשך: threadId ל-Gmail, source_message_id ל-WhatsApp</h2>
 
-<p>חידוש שהוסף בקומיט <code>28bb2ff</code> כדי לפתור את בעיית הכפילויות (46% מהמשימות בעבר). <span class="source">supabase/functions/ai-process/index.ts:284-316</span></p>
+<p>חידוש שהוסף בקומיט <code>28bb2ff</code> ל-Gmail, והורחב ב-<code>d85b2be</code> ל-WhatsApp, כדי לפתור את בעיית הכפילויות (46% מהמשימות בעבר). <span class="source">supabase/functions/ai-process/index.ts:332-374</span></p>
 
-<p>רק אחרי שסונט אמר ACTIONABLE, ai-process בודק:</p>
+<p>רק אחרי ש-<strong>Haiku</strong> סיווג את ההודעה כ-ACTIONABLE, ai-process בודק שני מסלולים לפי source_type:</p>
 
-<div class="pipeline">if (source_type === "gmail" && msg.metadata.threadId) {
-  // חיפוש 1: כל ההודעות באותו thread של המשתמש
+<div class="pipeline">// ── מסלול WhatsApp (whatsapp / whatsapp_echo) ─────────────────────
+// whatsapp-webhook עושה upsert על שורה אחת ב-source_messages לכל שיחה
+// ומאפס processing_status='pending' בכל הודעה חדשה. בלי dedup, היינו
+// יוצרים משימה חדשה לכל תשובה. הפתרון: לחפש משימה פתוחה שכבר קושרה
+// לאותה source_message_id.
+if (source_type === "whatsapp" || source_type === "whatsapp_echo") {
+  openTask = tasks
+    WHERE user_id = userId
+      AND status IN ('inbox', 'in_progress')
+      AND source_message_id = msg.id
+    ORDER BY created_at DESC LIMIT 1;
+  // נמצאה → append עדכון, לא משימה חדשה. אחרת → ממשיך לשלב 4.
+}
+
+// ── מסלול Gmail (השרשור הקלאסי) ───────────────────────────────────
+if (source_type === "gmail" && msg.metadata.threadId) {
   siblings = source_messages
     WHERE user_id = userId
       AND source_type = 'gmail'
       AND metadata->>'threadId' = msg.metadata.threadId
       AND id != msg.id;
 
-  // חיפוש 2: משימה פתוחה ששייכת לאחת מההודעות האלה
   openTask = tasks
     WHERE user_id = userId
       AND status IN ('inbox', 'in_progress')
       AND source_message_id IN siblings
     ORDER BY created_at DESC LIMIT 1;
-
-  if (openTask) {
-    // append ל-tasks.updates[] במקום יצירת משימה חדשה
-    // משימה זו לא תופיע יותר ברשימת ההצעות
-    // חוסך קריאה ל-Sonnet
-  }
+  // נמצאה → append עדכון, חוסך קריאה ל-Sonnet. אחרת → ממשיך לשלב 4.
 }</div>
 
-<p>אם נמצאה משימה לקישור — ההודעה נכנסת כעדכון ל-<code>tasks.updates</code> וה-classification מסומנת <code>actionable_followup</code> ב-<code>log_entries</code>. אחרת — ממשיך לשלב 4.</p>
+<p>אם נמצאה משימה לקישור — ההודעה נכנסת כעדכון ל-<code>tasks.updates</code>, רשומת <code>task_activities</code> נוצרת עם <code>activity_type='thread_followup'</code>, וה-classification מסומנת <code>actionable_followup</code> ב-<code>log_entries</code>. אחרת — ממשיך לשלב 4.</p>
 
 <!-- =============================================================== -->
 <h2 id="detectproject">7. שלב 4 — שיוך לפרויקט (detectProject)</h2>
@@ -363,7 +381,7 @@ context that the AI doesn't need to re-read this message.</code></pre>
 </details>
 
 <h4>קלט</h4>
-<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה חתוך ל-<code>body_truncate_task</code> (ברירת מחדל 6000) + הקשר פרויקט (אם נמצא).</p>
+<p>שדות: <code>From</code>, <code>To</code>, <code>Subject</code>, גוף ההודעה דרך <code>bodyForAI(msg)</code> — ל-Gmail/Drive/Calendar זה <code>body_text</code>, ל-WhatsApp זה <code>raw_content</code> שמכיל 20 הודעות אחרונות של השיחה כדי לתת לסונט את ההקשר המלא. כל זה חתוך ל-<code>body_truncate_task</code> תווים (ברירת מחדל 6000). מוסיף גם הקשר פרויקט אם נמצא.</p>
 
 <h4>פלט וטיפול</h4>
 <table>
@@ -450,11 +468,24 @@ context that the AI doesn't need to re-read this message.</code></pre>
 </tbody>
 </table>
 
-<h3>חוקי skip מתקדמים: <code>rules_memory</code></h3>
-<p>UI ב-<code>/settings/smrttask/rules</code>. בעיקר משמש ל-Gmail (gmail-sync מפעיל אותם בשלב הייבוא, לפני ש-source_messages נכתב).</p>
+<h3>המשתמש מנהל לעצמו: <code>rules_memory</code></h3>
+<p>UI ב-<code>/settings/smrttask/rules</code>. שני סוגי כללים:</p>
+
+<h4>א. כללי שולח/דומיין/נמען (משפיעים על השלב המוקדם של gmail-sync)</h4>
 <table>
-<tr><th>שדות</th><td><code>trigger</code> (למשל "from=spammer@bad.com"), <code>rule_type</code> (skip | skip_spam | bot), <code>is_active</code></td></tr>
-<tr><th>קוד מפעיל</th><td><span class="source">supabase/functions/_shared/rule-filters.ts</span> — מפרס triggers ל-Gmail query filters</td></tr>
+<tr><th>פורמט trigger</th><td><code>from=&lt;email&gt;</code>, <code>sender=&lt;email&gt;</code>, <code>to=&lt;email&gt;</code>, <code>domain=&lt;example.com&gt;</code></td></tr>
+<tr><th>rule_type</th><td><code>skip</code> | <code>skip_spam</code> | <code>bot</code></td></tr>
+<tr><th>מפעיל</th><td>gmail-sync — מתרגם ל-Gmail query filters, מסנן עוד בשליפה</td></tr>
+<tr><th>קוד</th><td><span class="source">supabase/functions/_shared/rule-filters.ts</span></td></tr>
+</table>
+
+<h4>ב. סינון קטגוריות Gmail (משפיע על ai-process preClassify, כלל 8)</h4>
+<table>
+<tr><th>פורמט trigger</th><td><code>category=promotions</code> / <code>category=social</code> / <code>category=forums</code> / <code>category=updates</code></td></tr>
+<tr><th>rule_type</th><td><code>skip</code></td></tr>
+<tr><th>ברירת מחדל (כשאין שורה ב-rules_memory)</th><td>promotions, social, forums — מסוננים. <strong>updates — לא מסוננים</strong> ועוברים לסונט.</td></tr>
+<tr><th>UI ב-rules page</th><td>4 toggles תחת "Gmail Filters". upsert בטוח דרך constraint <code>UNIQUE (user_id, trigger)</code></td></tr>
+<tr><th>קוד מפעיל</th><td><span class="source">supabase/functions/ai-process/index.ts:64-91</span> (buildCategoryFilter)</td></tr>
 </table>
 
 <!-- =============================================================== -->
@@ -499,19 +530,26 @@ context that the AI doesn't need to re-read this message.</code></pre>
 </table>
 
 <!-- =============================================================== -->
-<h2>נקודות שכדאי להחליט עליהן בהמשך</h2>
+<h2>מה כבר תוקן מאז התיעוד הראשון של המסמך</h2>
 
 <ul>
-<li><strong>הפרומפט של Haiku</strong> עדיין מכיל <code>maor.org</code> קשיח. אם תרצה להוסיף עוד לקוחות — צריך לתבנת אותו.</li>
-<li><strong>מילות מפתח שיווקיות</strong> ב-preClassify קשיחות בקוד. שווה לחשוף לקונפיגורציה (טבלה או עמודה ב-system_params)?</li>
-<li><strong>4 פעולות AI דורשות Sonnet</strong> בלי תיעוד עלות ב-log_entries (רק ה-default והקלאסיפייר מתעדים). זה משאיר חור ב-budget tracker עבור 11 הקייסים המקוריים.</li>
-<li><strong>part0-style ו-part1-collector</strong> ב-Express — האם להשאיר כ"כפתור סנכרון ידני", או למחוק לחלוטין?</li>
+<li><strong>הפרומפט של Haiku</strong> ✅ — אינו מכיל <code>maor.org</code> קשיח יותר. בנוי דינמית מ-<code>user_settings.my_emails</code> ו-<code>office_addresses</code>. <span class="source">קומיט 077a872</span></li>
+<li><strong>סינון שיווק</strong> ✅ — לא רשימת מילות מפתח קשיחה. עכשיו לפי תוויות Gmail (CATEGORY_*) פר-משתמש, עם ברירת מחדל חכמה (updates עוברים). <span class="source">קומיט d85b2be</span></li>
+<li><strong>WhatsApp רואה את הקשר השיחה</strong> ✅ — סונט/היייקו מקבלים את <code>raw_content</code> (20 הודעות) במקום <code>body_text</code> (אחרונה בלבד). <span class="source">קומיט d85b2be</span></li>
+<li><strong>WhatsApp dedup</strong> ✅ — <code>tryLinkToExistingTask</code> מטפל ב-WhatsApp דרך <code>source_message_id</code>. שיחה ארוכה = משימה אחת + עדכונים. <span class="source">קומיט d85b2be</span></li>
+<li><strong>כפילויות ב-<code>rules_memory</code></strong> ✅ — נוקה. נוסף <code>UNIQUE (user_id, trigger)</code>. דף ה-rules עושה upsert. <span class="source">migration 20260520000004</span></li>
+</ul>
+
+<h2>נקודות פתוחות שעדיין לא נסגרו</h2>
+
+<ul>
+<li><strong>11 פעולות AI מקוריות ב-executor</strong> לא מתעדות עלות ב-log_entries (רק ה-default והקלאסיפייר מתעדים). זה משאיר חור ב-budget tracker.</li>
+<li><strong>part0-style ו-part1-collector</strong> ב-Express — האם להשאיר כ"כפתור סנכרון ידני", או למחוק לחלוטין? (פער 2 בהחלטה הקודמת שלך).</li>
 <li><strong>part4-projects</strong> כפול — האם לבחור Edge או Express ולמחוק את השני?</li>
-<li><strong>WhatsApp ב-Edge Function v10</strong> ו-WhatsApp ב-Express webhook v?  — שניהם פעילים. צריך לוודא שאין כפילות.</li>
 </ul>
 
 <div class="footer">
-מסמך זה משקף את מצב הקוד בענף <code>claude/refine-task-classification-B5vQI</code> אחרי קומיט <code>f4f7a3b</code> ואת ההגדרות הרצות ב-Supabase ב-19/5/2026. כל הצהרה במסמך מקושרת לקובץ ושורה. אם משהו אינו תואם — זו תקלה במסמך, לא בקוד.
+מסמך זה משקף את מצב הקוד בענף <code>claude/refine-task-classification-B5vQI</code> אחרי קומיט <code>d85b2be</code>. גרסאות פרוסות: <code>ai-process v18</code>, <code>gmail-sync v6</code>. כל הצהרה במסמך מקושרת לקובץ ושורה. אם משהו אינו תואם — זו תקלה במסמך, לא בקוד.
 </div>
 
 </div>
