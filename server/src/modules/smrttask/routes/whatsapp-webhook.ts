@@ -195,12 +195,24 @@ router.post("/webhooks/whatsapp", async (req: Request, res: Response) => {
         ? (req.body as MetaWebhookBody)
         : (JSON.parse(rawBody) as MetaWebhookBody);
     if (!raw || typeof raw !== "object" || !Array.isArray(raw.entry)) {
+      // Still record what we got — helps diagnose calls that look misrouted.
+      void recordDebug(raw, [], "shape_invalid");
       return res.status(200).json({ ok: false, error: "shape_invalid" });
     }
     payload = raw;
   } catch {
     return res.status(200).json({ ok: false, error: "invalid_json" });
   }
+
+  // DEBUG: record every legitimate POST so we can inspect outgoing-message
+  // (echo) events that aren't yet appearing in whatsapp_messages.
+  const fields: string[] = [];
+  for (const entry of payload.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      if (change.field) fields.push(change.field);
+    }
+  }
+  void recordDebug(payload, fields, null);
 
   // Pick the first phone_number_id we can find. Meta sends one signature
   // per request, so all entries must come from the same app secret — a
@@ -267,6 +279,27 @@ function findFirstPhoneNumberId(payload: MetaWebhookBody): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Append every incoming Meta payload to whatsapp_webhook_debug. Temporary —
+ * we're using this to diagnose missing outgoing-message echoes. The insert
+ * is fire-and-forget so it can't slow the webhook response.
+ */
+async function recordDebug(
+  payload: unknown,
+  fields: string[],
+  notes: string | null,
+): Promise<void> {
+  try {
+    await db.from("whatsapp_webhook_debug").insert({
+      payload: payload as Record<string, unknown>,
+      fields,
+      notes,
+    });
+  } catch (e) {
+    console.error("[whatsapp-webhook] debug insert failed:", e instanceof Error ? e.message : e);
+  }
 }
 
 /** Resolve the per-WABA Meta App Secret from Vault, or null if not set. */
