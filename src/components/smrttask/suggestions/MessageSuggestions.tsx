@@ -11,6 +11,7 @@ import { CheckCircle2, X, Bell } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { DismissDialog } from "./DismissDialog";
 
 interface SourceJoin {
   source_type: string | null;
@@ -26,6 +27,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
 
   const fetchSuggestions = useCallback(async () => {
     setLoading(true);
@@ -64,13 +66,8 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     fetchSuggestions();
   }
 
-  async function handleDismiss(taskId: string) {
-    await supabase
-      .from("tasks")
-      .update({ status: "archived", manually_verified: true })
-      .eq("id", taskId);
-    toast.success(t("dismiss"));
-    fetchSuggestions();
+  function openDismissDialog(taskId: string, title: string) {
+    setDismissTarget({ id: taskId, title });
   }
 
   if (loading) {
@@ -151,7 +148,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                   size="sm"
                   variant="ghost"
                   className="h-9 min-w-[48px] gap-1 text-red-500 hover:text-red-600"
-                  onClick={() => handleDismiss(task.id as string)}
+                  onClick={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -168,6 +165,14 @@ export function MessageSuggestions({ locale }: { locale: string }) {
           </Card>
         );
       })}
+
+      <DismissDialog
+        taskId={dismissTarget?.id ?? null}
+        taskTitle={dismissTarget?.title}
+        open={!!dismissTarget}
+        onClose={() => setDismissTarget(null)}
+        onDismissed={fetchSuggestions}
+      />
     </div>
   );
 }

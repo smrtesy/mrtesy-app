@@ -401,4 +401,121 @@ router.post("/tasks/:id/approve-as-project",
   },
 );
 
+// ── dismissal reasons ──────────────────────────────────────────────────────
+// Closed set, intentionally short. The UI shows these as radios + a "custom"
+// row that reveals a free-text input. Two codes also produce a rules_memory
+// entry so the same sender stops generating suggestions:
+//   • sender_unimportant → rule_type=skip   (or bot, for WhatsApp)
+//   • spam               → rule_type=skip_spam
+const DISMISSAL_CODES = new Set([
+  "not_relevant_work",     // לא רלוונטי לעבודה שלי
+  "sender_unimportant",    // שולח לא חשוב — חסום שולח לעתיד
+  "topic_irrelevant",      // נושא לא רלוונטי
+  "manual_handle",         // אני מטפל בזה ידנית
+  "spam",                  // ספאם / שיווק
+  "ai_wrong",              // ה-AI לא הבין נכון
+  "custom",                // סיבה ידנית — דורש reason_text
+]);
+
+/** POST /tasks/:id/dismiss
+ *  Body: { reason_code: string, reason_text?: string }
+ *  Archives the task with manually_verified=true, records the dismissal
+ *  reason on the row, and — for sender-targeted codes — writes a
+ *  rules_memory entry derived from the linked source_message.
+ */
+router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
+  const reasonCode = (req.body?.reason_code ?? "") as string;
+  const reasonText = typeof req.body?.reason_text === "string" ? req.body.reason_text.trim() : "";
+
+  if (!DISMISSAL_CODES.has(reasonCode)) {
+    return res.status(400).json({ error: "invalid reason_code" });
+  }
+  if (reasonCode === "custom" && !reasonText) {
+    return res.status(400).json({ error: "reason_text is required when reason_code='custom'" });
+  }
+
+  // Load task + linked source message in one round-trip
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, user_id, source_message_id, source_messages(source_type, sender_email, sender_phone, sender, subject, serial_display)")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr)  return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+
+  // Archive + record reason
+  const now = new Date().toISOString();
+  const { error: uErr } = await db
+    .from("tasks")
+    .update({
+      status: "archived",
+      manually_verified: true,
+      dismissal_reason_code: reasonCode,
+      dismissal_reason_text: reasonText || null,
+      status_changed_at: now,
+    })
+    .eq("id", task.id);
+  if (uErr) return res.status(500).json({ error: uErr.message });
+
+  // For sender-targeted codes, also block the sender for future syncs.
+  // (Other codes — topic_irrelevant, manual_handle, ai_wrong — are recorded
+  // on the task only; the AI prompt picks them up as context next sync.)
+  let ruleCreated: { id: string; trigger: string; rule_type: string } | null = null;
+  if (reasonCode === "sender_unimportant" || reasonCode === "spam") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const smRaw = (task as any).source_messages;
+    const sm = (Array.isArray(smRaw) ? smRaw[0] : smRaw) as {
+      source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
+    } | null;
+
+    let trigger: string | null = null;
+    let ruleType: "skip" | "skip_spam" | "bot" = "skip";
+    let category: string | null = null;
+
+    if (sm?.source_type === "gmail" || sm?.source_type === "gmail_sent") {
+      if (sm.sender_email) trigger = `from=${sm.sender_email.toLowerCase()}`;
+      ruleType = reasonCode === "spam" ? "skip_spam" : "skip";
+    } else if (sm?.source_type === "whatsapp" || sm?.source_type === "whatsapp_echo") {
+      // WhatsApp uses rule_type=bot + category=bot — see part2-whatsapp.ts:77
+      const phone = (sm.sender_phone ?? "").replace(/\D/g, "");
+      if (phone) {
+        trigger = phone;
+        ruleType = "bot";
+        category = "bot";
+      }
+    }
+
+    if (trigger) {
+      const { data: rule, error: rErr } = await db
+        .from("rules_memory")
+        .insert({
+          user_id: task.user_id,
+          app_slug: "smrttask",
+          trigger,
+          rule_type: ruleType,
+          category,
+          action: "skip",
+          reason: reasonText || `User dismissed task with reason '${reasonCode}'`,
+          created_by: "user",
+        })
+        .select("id, trigger, rule_type")
+        .maybeSingle();
+      if (rErr) {
+        // Don't fail the dismissal — the task is already archived. Just log.
+        console.error("[dismiss] rules_memory insert error:", rErr.message);
+      } else {
+        ruleCreated = rule;
+      }
+    }
+  }
+
+  await emitEvent(req.org!.id, "smrttask", "task.dismissed", "task", task.id, {
+    reason_code: reasonCode,
+    rule_created: !!ruleCreated,
+  });
+
+  res.json({ ok: true, rule_created: ruleCreated });
+});
+
 export default router;
