@@ -86,24 +86,67 @@ router.get("/me/super-admin", requireAuth, async (req: Request, res: Response) =
 
 /**
  * POST /me/whatsapp/connect — bind the caller's smrtTask user to a Meta
- * WhatsApp phone number (the IDs visible in their DualHook dashboard).
+ * WhatsApp phone number (the IDs visible in their DualHook dashboard) and
+ * stash their Meta Cloud API Access Token in Supabase Vault.
  *
  * This is how the inbound webhook routes events to the right user:
  * incoming Meta payloads carry `metadata.phone_number_id`, we look it up
- * in `whatsapp_connections`, and that gives us the smrtTask user_id.
+ * in `whatsapp_connections`, and that gives us the smrtTask user_id plus
+ * a vault pointer for the access token used to fetch media.
  *
- * Body: { phone_number_id: string, waba_id?: string, display_phone_number?: string }
+ * Body: {
+ *   phone_number_id: string,
+ *   waba_id?: string,
+ *   display_phone_number?: string,
+ *   access_token?: string,
+ * }
  * Returns: { ok: true }
  */
 router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Response) => {
-  const { phone_number_id, waba_id, display_phone_number } = (req.body ?? {}) as {
+  const { phone_number_id, waba_id, display_phone_number, access_token } = (req.body ?? {}) as {
     phone_number_id?: string;
     waba_id?: string;
     display_phone_number?: string;
+    access_token?: string;
   };
 
   if (!phone_number_id || typeof phone_number_id !== "string") {
     return res.status(400).json({ error: "phone_number_id is required" });
+  }
+
+  // If the caller is sending a new access token, write it to Vault first.
+  // We reuse an existing secret row when one already exists for this
+  // connection (token rotation) rather than leaking a fresh row per save.
+  let accessTokenSecretId: string | null = null;
+  if (access_token && typeof access_token === "string" && access_token.trim()) {
+    const trimmed = access_token.trim();
+    const secretName = `whatsapp_access_token:${phone_number_id}`;
+
+    const { data: existing } = await db
+      .from("whatsapp_connections")
+      .select("access_token_secret_id")
+      .eq("phone_number_id", phone_number_id)
+      .maybeSingle();
+
+    const existingSecretId =
+      (existing?.access_token_secret_id as string | null | undefined) ?? null;
+
+    if (existingSecretId) {
+      const { error: vaultErr } = await db.rpc("vault_update_secret", {
+        secret_id: existingSecretId,
+        new_secret: trimmed,
+      });
+      if (vaultErr) return res.status(500).json({ error: `vault update: ${vaultErr.message}` });
+      accessTokenSecretId = existingSecretId;
+    } else {
+      const { data: created, error: vaultErr } = await db.rpc("vault_create_secret", {
+        new_secret: trimmed,
+        new_name: secretName,
+        new_description: "Meta Cloud API Bearer for WhatsApp media fetch",
+      });
+      if (vaultErr) return res.status(500).json({ error: `vault create: ${vaultErr.message}` });
+      accessTokenSecretId = (created as string | null) ?? null;
+    }
   }
 
   // UNIQUE(phone_number_id) means the same Meta number can only belong to one
@@ -113,16 +156,23 @@ router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Respo
   //
   // Single upsert (not delete+insert) so concurrent requests can't race into
   // the UNIQUE constraint between the two statements.
-  const { error: upsertErr } = await db.from("whatsapp_connections").upsert(
-    {
-      user_id: req.user!.id,
-      phone_number_id,
-      waba_id: waba_id ?? null,
-      display_phone_number: display_phone_number ?? null,
-      disconnected_at: null,
-    },
-    { onConflict: "phone_number_id" },
-  );
+  const updateRow: Record<string, unknown> = {
+    user_id: req.user!.id,
+    phone_number_id,
+    waba_id: waba_id ?? null,
+    display_phone_number: display_phone_number ?? null,
+    disconnected_at: null,
+  };
+  // Only update the secret pointer if we just wrote a new/updated token.
+  // (If the user re-saves Phone Number ID + WABA without touching the
+  //  token field, we keep the existing secret pointer.)
+  if (accessTokenSecretId !== null) {
+    updateRow.access_token_secret_id = accessTokenSecretId;
+  }
+
+  const { error: upsertErr } = await db
+    .from("whatsapp_connections")
+    .upsert(updateRow, { onConflict: "phone_number_id" });
   if (upsertErr) return res.status(500).json({ error: upsertErr.message });
 
   // Flip the badge on user_settings so the Settings page shows "connected".

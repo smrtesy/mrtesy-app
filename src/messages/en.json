@@ -347,6 +347,8 @@
     "wabaIdLabel": "WABA ID",
     "wabaIdHint": "From DualHook → Account Details → WABA ID",
     "displayPhoneLabel": "Display phone number (optional)",
+    "accessTokenLabel": "Access Token",
+    "accessTokenHint": "From DualHook → Account Details → Access Token. Stored encrypted in Supabase Vault. Required for audio transcription, image OCR, and document storage.",
     "confirmConnection": "Confirm Connection",
     "connectError": "Connection failed: {error}",
     "missingConfig": "Server config missing — contact admin"

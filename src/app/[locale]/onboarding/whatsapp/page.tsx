@@ -29,6 +29,7 @@ export default function OnboardingWhatsApp() {
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [wabaId, setWabaId] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -60,6 +61,7 @@ export default function OnboardingWhatsApp() {
           phone_number_id: phoneNumberId.trim(),
           waba_id: wabaId.trim() || undefined,
           display_phone_number: displayPhone.trim() || undefined,
+          access_token: accessToken.trim() || undefined,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -185,6 +187,21 @@ export default function OnboardingWhatsApp() {
             className="font-mono text-xs"
             placeholder="+19293330248"
           />
+        </div>
+
+        {/* Access Token — required for media (audio transcription, image OCR, document storage). */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("accessTokenLabel")}</label>
+          <Input
+            type="password"
+            value={accessToken}
+            onChange={(e) => setAccessToken(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="EAAxxxxxxxxx..."
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("accessTokenHint")}</p>
         </div>
 
         <Button onClick={handleConnect} disabled={connecting || !phoneNumberId} className="w-full min-h-[48px]">

@@ -232,6 +232,12 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
   // refresh per (user_id, chat_id) instead of one refresh per message —
   // history chunks can carry hundreds of messages across many chats.
   const perUser = new Map<string, NormalizedMessage[]>();
+  // Resolved access tokens, also keyed by user_id, so we Vault-read once
+  // per batch even if the payload spans multiple changes for the same user.
+  const tokenByUser = new Map<string, string | null>();
+  // Cache phone_number_id → resolved connection within the request so we
+  // never run resolveConnection twice for the same Meta number.
+  const connectionByPhone = new Map<string, ResolvedConnection | null>();
 
   for (const entry of payload.entry) {
     for (const change of entry.changes ?? []) {
@@ -245,12 +251,18 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
         continue;
       }
 
-      // Look up the smrtTask user for this Meta phone number.
-      const userId = await resolveUserId(phoneNumberId);
-      if (!userId) {
+      // Look up the smrtTask user and access token for this Meta phone number.
+      let conn = connectionByPhone.get(phoneNumberId);
+      if (conn === undefined) {
+        conn = await resolveConnection(phoneNumberId);
+        connectionByPhone.set(phoneNumberId, conn);
+      }
+      if (!conn) {
         console.warn(`[whatsapp-webhook] no connection for phone_number_id=${phoneNumberId}, skipping`);
         continue;
       }
+      const userId = conn.userId;
+      tokenByUser.set(userId, conn.accessToken);
 
       const contacts = value.contacts ?? [];
       const list = perUser.get(userId) ?? [];
@@ -289,18 +301,44 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
   // Process each user's batch in its own run session for auditability.
   for (const [userId, messages] of perUser.entries()) {
     if (messages.length === 0) continue;
-    await processUserBatch(userId, messages);
+    const accessToken = tokenByUser.get(userId) ?? null;
+    await processUserBatch(userId, messages, accessToken);
   }
 }
 
-async function resolveUserId(phoneNumberId: string): Promise<string | null> {
+interface ResolvedConnection {
+  userId: string;
+  /** Decrypted Meta Cloud API Bearer token, or null if the user hasn't
+   *  pasted one yet — in which case we still log incoming messages, but
+   *  can't fetch media (audio transcripts, images, documents). */
+  accessToken: string | null;
+}
+
+async function resolveConnection(phoneNumberId: string): Promise<ResolvedConnection | null> {
   const { data } = await db
     .from("whatsapp_connections")
-    .select("user_id")
+    .select("user_id, access_token_secret_id")
     .eq("phone_number_id", phoneNumberId)
     .is("disconnected_at", null)
     .maybeSingle();
-  return (data?.user_id as string | undefined) ?? null;
+
+  const userId = (data?.user_id as string | undefined) ?? null;
+  if (!userId) return null;
+
+  const secretId = (data?.access_token_secret_id as string | null | undefined) ?? null;
+  let accessToken: string | null = null;
+  if (secretId) {
+    const { data: plaintext, error } = await db.rpc("vault_read_secret", {
+      secret_id: secretId,
+    });
+    if (error) {
+      console.error(`[whatsapp-webhook] vault_read_secret(${secretId}) failed:`, error.message);
+    } else {
+      accessToken = (plaintext as string | null) ?? null;
+    }
+  }
+
+  return { userId, accessToken };
 }
 
 function normalizeLive(
@@ -377,7 +415,11 @@ function normalizeHistory(
 // Per-user batch
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function processUserBatch(userId: string, messages: NormalizedMessage[]): Promise<void> {
+async function processUserBatch(
+  userId: string,
+  messages: NormalizedMessage[],
+  accessToken: string | null,
+): Promise<void> {
   const isHistoryBatch = messages.some((m) => m.isHistory);
   const sessionId = await createRunSession(userId, "part2", "whatsapp").catch(() => null);
 
@@ -405,7 +447,7 @@ async function processUserBatch(userId: string, messages: NormalizedMessage[]): 
     }
 
     try {
-      const built = await buildMessageRow(userId, nm);
+      const built = await buildMessageRow(userId, nm, accessToken);
       const { error } = await db
         .from("whatsapp_messages")
         .upsert(built, { onConflict: "user_id,wamid" });
@@ -472,7 +514,11 @@ interface WhatsappMessageRow {
   raw_payload: MetaMessage;
 }
 
-async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<WhatsappMessageRow> {
+async function buildMessageRow(
+  userId: string,
+  nm: NormalizedMessage,
+  accessToken: string | null,
+): Promise<WhatsappMessageRow> {
   const m = nm.meta;
   const type = (m.type ?? "unknown").toLowerCase();
   const ts = m.timestamp ? new Date(parseInt(m.timestamp, 10) * 1000) : new Date();
@@ -499,9 +545,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
       mediaMime = a.mime_type ?? null;
       if (nm.isHistory) {
         body = mediaId ? "[אודיו מהיסטוריה - לא תומלל]" : "[אודיו ישן - לא ניתן להורדה]";
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN && process.env.GEMINI_API_KEY) {
+      } else if (mediaId && accessToken && process.env.GEMINI_API_KEY) {
         try {
-          const blob = await downloadMetaMedia(mediaId);
+          const blob = await downloadMetaMedia(mediaId, accessToken);
           const transcript = await transcribeAudio(blob.base64, blob.mimeType);
           body = "[תמלול אודיו]\n" + transcript;
         } catch (e) {
@@ -520,9 +566,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
       const caption = img.caption ?? "";
       if (nm.isHistory) {
         body = caption || "[תמונה מהיסטוריה - לא בוצע OCR]";
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN && process.env.GEMINI_API_KEY) {
+      } else if (mediaId && accessToken && process.env.GEMINI_API_KEY) {
         try {
-          const blob = await downloadMetaMedia(mediaId);
+          const blob = await downloadMetaMedia(mediaId, accessToken);
           const ocr = await performImageOcr(blob.base64, blob.mimeType);
           body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
         } catch (e) {
@@ -548,9 +594,9 @@ async function buildMessageRow(userId: string, nm: NormalizedMessage): Promise<W
         body = caption || "[מסמך ישן - לא ניתן להורדה]";
       } else if (nm.isHistory) {
         body = caption || `[מסמך מהיסטוריה: ${filename}]`;
-      } else if (mediaId && process.env.WHATSAPP_ACCESS_TOKEN) {
+      } else if (mediaId && accessToken) {
         try {
-          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime);
+          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime, accessToken);
           mediaUrl = stored.path;
           mediaFilename = stored.filename;
           mediaSize = stored.size;
@@ -663,10 +709,8 @@ async function persistDocumentToStorage(
   mediaId: string,
   filename: string,
   declaredMime: string | null,
+  token: string,
 ): Promise<PersistedDoc> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN not set");
-
   // Step 1 — resolve the signed download URL from Meta.
   const metaRes = await fetch(`https://graph.facebook.com/${META_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -706,10 +750,7 @@ interface MetaMediaBlob {
   mimeType: string;
 }
 
-async function downloadMetaMedia(mediaId: string): Promise<MetaMediaBlob> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN not set");
-
+async function downloadMetaMedia(mediaId: string, token: string): Promise<MetaMediaBlob> {
   const metaRes = await fetch(`https://graph.facebook.com/${META_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });

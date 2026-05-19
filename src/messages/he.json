@@ -347,6 +347,8 @@
     "wabaIdLabel": "WABA ID",
     "wabaIdHint": "מ-DualHook → Account Details → WABA ID",
     "displayPhoneLabel": "מספר טלפון להצגה (אופציונלי)",
+    "accessTokenLabel": "Access Token",
+    "accessTokenHint": "מ-DualHook → Account Details → Access Token. נשמר מוצפן ב-Supabase Vault. נדרש לתמלול אודיו, OCR לתמונות ושמירת מסמכים.",
     "confirmConnection": "אשר חיבור",
     "connectError": "שגיאה בחיבור: {error}",
     "missingConfig": "תצורת השרת חסרה — פנה למנהל המערכת"
