@@ -16,9 +16,11 @@
  */
 
 import { db, createRunSession, closeRunSession } from "../../../db";
-import { cachedCall, simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
+import { cachedCall, simpleCall, parseJsonResponse, MODELS, type ModelKey } from "../../../anthropic";
 import { getUserPromptContext, formatIdentity } from "../../../lib/user-context";
 import { loadPrompt } from "../../../lib/prompt-loader";
+
+const KNOWN_MODELS: ReadonlySet<ModelKey> = new Set(["haiku", "sonnet", "opus"]);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,17 @@ async function suggestProjects(userId: string, orgId: string, sessionId: string)
   const identity = formatIdentity(await getUserPromptContext(userId, orgId));
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
+  // Per-user clustering threshold + model — null = use system default.
+  const { data: settings } = await db
+    .from("user_settings")
+    .select("smrttask_project_cluster_threshold, smrttask_classifier_model")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const clusterThreshold = typeof settings?.smrttask_project_cluster_threshold === "number"
+    ? settings.smrttask_project_cluster_threshold : 0.65;
+  const modelKey: ModelKey = settings?.smrttask_classifier_model && KNOWN_MODELS.has(settings.smrttask_classifier_model as ModelKey)
+    ? (settings.smrttask_classifier_model as ModelKey) : "sonnet";
+
   // Fetch approved tasks in this org from the last 60 days
   const { data: tasks } = await db
     .from("tasks")
@@ -131,13 +144,13 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
     .replace("{{user}}", identity)
     .replace("{{existingProjects}}", existingNames || "none");
 
-  const { content } = await simpleCall("sonnet", suggestSystem, `TASKS:\n${taskList}`, 2048);
+  const { content } = await simpleCall(modelKey, suggestSystem, `TASKS:\n${taskList}`, 2048);
 
   const clusters = parseJsonResponse<ProjectCluster[]>(content) ?? [];
 
   let tasksCreated = 0;
   for (const cluster of clusters) {
-    if (cluster.confidence < 0.65 || cluster.task_ids.length < 3) continue;
+    if (cluster.confidence < clusterThreshold || cluster.task_ids.length < 3) continue;
 
     // Avoid duplicate suggestions in this org
     const { data: existing } = await db
@@ -161,7 +174,7 @@ Return [] if no clear projects emerge. Do NOT invent projects. Only group what's
       task_type: "project_suggestion",
       manually_verified: false,
       ai_confidence: cluster.confidence,
-      ai_model_used: MODELS.sonnet,
+      ai_model_used: MODELS[modelKey],
       // Store clustered task IDs + keywords in ai_generated_content for approval step
       ai_generated_content: [{
         id: crypto.randomUUID(),

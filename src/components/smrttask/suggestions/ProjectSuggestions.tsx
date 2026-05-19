@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,6 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Lightbulb, CheckCircle2, X } from "lucide-react";
 import { toast } from "sonner";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
+import { DismissDialog } from "./DismissDialog";
 
 interface SuggestionTask {
   id: string;
@@ -22,14 +24,18 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
   const [suggestions, setSuggestions] = useState<SuggestionTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
 
   const fetchSuggestions = useCallback(async () => {
     setLoading(true);
     try {
       const { tasks } = await api<{ tasks: SuggestionTask[] }>(
-        "/api/tasks?task_type=project_suggestion&status=inbox&limit=10",
+        "/api/tasks?task_type=project_suggestion&status=inbox&limit=100",
       );
       setSuggestions(tasks ?? []);
+      setSelected(new Set());
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
     } finally {
@@ -41,6 +47,27 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
     fetchSuggestions();
   }, [fetchSuggestions]);
 
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return suggestions;
+    return suggestions.filter((task) => {
+      const haystack = [task.title, task.title_he, task.description].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [suggestions, searchQuery]);
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllFiltered() { setSelected(new Set(filtered.map((t) => t.id))); }
+  function clearSelection() { setSelected(new Set()); }
+
   async function handleApprove(task: SuggestionTask) {
     try {
       await api(`/api/tasks/${task.id}/approve-as-project`, { method: "POST" });
@@ -51,13 +78,22 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
     }
   }
 
-  async function handleDismiss(taskId: string) {
+  async function handleFastDismiss(taskId: string) {
     try {
-      await api(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        body: { status: "archived", manually_verified: true },
-      });
-      toast.success(t("dismiss"));
+      await api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" });
+      toast.success(t("fastDismissed"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleBulkDismissFast() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    try {
+      await api(`/api/tasks/bulk-dismiss-fast`, { method: "POST", body: { task_ids: ids } });
+      toast.success(t("fastDismissed"));
       fetchSuggestions();
     } catch (e) {
       toast.error((e as Error).message);
@@ -84,12 +120,35 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-3">
-      {suggestions.map((task) => {
+      <SuggestionToolbar
+        total={suggestions.length}
+        filtered={filtered.length}
+        selectedCount={selected.size}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        onSelectAll={selectAllFiltered}
+        onClearSelection={clearSelection}
+        onBulkDismissFast={handleBulkDismissFast}
+      />
+
+      {filtered.length === 0 && (
+        <div className="py-8 text-center text-muted-foreground text-sm">{t("noProjects")}</div>
+      )}
+
+      {filtered.map((task) => {
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
+        const isSelected = selected.has(task.id);
         return (
-          <Card key={task.id}>
+          <Card key={task.id} className={isSelected ? "ring-2 ring-primary/50" : undefined}>
             <CardContent className="p-4">
               <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleSelect(task.id)}
+                  className="mt-2 shrink-0 h-4 w-4 cursor-pointer"
+                  aria-label={t("selectAll")}
+                />
                 <div className="mt-1 rounded-full bg-yellow-100 p-2">
                   <Lightbulb className="h-4 w-4 text-yellow-600" />
                 </div>
@@ -109,10 +168,23 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 gap-1 text-red-500"
-                  onClick={() => handleDismiss(task.id)}
+                  className="h-9 gap-1 text-muted-foreground hover:text-foreground"
+                  onClick={() => handleFastDismiss(task.id)}
+                  title={t("fastDismiss")}
+                  aria-label={t("fastDismiss")}
                 >
                   <X className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 gap-1 text-red-500 hover:text-red-600 font-semibold"
+                  onClick={() => setDismissTarget({ id: task.id, title })}
+                  title={t("dismissWithReason")}
+                  aria-label={t("dismissWithReason")}
+                >
+                  <X className="h-4 w-4" />
+                  <span className="text-xs">!</span>
                 </Button>
                 <Button
                   size="sm"
@@ -127,6 +199,14 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
           </Card>
         );
       })}
+
+      <DismissDialog
+        taskId={dismissTarget?.id ?? null}
+        taskTitle={dismissTarget?.title}
+        open={!!dismissTarget}
+        onClose={() => setDismissTarget(null)}
+        onDismissed={fetchSuggestions}
+      />
     </div>
   );
 }
