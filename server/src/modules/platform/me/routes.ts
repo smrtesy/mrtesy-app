@@ -18,7 +18,10 @@ const UPDATABLE_SETTINGS = new Set([
   "display_name", "timezone", "office_addresses", "skip_senders",
   "skip_recipients", "my_emails", "drive_folder_id",
   "calendar_event_filter", "calendar_allday_tasks", "calendar_holidays_tasks",
-  "classification_model", "summary_model", "daily_ai_budget_usd",
+  // classification_model + summary_model moved to smrttask_system_params
+  // (super-admin only). daily_ai_budget_usd remains per-user but will move
+  // to an admin endpoint in a later commit.
+  "daily_ai_budget_usd",
   "show_ai_costs", "reminder_channels", "default_reminder_timing",
   "preferred_language", "ai_clarification_prefs",
   "initial_scan_days_back", "calendar_initial_scan_months",

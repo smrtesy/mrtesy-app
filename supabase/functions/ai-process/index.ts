@@ -6,14 +6,60 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
-const BATCH_SIZE = 40;
+// System-wide knobs sourced from smrttask_system_params (single row, id='smrttask').
+// Loaded once at the start of each cron tick and passed through the call stack.
+// Defaults below are last-resort fallbacks for the brief window between migration
+// rollout and the seed row landing — in steady state the row always exists.
+interface SystemParams {
+  classification_model: string;
+  summary_model: string;
+  batch_size: number;
+  processing_lock_minutes: number;
+  calendar_past_days: number;
+  calendar_future_days: number;
+  body_truncate_classify: number;
+  body_truncate_project: number;
+  body_truncate_task: number;
+}
+
+const FALLBACK_PARAMS: SystemParams = {
+  classification_model: "claude-haiku-4-5-20251001",
+  summary_model: "claude-sonnet-4-6",
+  batch_size: 40,
+  processing_lock_minutes: 10,
+  calendar_past_days: 1,
+  calendar_future_days: 1,
+  body_truncate_classify: 2000,
+  body_truncate_project: 500,
+  body_truncate_task: 6000,
+};
+
+async function loadSystemParams(): Promise<SystemParams> {
+  const { data, error } = await supabase
+    .from("smrttask_system_params")
+    .select("*")
+    .eq("id", "smrttask")
+    .maybeSingle();
+  if (error || !data) return FALLBACK_PARAMS;
+  return {
+    classification_model: data.classification_model ?? FALLBACK_PARAMS.classification_model,
+    summary_model: data.summary_model ?? FALLBACK_PARAMS.summary_model,
+    batch_size: data.batch_size ?? FALLBACK_PARAMS.batch_size,
+    processing_lock_minutes: data.processing_lock_minutes ?? FALLBACK_PARAMS.processing_lock_minutes,
+    calendar_past_days: data.calendar_past_days ?? FALLBACK_PARAMS.calendar_past_days,
+    calendar_future_days: data.calendar_future_days ?? FALLBACK_PARAMS.calendar_future_days,
+    body_truncate_classify: data.body_truncate_classify ?? FALLBACK_PARAMS.body_truncate_classify,
+    body_truncate_project: data.body_truncate_project ?? FALLBACK_PARAMS.body_truncate_project,
+    body_truncate_task: data.body_truncate_task ?? FALLBACK_PARAMS.body_truncate_task,
+  };
+}
 
 // Priority order: whatsapp/calendar/drive first, then gmail with body
 const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "google_calendar", "google_drive", "gmail", "gmail_sent"];
 
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
-function preClassify(msg: any, settings: any): { result: string; skipReason?: string } {
+function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
   const sender = (msg.sender_email || msg.sender || "").toLowerCase();
   const recipient = (msg.recipient || "").toLowerCase();
   const body = (msg.body_text || "").toLowerCase();
@@ -27,16 +73,16 @@ function preClassify(msg: any, settings: any): { result: string; skipReason?: st
     if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
   }
 
-  // Calendar events: only process if within window (yesterday to +1 day)
+  // Calendar events: only process if within the system-configured window.
   if (sourceType === "google_calendar" && msg.received_at) {
     const eventDate = new Date(msg.received_at);
     const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    if (eventDate < oneDayAgo) {
+    const pastCutoff   = new Date(now.getTime() - sys.calendar_past_days   * 86_400_000);
+    const futureCutoff = new Date(now.getTime() + sys.calendar_future_days * 86_400_000);
+    if (eventDate < pastCutoff) {
       return { result: "skip", skipReason: "past_calendar_event" };
     }
-    if (eventDate > oneDayFromNow) {
+    if (eventDate > futureCutoff) {
       return { result: "defer", skipReason: "future_calendar_event" };
     }
   }
@@ -66,10 +112,10 @@ async function callClaude(model: string, systemPrompt: string, userMessage: stri
   return { text: data.content?.[0]?.text || "", inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 };
 }
 
-async function classifyMessage(msg: any, settings: any) {
-  const model = settings.classification_model || "claude-haiku-4-5-20251001";
+async function classifyMessage(msg: any, sys: SystemParams) {
+  const model = sys.classification_model;
   const systemPrompt = `You are a message classifier for a personal task management system.\nRules: outbox@maor.org→informational | Payment confirmations→informational | maor.org emails→classify by content (NOT spam!)\nRespond: WORD | reason in Hebrew. WORD: ACTIONABLE | INFORMATIONAL | SPAM`;
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, 2000)}`;
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, sys.body_truncate_classify)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 100);
   const text = result.text.trim().toUpperCase();
   let classification = "informational";
@@ -78,12 +124,12 @@ async function classifyMessage(msg: any, settings: any) {
   return { classification, reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, model };
 }
 
-async function detectProject(msg: any, settings: any, userId: string) {
+async function detectProject(msg: any, sys: SystemParams, userId: string) {
   const { data: projects } = await supabase.from("projects").select("id, name, name_he").eq("user_id", userId).eq("is_active", true);
   if (!projects || projects.length === 0) return null;
-  const model = settings.classification_model || "claude-haiku-4-5-20251001";
+  const model = sys.classification_model;
   const projectList = projects.map((p: any) => `${p.id}: ${p.name_he || p.name}`).join("\n");
-  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${(msg.body_text || "").substring(0, 500)}`, 50);
+  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${(msg.body_text || "").substring(0, sys.body_truncate_project)}`, 50);
   const projectId = result.text.trim();
   const matched = projects.find((p: any) => p.id === projectId);
   return matched ? { projectId: matched.id, inputTokens: result.inputTokens, outputTokens: result.outputTokens } : null;
@@ -100,9 +146,9 @@ async function getProjectBrief(projectId: string): Promise<string> {
   return parts.join("\n").substring(0, 400);
 }
 
-async function createTasksFromMessage(msg: any, settings: any, projectContext?: { projectId: string; brief: string }) {
-  const model = settings.summary_model || "claude-sonnet-4-6";
-  const truncate = settings.smrttask_body_truncate_task ?? 6000;
+async function createTasksFromMessage(msg: any, sys: SystemParams, projectContext?: { projectId: string; brief: string }) {
+  const model = sys.summary_model;
+  const truncate = sys.body_truncate_task;
   let systemPrompt = `You are a task builder for a personal task system.
 Extract concrete actionable tasks from this message.
 Return ONLY a JSON Array, no markdown, no commentary.
@@ -188,9 +234,9 @@ context that the AI doesn't need to re-read this message.`;
   return { tasks, inputTokens: result.inputTokens, outputTokens: result.outputTokens, model, projectId: projectContext?.projectId || null };
 }
 
-async function checkFollowup(msg: any, settings: any) {
-  const model = settings.classification_model || "claude-haiku-4-5-20251001";
-  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, 2000)}`, 100);
+async function checkFollowup(msg: any, sys: SystemParams) {
+  const model = sys.classification_model;
+  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -269,11 +315,11 @@ async function tryLinkToExistingTask(
   return { id: openTask.id as string, updates };
 }
 
-async function processMessage(msg: any, settings: any) {
+async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, aiModel = "", classification = "", classificationReason = "";
 
-  const preResult = preClassify(msg, settings);
+  const preResult = preClassify(msg, settings, sys);
 
   // Defer: release lock, keep pending — will be picked up when date arrives
   if (preResult.result === "defer") {
@@ -288,7 +334,7 @@ async function processMessage(msg: any, settings: any) {
   }
 
   if (preResult.result === "check_followup") {
-    const followup = await checkFollowup(msg, settings);
+    const followup = await checkFollowup(msg, sys);
     totalInputTokens += followup.inputTokens; totalOutputTokens += followup.outputTokens;
     if (!followup.isFollowup) {
       await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
@@ -305,7 +351,7 @@ async function processMessage(msg: any, settings: any) {
     return;
   } else {
     try {
-      const classResult = await classifyMessage(msg, settings);
+      const classResult = await classifyMessage(msg, sys);
       classification = classResult.classification; classificationReason = classResult.reason;
       totalInputTokens += classResult.inputTokens; totalOutputTokens += classResult.outputTokens;
       aiModel = classResult.model;
@@ -364,7 +410,7 @@ async function processMessage(msg: any, settings: any) {
           ai_model_used: aiModel,
           ai_input_tokens: totalInputTokens,
           ai_output_tokens: totalOutputTokens,
-          ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, aiModel.includes("haiku") ? "haiku" : "sonnet"),
+          ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, modelTypeFromName(aiModel)),
           processing_duration_ms: Date.now() - startTime,
         });
         return;
@@ -384,14 +430,14 @@ async function processMessage(msg: any, settings: any) {
 
     try {
       let projectContext: { projectId: string; brief: string } | undefined;
-      const projectMatch = await detectProject(msg, settings, msg.user_id);
+      const projectMatch = await detectProject(msg, sys, msg.user_id);
       if (projectMatch) {
         totalInputTokens += projectMatch.inputTokens; totalOutputTokens += projectMatch.outputTokens;
         const brief = await getProjectBrief(projectMatch.projectId);
         if (brief) projectContext = { projectId: projectMatch.projectId, brief };
       }
 
-      const taskResult = await createTasksFromMessage(msg, settings, projectContext);
+      const taskResult = await createTasksFromMessage(msg, sys, projectContext);
       totalInputTokens += taskResult.inputTokens; totalOutputTokens += taskResult.outputTokens;
 
       // Sonnet returned no tasks — message is informational despite Haiku's
@@ -436,13 +482,23 @@ async function processMessage(msg: any, settings: any) {
   }
 
   await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
-  const costType = aiModel.includes("haiku") ? "haiku" : "sonnet";
+  const costType = modelTypeFromName(aiModel);
   await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: classification, classification_reason: classificationReason, ai_model_used: aiModel, ai_input_tokens: totalInputTokens, ai_output_tokens: totalOutputTokens, ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, costType), processing_duration_ms: Date.now() - startTime });
 }
 
+// Cost rates per 1M tokens, keyed by what `modelTypeFromName` returns. Update
+// these when Anthropic pricing changes or when a new model is added to
+// smrttask_system_params.
 function estimateCost(input: number, output: number, type: string): number {
-  if (type === "haiku") return (input * 0.25 + output * 1.25) / 1_000_000;
-  return (input * 3 + output * 15) / 1_000_000;
+  if (type === "haiku") return (input * 0.80 + output * 4)  / 1_000_000;
+  if (type === "opus")  return (input * 15   + output * 75) / 1_000_000;
+  return (input * 3 + output * 15) / 1_000_000; // sonnet (default)
+}
+
+function modelTypeFromName(model: string): "haiku" | "sonnet" | "opus" {
+  if (model.includes("haiku")) return "haiku";
+  if (model.includes("opus"))  return "opus";
+  return "sonnet";
 }
 
 Deno.serve(async (req) => {
@@ -455,7 +511,14 @@ Deno.serve(async (req) => {
       if (!user) return new Response("Unauthorized", { status: 401 });
     }
 
-    await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - 10 * 60 * 1000).toISOString()).not("processing_lock_at", "is", null);
+    // Load system-wide knobs once per cron tick. Used for batch size,
+    // lock window, calendar window, model selection, and body truncation.
+    const sys = await loadSystemParams();
+
+    await supabase.from("source_messages")
+      .update({ processing_lock_at: null })
+      .lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString())
+      .not("processing_lock_at", "is", null);
 
     const { data: pendingUsers } = await supabase
       .from("source_messages")
@@ -479,8 +542,8 @@ Deno.serve(async (req) => {
       // Fetch priority messages first (whatsapp, calendar, drive), then gmail
       let allMessages: any[] = [];
       for (const st of SOURCE_PRIORITY) {
-        if (allMessages.length >= BATCH_SIZE) break;
-        const remaining = BATCH_SIZE - allMessages.length;
+        if (allMessages.length >= sys.batch_size) break;
+        const remaining = sys.batch_size - allMessages.length;
         const { data: msgs } = await supabase
           .from("source_messages")
           .select("*")
@@ -499,7 +562,7 @@ Deno.serve(async (req) => {
         const { data: claimed } = await supabase.from("source_messages").update({ processing_lock_at: new Date().toISOString() }).eq("id", msg.id).is("processing_lock_at", null).select("id").single();
         if (!claimed) continue;
         try {
-          const result = await processMessage(msg, settings);
+          const result = await processMessage(msg, settings, sys);
           if (result === "deferred") { totalDeferred++; }
           else { totalProcessed++; }
         }
@@ -509,7 +572,7 @@ Deno.serve(async (req) => {
         }
       }
     }
-    return new Response(JSON.stringify({ processed: totalProcessed, deferred: totalDeferred, batchSize: BATCH_SIZE }), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ processed: totalProcessed, deferred: totalDeferred, batchSize: sys.batch_size }), { headers: { "Content-Type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
