@@ -168,7 +168,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 gap-1 text-muted-foreground hover:text-foreground"
+                  className="h-9 gap-1 text-red-500 hover:text-red-600 hover:bg-red-50"
                   onClick={() => handleFastDismiss(task.id)}
                   title={t("fastDismiss")}
                   aria-label={t("fastDismiss")}
@@ -178,13 +178,13 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 gap-1 text-red-500 hover:text-red-600 font-semibold"
+                  className="h-9 gap-0 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
                   onClick={() => setDismissTarget({ id: task.id, title })}
                   title={t("dismissWithReason")}
                   aria-label={t("dismissWithReason")}
                 >
                   <X className="h-4 w-4" />
-                  <span className="text-xs">!</span>
+                  <span className="text-sm leading-none -ms-0.5">!</span>
                 </Button>
                 <Button
                   size="sm"

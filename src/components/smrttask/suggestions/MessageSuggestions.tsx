@@ -12,7 +12,7 @@ import { CheckCircle2, X, Bell } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
-import { AITrail } from "@/components/smrttask/common/AITrail";
+import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
 
@@ -239,41 +239,12 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 </div>
               </div>
 
-              {/* AI trail — closed by default. Click chevron to see why the AI created this. */}
-              <AITrail taskId={task.id as string} className="mt-3" />
-
-              {/* X (fast, no learning) — X! (with reason, learns) — ✓ approve */}
-              <div className="flex gap-2 mt-3 justify-end">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-9 min-w-[48px] gap-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => handleFastDismiss(task.id as string)}
-                  title={t("fastDismiss")}
-                  aria-label={t("fastDismiss")}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-9 min-w-[48px] gap-1 text-red-500 hover:text-red-600 font-semibold"
-                  onClick={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
-                  title={t("dismissWithReason")}
-                  aria-label={t("dismissWithReason")}
-                >
-                  <X className="h-4 w-4" />
-                  <span className="text-xs">!</span>
-                </Button>
-                <Button
-                  size="sm"
-                  className="h-9 min-w-[48px] gap-1"
-                  onClick={() => handleApprove(task.id as string)}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  {t("approve")}
-                </Button>
-              </div>
+              <SuggestionActions
+                taskId={task.id as string}
+                onFastDismiss={() => handleFastDismiss(task.id as string)}
+                onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
+                onApprove={() => handleApprove(task.id as string)}
+              />
             </CardContent>
           </Card>
         );
@@ -287,5 +258,71 @@ export function MessageSuggestions({ locale }: { locale: string }) {
         onDismissed={fetchSuggestions}
       />
     </div>
+  );
+}
+
+/**
+ * Per-card action row: AI trail icon (rightmost in RTL) + fast-X (red) + X! (orange)
+ * + approve. The AI trail body expands inline below the row when toggled.
+ */
+function SuggestionActions({
+  taskId,
+  onFastDismiss,
+  onDismissWithReason,
+  onApprove,
+}: {
+  taskId: string;
+  onFastDismiss: () => void;
+  onDismissWithReason: () => void;
+  onApprove: () => void;
+}) {
+  const t = useTranslations("suggestions");
+  const trail = useAITrail(taskId);
+
+  return (
+    <>
+      <div className="flex gap-2 mt-3 items-center">
+        <AITrailIconButton open={trail.open} onToggle={trail.toggle} />
+        <div className="flex-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-9 min-w-[48px] gap-1 text-red-500 hover:text-red-600 hover:bg-red-50"
+          onClick={onFastDismiss}
+          title={t("fastDismiss")}
+          aria-label={t("fastDismiss")}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-9 min-w-[48px] gap-0 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
+          onClick={onDismissWithReason}
+          title={t("dismissWithReason")}
+          aria-label={t("dismissWithReason")}
+        >
+          <X className="h-4 w-4" />
+          <span className="text-sm leading-none -ms-0.5">!</span>
+        </Button>
+        <Button
+          size="sm"
+          className="h-9 min-w-[48px] gap-1"
+          onClick={onApprove}
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          {t("approve")}
+        </Button>
+      </div>
+
+      {trail.open && (
+        <AITrailBody
+          data={trail.data}
+          loading={trail.loading}
+          error={trail.error}
+          className="mt-2"
+        />
+      )}
+    </>
   );
 }
