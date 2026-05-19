@@ -80,16 +80,13 @@ async function suggestProjects(userId: string, orgId: string, sessionId: string)
   const identity = formatIdentity(await getUserPromptContext(userId, orgId));
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Per-user clustering threshold + model — null = use system default.
-  const { data: settings } = await db
-    .from("user_settings")
-    .select("smrttask_project_cluster_threshold, smrttask_classifier_model")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const clusterThreshold = typeof settings?.smrttask_project_cluster_threshold === "number"
-    ? settings.smrttask_project_cluster_threshold : 0.65;
-  const modelKey: ModelKey = settings?.smrttask_classifier_model && KNOWN_MODELS.has(settings.smrttask_classifier_model as ModelKey)
-    ? (settings.smrttask_classifier_model as ModelKey) : "sonnet";
+  // The smrttask_project_cluster_threshold and smrttask_classifier_model
+  // columns this previously read were dropped in migration 20260520000001
+  // (super-admin-only knobs are in smrttask_system_params now). This
+  // module is dormant — see part3-classifier for context — and is
+  // scheduled for deletion in the next commit. Use defaults until then.
+  const clusterThreshold = 0.65;
+  const modelKey: ModelKey = "sonnet";
 
   // Fetch approved tasks in this org from the last 60 days
   const { data: tasks } = await db

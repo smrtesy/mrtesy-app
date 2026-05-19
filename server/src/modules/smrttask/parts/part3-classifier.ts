@@ -62,23 +62,16 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
   const { userId, orgId, limit = 50 } = opts;
   if (!orgId) throw new Error("Part3: orgId is required");
 
-  // Load per-user knobs (model + thresholds + batch size). Each column is
-  // nullable; null = use the hardcoded default. See migration 20260519000001.
-  const { data: settings } = await db
-    .from("user_settings")
-    .select("smrttask_classifier_model, smrttask_rule_threshold, smrttask_project_match_threshold, smrttask_batch_size")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  const modelKey: ModelKey = settings?.smrttask_classifier_model && KNOWN_MODELS.has(settings.smrttask_classifier_model as ModelKey)
-    ? (settings.smrttask_classifier_model as ModelKey)
-    : "sonnet";
-  const ruleThreshold = typeof settings?.smrttask_rule_threshold === "number"
-    ? settings.smrttask_rule_threshold : DEFAULT_RULE_THRESHOLD;
-  const projectMatchThreshold = typeof settings?.smrttask_project_match_threshold === "number"
-    ? settings.smrttask_project_match_threshold : DEFAULT_PROJECT_MATCH_THRESHOLD;
-  const batchSize = typeof settings?.smrttask_batch_size === "number" && settings.smrttask_batch_size > 0
-    ? settings.smrttask_batch_size : DEFAULT_BATCH_SIZE;
+  // The user_settings columns this previously read were dropped in
+  // migration 20260520000001 (system-wide knobs moved to
+  // smrttask_system_params, which is super-admin only). This part is
+  // dormant — sync_schedules is empty in production and ai-process owns
+  // classification — and is scheduled for deletion in the next commit.
+  // Until then it just uses the defaults.
+  const modelKey: ModelKey = "sonnet";
+  const ruleThreshold = DEFAULT_RULE_THRESHOLD;
+  const projectMatchThreshold = DEFAULT_PROJECT_MATCH_THRESHOLD;
+  const batchSize = DEFAULT_BATCH_SIZE;
 
   const sessionId = await createRunSession(userId, "part3", "classifier", MODELS[modelKey]);
 
