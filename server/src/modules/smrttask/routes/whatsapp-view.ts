@@ -38,26 +38,44 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Group by chat_id, keep only the newest message per chat (data is
-  // already DESC by received_at).
-  const seen = new Map<string, NonNullable<typeof data>[number]>();
+  // Two passes over the recent-messages window:
+  //   * `latestAny`     — newest message per chat, of any direction. Drives
+  //                       the preview text + timestamp shown in the list.
+  //   * `latestIncoming` — newest INCOMING message per chat. Drives the
+  //                       contact identity (name + phone) shown as the
+  //                       chat title. If we used `latestAny` for that,
+  //                       a reply sent from this app would swap the
+  //                       header to "אני / our own number" — exactly the
+  //                       bug a user reported. The chat is always
+  //                       conceptually "with the other party", regardless
+  //                       of who sent last.
+  // chat_id itself is the canonical contact identifier for 1:1 chats —
+  // safe fallback when a chat has only outgoing messages (e.g. history
+  // backfill of messages we sent before any reply).
+  type Row = NonNullable<typeof data>[number];
+  const latestAny = new Map<string, Row>();
+  const latestIncoming = new Map<string, Row>();
   for (const row of data ?? []) {
-    if (!seen.has(row.chat_id)) seen.set(row.chat_id, row);
+    if (!latestAny.has(row.chat_id)) latestAny.set(row.chat_id, row);
+    if (row.direction === "incoming" && !latestIncoming.has(row.chat_id)) {
+      latestIncoming.set(row.chat_id, row);
+    }
   }
 
-  // Tack on a count of unread/history messages per chat — useful badges
-  // for the UI later. Skip for now; we can add via a second query if needed.
-
-  const threads = [...seen.entries()].map(([chatId, m]) => ({
-    chat_id: chatId,
-    last_message_at: m.received_at,
-    last_direction: m.direction,
-    last_message_type: m.message_type,
-    last_body_text: m.body_text,
-    from_phone: m.from_phone,
-    from_name: m.from_name,
-    is_history: m.is_history,
-  }));
+  const threads = [...latestAny.entries()].map(([chatId, m]) => {
+    const inc = latestIncoming.get(chatId);
+    return {
+      chat_id: chatId,
+      last_message_at: m.received_at,
+      last_direction: m.direction,
+      last_message_type: m.message_type,
+      last_body_text: m.body_text,
+      // Identity always comes from the contact side — never from "us".
+      from_phone: inc?.from_phone ?? chatId,
+      from_name: inc?.from_name ?? null,
+      is_history: m.is_history,
+    };
+  });
 
   return res.json({ threads });
 });
