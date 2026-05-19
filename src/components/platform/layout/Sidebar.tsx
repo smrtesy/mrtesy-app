@@ -8,12 +8,12 @@ import {
   CheckSquare,
   Bell,
   FileText,
-  Calendar,
   Settings,
   FolderOpen,
   Plus,
   Shield,
   BookOpen,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,22 @@ import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 
 // Sidebar gates the whole smrtTask section via hasSmrtTask below — no per-item appSlug needed.
+//
+// Two sub-groups inside smrtTask:
+//   "active" — task management. Tasks owns both the list and the timeline view
+//              (calendar is /tasks?view=calendar), so the calendar entry is
+//              not its own nav item anymore.
+//   "views"  — read-only data feeds. WhatsApp messages and the system run log
+//              are pure inspection surfaces — they don't drive any action.
 const smrtTaskItems = [
   { key: "tasks",    href: "/tasks",       icon: CheckSquare },
   { key: "projects", href: "/projects",    icon: FolderOpen  },
-  { key: "calendar", href: "/calendar",    icon: Calendar    },
-  { key: "log",      href: "/log",         icon: FileText    },
   { key: "guide",    href: "/tasks/guide", icon: BookOpen    },
+] as const;
+
+const smrtTaskViewItems = [
+  { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
+  { key: "log",      href: "/log",      icon: FileText      },
 ] as const;
 
 const managementItems = [
@@ -36,13 +46,14 @@ const managementItems = [
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
-// Mobile shows a flat list of the most-used items
+// Mobile shows a flat list of the most-used items. Calendar dropped here too —
+// it's reachable from the Tasks page header.
 const mobileItems = [
-  { key: "tasks",    href: "/tasks",    icon: CheckSquare },
-  { key: "projects", href: "/projects", icon: FolderOpen  },
-  { key: "inbox",    href: "/inbox",    icon: Bell        },
-  { key: "calendar", href: "/calendar", icon: Calendar    },
-  { key: "settings", href: "/settings", icon: Settings    },
+  { key: "tasks",    href: "/tasks",    icon: CheckSquare   },
+  { key: "projects", href: "/projects", icon: FolderOpen    },
+  { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
+  { key: "inbox",    href: "/inbox",    icon: Bell          },
+  { key: "settings", href: "/settings", icon: Settings      },
 ] as const;
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -152,6 +163,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             <>
               <SectionLabel>smrtTask</SectionLabel>
               {smrtTaskItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
+              ))}
+
+              <SectionLabel>{t("sectionViews")}</SectionLabel>
+              {smrtTaskViewItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
               ))}
             </>

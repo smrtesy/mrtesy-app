@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
   CheckCircle2, XCircle, RefreshCw, Trash2, RotateCcw, Shield,
-  Loader2, Filter, Repeat,
+  Loader2, Filter, Repeat, SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -301,6 +301,12 @@ export default function SettingsPage() {
                 <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start">
                   <Repeat className="h-4 w-4" />
                   {t("syncSchedules")}
+                </Button>
+              </Link>
+              <Link href={`/${locale}/settings/smrttask/parameters`}>
+                <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {t("classifierParameters")}
                 </Button>
               </Link>
             </CardContent>

@@ -25,7 +25,7 @@ import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { runPart1, runPart2, runPart3 } from "./modules/smrttask";
+import smrttaskRouter, { runPart1, runPart3 } from "./modules/smrttask";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -85,7 +85,18 @@ app.use(cors(corsOptions));
 // body-parsing or route logic. Some proxies (Railway, Vercel) otherwise 502.
 app.options(/.*/, cors(corsOptions));
 
-app.use(express.json());
+// `verify` exposes the raw, unparsed body to downstream handlers via
+// `req.rawBody`. The WhatsApp webhook needs the exact bytes Meta signed in
+// X-Hub-Signature-256, and re-stringifying the parsed JSON loses the
+// original whitespace/ordering. Limit bumped to 10mb for history chunks.
+app.use(
+  express.json({
+    limit: "10mb",
+    verify: (req, _res, buf) => {
+      (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
@@ -120,7 +131,10 @@ async function runScheduledJobs() {
       if (schedule.part === "part1") {
         await runPart1({ userId: schedule.user_id });
       } else if (schedule.part === "part2") {
-        await runPart2({ userId: schedule.user_id });
+        // Part 2 (WhatsApp) is now event-driven via webhook, not cron-pulled.
+        // Legacy sync_schedules rows with part='part2' are silently skipped;
+        // they'll be cleaned up in a follow-up migration.
+        continue;
       } else if (schedule.part === "part3") {
         // Part 3 is org-aware: use the user's primary org (oldest membership).
         // Skip the schedule entry if the user has no org or smrttask isn't enabled there.

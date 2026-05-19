@@ -8,7 +8,6 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { google } from "googleapis";
 import { db } from "../../../db";
 import { requireAuth, isSuperAdmin } from "../../../middleware";
 import { getOAuthClient } from "../../../services/token-refresh";
@@ -17,7 +16,7 @@ const router = Router();
 
 const UPDATABLE_SETTINGS = new Set([
   "display_name", "timezone", "office_addresses", "skip_senders",
-  "skip_recipients", "my_emails", "drive_folder_id", "whatsapp_sheet_id",
+  "skip_recipients", "my_emails", "drive_folder_id",
   "calendar_event_filter", "calendar_allday_tasks", "calendar_holidays_tasks",
   "classification_model", "summary_model", "daily_ai_budget_usd",
   "show_ai_costs", "reminder_channels", "default_reminder_timing",
@@ -86,34 +85,54 @@ router.get("/me/super-admin", requireAuth, async (req: Request, res: Response) =
 });
 
 /**
- * POST /me/whatsapp/test-sheet — verify the caller can read a WhatsApp source
- * Sheet with their connected Google credentials. Used during onboarding before
- * the user has any smrtesy org entitlement, so it gates on requireAuth only.
+ * POST /me/whatsapp/connect — bind the caller's smrtTask user to a Meta
+ * WhatsApp phone number (the IDs visible in their DualHook dashboard).
  *
- * Body: { sheet_id: string, tab?: string }
- * Returns: { ok: true, row_count: number }
+ * This is how the inbound webhook routes events to the right user:
+ * incoming Meta payloads carry `metadata.phone_number_id`, we look it up
+ * in `whatsapp_connections`, and that gives us the smrtTask user_id.
+ *
+ * Body: { phone_number_id: string, waba_id?: string, display_phone_number?: string }
+ * Returns: { ok: true }
  */
-router.post("/me/whatsapp/test-sheet", requireAuth, async (req: Request, res: Response) => {
-  const { sheet_id, tab } = (req.body ?? {}) as { sheet_id?: string; tab?: string };
-  if (!sheet_id || typeof sheet_id !== "string") {
-    return res.status(400).json({ error: "sheet_id is required" });
+router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Response) => {
+  const { phone_number_id, waba_id, display_phone_number } = (req.body ?? {}) as {
+    phone_number_id?: string;
+    waba_id?: string;
+    display_phone_number?: string;
+  };
+
+  if (!phone_number_id || typeof phone_number_id !== "string") {
+    return res.status(400).json({ error: "phone_number_id is required" });
   }
 
-  try {
-    const auth = await getOAuthClient(req.user!.id, "gmail_calendar");
-    const sheets = google.sheets({ version: "v4", auth });
-    // Stay coherent with PART 2 (server/src/modules/smrttask/parts/part2-whatsapp.ts), which
-    // reads WHATSAPP_SHEET_TAB from env and only defaults to "Messages".
-    // Validating against "Messages" here while runtime reads a different
-    // tab would give the user a false-success/false-failure during onboarding.
-    const defaultTab = process.env.WHATSAPP_SHEET_TAB ?? "Messages";
-    const range = `${tab ?? defaultTab}!A2:A`;
-    const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: sheet_id, range });
-    return res.json({ ok: true, row_count: data.values?.length ?? 0 });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return res.status(400).json({ error: msg });
-  }
+  // UNIQUE(phone_number_id) means the same Meta number can only belong to one
+  // smrtTask user at a time — re-binding clears the previous user. For the
+  // single-tenant rollout this matches reality (one DualHook account, one
+  // owner). When multi-tenant arrives, we'll switch to onboarding sessions.
+  //
+  // Single upsert (not delete+insert) so concurrent requests can't race into
+  // the UNIQUE constraint between the two statements.
+  const { error: upsertErr } = await db.from("whatsapp_connections").upsert(
+    {
+      user_id: req.user!.id,
+      phone_number_id,
+      waba_id: waba_id ?? null,
+      display_phone_number: display_phone_number ?? null,
+      disconnected_at: null,
+    },
+    { onConflict: "phone_number_id" },
+  );
+  if (upsertErr) return res.status(500).json({ error: upsertErr.message });
+
+  // Flip the badge on user_settings so the Settings page shows "connected".
+  const { error: updErr } = await db
+    .from("user_settings")
+    .update({ whatsapp_connected: true })
+    .eq("user_id", req.user!.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+
+  return res.json({ ok: true });
 });
 
 /** GET /me/credentials — which services the user has connected (no token data!) */

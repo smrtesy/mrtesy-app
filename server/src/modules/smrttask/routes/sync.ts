@@ -10,7 +10,6 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
-import { runPart2 } from "../parts/part2-whatsapp";
 import { runPart3 } from "../parts/part3-classifier";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
@@ -59,20 +58,9 @@ router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
   }
 });
 
-// ── Part 2: WhatsApp ──────────────────────────────────────────────────────
-router.post("/part2", ...smrttaskGate, async (req: Request, res: Response) => {
-  const { lookback_hours, force } = req.body ?? {};
-  try {
-    const result = await runPart2({
-      userId: req.user!.id,
-      lookbackHours: lookback_hours ?? 48,
-      force: force ?? false,
-    });
-    return res.json({ ok: true, session_id: result.sessionId });
-  } catch (e) {
-    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
-  }
-});
+// Part 2 (WhatsApp) intentionally removed: WhatsApp ingestion is now
+// event-driven via /api/webhooks/whatsapp (see whatsapp-webhook.ts). The
+// previous /part2 route pulled from a Google Sheet on a 15-min cron.
 
 // ── Part 3: classifier ────────────────────────────────────────────────────
 router.post("/part3", ...smrttaskGate, async (req: Request, res: Response) => {
@@ -171,8 +159,6 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
   try {
     if (part === "part1") {
       await runPart1({ userId: user_id });
-    } else if (part === "part2") {
-      await runPart2({ userId: user_id });
     } else if (part === "part3") {
       // Part 3 is org-aware: cron uses the user's primary org membership.
       await runPart3({ userId: user_id, orgId: membership.org_id as string });

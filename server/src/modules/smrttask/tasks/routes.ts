@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
+import { simpleCall, parseJsonResponse } from "../../../anthropic";
 
 const router = Router();
 
@@ -443,22 +444,20 @@ router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
 });
 
 // ── dismissal reasons ──────────────────────────────────────────────────────
-// Closed set, intentionally short. The UI shows these as radios + a "custom"
-// row that reveals a free-text input. Two codes also produce a rules_memory
-// entry so the same sender stops generating suggestions:
+// Closed set. The UI exposes exactly three: two fixed codes that map to a
+// deterministic rules_memory entry, plus "custom" which routes the free-text
+// reason through Claude Haiku to propose a rule for the user to approve in
+// /settings/smrttask/rules.
 //   • sender_unimportant → rule_type=skip   (or bot, for WhatsApp)
 //   • spam               → rule_type=skip_spam
-// These same two codes are also "cascading" — when set, all OTHER pending
-// suggestions from the same sender get archived in the same call so the
-// user doesn't have to dismiss each one individually.
+//   • custom             → LLM-suggested rule, status='pending'
+// sender_unimportant + spam are also "cascading" — when set, all OTHER
+// pending suggestions from the same sender get archived in the same call
+// so the user doesn't have to dismiss each one individually.
 const DISMISSAL_CODES = new Set([
-  "not_relevant_work",     // לא רלוונטי לעבודה שלי
-  "sender_unimportant",    // שולח לא חשוב — חסום שולח לעתיד
-  "topic_irrelevant",      // נושא לא רלוונטי
-  "manual_handle",         // אני מטפל בזה ידנית
-  "spam",                  // ספאם / שיווק
-  "ai_wrong",              // ה-AI לא הבין נכון
-  "custom",                // סיבה ידנית — דורש reason_text
+  "sender_unimportant",
+  "spam",
+  "custom",
 ]);
 
 const CASCADING_CODES = new Set(["sender_unimportant", "spam"]);
@@ -609,6 +608,7 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   const smRaw = (task as any).source_messages;
   const sm = (Array.isArray(smRaw) ? smRaw[0] : smRaw) as {
     source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
+    sender?: string | null; subject?: string | null;
   } | null;
   const sender = CASCADING_CODES.has(reasonCode) ? resolveSender(sm, reasonCode) : null;
 
@@ -663,13 +663,202 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
     }
   }
 
+  // 3. Custom reason → ask Claude Haiku to propose a rule, store as pending
+  //    suggestion for the user to approve in /settings/smrttask/rules.
+  //    Failure is non-fatal: the task is already archived.
+  let rulePending: { trigger: string; rule_type: string; suggestion_confidence: number } | null = null;
+  if (reasonCode === "custom" && reasonText) {
+    try {
+      const { data: fullTask } = await db
+        .from("tasks")
+        .select("title_he, title, description, related_contact, related_contact_email, related_contact_phone")
+        .eq("id", task.id)
+        .maybeSingle();
+      const taskDesc = [
+        `Task: ${fullTask?.title_he ?? fullTask?.title ?? ""}`,
+        fullTask?.description ? `Description: ${fullTask.description}` : "",
+        fullTask?.related_contact ? `Contact: ${fullTask.related_contact}` : "",
+        sm?.source_type ? `Source: ${sm.source_type}` : "",
+        sm?.sender ? `Sender: ${sm.sender}` : "",
+        sm?.sender_email ? `Email: ${sm.sender_email}` : "",
+        sm?.sender_phone ? `Phone: ${sm.sender_phone}` : "",
+      ].filter(Boolean).join("\n");
+
+      const proposal = await proposeRuleFromCustomDismiss(reasonText, taskDesc);
+      if (proposal && proposal.trigger && proposal.rule_type) {
+        const conf = typeof proposal.confidence === "number"
+          ? Math.max(0, Math.min(1, proposal.confidence))
+          : 0.6;
+        const { data: pendingRow, error: pErr } = await db
+          .from("rules_memory")
+          .insert({
+            user_id: task.user_id,
+            app_slug: "smrttask",
+            trigger:    proposal.trigger,
+            rule_type:  proposal.rule_type,
+            action:     proposal.rule_type === "skip" || proposal.rule_type === "skip_spam" ? "skip" : null,
+            reason:     proposal.reason || `Proposed from user dismissal: "${reasonText}"`,
+            is_active:  false,
+            created_by: "claude",
+            suggestion_status: "pending",
+            suggestion_confidence: conf,
+          })
+          .select("trigger, rule_type, suggestion_confidence")
+          .maybeSingle();
+        if (pErr) {
+          console.error("[dismiss/custom] rules_memory pending insert error:", pErr.message);
+        } else if (pendingRow) {
+          rulePending = {
+            trigger: pendingRow.trigger,
+            rule_type: pendingRow.rule_type,
+            suggestion_confidence: pendingRow.suggestion_confidence ?? conf,
+          };
+        }
+      }
+    } catch (e) {
+      console.error("[dismiss/custom] proposeRuleFromCustomDismiss failed:", e);
+    }
+  }
+
   await emitEvent(req.org!.id, "smrttask", "task.dismissed", "task", task.id, {
     reason_code: reasonCode,
     rule_created: !!ruleCreated,
+    rule_pending: !!rulePending,
     cascaded_count: cascadedCount,
   });
 
-  res.json({ ok: true, rule_created: ruleCreated, cascaded_count: cascadedCount });
+  res.json({
+    ok: true,
+    rule_created: ruleCreated,
+    rule_pending: rulePending,
+    cascaded_count: cascadedCount,
+  });
 });
+
+/** POST /tasks/:id/dismiss-fast
+ *  Archive a single suggestion with NO learning, NO LLM, NO cascade. The UI's
+ *  unannotated X button uses this when the user just wants the item out of
+ *  their inbox without spending tokens or producing a rule. */
+router.post("/tasks/:id/dismiss-fast", async (req: Request, res: Response) => {
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr)  return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+
+  const { error: uErr } = await db
+    .from("tasks")
+    .update({
+      status: "archived",
+      manually_verified: true,
+      dismissal_reason_code: null,
+      dismissal_reason_text: null,
+      status_changed_at: new Date().toISOString(),
+    })
+    .eq("id", task.id);
+  if (uErr) return res.status(500).json({ error: uErr.message });
+
+  await emitEvent(req.org!.id, "smrttask", "task.dismissed", "task", task.id, {
+    reason_code: null, fast: true,
+  });
+
+  res.json({ ok: true });
+});
+
+/** POST /tasks/bulk-approve
+ *  Body: { task_ids: string[] }
+ *  Marks each task in the active org as manually_verified=true and stamps
+ *  seen_at. Used by the suggestion list's bulk-action toolbar. */
+router.post("/tasks/bulk-approve", async (req: Request, res: Response) => {
+  const ids = Array.isArray(req.body?.task_ids) ? (req.body.task_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
+
+  const now = new Date().toISOString();
+  const { count, error } = await db
+    .from("tasks")
+    .update({ manually_verified: true, seen_at: now }, { count: "exact" })
+    .eq("organization_id", req.org!.id)
+    .in("id", ids);
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, approved_count: count ?? 0 });
+});
+
+/** POST /tasks/bulk-dismiss-fast
+ *  Body: { task_ids: string[] }
+ *  Same semantics as dismiss-fast but for a batch — archives without
+ *  learning, cascading, or LLM calls. */
+router.post("/tasks/bulk-dismiss-fast", async (req: Request, res: Response) => {
+  const ids = Array.isArray(req.body?.task_ids) ? (req.body.task_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
+
+  const { count, error } = await db
+    .from("tasks")
+    .update({
+      status: "archived",
+      manually_verified: true,
+      dismissal_reason_code: null,
+      dismissal_reason_text: null,
+      status_changed_at: new Date().toISOString(),
+    }, { count: "exact" })
+    .eq("organization_id", req.org!.id)
+    .in("id", ids);
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, dismissed_count: count ?? 0 });
+});
+
+/** Calls Claude Haiku to translate a user's free-text dismissal reason into a
+ *  concrete rule proposal. Returns null on parse failure or empty trigger;
+ *  callers treat null as "no rule, log only". */
+async function proposeRuleFromCustomDismiss(
+  reasonText: string,
+  taskDescription: string,
+): Promise<{ trigger: string; rule_type: string; reason: string; confidence?: number } | null> {
+  const system = `You translate a user's free-text reason for dismissing a smrtTask suggestion into a concrete rule we can store in rules_memory.
+
+Return ONLY valid JSON, no prose, with this shape:
+{ "trigger": "<concrete trigger>", "rule_type": "skip|skip_spam|bot|preference", "reason": "<short Hebrew explanation>", "confidence": 0.0-1.0 }
+
+trigger conventions (pick ONE that fits best):
+  - "from=<email>"              when the user is blocking a specific sender
+  - "domain=<domain>"           when blocking a whole company / domain
+  - "phone=<digits>"            when blocking a WhatsApp phone
+  - "category=promotions|social|forums|updates" — Gmail category
+  - "topic=<keyword>"           topic preference (pair with rule_type=preference)
+  - "keyword=<keyword>"         general keyword preference
+
+rule_type (must be exactly one of these — case-sensitive, no other values are accepted):
+  - skip       — don't create tasks from this trigger
+  - skip_spam  — same as skip but tagged as spam (for analytics)
+  - bot        — known automated sender (WhatsApp phones, etc.)
+  - preference — softer signal that should influence future classification but not auto-skip
+                 (use this for topic/keyword triggers, not skip)
+
+Only return a rule if you can extract something concrete from the user's reason. If the reason is too vague ("not important"), return { "trigger": "", "rule_type": "preference", "reason": "<echo>", "confidence": 0 } and we'll discard it.`;
+
+  const userMsg = `User's reason: ${reasonText}\n\nDismissed task:\n${taskDescription}`;
+
+  const { content } = await simpleCall("haiku", system, userMsg, 256);
+  const parsed = parseJsonResponse<{ trigger: string; rule_type: string; reason: string; confidence?: number }>(content);
+  if (!parsed || !parsed.trigger || !parsed.trigger.trim()) return null;
+
+  // Must match rules_memory.rule_type CHECK constraint:
+  // ('skip','skip_spam','action','style','bot','preference','financial')
+  // We expose a narrower subset to the model because the others don't make sense
+  // for "user dismissed a suggestion".
+  const allowedTypes = new Set(["skip", "skip_spam", "bot", "preference"]);
+  if (!allowedTypes.has(parsed.rule_type)) return null;
+
+  return {
+    trigger: parsed.trigger.trim(),
+    rule_type: parsed.rule_type,
+    reason: parsed.reason?.trim() || "",
+    confidence: parsed.confidence,
+  };
+}
 
 export default router;
