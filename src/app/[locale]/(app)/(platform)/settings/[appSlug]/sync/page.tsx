@@ -51,8 +51,8 @@ const PARTS = [
   },
   {
     key: "part1",
-    label: "PART 1 — Email + Drive + Calendar",
-    description: "Collect new emails, Drive documents, and calendar events",
+    label: "PART 1 — Gmail + Drive",
+    description: "Kicks the Supabase gmail-sync + drive-sync Edge Functions (auto cron: 2 min / 6 h). Calendar uses push, no manual pull.",
     icon: FileSearch,
     color: "text-orange-500",
     manualOnly: false,
@@ -62,7 +62,7 @@ const PARTS = [
   {
     key: "part3",
     label: "PART 3 — Classifier",
-    description: "Classify pending source messages into tasks with Claude AI",
+    description: "Kicks the Supabase ai-process Edge Function (auto cron: 1 min) to classify pending source_messages into tasks.",
     icon: FileSearch,
     color: "text-blue-500",
     manualOnly: false,

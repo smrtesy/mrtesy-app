@@ -160,9 +160,20 @@
 <tr><th>אימות</th><td>HMAC signature + verify token (לא JWT)</td></tr>
 </table>
 
-<div class="callout warn">
-<div class="label">חשוב לדעת</div>
-ה-collector של Express (<code>part1-collector.ts</code>) עדיין קיים אבל <strong>לא רץ ב-cron</strong>. הוא נקרא רק אם המשתמש לוחץ ידנית "סנכרן" בעמוד <code>/settings/smrttask/sync</code> או בעמוד ה-onboarding. הסנכרון האוטומטי נעשה ע"י Edge Functions.
+<div class="callout ok">
+<div class="label">חשוב לדעת — אחרי האיחוד</div>
+<p>הקובץ <code>part1-collector.ts</code> ב-Express <strong>נמחק</strong>. גם
+ב-cron האוטומטי וגם בלחיצה ידנית על "סנכרן עכשיו" בעמוד
+<code>/settings/smrttask/sync</code> או ב-onboarding, ה-בקאנד פונה ישירות
+ל-Edge Functions של Supabase:</p>
+<ul>
+  <li><code>POST /api/sync/part1</code> → קורא ל-<code>gmail-sync</code> + <code>drive-sync</code> (במקביל)</li>
+  <li><code>POST /api/sync/part3</code> → קורא ל-<code>ai-process</code></li>
+</ul>
+<p>זה מקיים את ההנחיה "מקום אחד שהכל רץ בו" — כל הסנכרון של Gmail/Drive/
+סיווג עובר ב-Edge Functions. <code>part0-style</code> (לימוד סגנון
+כתיבה) ו-<code>part4-projects</code> (זיהוי פרויקטים) עדיין ב-Express כי
+עוד אין להם מקבילה ב-Edge — הם רצים <em>רק</em> בלחיצה ידנית.</p>
 </div>
 
 <!-- =============================================================== -->
@@ -508,13 +519,13 @@ context that the AI doesn't need to re-read this message.</code></pre>
 </tr>
 <tr>
   <td><code>server/src/modules/smrttask/parts/part1-collector.ts</code></td>
-  <td>קוד פעיל אבל לא רץ ב-cron</td>
-  <td>טבלת <code>sync_schedules</code> ריקה. נקרא רק אם המשתמש לוחץ ידנית "סנכרן עכשיו"</td>
+  <td><span class="badge deleted">נמחק</span></td>
+  <td>נמחק. <code>/api/sync/part1</code> עכשיו פרוקסי ל-<code>gmail-sync</code> + <code>drive-sync</code> Edge Functions</td>
 </tr>
 <tr>
   <td><code>server/src/modules/smrttask/parts/part0-style.ts</code></td>
   <td>פעיל אבל manual-only</td>
-  <td>תכנן ללמוד סגנון כתיבה. נקרא רק מהדף <code>/settings/smrttask/sync</code> ע"י המשתמש</td>
+  <td>לימוד סגנון כתיבה. אין מקבילה ב-Edge — נקרא רק מהדף <code>/settings/smrttask/sync</code> ע"י המשתמש</td>
 </tr>
 <tr>
   <td><code>server/src/modules/smrttask/parts/part4-projects.ts</code></td>
@@ -549,14 +560,96 @@ context that the AI doesn't need to re-read this message.</code></pre>
 
 <ul>
 <li><strong>11 פעולות AI מקוריות ב-executor</strong> לא מתעדות עלות ב-log_entries (רק ה-default והקלאסיפייר מתעדים). זה משאיר חור ב-budget tracker.</li>
-<li><strong>part0-style ו-part1-collector</strong> ב-Express — האם להשאיר כ"כפתור סנכרון ידני", או למחוק לחלוטין? (פער 2 בהחלטה הקודמת שלך).</li>
-<li><strong>part4-projects</strong> כפול — האם לבחור Edge או Express ולמחוק את השני?</li>
-<li><strong>Edge Function <code>whatsapp</code> v10 עדיין ACTIVE</strong> — אין לו cron job (וידאתי ב-<code>cron.job</code>), אבל הוא פרוס. ייתכן שמישהו קורא לו ישירות, או שהוא קוד נטוש שצריך למחוק. ל-Webhook של DualHook חיברנו את <code>/api/webhooks/whatsapp</code> ב-Express, לא את ה-Edge Function. צריך לוודא שאין שניהם פעילים בו-זמנית.</li>
-<li><strong>google_calendar</strong> — <code>calendar-webhook</code> Edge Function פעיל (v3), <code>calendar-renew-watch</code> רץ פעם בשבוע, אבל בפועל <strong>אין אפילו שורת source_message אחת מסוג <code>google_calendar</code> ב-DB</strong>. כנראה ש-Calendar Watch לא מחובר/לא הוקם, או שה-webhook לא כותב ל-source_messages.</li>
+<li><strong>part4-projects כפול</strong> — קיים גם ב-Express (<code>parts/part4-projects.ts</code>) וגם כ-Edge Function <code>project-detection</code> (רץ <code>0 2 * * *</code>). שניהם פעילים, פוטנציאל לכפילות בהרצה. צריך לבחור אחד ולמחוק את השני.</li>
 </ul>
 
+<h3>נקודה 2 — Edge Function <code>whatsapp</code> v10: מה מצאתי</h3>
+
+<p>בדקתי דרך <code>get_edge_function</code> את התוכן של whatsapp v10. הקובץ
+ACTIVE, ו<strong>גם הוא כותב ל-<code>source_messages</code></strong> בדיוק
+כמו ה-Express webhook — אותו <code>source_type='whatsapp'</code> /
+<code>'whatsapp_echo'</code>, עם <code>onConflict</code> על
+<code>(user_id, source_type, source_id)</code>. כלומר אם DualHook/Meta היה
+מפנה את ה-traffic לשני המקומות, היו נכתבות שורות כפולות.</p>
+
+<p><strong>מי באמת מקבל את התעבורה היום?</strong> בדקתי את שתי השורות
+האחרונות ב-<code>source_messages</code>:</p>
+<ul>
+<li><code>source_id = wa:16469234230</code>, <code>wa:19293330248</code></li>
+</ul>
+<p>הפורמט <code>wa:&lt;phone&gt;</code> נוצר ע"י קוד ה-Express (ראה
+<span class="source">whatsapp-webhook.ts</span>). ה-Edge Function יוצר
+<code>source_id = msg.id</code> מ-Meta (פורמט <code>wamid.XXX</code>).
+המסקנה: <strong>Meta/DualHook מפנים רק ל-Express היום</strong>. ה-Edge
+Function הזה <em>פרוס אבל לא מקבל traffic</em>.</p>
+
+<p><strong>למה זה לא תואם להחלטה "להשאיר Edge, להוריד Express"?</strong>
+ההחלטה ההיא הייתה ל-<em>סיווג</em> (ai-process מנצח את part3-classifier).
+ל-WhatsApp, ה-Repo הלך בכיוון ההפוך ב-PR #36 (DualHook → Express webhook
+ישיר), אז Express הוא ה-source-of-truth בפועל. ה-Edge Function v10 הוא
+שריד מאיטרציה קודמת.</p>
+
+<div class="callout warn">
+<div class="label">החלטה דרושה</div>
+<p>אתה צריך לבחור אחד מהשניים — אי אפשר להשאיר את שניהם:</p>
+<ol>
+<li><strong>למחוק את ה-Edge Function</strong> (<code>delete_edge_function whatsapp</code>) — מקבל את ההחלטה של PR #36.</li>
+<li><strong>להפנות את DualHook ל-Edge ולמחוק את Express webhook</strong> — צריך להגדיר ב-DualHook/Meta את ה-URL החדש: <code>https://exjnlghuzuvqedlltztz.supabase.co/functions/v1/whatsapp?user_id=&lt;UUID&gt;</code>, ולמחוק את <code>whatsapp-webhook.ts</code> ב-Express. שים לב: ה-Edge Function v10 לא עושה את הקיבוץ-לפי-שיחה (אחת לכל chat) שה-Express עושה — הוא כותב שורה לכל הודעה. תצטרך פורט של ה-קיבוץ ל-Edge Function לפני שתעבור.</li>
+</ol>
+</div>
+
+<h3>נקודה 3 — Calendar: 0 שורות. מה השורש</h3>
+
+<p>הפעלתי שאילתה אבחונית מקיפה:</p>
+
+<table>
+<thead><tr><th>בדיקה</th><th>תוצאה</th><th>פרשנות</th></tr></thead>
+<tbody>
+<tr><td><code>user_credentials WHERE service='google_calendar'</code></td><td>2 שורות, יש <code>refresh_token</code> + scopes=<code>['calendar']</code></td><td>נראה תקין</td></tr>
+<tr><td><code>user_settings WHERE calendar_connected=true</code></td><td>2 משתמשים</td><td>שני המשתמשים סימנו "מחובר"</td></tr>
+<tr><td><code>sync_state WHERE source='google_calendar'</code></td><td><strong>0 שורות</strong></td><td>אף פעם לא נשמר <code>nextSyncToken</code></td></tr>
+<tr><td><code>source_messages WHERE source_type='google_calendar'</code></td><td><strong>0 שורות</strong></td><td>אף webhook לא הגיע</td></tr>
+<tr><td><code>log_entries WHERE category='calendar_webhook'</code></td><td>0 שורות</td><td>Google אף פעם לא קרא ל-webhook</td></tr>
+<tr><td><code>log_entries WHERE category='calendar_renew_watch'</code></td><td><strong>6 כשלונות מאז 25/04, כולם "Token refresh failed: 401"</strong></td><td>השורש</td></tr>
+</tbody>
+</table>
+
+<p><strong>שורש הבעיה:</strong> <code>calendar-renew-watch</code> רץ כל
+6 שעות, ובכל הפעלה זה נכשל ב-401 כשהוא מנסה לרענן את ה-Calendar access
+token דרך <code>oauth2.googleapis.com/token</code> עם ה-refresh_token של
+שירות <code>google_calendar</code>. בלי access token תקין הוא לא מצליח
+להירשם ל-<code>watch</code> של Google, ולכן Google אף פעם לא קורא
+ל-<code>calendar-webhook</code>, ולכן אין שורות source_messages.</p>
+
+<p>מעניין במיוחד: ה-refresh_token של <code>service='gmail'</code> של אותם
+משתמשים עובד מצוין (Gmail מסונכרן כל 2 דקות מ-25/04). הבעיה ספציפית
+ל-refresh_token של <code>google_calendar</code>. הסיבות האפשריות:</p>
+<ol>
+<li>ה-OAuth grant של Calendar התקבל מ-client_id אחר ממה שה-Edge Function
+מחזיק ב-<code>GOOGLE_CLIENT_ID</code> env var. כשרה client לא מתאים לרענון
+הוא נכשל ב-401.</li>
+<li>המשתמש ביטל הרשאה ל-Calendar ב-Google Account (לא תקפ ל-Gmail).</li>
+<li>ה-refresh_token של Calendar נשמר מ-flow ישן/שונה ומאז סובב.</li>
+</ol>
+
+<div class="callout warn">
+<div class="label">הפתרון</div>
+<ol>
+<li><strong>למשתמש:</strong> להתנתק ולהתחבר מחדש ל-Google Calendar דרך
+דף ה-Connections. ה-OAuth flow המעודכן יביא refresh_token חדש שתואם
+ל-<code>GOOGLE_CLIENT_ID</code> הנוכחי.</li>
+<li><strong>למפתח:</strong> לוודא שכל ה-Google services (Gmail/Drive/
+Calendar) מתחברים ב-OAuth flow <em>אחד</em> שמבקש את כל ה-scopes בבת
+אחת, ולא בשלושה flows נפרדים שעלולים להחזיק tokens מ-clients שונים.</li>
+<li><strong>אבחון מהיר:</strong> אחרי שמשתמש מתחבר מחדש, להריץ ידנית את
+<code>calendar-renew-watch</code> (POST ל-Edge Function עם
+<code>x-cron-secret</code>). אם זה מצליח, יש שורה חדשה ב-<code>sync_state</code>
+ו-Google יתחיל לשלוח webhooks תוך דקות.</li>
+</ol>
+</div>
+
 <div class="footer">
-מסמך זה משקף את מצב הקוד בענף <code>claude/refine-task-classification-B5vQI</code> אחרי קומיט <code>d85b2be</code>. גרסאות פרוסות: <code>ai-process v18</code>, <code>gmail-sync v6</code>. כל הצהרה במסמך מקושרת לקובץ ושורה. אם משהו אינו תואם — זו תקלה במסמך, לא בקוד.
+מסמך זה משקף את מצב הקוד בענף <code>claude/refine-task-classification-B5vQI</code> אחרי איחוד ה-sync ל-Edge Functions ומחיקת <code>part1-collector.ts</code>. גרסאות פרוסות: <code>ai-process v18</code>, <code>gmail-sync v6</code>, <code>whatsapp v10</code> (פרוס אבל לא מקבל traffic), <code>calendar-webhook v3</code> (לא נקרא — ראה נקודה 3). כל הצהרה במסמך מקושרת לקובץ ושורה. אם משהו אינו תואם — זו תקלה במסמך, לא בקוד.
 </div>
 
 </div>

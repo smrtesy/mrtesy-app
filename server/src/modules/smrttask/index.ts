@@ -34,9 +34,3 @@ router.use("/sync", syncRouter);
 router.use(whatsappViewRouter);
 
 export default router;
-
-// Re-export the AI pipeline parts the cron scheduler still uses. PART 2
-// (WhatsApp) is event-driven via the webhook above. PART 3 was deleted —
-// classification is now owned by the Supabase Edge Function `ai-process`,
-// which the new /sync/part3 endpoint kicks off on demand.
-export { runPart1 } from "./parts/part1-collector";

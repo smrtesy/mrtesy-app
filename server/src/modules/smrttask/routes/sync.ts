@@ -9,7 +9,6 @@ import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
-import { runPart1 } from "../parts/part1-collector";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
 import { notifyError } from "../../../lib/platform";
@@ -40,21 +39,43 @@ router.post("/part0", ...smrttaskGate, async (req: Request, res: Response) => {
   }
 });
 
-// ── Part 1: collector (Gmail/Drive/Calendar) ──────────────────────────────
+// ── Part 1: collector — proxied to the Supabase gmail-sync + drive-sync Edge Functions ──
+// The Express part1-collector was deleted; gmail-sync (cron every 2 min) and
+// drive-sync (cron every 6h) are the only collectors. This endpoint kicks them
+// off immediately so manual "Sync Now" doesn't wait for the next cron tick.
+//
+// Calendar collection happens via push (calendar-webhook Edge Function),
+// driven by calendar-renew-watch establishing a Google watch channel — there
+// is no on-demand "pull all calendar events" path. If the user's Calendar
+// watch isn't established, calendar-renew-watch is what fixes it.
 router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
-  const { gmail_days, drive_hours, cal_months, drive_folder_id } = req.body ?? {};
-  try {
-    const result = await runPart1({
-      userId: req.user!.id,
-      gmailDays: gmail_days,
-      driveHours: drive_hours,
-      calMonths: cal_months,
-      driveFolderId: drive_folder_id,
-    });
-    return res.json({ ok: true, session_id: result.sessionId });
-  } catch (e) {
-    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const cronSecret = process.env.CRON_SECRET;
+  if (!supabaseUrl || !cronSecret) {
+    return res.status(500).json({ error: "SUPABASE_URL / CRON_SECRET not configured" });
   }
+
+  const headers = { "Content-Type": "application/json", "x-cron-secret": cronSecret } as const;
+
+  type EdgeResult = { ok: boolean; status: number; body: unknown };
+  async function kick(slug: string): Promise<EdgeResult> {
+    try {
+      const resp = await fetch(`${supabaseUrl}/functions/v1/${slug}`, { method: "POST", headers });
+      const body = await resp.json().catch(() => ({}));
+      return { ok: resp.ok, status: resp.status, body };
+    } catch (e) {
+      return { ok: false, status: 0, body: { error: e instanceof Error ? e.message : String(e) } };
+    }
+  }
+
+  const [gmail, drive] = await Promise.all([kick("gmail-sync"), kick("drive-sync")]);
+
+  if (!gmail.ok && !drive.ok) {
+    return res.status(502).json({ error: "Both gmail-sync and drive-sync failed", gmail, drive });
+  }
+  // Keep `session_id` so the existing UI toast renders cleanly. The Edge
+  // Functions write their own log_entries rows for progress.
+  return res.json({ ok: true, session_id: "gmail-sync+drive-sync", gmail, drive });
 });
 
 // Part 2 (WhatsApp) intentionally removed: WhatsApp ingestion is now
@@ -179,13 +200,11 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
   }
 
   try {
-    if (part === "part1") {
-      await runPart1({ userId: user_id });
-    } else if (part === "part3") {
-      // Classification moved to the ai-process Edge Function in Supabase.
-      // Its own cron runs there, so the Railway-side scheduler has nothing
-      // to do. Treat existing part='part3' rows as a no-op until they
-      // age out.
+    if (part === "part1" || part === "part3") {
+      // Collection (part1) and classification (part3) both moved to Supabase
+      // Edge Functions with their own cron in Supabase. Railway's scheduler
+      // has nothing to do for these — treat existing rows as no-ops until
+      // they age out.
     } else {
       return res.status(400).json({ error: `Unknown part: ${part}` });
     }

@@ -25,7 +25,7 @@ import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { runPart1 } from "./modules/smrttask";
+import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 
 const app = express();
@@ -139,19 +139,11 @@ async function runScheduledJobs() {
 
   for (const schedule of schedules) {
     try {
-      if (schedule.part === "part1") {
-        await runPart1({ userId: schedule.user_id });
-      } else if (schedule.part === "part2") {
-        // Part 2 (WhatsApp) is now event-driven via webhook, not cron-pulled.
-        // Legacy sync_schedules rows with part='part2' are silently skipped;
-        // they'll be cleaned up in a follow-up migration.
-        continue;
-      } else if (schedule.part === "part3") {
-        // Part 3 was deleted — classification is now owned by the
-        // Supabase Edge Function `ai-process`, which runs on its own
-        // cron in Supabase. Legacy sync_schedules rows with part='part3'
-        // are silently skipped; the row will be cleaned up by a future
-        // migration once we confirm nothing else writes them.
+      // All cron-driven parts (part1 collection, part2 WhatsApp, part3
+      // classification) moved to Supabase Edge Functions with their own
+      // cron in Supabase. Legacy sync_schedules rows are silently skipped
+      // until a follow-up migration cleans them up.
+      if (schedule.part === "part1" || schedule.part === "part2" || schedule.part === "part3") {
         continue;
       }
 
