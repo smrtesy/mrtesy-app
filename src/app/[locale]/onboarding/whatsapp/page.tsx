@@ -11,10 +11,9 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-// Surfaced to the user so they can copy them straight into DualHook's
-// Webhook Override screen. Configured per-environment.
+// The webhook URL is platform-fixed; we only expose it here so the user
+// can paste it straight into DualHook's "Webhook Override" field.
 const WEBHOOK_URL = `${BACKEND_URL}/api/webhooks/whatsapp`;
-const WEBHOOK_VERIFY_TOKEN = process.env.NEXT_PUBLIC_WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "";
 
 export default function OnboardingWhatsApp() {
   const t = useTranslations("onboarding");
@@ -28,7 +27,11 @@ export default function OnboardingWhatsApp() {
 
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [wabaId, setWabaId] = useState("");
+  const [businessId, setBusinessId] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [verifyToken, setVerifyToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -59,7 +62,11 @@ export default function OnboardingWhatsApp() {
         body: JSON.stringify({
           phone_number_id: phoneNumberId.trim(),
           waba_id: wabaId.trim() || undefined,
+          business_id: businessId.trim() || undefined,
           display_phone_number: displayPhone.trim() || undefined,
+          access_token: accessToken.trim() || undefined,
+          app_secret: appSecret.trim() || undefined,
+          verify_token: verifyToken.trim() || undefined,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -126,29 +133,6 @@ export default function OnboardingWhatsApp() {
           </div>
         </div>
 
-        {/* Verify Token — copyable */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">{tWa("verifyTokenLabel")}</label>
-          <div className="flex gap-2">
-            <Input
-              value={WEBHOOK_VERIFY_TOKEN || tWa("missingConfig")}
-              readOnly
-              dir="ltr"
-              className="font-mono text-xs"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => copyToClipboard("token", WEBHOOK_VERIFY_TOKEN)}
-              disabled={!WEBHOOK_VERIFY_TOKEN}
-              aria-label={tWa("copyToClipboard")}
-            >
-              {copiedKey === "token" ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-
         {/* Phone Number ID */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{tWa("phoneNumberIdLabel")}</label>
@@ -175,6 +159,19 @@ export default function OnboardingWhatsApp() {
           <p className="text-xs text-muted-foreground">{tWa("wabaIdHint")}</p>
         </div>
 
+        {/* Business ID — kept for completeness; not used by the message/media flow today. */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("businessIdLabel")}</label>
+          <Input
+            value={businessId}
+            onChange={(e) => setBusinessId(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="2156077741835869"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("businessIdHint")}</p>
+        </div>
+
         {/* Display phone (optional) */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{tWa("displayPhoneLabel")}</label>
@@ -185,6 +182,51 @@ export default function OnboardingWhatsApp() {
             className="font-mono text-xs"
             placeholder="+19293330248"
           />
+        </div>
+
+        {/* Access Token — Meta Cloud API Bearer used for media fetch. */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("accessTokenLabel")}</label>
+          <Input
+            type="password"
+            value={accessToken}
+            onChange={(e) => setAccessToken(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="EAAxxxxxxxxx..."
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("accessTokenHint")}</p>
+        </div>
+
+        {/* App Secret — Meta signs webhooks with this. */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("appSecretLabel")}</label>
+          <Input
+            type="password"
+            value={appSecret}
+            onChange={(e) => setAppSecret(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="••••••••••••••••••••••••"
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("appSecretHint")}</p>
+        </div>
+
+        {/* Verify Token — user-chosen, also pasted into DualHook. */}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">{tWa("verifyTokenLabel")}</label>
+          <Input
+            type="password"
+            value={verifyToken}
+            onChange={(e) => setVerifyToken(e.target.value)}
+            dir="ltr"
+            className="font-mono text-xs"
+            placeholder="a-random-string-you-choose"
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">{tWa("verifyTokenHint")}</p>
         </div>
 
         <Button onClick={handleConnect} disabled={connecting || !phoneNumberId} className="w-full min-h-[48px]">
