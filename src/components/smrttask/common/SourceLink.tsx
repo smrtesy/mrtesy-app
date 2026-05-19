@@ -67,14 +67,19 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
       // in Chrome if Gmail is not installed.
       if (isAndroid && (row.source_type === "gmail" || row.source_type === "gmail_sent")) {
         const webUrl = row.source_url!;
-        // Extract path + fragment from https://mail.google.com/<path>#<fragment>
-        const m = webUrl.match(/mail\.google\.com(\/[^#]*)(#.*)?$/);
+        // Capture path and fragment separately (fragment without its leading #).
+        const m = webUrl.match(/mail\.google\.com(\/[^#]*)(?:#(.*))?$/);
         if (m) {
-          const intentPath = (m[1] ?? "/mail/u/0/") + (m[2] ?? "");
+          const path = m[1] ?? "/mail/u/0/";
+          const frag = m[2]; // e.g. "all/18abc123" — no leading #
+          // Encode # as %23 so the Gmail fragment doesn't collide with the
+          // #Intent; marker that ends the Intent URL.
+          const intentPath = path + (frag ? `%23${frag}` : "");
           const fallback = encodeURIComponent(webUrl);
           e.preventDefault();
+          // intent://mail.google.com/mail/u/0/%23all/{id}#Intent;scheme=https;package=...;end
           window.location.href =
-            `intent:/${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
+            `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
           return;
         }
       }
