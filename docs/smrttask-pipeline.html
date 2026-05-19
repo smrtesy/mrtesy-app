@@ -153,8 +153,8 @@
 <h3>ד. WhatsApp (DualHook → Webhook)</h3>
 <table>
 <tr><th>פעולה</th><td>הודעות מ-WhatsApp Cloud API מועברות דרך DualHook → webhook ב-Express</td></tr>
-<tr><th>מיקום</th><td><span class="badge express">Express</span> <code>POST /api/whatsapp-webhook</code></td></tr>
-<tr><th>קוד</th><td><span class="source">server/src/modules/smrttask/routes/whatsapp-webhook.ts</span> (803 שורות)</td></tr>
+<tr><th>מיקום</th><td><span class="badge express">Express</span> <code>POST /api/webhooks/whatsapp</code> (Meta verification: <code>GET /api/webhooks/whatsapp</code>)</td></tr>
+<tr><th>קוד</th><td><span class="source">server/src/modules/smrttask/routes/whatsapp-webhook.ts</span> (1015 שורות; כתיבה ל-source_messages בשורות 988-1012)</td></tr>
 <tr><th>source_type</th><td><code>whatsapp</code> להודעות נכנסות, <code>whatsapp_echo</code> להודעות שיוצאות</td></tr>
 <tr><th>קיבוץ</th><td>שורה אחת ב-<code>source_messages</code> לכל "שיחה" (<code>chatId</code>), עם <code>raw_content</code> שמכיל 20 הודעות אחרונות</td></tr>
 <tr><th>אימות</th><td>HMAC signature + verify token (לא JWT)</td></tr>
@@ -187,7 +187,7 @@
 <!-- =============================================================== -->
 <h2 id="preclassify">4. שלב 1 — סיווג מקדים (preClassify)</h2>
 
-<p>ai-process מקבל הודעה מ-<code>source_messages</code> ומריץ עליה <strong>סיווג ללא AI</strong> כדי לחסוך עלות. <span class="source">supabase/functions/ai-process/index.ts:62-100</span></p>
+<p>ai-process מקבל הודעה מ-<code>source_messages</code> ומריץ עליה <strong>סיווג ללא AI</strong> כדי לחסוך עלות. <span class="source">supabase/functions/ai-process/index.ts:112-164</span></p>
 
 <p>הכללים נבדקים בסדר הזה — הראשון שמתאים מנצח:</p>
 
@@ -216,10 +216,15 @@
 ai-process קורא מ-<code>rules_memory</code> את כל השורות עם <code>trigger='category=&lt;key&gt;'</code> (4 ערכים: <code>promotions / social / forums / updates</code>). אם יש שורה — היא מנצחת. אם לא קיימת — חל ברירת המחדל החכמה: <strong>promotions, social, forums מסוננים. updates עוברים לסונט</strong>. המשתמש שולט בזה דרך הדף <code>/settings/smrttask/rules</code> תחת "Gmail Filters" (4 toggles).
 </div>
 
+<div class="callout warn">
+<div class="label">תוויות Gmail רק להודעות מ-v6 ואילך</div>
+gmail-sync v6 (הקומיט הזה) הוא הראשון ששומר <code>metadata.labels</code>. הודעות שנשמרו לפני זה (178 הודעות gmail נכון לעכשיו) <strong>לא</strong> מכילות labels — אצלן כלל 8 לעולם לא מופעל, וההודעה תיפול ל-<code>needs_claude</code> ותעובד דרך Haiku ו-Sonnet כרגיל. רק הודעות gmail חדשות שייכנסו אחרי 19/5 ייהנו מסינון הקטגוריות.
+</div>
+
 <!-- =============================================================== -->
 <h2 id="classify">5. שלב 2 — סיווג עמוק (Haiku)</h2>
 
-<p>רק אם preClassify החזיר <code>needs_claude</code> או <code>check_followup</code>, ai-process קורא ל-Claude Haiku. <span class="source">supabase/functions/ai-process/index.ts:115-125</span></p>
+<p>רק אם preClassify החזיר <code>needs_claude</code> או <code>check_followup</code>, ai-process קורא ל-Claude Haiku. <span class="source">supabase/functions/ai-process/index.ts:179-213</span></p>
 
 <h4>הפרומפט שנשלח ל-Haiku (תבנית פר-משתמש)</h4>
 <pre><code>You are a message classifier for a personal task management system.
@@ -239,7 +244,7 @@ WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM</code></pre>
 
 <div class="callout ok">
 <div class="label">תבנית, לא קשיחות</div>
-הפרומפט בנוי דינמית מ-<code>user_settings.my_emails</code> ו-<code>user_settings.office_addresses</code> של המשתמש שמטפלים בהודעה. אם המערכים ריקים, הקטעים מושמטים — הפרומפט עובד גם לטננטים שטרם הגדירו כלום. <span class="source">supabase/functions/ai-process/index.ts:140-162</span>
+הפרומפט בנוי דינמית מ-<code>user_settings.my_emails</code> ו-<code>user_settings.office_addresses</code> של המשתמש שמטפלים בהודעה. אם המערכים ריקים, הקטעים מושמטים — הפרומפט עובד גם לטננטים שטרם הגדירו כלום. <span class="source">supabase/functions/ai-process/index.ts:185-203</span>
 </div>
 
 <h4>קלט</h4>
@@ -256,7 +261,7 @@ WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM</code></pre>
 <!-- =============================================================== -->
 <h2 id="followup">6. שלב 3 — זיהוי המשך: threadId ל-Gmail, source_message_id ל-WhatsApp</h2>
 
-<p>חידוש שהוסף בקומיט <code>28bb2ff</code> ל-Gmail, והורחב ב-<code>d85b2be</code> ל-WhatsApp, כדי לפתור את בעיית הכפילויות (46% מהמשימות בעבר). <span class="source">supabase/functions/ai-process/index.ts:332-374</span></p>
+<p>חידוש שהוסף בקומיט <code>28bb2ff</code> ל-Gmail, והורחב ב-<code>d85b2be</code> ל-WhatsApp, כדי לפתור את בעיית הכפילויות (46% מהמשימות בעבר). <span class="source">supabase/functions/ai-process/index.ts:372-427</span></p>
 
 <p>רק אחרי ש-<strong>Haiku</strong> סיווג את ההודעה כ-ACTIONABLE, ai-process בודק שני מסלולים לפי source_type:</p>
 
@@ -295,7 +300,7 @@ if (source_type === "gmail" && msg.metadata.threadId) {
 <!-- =============================================================== -->
 <h2 id="detectproject">7. שלב 4 — שיוך לפרויקט (detectProject)</h2>
 
-<p>רק להודעות actionable שלא נקשרו לשרשור קיים. <span class="source">supabase/functions/ai-process/index.ts:127-136</span></p>
+<p>רק להודעות actionable שלא נקשרו לשרשור קיים. <span class="source">supabase/functions/ai-process/index.ts:215-224</span></p>
 
 <table>
 <tr><th>שאילתה</th><td><code>SELECT id, name, name_he FROM projects WHERE user_id = ? AND is_active = true</code></td></tr>
@@ -309,7 +314,7 @@ if (source_type === "gmail" && msg.metadata.threadId) {
 <!-- =============================================================== -->
 <h2 id="createtask">8. שלב 5 — יצירת המשימה (Sonnet)</h2>
 
-<p>הקריאה היקרה ביותר בכל הצינור. <span class="source">supabase/functions/ai-process/index.ts:149-235</span></p>
+<p>הקריאה היקרה ביותר בכל הצינור. <span class="source">supabase/functions/ai-process/index.ts:237-323</span></p>
 
 <h4>הפרומפט המלא ל-Sonnet</h4>
 <details>
@@ -426,7 +431,7 @@ context that the AI doesn't need to re-read this message.</code></pre>
 
 <div class="callout ok">
 <div class="label">תקציב יומי</div>
-לפני כל קריאה ל-AI, ה-executor סוכם את <code>log_entries.ai_cost_usd</code> של היום עבור המשתמש. אם עבר את <code>user_settings.daily_ai_budget_usd</code> (ברירת מחדל $1) → 429. הפרונט מציג טוסט עם הסבר ולינק לדף הפרמטרים. <span class="source">server/src/modules/smrttask/routes/actions.ts:33-50</span>
+לפני כל קריאה ל-AI, ה-executor סוכם את <code>log_entries.ai_cost_usd</code> של היום עבור המשתמש. אם עבר את <code>user_settings.daily_ai_budget_usd</code> (ברירת מחדל $1) → 429. הפרונט מציג טוסט עם הסבר ולינק לדף הפרמטרים. <span class="source">server/src/modules/smrttask/routes/actions.ts:34-52</span>
 </div>
 
 <!-- =============================================================== -->
@@ -485,7 +490,7 @@ context that the AI doesn't need to re-read this message.</code></pre>
 <tr><th>rule_type</th><td><code>skip</code></td></tr>
 <tr><th>ברירת מחדל (כשאין שורה ב-rules_memory)</th><td>promotions, social, forums — מסוננים. <strong>updates — לא מסוננים</strong> ועוברים לסונט.</td></tr>
 <tr><th>UI ב-rules page</th><td>4 toggles תחת "Gmail Filters". upsert בטוח דרך constraint <code>UNIQUE (user_id, trigger)</code></td></tr>
-<tr><th>קוד מפעיל</th><td><span class="source">supabase/functions/ai-process/index.ts:64-91</span> (buildCategoryFilter)</td></tr>
+<tr><th>קוד מפעיל</th><td><span class="source">supabase/functions/ai-process/index.ts:82-96</span> (buildCategoryFilter)</td></tr>
 </table>
 
 <!-- =============================================================== -->
@@ -546,6 +551,8 @@ context that the AI doesn't need to re-read this message.</code></pre>
 <li><strong>11 פעולות AI מקוריות ב-executor</strong> לא מתעדות עלות ב-log_entries (רק ה-default והקלאסיפייר מתעדים). זה משאיר חור ב-budget tracker.</li>
 <li><strong>part0-style ו-part1-collector</strong> ב-Express — האם להשאיר כ"כפתור סנכרון ידני", או למחוק לחלוטין? (פער 2 בהחלטה הקודמת שלך).</li>
 <li><strong>part4-projects</strong> כפול — האם לבחור Edge או Express ולמחוק את השני?</li>
+<li><strong>Edge Function <code>whatsapp</code> v10 עדיין ACTIVE</strong> — אין לו cron job (וידאתי ב-<code>cron.job</code>), אבל הוא פרוס. ייתכן שמישהו קורא לו ישירות, או שהוא קוד נטוש שצריך למחוק. ל-Webhook של DualHook חיברנו את <code>/api/webhooks/whatsapp</code> ב-Express, לא את ה-Edge Function. צריך לוודא שאין שניהם פעילים בו-זמנית.</li>
+<li><strong>google_calendar</strong> — <code>calendar-webhook</code> Edge Function פעיל (v3), <code>calendar-renew-watch</code> רץ פעם בשבוע, אבל בפועל <strong>אין אפילו שורת source_message אחת מסוג <code>google_calendar</code> ב-DB</strong>. כנראה ש-Calendar Watch לא מחובר/לא הוקם, או שה-webhook לא כותב ל-source_messages.</li>
 </ul>
 
 <div class="footer">
