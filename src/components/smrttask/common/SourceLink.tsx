@@ -49,8 +49,10 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
       if (typeof window === "undefined") return;
       if (!window.matchMedia("(max-width: 767px)").matches) return;
 
-      // WhatsApp: rewrite to whatsapp:// custom scheme. Custom schemes are
-      // not Universal Links so window.location.href is fine here.
+      const ua = navigator.userAgent;
+      const isAndroid = /Android/i.test(ua);
+
+      // WhatsApp: custom URL scheme works on both Android and iOS with JS navigation.
       if (row.source_type === "whatsapp" || row.source_type === "whatsapp_echo") {
         const m = (row.source_url ?? "").match(/wa\.me\/(\d+)/);
         if (m) {
@@ -60,11 +62,26 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
         }
       }
 
-      // Gmail / Drive / Calendar: iOS Universal Links fire ONLY on a native
-      // anchor-click, never on window.location.href. Switching target to _self
-      // (same tab) prevents the "new tab suppresses Universal Links" issue
-      // while still letting the browser follow the href natively.
-      // Don't preventDefault — the click must propagate for iOS to intercept.
+      // Android Gmail: Intent URL opens Gmail app directly, bypassing the
+      // "Open supported links" App Links setting. Falls back to the web URL
+      // in Chrome if Gmail is not installed.
+      if (isAndroid && (row.source_type === "gmail" || row.source_type === "gmail_sent")) {
+        const webUrl = row.source_url!;
+        // Extract path + fragment from https://mail.google.com/<path>#<fragment>
+        const m = webUrl.match(/mail\.google\.com(\/[^#]*)(#.*)?$/);
+        if (m) {
+          const intentPath = (m[1] ?? "/mail/u/0/") + (m[2] ?? "");
+          const fallback = encodeURIComponent(webUrl);
+          e.preventDefault();
+          window.location.href =
+            `intent:/${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
+          return;
+        }
+      }
+
+      // iOS and other platforms: App / Universal Links fire ONLY on native
+      // anchor-clicks, never on window.location.href. Switching to _self lets
+      // the browser follow the href natively so the OS can intercept it.
       e.currentTarget.target = "_self";
     };
 
