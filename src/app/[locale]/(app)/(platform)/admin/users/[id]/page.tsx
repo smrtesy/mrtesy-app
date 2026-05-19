@@ -5,6 +5,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserMembershipsClient } from "@/components/admin/UserMembershipsClient";
+import { UserAiBudgetEditor } from "@/components/admin/UserAiBudgetEditor";
 
 export default async function AdminUserDetailPage({
   params,
@@ -80,6 +81,8 @@ export default async function AdminUserDetailPage({
           </span>
           <div className="h-px flex-1 bg-border" />
         </div>
+
+      <UserAiBudgetEditor userId={id} />
 
       <Card>
         <CardHeader><CardTitle>{t("connectionsSection")}</CardTitle></CardHeader>

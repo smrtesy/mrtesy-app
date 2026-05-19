@@ -284,6 +284,13 @@
     "save": "Save",
     "saved": "Saved"
   },
+  "adminUserBudget": {
+    "title": "Daily AI budget",
+    "description": "Per-user daily cap on AI spend. Once exceeded, ai-process stops handling new messages for this user until tomorrow, and action buttons return a budget error. Per-user value but only super-admins can change it.",
+    "label": "Daily budget (USD)",
+    "save": "Save",
+    "saved": "Budget updated"
+  },
   "adminSmrttaskParameters": {
     "backToApp": "Back to app",
     "title": "smrtTask system parameters",

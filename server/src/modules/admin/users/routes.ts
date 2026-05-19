@@ -4,6 +4,7 @@
  *   GET    /admin/users                      list all users + counts
  *   GET    /admin/users/:id                  single user detail
  *   GET    /admin/users/:id/memberships      orgs the user belongs to + per-org role
+ *   PATCH  /admin/users/:id/budget           set daily_ai_budget_usd
  *   POST   /admin/users/:id/super-admin      grant super-admin   body: { note? }
  *   DELETE /admin/users/:id/super-admin      revoke
  *   GET    /admin/super-admins               list everyone with super-admin
@@ -166,6 +167,43 @@ router.get("/admin/users/:id/memberships", async (req: Request, res: Response) =
   }
 
   res.json({ memberships, effective_apps: Array.from(effectiveSlugs) });
+});
+
+/**
+ * PATCH /admin/users/:id/budget — set the user's daily AI spend cap.
+ *
+ * Body: { daily_ai_budget_usd: number }   (0 < x ≤ 100)
+ *
+ * daily_ai_budget_usd lives on user_settings (per-user) but only super-admins
+ * may change it; /me/settings PATCH does not whitelist this field. The
+ * service-role client bypasses the user_isolation RLS so this writes to
+ * another user's row.
+ *
+ * The upper bound of $100/day is a safety rail — heavy AI workloads above
+ * this need a deliberate code change. Bump it if a real use case appears.
+ */
+router.patch("/admin/users/:id/budget", async (req: Request, res: Response) => {
+  const targetUserId = req.params.id;
+  const raw = req.body?.daily_ai_budget_usd;
+  const v = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(v) || v <= 0 || v > 100) {
+    return res.status(400).json({ error: "daily_ai_budget_usd must be a number greater than 0 and at most 100" });
+  }
+
+  // `.select(...).single()` forces a 0-row UPDATE to surface as PGRST116, so
+  // a stale/invalid user_id returns 404 instead of a misleading {ok:true}.
+  const { data, error } = await db
+    .from("user_settings")
+    .update({ daily_ai_budget_usd: v })
+    .eq("user_id", targetUserId)
+    .select("user_id, daily_ai_budget_usd")
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return res.status(404).json({ error: "user_settings row not found for this user" });
+    return res.status(500).json({ error: error.message });
+  }
+  res.json({ ok: true, daily_ai_budget_usd: data.daily_ai_budget_usd });
 });
 
 /** POST /admin/users/:id/super-admin  body: { note?: string } */
