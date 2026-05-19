@@ -116,6 +116,78 @@ export async function updateSyncState(
   );
 }
 
+// ── Helper: read a platform-wide app secret/config value ────────────────────
+//
+// Reads from `app_secrets` (the operator-managed table edited via the
+// admin UI). Decrypts via Vault when the row is marked is_secret. Falls
+// back to the named env var when the row isn't there yet — handy during
+// the transition from env-driven to UI-driven secrets, and a safety net
+// for anything the operator hasn't bothered to set.
+//
+// Lightweight in-memory cache (10s TTL) so a busy webhook doesn't
+// round-trip Supabase per message.
+
+interface AppSecretCacheEntry {
+  value: string | null;
+  expires: number;
+}
+const APP_SECRET_TTL_MS = 10_000;
+const appSecretCache = new Map<string, AppSecretCacheEntry>();
+
+export async function getAppSecret(
+  appSlug: string,
+  key: string,
+  envFallback?: string,
+): Promise<string | null> {
+  const cacheKey = `${appSlug}:${key}`;
+  const cached = appSecretCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) return cached.value;
+
+  const { data: app } = await db.from("apps").select("id").eq("slug", appSlug).maybeSingle();
+  if (!app) {
+    const fallback = envFallback ? process.env[envFallback] ?? null : null;
+    appSecretCache.set(cacheKey, { value: fallback, expires: Date.now() + APP_SECRET_TTL_MS });
+    return fallback;
+  }
+
+  const { data: row } = await db
+    .from("app_secrets")
+    .select("is_secret, value_text, value_secret_id")
+    .eq("app_id", app.id)
+    .eq("key", key)
+    .maybeSingle();
+
+  let value: string | null = null;
+  if (row) {
+    if (row.is_secret && row.value_secret_id) {
+      const { data: plaintext } = await db.rpc("vault_read_secret", {
+        secret_id: row.value_secret_id,
+      });
+      value = typeof plaintext === "string" ? plaintext : null;
+    } else if (!row.is_secret) {
+      value = (row.value_text as string | null) ?? null;
+    }
+  }
+
+  if (value === null && envFallback) {
+    value = process.env[envFallback] ?? null;
+  }
+
+  appSecretCache.set(cacheKey, { value, expires: Date.now() + APP_SECRET_TTL_MS });
+  return value;
+}
+
+/** Clear the app-secret cache. Call after a write so the next read sees fresh data. */
+export function invalidateAppSecretCache(appSlug: string, key?: string): void {
+  if (key) {
+    appSecretCache.delete(`${appSlug}:${key}`);
+  } else {
+    for (const k of [...appSecretCache.keys()]) {
+      if (k.startsWith(`${appSlug}:`)) appSecretCache.delete(k);
+    }
+  }
+}
+
 // ── Helper: get OAuth credentials for a user ─────────────────────────────────
 export async function getCredentials(userId: string, service: string) {
   const { data, error } = await db

@@ -85,68 +85,135 @@ router.get("/me/super-admin", requireAuth, async (req: Request, res: Response) =
 });
 
 /**
+ * Write-or-rotate a secret in Vault. If `existingId` is non-null we update
+ * that row in place; otherwise we create a fresh secret with the given
+ * name/description and return its new uuid. Returns null on error (the
+ * caller is responsible for surfacing the error to the user).
+ */
+async function upsertVaultSecret(
+  newValue: string,
+  existingId: string | null,
+  name: string,
+  description: string,
+): Promise<{ id: string | null; error: string | null }> {
+  if (existingId) {
+    const { error } = await db.rpc("vault_update_secret", {
+      secret_id: existingId,
+      new_secret: newValue,
+    });
+    if (error) return { id: null, error: `vault update ${name}: ${error.message}` };
+    return { id: existingId, error: null };
+  }
+  const { data, error } = await db.rpc("vault_create_secret", {
+    new_secret: newValue,
+    new_name: name,
+    new_description: description,
+  });
+  if (error) return { id: null, error: `vault create ${name}: ${error.message}` };
+  return { id: (data as string | null) ?? null, error: null };
+}
+
+/**
  * POST /me/whatsapp/connect — bind the caller's smrtTask user to a Meta
  * WhatsApp phone number (the IDs visible in their DualHook dashboard) and
- * stash their Meta Cloud API Access Token in Supabase Vault.
+ * stash the three Meta secrets they pasted into Supabase Vault.
  *
- * This is how the inbound webhook routes events to the right user:
- * incoming Meta payloads carry `metadata.phone_number_id`, we look it up
- * in `whatsapp_connections`, and that gives us the smrtTask user_id plus
- * a vault pointer for the access token used to fetch media.
+ * Per-WABA secrets (all go to Vault):
+ *   - access_token        Bearer for Meta Cloud API media fetch
+ *   - app_secret          HMAC key for X-Hub-Signature-256 validation
+ *   - verify_token        Echoed back during Meta's GET handshake
+ *
+ * Every value is optional in the body: an empty/missing field means "leave
+ * the existing one alone", so the user can rotate just one secret without
+ * having to re-enter the others.
  *
  * Body: {
- *   phone_number_id: string,
- *   waba_id?: string,
+ *   phone_number_id:      string,
+ *   waba_id?:             string,
  *   display_phone_number?: string,
- *   access_token?: string,
+ *   access_token?:        string,
+ *   app_secret?:          string,
+ *   verify_token?:        string,
  * }
  * Returns: { ok: true }
  */
 router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Response) => {
-  const { phone_number_id, waba_id, display_phone_number, access_token } = (req.body ?? {}) as {
+  const {
+    phone_number_id,
+    waba_id,
+    display_phone_number,
+    access_token,
+    app_secret,
+    verify_token,
+  } = (req.body ?? {}) as {
     phone_number_id?: string;
     waba_id?: string;
     display_phone_number?: string;
     access_token?: string;
+    app_secret?: string;
+    verify_token?: string;
   };
 
   if (!phone_number_id || typeof phone_number_id !== "string") {
     return res.status(400).json({ error: "phone_number_id is required" });
   }
 
-  // If the caller is sending a new access token, write it to Vault first.
-  // We reuse an existing secret row when one already exists for this
-  // connection (token rotation) rather than leaking a fresh row per save.
-  let accessTokenSecretId: string | null = null;
+  // Fetch existing secret pointers so we can rotate-in-place instead of
+  // orphaning vault rows on every save.
+  const { data: existingRow } = await db
+    .from("whatsapp_connections")
+    .select("access_token_secret_id, app_secret_id, verify_token_id")
+    .eq("phone_number_id", phone_number_id)
+    .maybeSingle();
+
+  const existingAccessId =
+    (existingRow?.access_token_secret_id as string | null | undefined) ?? null;
+  const existingAppSecretId =
+    (existingRow?.app_secret_id as string | null | undefined) ?? null;
+  const existingVerifyId =
+    (existingRow?.verify_token_id as string | null | undefined) ?? null;
+
+  // Each of the three is only written when the caller actually sent a value —
+  // an empty input is treated as "keep what's already there".
+  const updateRow: Record<string, unknown> = {
+    user_id: req.user!.id,
+    phone_number_id,
+    waba_id: waba_id ?? null,
+    display_phone_number: display_phone_number ?? null,
+    disconnected_at: null,
+  };
+
   if (access_token && typeof access_token === "string" && access_token.trim()) {
-    const trimmed = access_token.trim();
-    const secretName = `whatsapp_access_token:${phone_number_id}`;
+    const { id, error } = await upsertVaultSecret(
+      access_token.trim(),
+      existingAccessId,
+      `whatsapp_access_token:${phone_number_id}`,
+      "Meta Cloud API Bearer for WhatsApp media fetch",
+    );
+    if (error) return res.status(500).json({ error });
+    updateRow.access_token_secret_id = id;
+  }
 
-    const { data: existing } = await db
-      .from("whatsapp_connections")
-      .select("access_token_secret_id")
-      .eq("phone_number_id", phone_number_id)
-      .maybeSingle();
+  if (app_secret && typeof app_secret === "string" && app_secret.trim()) {
+    const { id, error } = await upsertVaultSecret(
+      app_secret.trim(),
+      existingAppSecretId,
+      `whatsapp_app_secret:${phone_number_id}`,
+      "Meta App Secret used to verify X-Hub-Signature-256 on inbound webhooks",
+    );
+    if (error) return res.status(500).json({ error });
+    updateRow.app_secret_id = id;
+  }
 
-    const existingSecretId =
-      (existing?.access_token_secret_id as string | null | undefined) ?? null;
-
-    if (existingSecretId) {
-      const { error: vaultErr } = await db.rpc("vault_update_secret", {
-        secret_id: existingSecretId,
-        new_secret: trimmed,
-      });
-      if (vaultErr) return res.status(500).json({ error: `vault update: ${vaultErr.message}` });
-      accessTokenSecretId = existingSecretId;
-    } else {
-      const { data: created, error: vaultErr } = await db.rpc("vault_create_secret", {
-        new_secret: trimmed,
-        new_name: secretName,
-        new_description: "Meta Cloud API Bearer for WhatsApp media fetch",
-      });
-      if (vaultErr) return res.status(500).json({ error: `vault create: ${vaultErr.message}` });
-      accessTokenSecretId = (created as string | null) ?? null;
-    }
+  if (verify_token && typeof verify_token === "string" && verify_token.trim()) {
+    const { id, error } = await upsertVaultSecret(
+      verify_token.trim(),
+      existingVerifyId,
+      `whatsapp_verify_token:${phone_number_id}`,
+      "Verify token Meta echoes back during the webhook GET handshake",
+    );
+    if (error) return res.status(500).json({ error });
+    updateRow.verify_token_id = id;
   }
 
   // UNIQUE(phone_number_id) means the same Meta number can only belong to one
@@ -156,20 +223,6 @@ router.post("/me/whatsapp/connect", requireAuth, async (req: Request, res: Respo
   //
   // Single upsert (not delete+insert) so concurrent requests can't race into
   // the UNIQUE constraint between the two statements.
-  const updateRow: Record<string, unknown> = {
-    user_id: req.user!.id,
-    phone_number_id,
-    waba_id: waba_id ?? null,
-    display_phone_number: display_phone_number ?? null,
-    disconnected_at: null,
-  };
-  // Only update the secret pointer if we just wrote a new/updated token.
-  // (If the user re-saves Phone Number ID + WABA without touching the
-  //  token field, we keep the existing secret pointer.)
-  if (accessTokenSecretId !== null) {
-    updateRow.access_token_secret_id = accessTokenSecretId;
-  }
-
   const { error: upsertErr } = await db
     .from("whatsapp_connections")
     .upsert(updateRow, { onConflict: "phone_number_id" });
