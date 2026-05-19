@@ -25,7 +25,7 @@ import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { runPart1, runPart3 } from "./modules/smrttask";
+import smrttaskRouter, { runPart1 } from "./modules/smrttask";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -136,33 +136,12 @@ async function runScheduledJobs() {
         // they'll be cleaned up in a follow-up migration.
         continue;
       } else if (schedule.part === "part3") {
-        // Part 3 is org-aware: use the user's primary org (oldest membership).
-        // Skip the schedule entry if the user has no org or smrttask isn't enabled there.
-        const { data: membership } = await db
-          .from("org_members")
-          .select("org_id")
-          .eq("user_id", schedule.user_id)
-          .order("joined_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        if (!membership) {
-          console.warn(`[cron] part3 skipped — user ${schedule.user_id} has no org`);
-          continue;
-        }
-
-        const { data: app } = await db.from("apps").select("id").eq("slug", "smrttask").maybeSingle();
-        const { data: entitled } = await db
-          .from("app_memberships")
-          .select("org_id")
-          .eq("org_id", membership.org_id)
-          .eq("app_id", app?.id ?? "")
-          .maybeSingle();
-        if (!entitled) {
-          console.warn(`[cron] part3 skipped — smrttask not enabled for org ${membership.org_id}`);
-          continue;
-        }
-
-        await runPart3({ userId: schedule.user_id, orgId: membership.org_id as string });
+        // Part 3 was deleted — classification is now owned by the
+        // Supabase Edge Function `ai-process`, which runs on its own
+        // cron in Supabase. Legacy sync_schedules rows with part='part3'
+        // are silently skipped; the row will be cleaned up by a future
+        // migration once we confirm nothing else writes them.
+        continue;
       }
 
       // Advance next_run_at by 15 minutes

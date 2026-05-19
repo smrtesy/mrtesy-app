@@ -10,7 +10,6 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
-import { runPart3 } from "../parts/part3-classifier";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
 import { notifyError } from "../../../lib/platform";
@@ -62,16 +61,39 @@ router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
 // event-driven via /api/webhooks/whatsapp (see whatsapp-webhook.ts). The
 // previous /part2 route pulled from a Google Sheet on a 15-min cron.
 
-// ── Part 3: classifier ────────────────────────────────────────────────────
+// ── Part 3: classifier — proxied to the Supabase ai-process Edge Function ──
+// The Express part3-classifier was deleted in this same commit; ai-process
+// (Supabase Edge) is now the only classifier. This endpoint kicks it off
+// immediately so the user doesn't have to wait for the next cron tick.
+//
+// The body { limit } from the legacy UI is ignored — ai-process reads
+// batch_size from smrttask_system_params instead.
 router.post("/part3", ...smrttaskGate, async (req: Request, res: Response) => {
-  const { limit } = req.body ?? {};
+  // SUPABASE_URL is the server-side var (Railway, server runtime).
+  // NEXT_PUBLIC_SUPABASE_URL is a fallback for environments where only the
+  // client-facing var is set.
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const cronSecret = process.env.CRON_SECRET;
+  if (!supabaseUrl || !cronSecret) {
+    return res.status(500).json({ error: "SUPABASE_URL / CRON_SECRET not configured" });
+  }
+
   try {
-    const result = await runPart3({
-      userId: req.user!.id,
-      orgId: req.org!.id,
-      limit: limit ?? 50,
+    const resp = await fetch(`${supabaseUrl}/functions/v1/ai-process`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-secret": cronSecret,
+      },
     });
-    return res.json({ ok: true, session_id: result.sessionId });
+    const body = (await resp.json()) as { error?: string; processed?: number; deferred?: number; batchSize?: number };
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: body?.error ?? `ai-process returned ${resp.status}` });
+    }
+    // Keep `session_id` in the response so the existing sync UI's toast
+    // doesn't say "undefined". ai-process doesn't write to run_sessions —
+    // its progress lives in log_entries with category='ai_process'.
+    return res.json({ ok: true, session_id: "ai-process", ...body });
   } catch (e) {
     return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -160,8 +182,10 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
     if (part === "part1") {
       await runPart1({ userId: user_id });
     } else if (part === "part3") {
-      // Part 3 is org-aware: cron uses the user's primary org membership.
-      await runPart3({ userId: user_id, orgId: membership.org_id as string });
+      // Classification moved to the ai-process Edge Function in Supabase.
+      // Its own cron runs there, so the Railway-side scheduler has nothing
+      // to do. Treat existing part='part3' rows as a no-op until they
+      // age out.
     } else {
       return res.status(400).json({ error: `Unknown part: ${part}` });
     }

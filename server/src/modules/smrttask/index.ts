@@ -28,8 +28,8 @@ router.use(whatsappViewRouter);
 
 export default router;
 
-// Re-export AI pipeline parts so the cron scheduler can call them.
-// PART 2 (WhatsApp) is intentionally absent: WhatsApp ingestion is now
-// event-driven via the webhook above, not cron-pulled from a Sheet.
+// Re-export the AI pipeline parts the cron scheduler still uses. PART 2
+// (WhatsApp) is event-driven via the webhook above. PART 3 was deleted —
+// classification is now owned by the Supabase Edge Function `ai-process`,
+// which the new /sync/part3 endpoint kicks off on demand.
 export { runPart1 } from "./parts/part1-collector";
-export { runPart3 } from "./parts/part3-classifier";
