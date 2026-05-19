@@ -88,7 +88,7 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="flex min-h-screen w-full">
+    <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* Desktop Sidebar */}
       <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
       {/* Main content */}

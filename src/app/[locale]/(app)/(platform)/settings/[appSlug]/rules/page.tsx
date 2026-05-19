@@ -310,10 +310,10 @@ export default function SettingsRulesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t("title")}</h1>
-        <Button size="sm" onClick={() => setShowAddForm((v) => !v)}>
-          <Plus className="h-4 w-4 mr-2" />
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold min-w-0 truncate">{t("title")}</h1>
+        <Button size="sm" onClick={() => setShowAddForm((v) => !v)} className="shrink-0 gap-1.5">
+          <Plus className="h-4 w-4" />
           {t("addRule")}
         </Button>
       </div>
@@ -321,10 +321,10 @@ export default function SettingsRulesPage() {
       {/* Add form */}
       {showAddForm && (
         <Card>
-          <CardHeader>
+          <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base">{t("newRule")}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-3 px-4 pb-4 md:px-6 md:pb-6">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="text-xs font-medium mb-1 block">{t("triggerLabel")}</label>
@@ -372,10 +372,10 @@ export default function SettingsRulesPage() {
 
       {/* Gmail Filters */}
       <Card>
-        <CardHeader>
+        <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
           <CardTitle className="text-base">{t("gmailFilters")}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
           {GMAIL_CATEGORIES.map((cat) => {
             const rule = getCategoryRule(cat.key);
             const isActive = rule ? rule.is_active : false;
@@ -406,10 +406,10 @@ export default function SettingsRulesPage() {
 
       {/* Calendar Filters */}
       <Card>
-        <CardHeader>
+        <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
           <CardTitle className="text-base">{t("calendarFilters")}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
           {calendarsLoading ? (
             <div className="space-y-2">
               {[1, 2].map((i) => <div key={i} className="h-14 rounded-lg bg-muted animate-pulse" />)}
@@ -452,10 +452,10 @@ export default function SettingsRulesPage() {
 
       {/* Skip Addresses — unified from=, to=, domain= */}
       <Card>
-        <CardHeader>
+        <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
           <CardTitle className="text-base">{t("skipAddresses", { count: skipAddressRules.length })}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
           {skipAddressRules.length === 0 ? (
             <p className="text-xs text-muted-foreground py-1">{t("skipAddressesEmpty")}</p>
           ) : (
@@ -502,10 +502,10 @@ export default function SettingsRulesPage() {
       {/* Bot Phones */}
       {botRules.length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base">{t("botPhones", { count: botRules.length })}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
             {botRules.map((rule) => (
               <div key={rule.id} className="flex items-center gap-3 rounded-lg border p-3">
                 <div className="flex-1 min-w-0">
@@ -531,10 +531,10 @@ export default function SettingsRulesPage() {
       {/* Other Rules — non-skip, non-bot, non-style/preference/financial */}
       {otherRules.length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base">{t("otherRules", { count: otherRules.length })}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
             {otherRules.map((rule) => (
               <div
                 key={rule.id}
@@ -588,13 +588,13 @@ export default function SettingsRulesPage() {
       {/* Pending AI suggestions */}
       {pendingSuggestions.length > 0 && (
         <Card className="border-yellow-200 bg-yellow-50">
-          <CardHeader>
+          <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Lightbulb className="h-4 w-4 text-yellow-600" />
               {t("pendingSuggestions", { count: pendingSuggestions.length })}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-3 px-4 pb-4 md:px-6 md:pb-6">
             {pendingSuggestions.map((rule) => (
               <div key={rule.id} className="rounded-lg bg-white border p-3 space-y-2">
                 <div className="flex items-start gap-2">
