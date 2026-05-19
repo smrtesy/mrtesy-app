@@ -10,12 +10,15 @@
  */
 
 import { db, loadRules, createRunSession, closeRunSession } from "../../../db";
-import { cachedCall, parseJsonResponse, MODELS } from "../../../anthropic";
+import { cachedCall, parseJsonResponse, MODELS, type ModelKey } from "../../../anthropic";
 import { buildDeepClassifierSystem } from "../../../prompts/classifier";
 import { getUserPromptContext } from "../../../lib/user-context";
 import { loadPrompt } from "../../../lib/prompt-loader";
 
-const BATCH_SIZE = 5;
+const DEFAULT_BATCH_SIZE = 5;
+const DEFAULT_RULE_THRESHOLD = 0.7;
+const DEFAULT_PROJECT_MATCH_THRESHOLD = 0.7;
+const KNOWN_MODELS: ReadonlySet<ModelKey> = new Set(["haiku", "sonnet", "opus"]);
 
 interface ClassificationResult {
   action: "new_task" | "update_task";
@@ -58,7 +61,26 @@ export interface Part3Options {
 export async function runPart3(opts: Part3Options): Promise<{ sessionId: string }> {
   const { userId, orgId, limit = 50 } = opts;
   if (!orgId) throw new Error("Part3: orgId is required");
-  const sessionId = await createRunSession(userId, "part3", "classifier", MODELS.sonnet);
+
+  // Load per-user knobs (model + thresholds + batch size). Each column is
+  // nullable; null = use the hardcoded default. See migration 20260519000001.
+  const { data: settings } = await db
+    .from("user_settings")
+    .select("smrttask_classifier_model, smrttask_rule_threshold, smrttask_project_match_threshold, smrttask_batch_size")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  const modelKey: ModelKey = settings?.smrttask_classifier_model && KNOWN_MODELS.has(settings.smrttask_classifier_model as ModelKey)
+    ? (settings.smrttask_classifier_model as ModelKey)
+    : "sonnet";
+  const ruleThreshold = typeof settings?.smrttask_rule_threshold === "number"
+    ? settings.smrttask_rule_threshold : DEFAULT_RULE_THRESHOLD;
+  const projectMatchThreshold = typeof settings?.smrttask_project_match_threshold === "number"
+    ? settings.smrttask_project_match_threshold : DEFAULT_PROJECT_MATCH_THRESHOLD;
+  const batchSize = typeof settings?.smrttask_batch_size === "number" && settings.smrttask_batch_size > 0
+    ? settings.smrttask_batch_size : DEFAULT_BATCH_SIZE;
+
+  const sessionId = await createRunSession(userId, "part3", "classifier", MODELS[modelKey]);
 
   const errors: string[] = [];
   let tasksCreated = 0;
@@ -188,7 +210,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       while (retries < 3) {
         try {
           const raw = await cachedCall({
-            model: "sonnet",
+            model: modelKey,
             systemPrompt,
             rulesContext: rulesContext || undefined,
             userMessage: userMsg,
@@ -255,7 +277,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
             tasksUpdated++;
           }
 
-          if ((i + 1) % BATCH_SIZE === 0) {
+          if ((i + 1) % batchSize === 0) {
             await db.from("run_sessions")
               .update({ items_processed: itemsProcessed, tasks_updated: tasksUpdated })
               .eq("id", sessionId);
@@ -267,7 +289,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       }
 
       // ── Handle suggested rule ─────────────────────────────────────────────
-      if (result.suggested_rule && (result.confidence ?? 0) >= 0.7) {
+      if (result.suggested_rule && (result.confidence ?? 0) >= ruleThreshold) {
         const { error: ruleInsertErr } = await db.from("rules_memory").insert({
           user_id: userId,
           trigger: result.suggested_rule.trigger,
@@ -302,7 +324,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       const aiProjectId = result.project_id;
       const orgProjectIds = new Set((activeProjects ?? []).map((p) => p.id));
       const resolvedProjectId =
-        aiProjectId && (result.project_confidence ?? 0) >= 0.7 && orgProjectIds.has(aiProjectId)
+        aiProjectId && (result.project_confidence ?? 0) >= projectMatchThreshold && orgProjectIds.has(aiProjectId)
           ? aiProjectId
           : null;
 
@@ -329,7 +351,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         tags: task.tags,
         ai_actions: task.suggested_actions.map((a) => ({ label: a, prompt: a })),
         ai_confidence: result.confidence ?? null,
-        ai_model_used: MODELS.sonnet,
+        ai_model_used: MODELS[modelKey],
         manually_verified: false,
         project_id: resolvedProjectId,
         project_confidence: resolvedProjectId ? result.project_confidence ?? null : null,
@@ -362,8 +384,8 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           .eq("id", msg.id);
       }
 
-      // Checkpoint every BATCH_SIZE
-      if ((i + 1) % BATCH_SIZE === 0) {
+      // Checkpoint every batchSize
+      if ((i + 1) % batchSize === 0) {
         await db.from("run_sessions").update({
           items_processed: itemsProcessed,
           tasks_created: tasksCreated,

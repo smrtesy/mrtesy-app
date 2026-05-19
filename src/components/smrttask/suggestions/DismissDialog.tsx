@@ -13,12 +13,8 @@ const CASCADING_CODES = new Set(["sender_unimportant", "spam"]);
 
 // Keep in sync with DISMISSAL_CODES in server/src/modules/smrttask/tasks/routes.ts
 const REASONS = [
-  { code: "not_relevant_work",  labelKey: "reasonNotRelevant"      },
   { code: "sender_unimportant", labelKey: "reasonSenderUnimportant" },
-  { code: "topic_irrelevant",   labelKey: "reasonTopicIrrelevant"  },
-  { code: "manual_handle",      labelKey: "reasonManualHandle"     },
   { code: "spam",               labelKey: "reasonSpam"             },
-  { code: "ai_wrong",           labelKey: "reasonAiWrong"          },
   { code: "custom",             labelKey: "reasonCustom"           },
 ] as const;
 
@@ -76,8 +72,9 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed }:
 
     setSubmitting(true);
     try {
-      const { rule_created, cascaded_count } = await api<{
+      const { rule_created, rule_pending, cascaded_count } = await api<{
         rule_created: { rule_type: string; trigger: string } | null;
+        rule_pending: { rule_type: string; trigger: string; suggestion_confidence: number } | null;
         cascaded_count: number;
       }>(`/api/tasks/${taskId}/dismiss`, {
         method: "POST",
@@ -89,11 +86,12 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed }:
       });
 
       // Toast hierarchy: most specific message wins.
-      // If we cascaded > 0 also tell the user how many others closed.
       if (cascaded_count > 0) {
         toast.success(t("cascadedToast", { count: cascaded_count + 1 }));
       } else if (rule_created) {
         toast.success(t("ruleCreatedToast", { trigger: rule_created.trigger }));
+      } else if (rule_pending) {
+        toast.success(t("ruleProposedToast", { trigger: rule_pending.trigger }));
       } else {
         toast.success(t("dismiss"));
       }
