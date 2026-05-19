@@ -59,10 +59,11 @@ const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "google_calendar", "google
 
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
-// Gmail's own categorisation. When the user has dragged a message into one
-// of these tabs (or Gmail's filters auto-categorised it), trust that signal
-// over content scanning. Replaces the earlier hardcoded keyword scan.
-const GMAIL_INFORMATIONAL_LABELS = new Set([
+// Gmail's own categorisation. Defaults match user_settings.gmail_skip_categories,
+// which the user controls from /settings/smrttask/parameters. Listed here only
+// as a fallback for users whose settings row hasn't been migrated yet — in
+// steady state the per-user array wins.
+const GMAIL_CATEGORY_FALLBACK = new Set([
   "CATEGORY_PROMOTIONS",
   "CATEGORY_SOCIAL",
   "CATEGORY_UPDATES",
@@ -78,6 +79,15 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   const skipSenders = (settings.skip_senders || []).map((e: string) => e.toLowerCase());
   const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
   const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
+
+  // Per-user Gmail category filter. NULL = no row yet → use fallback so the
+  // feature is on by default. Empty array = user explicitly opted out, no
+  // Gmail category is treated as informational.
+  const userCategorySetting = settings.gmail_skip_categories;
+  const categoryFilter: Set<string> =
+    userCategorySetting === null || userCategorySetting === undefined
+      ? GMAIL_CATEGORY_FALLBACK
+      : new Set(userCategorySetting);
 
   for (const sr of skipRecipients) {
     if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
@@ -103,12 +113,15 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
   if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
 
-  // Gmail's own categorisation. Only applies to gmail/gmail_sent messages
-  // that gmail-sync tagged with labelIds in metadata. WhatsApp / Drive /
-  // Calendar source_messages have no labels and skip this branch.
-  const informationalLabel = gmailLabels.find((l) => GMAIL_INFORMATIONAL_LABELS.has(l));
-  if (informationalLabel) {
-    return { result: "informational", skipReason: `gmail_category:${informationalLabel}` };
+  // Gmail category check — controlled per-user via gmail_skip_categories.
+  // Only applies to messages that gmail-sync tagged with labelIds in metadata.
+  // WhatsApp / Drive / Calendar source_messages have no labels and skip this branch.
+  // If the user's category filter is empty, this becomes a no-op.
+  if (categoryFilter.size > 0) {
+    const informationalLabel = gmailLabels.find((l) => categoryFilter.has(l));
+    if (informationalLabel) {
+      return { result: "informational", skipReason: `gmail_category:${informationalLabel}` };
+    }
   }
 
   return { result: "needs_claude" };

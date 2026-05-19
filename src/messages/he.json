@@ -281,6 +281,20 @@
     "skipSendersHint": "כל הודעה מהשולחים האלה תסומן informational אוטומטית. השתמש כדי לחסום ניוזלטרים, התראות מערכת חוזרות וכו'.",
     "skipRecipientsLabel": "נמענים לדלג עליהם",
     "skipRecipientsHint": "אם ההודעה נשלחה לכתובת הזו (CC/BCC), היא תדולג לחלוטין. בעיקר mailing lists.",
+    "gmailCategoriesSection": "סינון לפי קטגוריות Gmail",
+    "gmailCategoriesHint": "סמן אילו טאבים של Gmail מסומנים כ-אינפורמטיב ולא יווצרו מהם משימות. ההגדרה לוקחת את הסיווג של Gmail עצמו. הסר את הסימון אם אתה כן רוצה לקבל משימות מטאב מסוים.",
+    "gmailCategory": {
+      "CATEGORY_PROMOTIONS": "Promotions (קידום מכירות)",
+      "CATEGORY_SOCIAL": "Social (רשתות חברתיות)",
+      "CATEGORY_UPDATES": "Updates (עדכוני מערכת)",
+      "CATEGORY_FORUMS": "Forums (פורומים ומיילינג ליסטים)"
+    },
+    "gmailCategoryDesc": {
+      "CATEGORY_PROMOTIONS": "מבצעים, קופונים, ניוזלטרים שיווקיים",
+      "CATEGORY_SOCIAL": "פייסבוק, לינקדאין, טוויטר וכו'",
+      "CATEGORY_UPDATES": "אישורי הזמנות, חשבוניות, הודעות מערכת",
+      "CATEGORY_FORUMS": "מיילינג ליסטים וקבוצות דיון"
+    },
     "save": "שמור",
     "saved": "נשמר"
   },

@@ -19,13 +19,24 @@ interface UserParams {
   office_addresses: string[];
   skip_senders: string[];
   skip_recipients: string[];
+  gmail_skip_categories: string[];
 }
 
+const GMAIL_CATEGORIES = [
+  "CATEGORY_PROMOTIONS",
+  "CATEGORY_SOCIAL",
+  "CATEGORY_UPDATES",
+  "CATEGORY_FORUMS",
+] as const;
+
+// Used when load() returns no settings row. Matches the column default
+// from migration 20260520000003 — all 4 categories filtered.
 const EMPTY: UserParams = {
   my_emails: [],
   office_addresses: [],
   skip_senders: [],
   skip_recipients: [],
+  gmail_skip_categories: [...GMAIL_CATEGORIES],
 };
 
 export default function SettingsParametersPage() {
@@ -40,7 +51,7 @@ export default function SettingsParametersPage() {
     if (!user) return;
     const { data } = await supabase
       .from("user_settings")
-      .select("my_emails, office_addresses, skip_senders, skip_recipients")
+      .select("my_emails, office_addresses, skip_senders, skip_recipients, gmail_skip_categories")
       .eq("user_id", user.id)
       .maybeSingle();
     if (data) {
@@ -49,6 +60,10 @@ export default function SettingsParametersPage() {
         office_addresses: data.office_addresses ?? [],
         skip_senders: data.skip_senders ?? [],
         skip_recipients: data.skip_recipients ?? [],
+        // NULL on a brand-new row → use the default-on behaviour. Once the user
+        // unchecks every box, the empty array is persisted and Gmail category
+        // filtering is fully off.
+        gmail_skip_categories: data.gmail_skip_categories ?? [...GMAIL_CATEGORIES],
       });
     }
     setLoading(false);
@@ -72,6 +87,18 @@ export default function SettingsParametersPage() {
 
   function setChips(key: keyof UserParams, v: string[]) {
     setParams((p) => ({ ...p, [key]: v }));
+  }
+
+  function toggleCategory(cat: string) {
+    setParams((p) => {
+      const has = p.gmail_skip_categories.includes(cat);
+      return {
+        ...p,
+        gmail_skip_categories: has
+          ? p.gmail_skip_categories.filter((c) => c !== cat)
+          : [...p.gmail_skip_categories, cat],
+      };
+    });
   }
 
   if (loading) {
@@ -122,6 +149,38 @@ export default function SettingsParametersPage() {
               placeholder="list@example.com"
             />
           </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{t("gmailCategoriesSection")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground" dir="auto">
+            {t("gmailCategoriesHint")}
+          </p>
+          <div className="space-y-2">
+            {GMAIL_CATEGORIES.map((cat) => {
+              const checked = params.gmail_skip_categories.includes(cat);
+              const labelKey = `gmailCategory.${cat}` as const;
+              const descKey  = `gmailCategoryDesc.${cat}` as const;
+              return (
+                <label key={cat} className="flex items-start gap-3 cursor-pointer p-2 rounded hover:bg-muted/40">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleCategory(cat)}
+                    className="mt-1 h-4 w-4 cursor-pointer"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium" dir="auto">{t(labelKey)}</div>
+                    <div className="text-xs text-muted-foreground" dir="auto">{t(descKey)}</div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
 
