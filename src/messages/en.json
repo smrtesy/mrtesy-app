@@ -44,7 +44,13 @@
     "outgoing": "Outgoing",
     "history": "History",
     "back": "Back",
-    "openDocument": "Open document"
+    "openDocument": "Open document",
+    "send": "Send",
+    "composePlaceholder": "Type a message…",
+    "composeDisabled": "24-hour window closed — can't send",
+    "windowOpenUntil": "Free-form replies allowed until {time}",
+    "windowClosed": "The 24-hour window is closed. Per Meta's rules, only approved templates can be sent outside the window. Wait for the contact to message first.",
+    "windowClosedShort": "24-hour window closed — can't send free text"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

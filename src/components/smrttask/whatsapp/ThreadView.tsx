@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, ArrowRight, Loader2, FileText, Download } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, FileText, Download, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import type { Thread } from "./ThreadList";
@@ -37,9 +38,13 @@ interface Props {
   chatId: string;
   thread: Thread | undefined;
   onBack: () => void;
+  /** Called after a successful send so the parent can refetch immediately. */
+  onMessageSent?: () => void;
 }
 
-export function ThreadView({ messages, loading, chatId, thread, onBack }: Props) {
+const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export function ThreadView({ messages, loading, chatId, thread, onBack, onMessageSent }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -67,6 +72,24 @@ export function ThreadView({ messages, loading, chatId, thread, onBack }: Props)
   const visibleMessages = messages.filter((m) => !m.is_reaction);
 
   const displayName = thread?.from_name?.trim() || thread?.from_phone || chatId;
+
+  // 24h-window status. We can compute it from the messages we already
+  // have — find the most recent incoming message; if it's within 24h,
+  // free-form sending is allowed.
+  const { withinWindow, windowExpiresAt } = useMemo(() => {
+    const latestIncoming = [...messages]
+      .reverse()
+      .find((m) => m.direction === "incoming" && !m.is_reaction);
+    if (!latestIncoming?.received_at) {
+      return { withinWindow: false as const, windowExpiresAt: null };
+    }
+    const t = new Date(latestIncoming.received_at).getTime();
+    const expires = t + SEND_WINDOW_MS;
+    return {
+      withinWindow: Date.now() < expires,
+      windowExpiresAt: new Date(expires),
+    };
+  }, [messages]);
 
   return (
     <div className="flex h-full flex-col rounded-lg border bg-card overflow-hidden">
@@ -101,6 +124,102 @@ export function ThreadView({ messages, loading, chatId, thread, onBack }: Props)
         {visibleMessages.map((m) => (
           <MessageBubble key={m.id} message={m} reactions={reactionsByTarget.get(m.wamid) ?? []} />
         ))}
+      </div>
+
+      {/* Compose box — Meta only allows free-form replies within 24h of the
+          customer's last message. Outside the window, the input is disabled
+          and we explain why. */}
+      <ComposeBox
+        chatId={chatId}
+        withinWindow={withinWindow}
+        windowExpiresAt={windowExpiresAt}
+        onSent={onMessageSent}
+      />
+    </div>
+  );
+}
+
+function ComposeBox({
+  chatId,
+  withinWindow,
+  windowExpiresAt,
+  onSent,
+}: {
+  chatId: string;
+  withinWindow: boolean;
+  windowExpiresAt: Date | null;
+  onSent?: () => void;
+}) {
+  const t = useTranslations("whatsappPage");
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // Per-message direction inside the input itself so Hebrew & English both
+  // render naturally. Defaults to RTL when the field is empty (the most
+  // common case for our Hebrew-speaking operator).
+  const dir = detectMessageDir(text) === "rtl" || text.trim() === "" ? "rtl" : "ltr";
+
+  async function handleSend() {
+    if (!text.trim() || sending) return;
+    if (!withinWindow) {
+      toast.error(t("windowClosedShort"));
+      return;
+    }
+    setSending(true);
+    try {
+      await api("/api/whatsapp/messages/send", {
+        method: "POST",
+        body: { to_phone: chatId, text: text.trim() },
+      });
+      setText("");
+      onSent?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter sends; Shift+Enter inserts a newline (standard chat UX).
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  }
+
+  return (
+    <div className="border-t bg-muted/40 p-2 space-y-1.5">
+      {!withinWindow && (
+        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          {t("windowClosed")}
+        </p>
+      )}
+      {withinWindow && windowExpiresAt && (
+        <p className="text-[10px] text-muted-foreground">
+          {t("windowOpenUntil", { time: windowExpiresAt.toLocaleString() })}
+        </p>
+      )}
+      <div className="flex gap-2 items-end">
+        <Textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={withinWindow ? t("composePlaceholder") : t("composeDisabled")}
+          disabled={!withinWindow || sending}
+          dir={dir}
+          rows={1}
+          className="resize-none min-h-[40px] max-h-[140px] text-sm"
+        />
+        <Button
+          type="button"
+          onClick={handleSend}
+          disabled={!withinWindow || !text.trim() || sending}
+          size="icon"
+          aria-label={t("send")}
+        >
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        </Button>
       </div>
     </div>
   );

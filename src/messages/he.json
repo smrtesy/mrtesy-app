@@ -44,7 +44,13 @@
     "outgoing": "יוצא",
     "history": "היסטוריה",
     "back": "חזרה",
-    "openDocument": "פתח מסמך"
+    "openDocument": "פתח מסמך",
+    "send": "שלח",
+    "composePlaceholder": "כתוב הודעה...",
+    "composeDisabled": "חלון 24 שעות סגור — לא ניתן לשלוח",
+    "windowOpenUntil": "ניתן לשלוח חופשי עד {time}",
+    "windowClosed": "חלון 24 השעות סגור. לפי כללי Meta, אפשר לשלוח רק תבניות מאושרות מחוץ לחלון. נא להמתין שאיש הקשר ישלח הודעה.",
+    "windowClosedShort": "חלון 24 שעות סגור — לא ניתן לשלוח free-text"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
