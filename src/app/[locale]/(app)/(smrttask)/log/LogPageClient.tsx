@@ -44,6 +44,7 @@ const statusFilters = [
 
 interface SourceEntry {
   id: string;
+  serial_display: string | null;
   source_type: string;
   source_id: string;
   processing_status: string;
@@ -58,6 +59,7 @@ interface SourceEntry {
   // From log_entries LEFT JOIN
   classification_reason: string | null;
   task_title: string | null;
+  task_serial: string | null;
   error_message: string | null;
   log_status: string | null;
   ai_model_used: string | null;
@@ -93,7 +95,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     let query = supabase
       .from("source_messages")
-      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms)")
+      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms), tasks!source_message_id(serial_display)")
       .order("received_at", { ascending: false })
       .limit(200);
 
@@ -125,8 +127,13 @@ export function LogPageClient({ locale }: { locale: string }) {
         }
       }
 
+      // tasks join — pick the first matching task's serial if any
+      const tasksArr = row.tasks || [];
+      const taskSerial = tasksArr.length > 0 ? tasksArr[0].serial_display : null;
+
       return {
         id: row.id,
+        serial_display: row.serial_display ?? null,
         source_type: row.source_type,
         source_id: row.source_id,
         processing_status: row.processing_status,
@@ -141,6 +148,7 @@ export function LogPageClient({ locale }: { locale: string }) {
         // From log_entries
         classification_reason: logEntry?.classification_reason || null,
         task_title: logEntry?.task_title || null,
+        task_serial: taskSerial,
         error_message: logEntry?.error_message || null,
         log_status: logEntry?.status || null,
         ai_model_used: logEntry?.ai_model_used || null,
@@ -226,11 +234,21 @@ export function LogPageClient({ locale }: { locale: string }) {
                 }`}
                 onClick={() => setExpandedId(isExpanded ? null : log.id)}
               >
-                {/* Row 1: source icon + processing status + classification + time */}
-                <div className="flex items-center gap-2">
+                {/* Row 1: source icon + serials + processing status + classification + time */}
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-base">
                     {sourceIcons[log.source_type || ""] || "📋"}
                   </span>
+                  {log.serial_display && (
+                    <span className="font-mono text-[10px] rounded border px-1 py-0.5 text-muted-foreground bg-muted/40">
+                      {log.serial_display}
+                    </span>
+                  )}
+                  {log.task_serial && (
+                    <span className="font-mono text-[10px] rounded border px-1 py-0.5 text-primary border-primary/50 bg-primary/10">
+                      → {log.task_serial}
+                    </span>
+                  )}
                   <Badge variant={badge.variant} className="text-[10px]">
                     {tLog(badge.key)}
                   </Badge>

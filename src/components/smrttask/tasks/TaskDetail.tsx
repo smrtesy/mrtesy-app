@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { AITrail } from "@/components/smrttask/common/AITrail";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -228,6 +229,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
 
         <ScrollArea className="flex-1 px-4 py-4">
           <div className="space-y-4">
+            {/* AI trail — collapsed by default; lazy-fetched on first open.
+                Only shown for AI-sourced tasks (manual tasks have no trail). */}
+            {task.source_message_id && (
+              <AITrail taskId={task.id} />
+            )}
+
             {/* Field Editing */}
             {editingFields && (
               <div className="space-y-3 rounded-lg border p-3 bg-muted/50">

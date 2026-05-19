@@ -149,6 +149,15 @@
     "recurring": "חוזר",
     "createProject": "צור פרויקט"
   },
+  "aiTrail": {
+    "title": "למה ה-AI יצר את זה?",
+    "loading": "טוען...",
+    "noSource": "אין מקור — משימה נוצרה ידנית",
+    "subject": "נושא",
+    "from": "מאת",
+    "classification": "סיווג",
+    "reason": "נימוק"
+  },
   "log": {
     "title": "לוג מקורות",
     "noEntries": "אין הודעות עדיין",

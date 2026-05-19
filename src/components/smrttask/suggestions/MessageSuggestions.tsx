@@ -11,6 +11,7 @@ import { CheckCircle2, X, Bell } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { AITrail } from "@/components/smrttask/common/AITrail";
 import { DismissDialog } from "./DismissDialog";
 
 interface SourceJoin {
@@ -143,6 +144,10 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                   </div>
                 </div>
               </div>
+
+              {/* AI trail — closed by default. Click chevron to see why the AI created this. */}
+              <AITrail taskId={task.id as string} className="mt-3" />
+
               <div className="flex gap-2 mt-3 justify-end">
                 <Button
                   size="sm"

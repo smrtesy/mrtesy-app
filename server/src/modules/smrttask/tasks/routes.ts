@@ -401,6 +401,47 @@ router.post("/tasks/:id/approve-as-project",
   },
 );
 
+/** GET /tasks/:id/trail
+ *  Returns the AI decision trail for the message that produced this task:
+ *  source_message details + the most-recent log_entry. Used by the
+ *  collapsible "Why did the AI create this?" block in TaskDetail and
+ *  the MessageSuggestions cards. Returns 404 if the task has no
+ *  source_message_id (manually-created task).
+ */
+router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
+  // First confirm the task is in this org so we don't leak across tenants.
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, source_message_id")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr)  return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+  if (!task.source_message_id) {
+    return res.json({ source: null, log: null });
+  }
+
+  const [{ data: sm }, { data: logs }] = await Promise.all([
+    db
+      .from("source_messages")
+      .select("id, source_type, source_id, source_url, serial_display, sender, sender_email, sender_phone, subject, body_text, received_at, ai_classification")
+      .eq("id", task.source_message_id)
+      .maybeSingle(),
+    db
+      .from("log_entries")
+      .select("classification_reason, ai_classification, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, status, error_message, created_at")
+      .eq("source_message_id", task.source_message_id)
+      .order("created_at", { ascending: false })
+      .limit(1),
+  ]);
+
+  res.json({
+    source: sm ?? null,
+    log:    logs?.[0] ?? null,
+  });
+});
+
 // ── dismissal reasons ──────────────────────────────────────────────────────
 // Closed set, intentionally short. The UI shows these as radios + a "custom"
 // row that reveals a free-text input. Two codes also produce a rules_memory

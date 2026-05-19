@@ -149,6 +149,15 @@
     "recurring": "Recurring",
     "createProject": "Create Project"
   },
+  "aiTrail": {
+    "title": "Why did the AI create this?",
+    "loading": "Loading...",
+    "noSource": "No source — task was created manually",
+    "subject": "Subject",
+    "from": "From",
+    "classification": "Classification",
+    "reason": "Reason"
+  },
   "log": {
     "title": "Source Log",
     "noEntries": "No messages yet",
