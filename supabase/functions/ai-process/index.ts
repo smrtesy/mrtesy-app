@@ -59,15 +59,25 @@ const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "google_calendar", "google
 
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
+// Gmail's own categorisation. When the user has dragged a message into one
+// of these tabs (or Gmail's filters auto-categorised it), trust that signal
+// over content scanning. Replaces the earlier hardcoded keyword scan.
+const GMAIL_INFORMATIONAL_LABELS = new Set([
+  "CATEGORY_PROMOTIONS",
+  "CATEGORY_SOCIAL",
+  "CATEGORY_UPDATES",
+  "CATEGORY_FORUMS",
+]);
+
 function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
   const sender = (msg.sender_email || msg.sender || "").toLowerCase();
   const recipient = (msg.recipient || "").toLowerCase();
-  const body = (msg.body_text || "").toLowerCase();
   const sourceType = msg.source_type || "";
   const myEmails = (settings.my_emails || []).map((e: string) => e.toLowerCase());
   const officeAddresses = (settings.office_addresses || []).map((e: string) => e.toLowerCase());
   const skipSenders = (settings.skip_senders || []).map((e: string) => e.toLowerCase());
   const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
+  const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
 
   for (const sr of skipRecipients) {
     if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
@@ -92,10 +102,15 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
   if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
-  const skipPatterns = ["unsubscribe", "no-reply", "noreply", "newsletter", "marketing"];
-  if (skipPatterns.some((p) => body.includes(p) || sender.includes(p))) {
-    return { result: "informational", skipReason: "skip_pattern" };
+
+  // Gmail's own categorisation. Only applies to gmail/gmail_sent messages
+  // that gmail-sync tagged with labelIds in metadata. WhatsApp / Drive /
+  // Calendar source_messages have no labels and skip this branch.
+  const informationalLabel = gmailLabels.find((l) => GMAIL_INFORMATIONAL_LABELS.has(l));
+  if (informationalLabel) {
+    return { result: "informational", skipReason: `gmail_category:${informationalLabel}` };
   }
+
   return { result: "needs_claude" };
 }
 
@@ -112,9 +127,33 @@ async function callClaude(model: string, systemPrompt: string, userMessage: stri
   return { text: data.content?.[0]?.text || "", inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 };
 }
 
-async function classifyMessage(msg: any, sys: SystemParams) {
+async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
   const model = sys.classification_model;
-  const systemPrompt = `You are a message classifier for a personal task management system.\nRules: outbox@maor.org→informational | Payment confirmations→informational | maor.org emails→classify by content (NOT spam!)\nRespond: WORD | reason in Hebrew. WORD: ACTIONABLE | INFORMATIONAL | SPAM`;
+
+  // Per-user identity context. my_emails are the addresses the user sends
+  // FROM (treat as outgoing/personal); office_addresses are the user's
+  // customer-facing addresses (treat their content as inbound business,
+  // never spam). Replaces a hardcoded reference to a specific tenant.
+  const myEmails: string[] = settings.my_emails ?? [];
+  const officeAddresses: string[] = settings.office_addresses ?? [];
+  const identityLines: string[] = [];
+  if (myEmails.length > 0) {
+    identityLines.push(`User's own addresses (outgoing): ${myEmails.join(", ")}`);
+  }
+  if (officeAddresses.length > 0) {
+    identityLines.push(`User's office/customer-facing addresses: ${officeAddresses.join(", ")}. Mail addressed to or from these is business correspondence — classify by content, never spam.`);
+  }
+  const identityBlock = identityLines.length > 0 ? `\n\n${identityLines.join("\n")}` : "";
+
+  const systemPrompt = `You are a message classifier for a personal task management system.${identityBlock}
+
+Rules:
+- Outgoing mail (from the user's own addresses) → informational
+- Payment confirmations of completed transactions → informational
+- Mail to/from the user's office addresses → classify by content (NOT spam)
+
+Respond: WORD | reason in Hebrew. WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM`;
+
   const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${(msg.body_text || "").substring(0, sys.body_truncate_classify)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 100);
   const text = result.text.trim().toUpperCase();
@@ -351,7 +390,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     return;
   } else {
     try {
-      const classResult = await classifyMessage(msg, sys);
+      const classResult = await classifyMessage(msg, settings, sys);
       classification = classResult.classification; classificationReason = classResult.reason;
       totalInputTokens += classResult.inputTokens; totalOutputTokens += classResult.outputTokens;
       aiModel = classResult.model;
