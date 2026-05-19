@@ -448,6 +448,9 @@ router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
 // entry so the same sender stops generating suggestions:
 //   • sender_unimportant → rule_type=skip   (or bot, for WhatsApp)
 //   • spam               → rule_type=skip_spam
+// These same two codes are also "cascading" — when set, all OTHER pending
+// suggestions from the same sender get archived in the same call so the
+// user doesn't have to dismiss each one individually.
 const DISMISSAL_CODES = new Set([
   "not_relevant_work",     // לא רלוונטי לעבודה שלי
   "sender_unimportant",    // שולח לא חשוב — חסום שולח לעתיד
@@ -458,15 +461,115 @@ const DISMISSAL_CODES = new Set([
   "custom",                // סיבה ידנית — דורש reason_text
 ]);
 
+const CASCADING_CODES = new Set(["sender_unimportant", "spam"]);
+
+type SenderResolution = {
+  /** column on source_messages we filter by */
+  filterCol: "sender_email" | "sender_phone";
+  /** normalised value to filter by (lower-case email or digits-only phone) */
+  filterVal: string;
+  /** human-readable trigger string we store in rules_memory + show in UI */
+  trigger: string;
+  ruleType: "skip" | "skip_spam" | "bot";
+  category: string | null;
+};
+
+/** Resolve a source_message into the sender-filter we use for both rule
+ *  creation and cascade lookups. Returns null when we can't derive one
+ *  (e.g. Drive/Calendar rows have no sender). */
+function resolveSender(
+  sm: { source_type?: string | null; sender_email?: string | null; sender_phone?: string | null } | null,
+  reasonCode: string,
+): SenderResolution | null {
+  if (!sm) return null;
+  if (sm.source_type === "gmail" || sm.source_type === "gmail_sent") {
+    if (!sm.sender_email) return null;
+    const v = sm.sender_email.toLowerCase();
+    return {
+      filterCol: "sender_email",
+      filterVal: v,
+      trigger:   `from=${v}`,
+      ruleType:  reasonCode === "spam" ? "skip_spam" : "skip",
+      category:  null,
+    };
+  }
+  if (sm.source_type === "whatsapp" || sm.source_type === "whatsapp_echo") {
+    const phone = (sm.sender_phone ?? "").replace(/\D/g, "");
+    if (!phone) return null;
+    return {
+      filterCol: "sender_phone",
+      filterVal: phone,
+      trigger:   `phone=${phone}`,
+      ruleType:  "bot",
+      category:  "bot",
+    };
+  }
+  return null;
+}
+
+/** GET /tasks/:id/dismiss-preview?reason_code=<code>
+ *  How many OTHER pending suggestions would also be dismissed if the user
+ *  picked this reason. The UI fetches this when the user selects a
+ *  cascading reason so we can show "+5 other suggestions from this sender".
+ *  Non-cascading codes return cascade_count=0 unconditionally. */
+router.get("/tasks/:id/dismiss-preview", async (req: Request, res: Response) => {
+  const reasonCode = String(req.query.reason_code ?? "");
+  if (!CASCADING_CODES.has(reasonCode)) {
+    return res.json({ cascade_count: 0, cascade_trigger: null });
+  }
+
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, user_id, source_message_id, source_messages(source_type, sender_email, sender_phone)")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr)  return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+  if (!task.source_message_id) return res.json({ cascade_count: 0, cascade_trigger: null });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const smRawPv = (task as any).source_messages;
+  const smPv = (Array.isArray(smRawPv) ? smRawPv[0] : smRawPv) as {
+    source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
+  } | null;
+  const sender = resolveSender(smPv, reasonCode);
+  if (!sender) return res.json({ cascade_count: 0, cascade_trigger: null });
+
+  // Find every source_message from this sender belonging to the user…
+  const { data: matchingSms } = await db
+    .from("source_messages")
+    .select("id")
+    .eq("user_id", task.user_id)
+    .eq(sender.filterCol, sender.filterVal);
+  const smIds = (matchingSms ?? []).map((r) => r.id).filter((id) => id !== task.source_message_id);
+  if (smIds.length === 0) {
+    return res.json({ cascade_count: 0, cascade_trigger: sender.trigger });
+  }
+
+  // …and count how many of THEIR pending tasks live in this org.
+  const { count } = await db
+    .from("tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", req.org!.id)
+    .eq("status", "inbox")
+    .in("source_message_id", smIds);
+
+  res.json({ cascade_count: count ?? 0, cascade_trigger: sender.trigger });
+});
+
 /** POST /tasks/:id/dismiss
- *  Body: { reason_code: string, reason_text?: string }
+ *  Body: { reason_code: string, reason_text?: string, cascade?: boolean }
  *  Archives the task with manually_verified=true, records the dismissal
  *  reason on the row, and — for sender-targeted codes — writes a
  *  rules_memory entry derived from the linked source_message.
+ *  When cascade=true (default for cascading codes) all OTHER pending
+ *  suggestions from the same sender are archived in the same call.
  */
 router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   const reasonCode = (req.body?.reason_code ?? "") as string;
   const reasonText = typeof req.body?.reason_text === "string" ? req.body.reason_text.trim() : "";
+  const cascadeRequested = req.body?.cascade !== false;  // default true; pass false to opt out
 
   if (!DISMISSAL_CODES.has(reasonCode)) {
     return res.status(400).json({ error: "invalid reason_code" });
@@ -487,66 +590,75 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
 
   // Archive + record reason
   const now = new Date().toISOString();
+  const dismissPatch = {
+    status: "archived",
+    manually_verified: true,
+    dismissal_reason_code: reasonCode,
+    dismissal_reason_text: reasonText || null,
+    status_changed_at: now,
+  } as const;
+
   const { error: uErr } = await db
     .from("tasks")
-    .update({
-      status: "archived",
-      manually_verified: true,
-      dismissal_reason_code: reasonCode,
-      dismissal_reason_text: reasonText || null,
-      status_changed_at: now,
-    })
+    .update(dismissPatch)
     .eq("id", task.id);
   if (uErr) return res.status(500).json({ error: uErr.message });
 
-  // For sender-targeted codes, also block the sender for future syncs.
-  // (Other codes — topic_irrelevant, manual_handle, ai_wrong — are recorded
-  // on the task only; the AI prompt picks them up as context next sync.)
+  // Sender resolution drives BOTH rule creation and cascade dismissal.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const smRaw = (task as any).source_messages;
+  const sm = (Array.isArray(smRaw) ? smRaw[0] : smRaw) as {
+    source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
+  } | null;
+  const sender = CASCADING_CODES.has(reasonCode) ? resolveSender(sm, reasonCode) : null;
+
+  // 1. rules_memory — block the sender for future syncs.
   let ruleCreated: { id: string; trigger: string; rule_type: string } | null = null;
-  if (reasonCode === "sender_unimportant" || reasonCode === "spam") {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const smRaw = (task as any).source_messages;
-    const sm = (Array.isArray(smRaw) ? smRaw[0] : smRaw) as {
-      source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
-    } | null;
-
-    let trigger: string | null = null;
-    let ruleType: "skip" | "skip_spam" | "bot" = "skip";
-    let category: string | null = null;
-
-    if (sm?.source_type === "gmail" || sm?.source_type === "gmail_sent") {
-      if (sm.sender_email) trigger = `from=${sm.sender_email.toLowerCase()}`;
-      ruleType = reasonCode === "spam" ? "skip_spam" : "skip";
-    } else if (sm?.source_type === "whatsapp" || sm?.source_type === "whatsapp_echo") {
-      // WhatsApp uses rule_type=bot + category=bot — see part2-whatsapp.ts:77
-      const phone = (sm.sender_phone ?? "").replace(/\D/g, "");
-      if (phone) {
-        trigger = phone;
-        ruleType = "bot";
-        category = "bot";
-      }
+  if (sender) {
+    const { data: rule, error: rErr } = await db
+      .from("rules_memory")
+      .insert({
+        user_id: task.user_id,
+        app_slug: "smrttask",
+        trigger:    sender.trigger,
+        rule_type:  sender.ruleType,
+        category:   sender.category,
+        action:     "skip",
+        reason:     reasonText || `User dismissed task with reason '${reasonCode}'`,
+        created_by: "user",
+      })
+      .select("id, trigger, rule_type")
+      .maybeSingle();
+    if (rErr) {
+      // Don't fail the dismissal — the task is already archived. Just log.
+      console.error("[dismiss] rules_memory insert error:", rErr.message);
+    } else {
+      ruleCreated = rule;
     }
+  }
 
-    if (trigger) {
-      const { data: rule, error: rErr } = await db
-        .from("rules_memory")
-        .insert({
-          user_id: task.user_id,
-          app_slug: "smrttask",
-          trigger,
-          rule_type: ruleType,
-          category,
-          action: "skip",
-          reason: reasonText || `User dismissed task with reason '${reasonCode}'`,
-          created_by: "user",
-        })
-        .select("id, trigger, rule_type")
-        .maybeSingle();
-      if (rErr) {
-        // Don't fail the dismissal — the task is already archived. Just log.
-        console.error("[dismiss] rules_memory insert error:", rErr.message);
+  // 2. Cascade — archive every OTHER pending suggestion from the same sender.
+  //    Skipped when cascade=false in body (the dialog's "סגור גם N אחרות" checkbox).
+  let cascadedCount = 0;
+  if (sender && cascadeRequested) {
+    const { data: matchingSms } = await db
+      .from("source_messages")
+      .select("id")
+      .eq("user_id", task.user_id)
+      .eq(sender.filterCol, sender.filterVal);
+    const smIds = (matchingSms ?? []).map((r) => r.id).filter((id) => id !== task.source_message_id);
+
+    if (smIds.length > 0) {
+      const { count, error: cErr } = await db
+        .from("tasks")
+        .update(dismissPatch, { count: "exact" })
+        .eq("organization_id", req.org!.id)
+        .eq("status", "inbox")
+        .in("source_message_id", smIds);
+      if (cErr) {
+        console.error("[dismiss] cascade update error:", cErr.message);
       } else {
-        ruleCreated = rule;
+        cascadedCount = count ?? 0;
       }
     }
   }
@@ -554,9 +666,10 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   await emitEvent(req.org!.id, "smrttask", "task.dismissed", "task", task.id, {
     reason_code: reasonCode,
     rule_created: !!ruleCreated,
+    cascaded_count: cascadedCount,
   });
 
-  res.json({ ok: true, rule_created: ruleCreated });
+  res.json({ ok: true, rule_created: ruleCreated, cascaded_count: cascadedCount });
 });
 
 export default router;

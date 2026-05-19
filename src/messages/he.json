@@ -138,6 +138,8 @@
     "reasonCustom": "סיבה אחרת...",
     "reasonCustomPlaceholder": "תכתוב למה אתה דוחה — ה-AI ילמד מזה להבא",
     "ruleCreatedToast": "נחסם: {trigger}",
+    "cascadeNote": "סגור גם {count} הצעות אחרות מ-{trigger}",
+    "cascadedToast": "{count} הצעות נסגרו",
     "noSuggestions": "אין הצעות חדשות",
     "countLabel": "מציג {shown} מתוך {total} הצעות",
     "noScheduled": "אין תזכורות מתוזמנות",

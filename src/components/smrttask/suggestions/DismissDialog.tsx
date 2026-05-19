@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+const CASCADING_CODES = new Set(["sender_unimportant", "spam"]);
 
 // Keep in sync with DISMISSAL_CODES in server/src/modules/smrttask/tasks/routes.ts
 const REASONS = [
@@ -34,11 +36,32 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed }:
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [customText, setCustomText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Cascade preview — populated when user picks a cascading reason
+  const [preview, setPreview] = useState<{ count: number; trigger: string | null } | null>(null);
+  const [cascade, setCascade] = useState(true);
+
+  // Fetch the cascade preview when the user picks a reason that propagates
+  // (sender_unimportant / spam). Non-cascading reasons clear the preview.
+  useEffect(() => {
+    if (!taskId || !selectedCode || !CASCADING_CODES.has(selectedCode)) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ cascade_count: number; cascade_trigger: string | null }>(
+      `/api/tasks/${taskId}/dismiss-preview?reason_code=${selectedCode}`,
+    )
+      .then((data) => { if (!cancelled) setPreview({ count: data.cascade_count, trigger: data.cascade_trigger }); })
+      .catch(() => { if (!cancelled) setPreview(null); });
+    return () => { cancelled = true; };
+  }, [taskId, selectedCode]);
 
   function reset() {
     setSelectedCode(null);
     setCustomText("");
     setSubmitting(false);
+    setPreview(null);
+    setCascade(true);
   }
 
   function handleClose() {
@@ -53,17 +76,23 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed }:
 
     setSubmitting(true);
     try {
-      const { rule_created } = await api<{ rule_created: { rule_type: string; trigger: string } | null }>(
-        `/api/tasks/${taskId}/dismiss`,
-        {
-          method: "POST",
-          body: {
-            reason_code: selectedCode,
-            reason_text: customText.trim() || undefined,
-          },
+      const { rule_created, cascaded_count } = await api<{
+        rule_created: { rule_type: string; trigger: string } | null;
+        cascaded_count: number;
+      }>(`/api/tasks/${taskId}/dismiss`, {
+        method: "POST",
+        body: {
+          reason_code: selectedCode,
+          reason_text: customText.trim() || undefined,
+          cascade,
         },
-      );
-      if (rule_created) {
+      });
+
+      // Toast hierarchy: most specific message wins.
+      // If we cascaded > 0 also tell the user how many others closed.
+      if (cascaded_count > 0) {
+        toast.success(t("cascadedToast", { count: cascaded_count + 1 }));
+      } else if (rule_created) {
         toast.success(t("ruleCreatedToast", { trigger: rule_created.trigger }));
       } else {
         toast.success(t("dismiss"));
@@ -123,6 +152,22 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed }:
             dir="auto"
             autoFocus
           />
+        )}
+
+        {/* Cascade preview — only when the chosen reason propagates AND there
+            are other pending suggestions from the same sender. */}
+        {preview && preview.count > 0 && (
+          <label className="flex items-start gap-2 mt-2 rounded-md border bg-muted/30 px-3 py-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cascade}
+              onChange={(e) => setCascade(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="flex-1" dir="auto">
+              {t("cascadeNote", { count: preview.count, trigger: preview.trigger ?? "" })}
+            </span>
+          </label>
         )}
 
         <DialogFooter className="flex-row gap-2 sm:gap-2">

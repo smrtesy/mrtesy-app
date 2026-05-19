@@ -138,6 +138,8 @@
     "reasonCustom": "Other reason...",
     "reasonCustomPlaceholder": "Tell us why — the AI will learn from this",
     "ruleCreatedToast": "Blocked: {trigger}",
+    "cascadeNote": "Also close {count} other suggestions from {trigger}",
+    "cascadedToast": "{count} suggestions dismissed",
     "noSuggestions": "No new suggestions",
     "countLabel": "Showing {shown} of {total} suggestions",
     "noScheduled": "No scheduled reminders",
