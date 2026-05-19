@@ -370,9 +370,27 @@ async function processWebhookPayload(payload: MetaWebhookBody): Promise<void> {
         for (const m of value.messages ?? []) {
           list.push(normalizeLive(m, contacts, metadata, "incoming"));
         }
+        // Some Coexistence flows tuck echoes into the messages event too.
         for (const m of value.message_echoes ?? []) {
           list.push(normalizeLive(m, contacts, metadata, "outgoing"));
         }
+        for (const m of value.smb_message_echoes ?? []) {
+          list.push(normalizeLive(m, contacts, metadata, "outgoing"));
+        }
+      } else if (
+        change.field === "smb_message_echoes" ||
+        change.field === "message_echoes"
+      ) {
+        // Standalone echo event for messages the user sent from their phone.
+        // The outer field NAMES the event ("smb_message_echoes"), and the
+        // payload always carries the array as value.message_echoes — the
+        // "smb_" prefix is on the field, not the array key. The DualHook
+        // debug logs from prod confirmed this shape.
+        for (const m of value.message_echoes ?? []) {
+          list.push(normalizeLive(m, contacts, metadata, "outgoing"));
+        }
+        // Defensive: handle either array name in case a different BSP
+        // configuration mirrors the field name into the array.
         for (const m of value.smb_message_echoes ?? []) {
           list.push(normalizeLive(m, contacts, metadata, "outgoing"));
         }
