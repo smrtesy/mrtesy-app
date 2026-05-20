@@ -1205,6 +1205,25 @@ async function refreshSourceMessageThread(
   if (error) throw new Error(error.message);
   if (!msgs || msgs.length === 0) return;
 
+  // Self-chat detection: the user sent a message to their own WhatsApp
+  // number, using their phone as a voice-memo / task-capture channel.
+  // We compare digits-only chatId to the connected line's display number.
+  // When it matches, we surface a hint in raw_content so the classifier
+  // knows to treat every message as a deliberate self-note (=> ACTIONABLE),
+  // not as a passive outbound the user is just shooting off.
+  let isSelfChat = false;
+  {
+    const { data: conn } = await db
+      .from("whatsapp_connections")
+      .select("display_phone_number")
+      .eq("user_id", userId)
+      .is("disconnected_at", null)
+      .maybeSingle();
+    const mineDigits = String(conn?.display_phone_number ?? "").replace(/\D/g, "");
+    const chatDigits = String(chatId).replace(/\D/g, "");
+    isSelfChat = mineDigits.length > 0 && mineDigits === chatDigits;
+  }
+
   const ordered = [...msgs].reverse();
   const last = ordered[ordered.length - 1];
 
@@ -1233,9 +1252,14 @@ async function refreshSourceMessageThread(
     `Chat: ${chatName}`,
     `Phone: ${fromPhone}`,
     `Group: ${isGroup}`,
+    isSelfChat
+      ? `Self-chat: true (this is the user talking to their own WhatsApp number — they use it as a voice-memo channel for task capture; every message is a deliberate self-note, treat as ACTIONABLE unless clearly a status remark)`
+      : "",
     `\n--- CONVERSATION (last 20 messages) ---`,
     conversationLines,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const { error: upsertErr } = await db.from("source_messages").upsert(
     {
@@ -1251,7 +1275,7 @@ async function refreshSourceMessageThread(
       source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
       reply_to_context: fromPhone,
       processing_status: "pending",
-      metadata: { chatId, chatName, fromPhone, isGroup },
+      metadata: { chatId, chatName, fromPhone, isGroup, isSelfChat },
     },
     { onConflict: "user_id,source_type,source_id" },
   );

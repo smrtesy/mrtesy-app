@@ -19,6 +19,7 @@ interface ParamsRow {
   smrttask_project_cluster_threshold: number | null;
   smrttask_batch_size: number | null;
   whatsapp_lookback_hours: number | null;
+  daily_ai_budget_usd: number | null;
 }
 
 const DEFAULTS: ParamsRow = {
@@ -28,6 +29,7 @@ const DEFAULTS: ParamsRow = {
   smrttask_project_cluster_threshold: 0.65,
   smrttask_batch_size: 5,
   whatsapp_lookback_hours: 48,
+  daily_ai_budget_usd: 10,
 };
 
 const MODELS = ["haiku", "sonnet", "opus"] as const;
@@ -44,7 +46,7 @@ export default function SettingsParametersPage() {
     if (!user) return;
     const { data } = await supabase
       .from("user_settings")
-      .select("smrttask_classifier_model, smrttask_rule_threshold, smrttask_project_match_threshold, smrttask_project_cluster_threshold, smrttask_batch_size, whatsapp_lookback_hours")
+      .select("smrttask_classifier_model, smrttask_rule_threshold, smrttask_project_match_threshold, smrttask_project_cluster_threshold, smrttask_batch_size, whatsapp_lookback_hours, daily_ai_budget_usd")
       .eq("user_id", user.id)
       .maybeSingle();
     if (data) setParams({ ...DEFAULTS, ...data });
@@ -88,6 +90,22 @@ export default function SettingsParametersPage() {
         <h1 className="text-2xl font-bold">{t("title")}</h1>
         <p className="text-sm text-muted-foreground mt-1">{t("subtitle")}</p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{t("budgetSectionTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <Field label={t("dailyBudgetLabel")} hint={t("dailyBudgetHint")}>
+            <NumberInput
+              value={params.daily_ai_budget_usd}
+              defaultValue={DEFAULTS.daily_ai_budget_usd}
+              min={0.1} max={100} step={0.5}
+              onChange={(v) => setParams((p) => ({ ...p, daily_ai_budget_usd: v }))}
+            />
+          </Field>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">

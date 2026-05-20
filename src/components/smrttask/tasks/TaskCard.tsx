@@ -13,6 +13,8 @@ import {
   CheckSquare,
   Play,
   Trash2,
+  Bell,
+  RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
@@ -65,16 +67,37 @@ export function TaskCard({
   const checklist = task.checklist ?? [];
   const checklistTotal = checklist.length;
   const checklistDone = checklist.filter((it) => it.done).length;
+  const isPendingCompletion = task.status === "pending_completion";
+  const hasUnread = Boolean(task.has_unread_update);
 
   return (
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
         isNew && "border-s-2 border-s-blue-400/30",
+        isPendingCompletion && "border-s-4 border-s-emerald-500",
+        hasUnread && !isPendingCompletion && "border-s-4 border-s-amber-500",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
     >
+      {/* Completion / unread banner (above title for visibility) */}
+      {(isPendingCompletion || hasUnread) && (
+        <div
+          className={cn(
+            "mb-2 -mx-1 -mt-1 rounded-md px-2 py-1 text-xs flex items-start gap-2",
+            isPendingCompletion ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-900",
+          )}
+        >
+          <Bell className="h-3 w-3 mt-0.5 shrink-0" />
+          <span dir="auto" className="flex-1">
+            {isPendingCompletion
+              ? task.completion_signal_reason || t("completionBanner")
+              : t("hasUnreadUpdate")}
+          </span>
+        </div>
+      )}
+
       {/* Title + Priority */}
       <div className="flex items-start justify-between gap-2">
         {onToggleSelect && (
@@ -156,7 +179,52 @@ export function TaskCard({
         </div>
       )}
 
-      {/* Bottom action row */}
+      {/* Pending-completion: prominent approve / reopen row REPLACES the regular row */}
+      {isPendingCompletion ? (
+        <div className="mt-3 flex items-center gap-2 border-t pt-2">
+          <Button
+            variant="default"
+            size="sm"
+            className="h-9 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={(e) => {
+              e.stopPropagation();
+              onComplete(task.id);
+            }}
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {t("approveClose")}
+          </Button>
+          {onActivate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate(task.id);
+              }}
+            >
+              <RotateCcw className="h-4 w-4" />
+              {t("reopenToInbox")}
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="ms-auto h-9 w-9 text-red-600 hover:text-red-700 hover:bg-red-50"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(task.id);
+              }}
+              title={t("actions.delete")}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ) : (
+      /* Regular bottom action row */
       <div className="mt-3 flex items-center justify-between border-t pt-2">
         <div className="flex gap-1">
           <Button
@@ -241,6 +309,7 @@ export function TaskCard({
           <span className="hidden md:inline">{t("actions.complete")}</span>
         </Button>
       </div>
+      )}
     </div>
   );
 }
