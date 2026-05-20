@@ -30,6 +30,7 @@ import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
+import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -354,6 +355,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 </div>
               )}
             </div>
+
+            <Separator />
+
+            {/* Checklist (subtasks) — persisted as task.checklist JSONB array */}
+            <TaskChecklist
+              taskId={task.id}
+              items={task.checklist ?? []}
+              onChange={onUpdate}
+            />
 
             <Separator />
 

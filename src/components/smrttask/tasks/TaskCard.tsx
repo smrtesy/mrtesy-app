@@ -10,6 +10,7 @@ import {
   Clock,
   CheckCircle2,
   Folder,
+  CheckSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
@@ -55,6 +56,9 @@ export function TaskCard({
   const isNew = !task.seen_at;
   const aiActions = (task.ai_actions || []).slice(0, 2);
   const source = task.source_messages ?? null;
+  const checklist = task.checklist ?? [];
+  const checklistTotal = checklist.length;
+  const checklistDone = checklist.filter((it) => it.done).length;
 
   return (
     <div
@@ -115,6 +119,12 @@ export function TaskCard({
           >
             <Folder className="h-2.5 w-2.5" />
             {locale === "he" && project.name_he ? project.name_he : project.name}
+          </span>
+        )}
+        {checklistTotal > 0 && (
+          <span className="flex items-center gap-1">
+            <CheckSquare className="h-3 w-3" />
+            {checklistDone}/{checklistTotal}
           </span>
         )}
       </div>

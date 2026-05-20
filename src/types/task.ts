@@ -1,3 +1,12 @@
+export interface ChecklistItem {
+  id: string;
+  title: string;
+  done: boolean;
+  created_at: string;
+  completed_at: string | null;
+  created_by: "user" | "ai";
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -34,6 +43,7 @@ export interface Task {
     name: string;
     url: string;
   }>;
+  checklist: ChecklistItem[];
   related_contact: string | null;
   related_contact_email: string | null;
   related_contact_phone: string | null;
