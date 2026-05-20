@@ -27,6 +27,18 @@ STEP 2 — CLASSIFY NEW MESSAGES
 ACTIONABLE = requires a real action or decision from ${ctx.userName}.
 INFORMATIONAL = useful to know but no action needed right now.
 
+SELF-CHAT RULE — when the source includes "Self-chat: true" (the user
+sent a WhatsApp message to their own number), treat every voice memo
+or text in that thread as a deliberate self-note for task capture.
+Default to ACTIONABLE with a real task title built from the content
+(audio transcript, free-text note). Do NOT classify a self-chat
+message as INFORMATIONAL just because it's outgoing — the user is
+using their own number as a quick-capture channel, so a transcript
+like "new task X in project Y" must produce a new_task action with
+title_he extracted from the transcript. Only fall back to
+INFORMATIONAL when the self-note is clearly NOT a task (e.g. a song
+lyric, a journaled thought with no action verb).
+
 Priority rules:
 - urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation
 - high: deadline within 7 days, payment failure, important meeting
