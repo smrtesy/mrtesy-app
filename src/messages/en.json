@@ -60,6 +60,8 @@
     "activeOnDate": "Last active {date}",
     "reactWith": "React with {emoji}",
     "openTask": "Open task",
+    "openSuggestion": "Open suggestion",
+    "suggestionPrefix": "Suggestion:",
     "tasksFromChat": "{count, plural, one {1 task from this chat} other {# tasks from this chat}}",
     "startRecording": "Start recording",
     "stopRecording": "Stop recording",

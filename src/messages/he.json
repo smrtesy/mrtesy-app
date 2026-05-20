@@ -60,6 +60,8 @@
     "activeOnDate": "פעיל לאחרונה ב-{date}",
     "reactWith": "הגב עם {emoji}",
     "openTask": "פתח משימה",
+    "openSuggestion": "פתח הצעה",
+    "suggestionPrefix": "הצעה:",
     "tasksFromChat": "{count, plural, one {משימה אחת מהשיחה} other {# משימות מהשיחה}}",
     "startRecording": "התחל הקלטה",
     "stopRecording": "עצור הקלטה",

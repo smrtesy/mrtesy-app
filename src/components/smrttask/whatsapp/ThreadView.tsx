@@ -47,6 +47,9 @@ export interface ChatTask {
   title_he: string | null;
   status: string | null;
   priority: string | null;
+  /** false = still a pending AI suggestion (lives in /inbox);
+   *  true = user-approved task (lives in /tasks). */
+  manually_verified: boolean | null;
   created_at: string;
   due_date: string | null;
 }
@@ -745,21 +748,35 @@ function MessageBubble({
 
         {/* Tasks created from this message (heuristic match by created_at) —
             small inline links per task so the user can jump from the
-            conversation context straight to the resulting task card. */}
+            conversation context straight to the resulting task card.
+            Routing depends on the task's lifecycle:
+              • not yet verified by the user  → /inbox (suggestion)
+              • status='in_progress'          → /tasks?tab=active
+              • status='archived'             → /tasks?tab=completed
+              • else (verified inbox)         → /tasks (default Pending tab)
+            ?focus=<id> tells the destination page which card to open. */}
         {relatedTasks.length > 0 && (
           <div className="mt-1 flex flex-col gap-0.5">
             {relatedTasks.map((task) => {
               const taskTitle =
                 locale === "he" && task.title_he ? task.title_he : task.title ?? t("contact");
+              const href = taskLinkFor(task, locale);
+              const isSuggestion = task.manually_verified === false;
               return (
                 <Link
                   key={task.id}
-                  href={`/${locale}/tasks?focus=${task.id}`}
-                  className="inline-flex items-center gap-1 self-start rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 hover:bg-blue-100 transition"
-                  title={t("openTask")}
+                  href={href}
+                  className={`inline-flex items-center gap-1 self-start rounded-md border px-1.5 py-0.5 text-[10px] transition ${
+                    isSuggestion
+                      ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                  }`}
+                  title={isSuggestion ? t("openSuggestion") : t("openTask")}
                 >
                   <CheckSquare className="h-3 w-3" />
-                  <span className="truncate max-w-[200px]">{taskTitle}</span>
+                  <span className="truncate max-w-[200px]">
+                    {isSuggestion ? `${t("suggestionPrefix")} ${taskTitle}` : taskTitle}
+                  </span>
                 </Link>
               );
             })}
@@ -878,6 +895,21 @@ function DeliveryReceipt({
  * last-seen isn't exposed by the Cloud API; we approximate from the
  * most recent incoming message or read receipt.
  */
+/**
+ * Build the right href for a chat-task chip. Pending AI suggestions live
+ * on /inbox; verified tasks live on /tasks under the correct status tab.
+ * `?focus=<id>` tells the destination page to open the matching card.
+ */
+function taskLinkFor(task: ChatTask, locale: string): string {
+  if (task.manually_verified === false) {
+    return `/${locale}/inbox?focus=${task.id}`;
+  }
+  const status = task.status ?? "inbox";
+  if (status === "in_progress") return `/${locale}/tasks?tab=active&focus=${task.id}`;
+  if (status === "archived") return `/${locale}/tasks?tab=completed&focus=${task.id}`;
+  return `/${locale}/tasks?focus=${task.id}`;
+}
+
 function formatLastSeen(date: Date, t: (key: string, vals?: Record<string, string | number>) => string): string {
   const diffMs = Date.now() - date.getTime();
   const min = Math.floor(diffMs / 60_000);
