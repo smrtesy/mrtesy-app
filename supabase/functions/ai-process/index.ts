@@ -228,9 +228,41 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
 }
 
 Classification rules:
-- ACTIONABLE = the user must take a concrete step now
-- INFORMATIONAL = no user step needed (acknowledgement, "Sure thanks", marketing, status, payment confirmations of completed transactions)
-- SPAM = clearly junk
+- ACTIONABLE = either (a) the user must take a concrete step now, OR
+  (b) the message is a pending matter the user MUST keep tracking until it
+  resolves.
+
+  PRIMARY RULE for case (b): if the message is a RESPONSE to a request the
+  user previously initiated — phrases like "we received your request",
+  "we are looking into it", "I'll get back to you", "we will update you
+  shortly", "we are working on it" — it is ACTIONABLE. The user asked,
+  the other side promised to follow up; the user now owes themselves a
+  tracker so the promise doesn't quietly slip. The task is "track <party>
+  on <topic> until they come back".
+
+  Other ACTIONABLE pending matters (no immediate step, but must track):
+    • Legal case / collection / dispute in progress
+    • Medical test / lab work / specialist referral pending
+    • Loan / mortgage / refund application under review
+    • Insurance claim / appeal in progress
+    • Delivery in transit / order being prepared
+    • Vendor / contractor / agent quote pending
+    • Business deal / negotiation in progress
+
+- INFORMATIONAL = read-and-forget. No tracking needed. The user did not
+  initiate anything that requires a return response. Examples:
+    • Marketing / newsletter / sale / promotion
+    • Build, CI, server, monitoring notification ("deploy succeeded")
+    • Social-network ping
+    • Payment CONFIRMATION of an already-completed transaction the user initiated
+      and considers closed
+    • Closure acknowledgement: "thanks, all good", "סבבה", "תודה"
+
+- SPAM = clearly junk.
+
+Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
+to over-track than to lose visibility on a pending matter — especially
+when the message references something the user previously asked about.
 
 completion=true means: the prior task in this thread is DONE per the new message
 (payment confirmed, document signed and accepted, decision answered and acknowledged,
