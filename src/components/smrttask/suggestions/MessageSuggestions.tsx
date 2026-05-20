@@ -8,13 +8,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell } from "lucide-react";
+import { CheckCircle2, X, Bell, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
+import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
+import type { Task } from "@/types/task";
 
 interface SourceJoin {
   source_type: string | null;
@@ -31,6 +33,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
+  const [editTask, setEditTask] = useState<Task | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -41,7 +44,10 @@ export function MessageSuggestions({ locale }: { locale: string }) {
 
     const { data, count } = await supabase
       .from("tasks")
-      .select("*, source_messages(source_type, source_url, serial_display)", { count: "exact" })
+      // projects(...) is needed so the edit-button TaskDetail sheet can
+      // show the linked project chip; without the join it silently
+      // disappears in the editor.
+      .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color)", { count: "exact" })
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -244,6 +250,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 onFastDismiss={() => handleFastDismiss(task.id as string)}
                 onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
                 onApprove={() => handleApprove(task.id as string)}
+                onEdit={() => setEditTask(task as Task)}
               />
             </CardContent>
           </Card>
@@ -256,6 +263,15 @@ export function MessageSuggestions({ locale }: { locale: string }) {
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
         onDismissed={fetchSuggestions}
+      />
+
+      <TaskDetail
+        task={editTask}
+        locale={locale}
+        open={!!editTask}
+        onClose={() => setEditTask(null)}
+        onUpdate={fetchSuggestions}
+        initialEditingFields
       />
     </div>
   );
@@ -270,19 +286,32 @@ function SuggestionActions({
   onFastDismiss,
   onDismissWithReason,
   onApprove,
+  onEdit,
 }: {
   taskId: string;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
+  onEdit: () => void;
 }) {
   const t = useTranslations("suggestions");
+  const tCommon = useTranslations("common");
   const trail = useAITrail(taskId);
 
   return (
     <>
       <div className="flex gap-2 mt-3 items-center">
         <AITrailIconButton open={trail.open} onToggle={trail.toggle} />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-9 min-w-[40px] gap-1"
+          onClick={onEdit}
+          title={tCommon("edit")}
+          aria-label={tCommon("edit")}
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
         <div className="flex-1" />
         <Button
           size="sm"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -51,9 +51,11 @@ interface TaskDetailProps {
   onDelete?: (taskId: string) => void;
   onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
+  /** When the sheet first opens for this task, expand the field editor immediately. */
+  initialEditingFields?: boolean;
 }
 
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onQuickAction, onDriveSearch }: TaskDetailProps) {
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onQuickAction, onDriveSearch, initialEditingFields }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
@@ -81,6 +83,19 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [addingUpdate, setAddingUpdate] = useState(false);
   const [showGenerated, setShowGenerated] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
+
+  // Auto-expand the field editor when the sheet opens with
+  // initialEditingFields=true. We track the task id we already triggered for
+  // so reopening the sheet for the same task doesn't re-fire it after the
+  // user has manually closed the editor.
+  const autoEditedTaskIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !initialEditingFields || !task) return;
+    if (autoEditedTaskIdRef.current === task.id) return;
+    autoEditedTaskIdRef.current = task.id;
+    void startFieldEdit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, task?.id, initialEditingFields]);
 
   if (!task) return null;
 

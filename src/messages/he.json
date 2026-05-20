@@ -32,6 +32,7 @@
     "sectionPlatform": "פלטפורמה",
     "sectionViews": "תצוגות",
     "newTask": "משימה חדשה",
+    "update": "עדכון",
     "inbox": "תיבה",
     "guide": "מדריך"
   },
@@ -184,6 +185,38 @@
       "placeholder": "הוסף משימה בשפה טבעית...",
       "confirmDates": "נכון?",
       "editDates": "ערוך תאריכים"
+    }
+  },
+  "router": {
+    "title": "עדכון",
+    "placeholder": "כתוב מה לעשות — להוסיף משימה, לעדכן משימה קיימת (\"T42 דחיתי למחר\"), לסמן הושלמה, או להוסיף תת-משימות.",
+    "classify": "הבן",
+    "apply": "אשר",
+    "applied": "בוצע",
+    "targetTask": "משימה לפעולה",
+    "targetMissing": "לא זוהתה משימה — בחר ידנית",
+    "notThisOne": "לא זו",
+    "searchTasks": "חפש משימה...",
+    "noTasks": "אין משימות פתוחות",
+    "unknownFallback": "לא הצלחתי להבין מה לעשות. אפשר להמיר את הקלט למשימה חדשה.",
+    "createAsNewTask": "צור כמשימה חדשה",
+    "intents": {
+      "create_task": "משימה חדשה",
+      "update_task": "עדכון משימה",
+      "add_subtask": "הוספת תת-משימות",
+      "add_update": "הוספת הערה",
+      "complete_task": "סימון הושלמה",
+      "dismiss_task": "ביטול משימה",
+      "unknown": "לא ברור"
+    },
+    "fields": {
+      "title": "כותרת",
+      "description": "תיאור",
+      "dueDate": "תאריך יעד",
+      "priority": "עדיפות",
+      "checklist": "צ'קליסט",
+      "subtasks": "תת-משימות להוספה",
+      "updateText": "טקסט ההערה"
     }
   },
   "suggestions": {

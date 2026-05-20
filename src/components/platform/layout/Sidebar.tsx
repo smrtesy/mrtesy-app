@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { SmartTaskInput } from "@/components/smrttask/tasks/SmartTaskInput";
+import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
@@ -203,7 +203,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           <div className="p-3 border-t">
             <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
               <Plus className="h-4 w-4" />
-              {t("newTask")}
+              {t("update")}
             </Button>
           </div>
         )}
@@ -246,10 +246,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
         </Button>
       )}
 
-      <SmartTaskInput
+      <UpdateInput
         open={taskInputOpen}
         onClose={() => setTaskInputOpen(false)}
-        onCreated={() => {
+        onApplied={() => {
           window.location.reload();
         }}
       />

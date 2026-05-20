@@ -33,6 +33,7 @@ import crypto from "node:crypto";
 import { Router, Request, Response } from "express";
 import { db, createRunSession, closeRunSession, loadRules, getAppSecret } from "../../../db";
 import { transcribeAudio, performImageOcr } from "../../../gemini";
+import { fetchOpenTasksForUser, classifyRouterInput } from "./router";
 
 const router = Router();
 
@@ -586,6 +587,25 @@ async function processUserBatch(
     }
   }
 
+  // Self-WA routing: any LIVE text message whose chat is the user's own
+  // display_phone_number is treated as a "note to self" — queue it as a
+  // pending router_decisions row. We skip history chunks (those are old
+  // notes, we don't want to retro-classify) and reaction-only messages.
+  for (const nm of messages) {
+    if (nm.isHistory) continue;
+    if (!nm.meta.id) continue;
+    const myDisplay = String(nm.metadata.display_phone_number ?? "");
+    if (!myDisplay || nm.chatId !== myDisplay) continue;
+    const text = nm.meta.text?.body?.trim();
+    if (!text) continue;
+
+    try {
+      await queueSelfWhatsappDecision(userId, nm.meta.id, text);
+    } catch (e) {
+      errors.push(`router self-WA ${nm.meta.id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   if (sessionId) {
     await closeRunSession(
       sessionId,
@@ -600,6 +620,98 @@ async function processUserBatch(
         : `WhatsApp webhook batch: ${inserted} messages across ${touchedChats.size} threads.`,
       errors,
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Self-WhatsApp → router_decisions queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Queue a self-WA message as a pending router decision. The actual AI
+ * classification is deferred to the /router/decide endpoint (which the
+ * UI calls when opening the pending decision) — keeping the webhook
+ * handler fast and the cost off the synchronous path.
+ *
+ * Dedupe is enforced via the (user_id, source_wamid) unique index on the
+ * router_decisions table: re-deliveries from Meta become no-ops.
+ */
+async function queueSelfWhatsappDecision(
+  userId: string,
+  wamid: string,
+  inputText: string,
+): Promise<void> {
+  const trimmed = inputText.trim().slice(0, 4000);
+  if (!trimmed) return;
+
+  // Resolve the user's primary smrtTask-enabled org. If smrtTask isn't
+  // entitled in their primary org we skip — the user would have nowhere
+  // for the decision to land.
+  const { data: membership } = await db
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const orgId = (membership?.org_id as string | undefined) ?? null;
+  if (!orgId) return;
+
+  const { data: app } = await db.from("apps").select("id").eq("slug", "smrttask").maybeSingle();
+  if (!app) return;
+  const { data: entitled } = await db
+    .from("app_memberships")
+    .select("org_id")
+    .eq("org_id", orgId)
+    .eq("app_id", app.id)
+    .maybeSingle();
+  if (!entitled) return;
+
+  // Cheap pre-check: if a decision already exists for this wamid we're
+  // done. The unique index would also catch this, but reading first
+  // avoids an extra AI call on Meta re-deliveries.
+  const { data: existing } = await db
+    .from("router_decisions")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_wamid", wamid)
+    .maybeSingle();
+  if (existing) return;
+
+  const openTasks = await fetchOpenTasksForUser(userId, orgId);
+  const { output, modelUsed, costUsd } = await classifyRouterInput(trimmed, openTasks);
+
+  // Resolve referenced task by serial within the same org
+  let targetTaskId: string | null = null;
+  if (output.target_task_serial) {
+    const { data: t } = await db
+      .from("tasks")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("organization_id", orgId)
+      .eq("serial_display", output.target_task_serial)
+      .maybeSingle();
+    targetTaskId = (t?.id as string | undefined) ?? null;
+  }
+
+  const { error } = await db
+    .from("router_decisions")
+    .insert({
+      user_id: userId,
+      organization_id: orgId,
+      source: "whatsapp_self",
+      source_wamid: wamid,
+      input_text: trimmed,
+      intent: output.intent,
+      target_task_id: targetTaskId,
+      payload: output.payload ?? {},
+      reasoning: output.reasoning ?? null,
+      model_used: modelUsed,
+      cost_usd: costUsd,
+      status: "pending",
+    });
+  if (error && !/duplicate key|router_decisions_user_wamid/i.test(error.message)) {
+    throw new Error(error.message);
   }
 }
 

@@ -32,6 +32,7 @@
     "sectionPlatform": "Platform",
     "sectionViews": "Views",
     "newTask": "New Task",
+    "update": "Update",
     "inbox": "Inbox",
     "guide": "Guide"
   },
@@ -184,6 +185,38 @@
       "placeholder": "Add task in natural language...",
       "confirmDates": "Correct?",
       "editDates": "Edit dates"
+    }
+  },
+  "router": {
+    "title": "Update",
+    "placeholder": "Describe what to do — add a task, update an existing one (\"T42 pushed to tomorrow\"), mark done, or add subtasks.",
+    "classify": "Parse",
+    "apply": "Confirm",
+    "applied": "Done",
+    "targetTask": "Target task",
+    "targetMissing": "No task matched — pick manually",
+    "notThisOne": "Not this one",
+    "searchTasks": "Search tasks...",
+    "noTasks": "No open tasks",
+    "unknownFallback": "Couldn't figure out what to do. You can convert the input into a new task.",
+    "createAsNewTask": "Create as a new task",
+    "intents": {
+      "create_task": "New task",
+      "update_task": "Update task",
+      "add_subtask": "Add subtasks",
+      "add_update": "Add note",
+      "complete_task": "Mark complete",
+      "dismiss_task": "Dismiss task",
+      "unknown": "Unclear"
+    },
+    "fields": {
+      "title": "Title",
+      "description": "Description",
+      "dueDate": "Due date",
+      "priority": "Priority",
+      "checklist": "Checklist",
+      "subtasks": "Subtasks to add",
+      "updateText": "Note text"
     }
   },
   "suggestions": {

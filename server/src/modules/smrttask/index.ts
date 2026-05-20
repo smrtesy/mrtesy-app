@@ -12,6 +12,7 @@ import actionsRouter from "./routes/actions";
 import syncRouter from "./routes/sync";
 import whatsappWebhookRouter from "./routes/whatsapp-webhook";
 import whatsappViewRouter from "./routes/whatsapp-view";
+import routerRouter from "./routes/router";
 
 const router = Router();
 
@@ -26,6 +27,7 @@ const router = Router();
 router.use(whatsappWebhookRouter);
 
 router.use(tasksRouter);
+router.use(routerRouter);
 router.use(projectsRouter);
 router.use(remindersRouter);
 router.use("/actions", actionsRouter);
