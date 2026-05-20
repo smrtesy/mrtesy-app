@@ -256,6 +256,28 @@ router.post("/webhooks/whatsapp", async (req: Request, res: Response) => {
     console.error("[whatsapp-webhook] processing error:", err);
   }
 
+  // Shadow run: after Express has finished writing whatsapp_messages and
+  // source_messages, forward the same payload to the whatsapp-v11 Edge
+  // Function so it can build a parallel row in source_messages_shadow. We
+  // can then SQL-diff source_messages vs source_messages_shadow to verify
+  // the Edge port is byte-identical to Express before flipping production.
+  //
+  // Fire-and-forget — never blocks the 200 response back to Meta, and any
+  // error here is logged but does NOT affect the user-visible webhook.
+  // Controlled by env so we can disable instantly if it misbehaves.
+  if (process.env.WHATSAPP_SHADOW_FORWARD === "1") {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (supabaseUrl) {
+      fetch(`${supabaseUrl}/functions/v1/whatsapp-v11`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Shadow-Run": "1" },
+        body: rawBody,
+      }).catch((e) => {
+        console.warn("[whatsapp-webhook] shadow forward failed:", e instanceof Error ? e.message : e);
+      });
+    }
+  }
+
   return res.status(200).json({ ok: true });
 });
 
