@@ -118,9 +118,14 @@
     "title": "משימות פעילות",
     "new": "משימה חדשה",
     "inbox": "ממתינות",
+    "pendingCompletion": "מחכה לאישורך לסגירה",
     "active": "פעילות",
     "completed": "הושלמו",
     "archived": "ארכיון",
+    "completionBanner": "הבינה זיהתה שהמשימה הזו אולי הושלמה — אשר סגירה או החזר ל-inbox.",
+    "approveClose": "אשר סגירה",
+    "reopenToInbox": "החזר ל-inbox",
+    "hasUnreadUpdate": "עדכון חדש",
     "view": {
       "list": "רשימה",
       "calendar": "לוח זמנים"
@@ -410,6 +415,9 @@
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",
     "subtitle": "ניהול פרמטרים שמשפיעים על הסיווג, חיפוש פרויקטים וסנכרון WhatsApp. השאר ריק כדי להשתמש בברירת המחדל של המערכת.",
+    "budgetSectionTitle": "תקציב בינה יומי",
+    "dailyBudgetLabel": "תקרה יומית (דולר)",
+    "dailyBudgetHint": "כשהוצאות הבינה היומיות שלך עוברות את הסכום הזה, עיבוד הודעות חדשות נעצר וכפתורי הבינה במשימות מחזירים שגיאה. ברירת מחדל 10 דולר.",
     "classifierSectionTitle": "מסווג (Part 3 / Part 4)",
     "modelLabel": "מודל לסיווג",
     "modelHint": "ברירת מחדל: claude-sonnet-4-6. בחר haiku לזול ומהיר, opus לאיכותי יותר.",
@@ -454,6 +462,8 @@
     "messagesUnit": "הודעות",
     "calendarLabel": "לוח שנה",
     "eventsUnit": "אירועים",
+    "driveLabel": "דרייב",
+    "filesUnit": "קבצים",
     "savingMessages": "שומר הודעות... העיבוד ימשיך ברקע.",
     "backgroundProcessing": "המערכת תעבד את ההודעות ברקע ותיצור משימות אוטומטית.",
     "largeMailboxWarning": "יש הרבה הודעות ({count}) — העיבוד ברקע עשוי לקחת מספר שעות.",

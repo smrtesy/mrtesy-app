@@ -39,9 +39,11 @@ const UPDATABLE_FIELDS = new Set([
   "manually_verified", "source_link",
   // JSON content fields — client sends the whole array after read-modify-write
   "ai_generated_content", "linked_drive_docs", "checklist", "task_materials",
+  // Follow-up signals from ai-process (clearing when user reads the task)
+  "has_unread_update", "completion_signal_detected", "completion_signal_reason",
 ]);
 
-const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed"];
+const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "pending_completion"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 
 /** Validate the shape of a checklist array coming from a client PATCH.

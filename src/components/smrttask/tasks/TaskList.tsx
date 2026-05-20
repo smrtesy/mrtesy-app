@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import type { Task } from "@/types/task";
 
-const VALID_TABS = ["inbox", "active", "completed"] as const;
+const VALID_TABS = ["inbox", "pending_completion", "active", "completed"] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 export function TaskList({ locale }: { locale: string }) {
@@ -63,6 +63,7 @@ export function TaskList({ locale }: { locale: string }) {
     try {
       const params = new URLSearchParams();
       if (filter === "inbox")     { params.set("status", "inbox"); params.set("verified", "true"); }
+      else if (filter === "pending_completion") { params.set("status", "pending_completion"); }
       else if (filter === "active")    { params.set("status", "in_progress"); }
       else if (filter === "completed") { params.set("status", "archived"); }
       params.set("limit", "50");
@@ -148,9 +149,16 @@ export function TaskList({ locale }: { locale: string }) {
 
   async function handleActivate(taskId: string) {
     try {
+      // Also clear AI follow-up flags so a "reopen from pending_completion"
+      // doesn't leave the green/amber banner up after the user has decided.
       await api(`/api/tasks/${taskId}`, {
         method: "PATCH",
-        body: { status: "in_progress" },
+        body: {
+          status: "in_progress",
+          has_unread_update: false,
+          completion_signal_detected: false,
+          completion_signal_reason: null,
+        },
       });
       toast.success(t("actions.activate"));
       fetchTasks();
@@ -209,6 +217,7 @@ export function TaskList({ locale }: { locale: string }) {
       <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSearchResults(null); }} dir={locale === "he" ? "rtl" : "ltr"}>
         <TabsList>
           <TabsTrigger value="inbox">{t("inbox")}</TabsTrigger>
+          <TabsTrigger value="pending_completion">{t("pendingCompletion")}</TabsTrigger>
           <TabsTrigger value="active">{t("active")}</TabsTrigger>
           <TabsTrigger value="completed">{t("completed")}</TabsTrigger>
         </TabsList>

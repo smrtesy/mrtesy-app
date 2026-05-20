@@ -118,9 +118,14 @@
     "title": "Active Tasks",
     "new": "New Task",
     "inbox": "Pending",
+    "pendingCompletion": "Awaiting your approval to close",
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "completionBanner": "The AI thinks this task may be done — approve closing it or send it back to inbox.",
+    "approveClose": "Approve close",
+    "reopenToInbox": "Reopen",
+    "hasUnreadUpdate": "New update",
     "view": {
       "list": "List",
       "calendar": "Timeline"
@@ -410,6 +415,9 @@
   "settingsParameters": {
     "title": "smrtTask Parameters",
     "subtitle": "Tune classifier behaviour, project discovery, and WhatsApp sync. Leave blank to use the system default.",
+    "budgetSectionTitle": "Daily AI budget",
+    "dailyBudgetLabel": "Daily cap (USD)",
+    "dailyBudgetHint": "Once your daily AI spend exceeds this amount, new-message processing stops and per-task AI buttons return an error. Default $10.",
     "classifierSectionTitle": "Classifier (Part 3 / Part 4)",
     "modelLabel": "Classifier model",
     "modelHint": "Default: claude-sonnet-4-6. Pick haiku for cheap+fast, opus for higher quality.",
@@ -454,6 +462,8 @@
     "messagesUnit": "messages",
     "calendarLabel": "Calendar",
     "eventsUnit": "events",
+    "driveLabel": "Drive",
+    "filesUnit": "files",
     "savingMessages": "Saving messages... Processing will continue in the background.",
     "backgroundProcessing": "The system will process messages in the background and create tasks automatically.",
     "largeMailboxWarning": "Large mailbox ({count} messages) — background processing may take a few hours.",

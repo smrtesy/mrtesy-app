@@ -50,10 +50,23 @@ export async function listNewFiles(
 
 export async function getFileContent(userId: string, fileId: string): Promise<string> {
   const drive = await getDriveClient(userId);
-  const res = await drive.files.export(
-    { fileId, mimeType: "text/plain" },
-    { responseType: "text" },
-  );
-  const text = (res.data as string) ?? "";
-  return text.slice(0, 3000);
+  // `files.export` only works for Google Workspace files (Docs/Sheets/Slides).
+  // Non-Workspace files (PDFs, images, scanned docs from ScanSnap, etc.)
+  // throw 403 "Export only supports Docs Editors files". For those we just
+  // want metadata in source_messages — body extraction can come later
+  // (OCR, PDF parsing). Returning "" keeps the upsert path alive.
+  try {
+    const res = await drive.files.export(
+      { fileId, mimeType: "text/plain" },
+      { responseType: "text" },
+    );
+    const text = (res.data as string) ?? "";
+    return text.slice(0, 3000);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/Export only supports|fileNotExportable/i.test(msg)) {
+      return "";
+    }
+    throw err;
+  }
 }

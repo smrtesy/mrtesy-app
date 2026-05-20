@@ -138,6 +138,208 @@ function isWhatsApp(msg: any): boolean {
   return msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo";
 }
 
+function threadKey(msg: any): string | null {
+  if (msg.source_type === "gmail" || msg.source_type === "gmail_sent") {
+    const tid = msg.metadata?.threadId as string | undefined;
+    return tid ? `gmail:${tid}` : null;
+  }
+  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+    const cid = msg.metadata?.chatId as string | undefined;
+    return cid ? `whatsapp:${cid}` : null;
+  }
+  return null;
+}
+
+interface ThreadMemoryRow {
+  id: string;
+  user_id: string;
+  thread_key: string;
+  summary: string;
+  state: "open" | "pending_user_action" | "pending_other_party" | "resolved";
+  related_task_id: string | null;
+  last_message_id: string | null;
+}
+
+async function loadThreadMemory(userId: string, key: string): Promise<ThreadMemoryRow | null> {
+  const { data } = await supabase
+    .from("thread_memory")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("thread_key", key)
+    .maybeSingle();
+  return (data as ThreadMemoryRow | null) ?? null;
+}
+
+async function upsertThreadMemory(userId: string, key: string, fields: Partial<ThreadMemoryRow>) {
+  await supabase.from("thread_memory").upsert(
+    { user_id: userId, thread_key: key, ...fields, updated_at: new Date().toISOString() },
+    { onConflict: "user_id,thread_key" },
+  );
+}
+
+interface ThreadAnalysis {
+  classification: "actionable" | "informational" | "spam";
+  reason: string;
+  newSummary: string;
+  state: "open" | "pending_user_action" | "pending_other_party" | "resolved";
+  completionSignal: boolean;
+  completionReason: string;
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+}
+
+async function analyzeWithMemory(
+  msg: any,
+  memory: ThreadMemoryRow | null,
+  settings: any,
+  sys: SystemParams,
+): Promise<ThreadAnalysis> {
+  const model = sys.classification_model;
+  const myEmails: string[] = settings.my_emails ?? [];
+  const officeAddresses: string[] = settings.office_addresses ?? [];
+  const identityLines: string[] = [];
+  if (myEmails.length > 0) identityLines.push(`User's own addresses (outgoing): ${myEmails.join(", ")}`);
+  if (officeAddresses.length > 0) identityLines.push(`User's office/customer-facing addresses: ${officeAddresses.join(", ")}. Business correspondence — never spam.`);
+  const identityBlock = identityLines.length > 0 ? `\n\n${identityLines.join("\n")}` : "";
+
+  const memoryBlock = memory && memory.summary
+    ? `\n\nExisting thread summary (previous messages already processed):\n"""${memory.summary}"""\nThread state so far: ${memory.state}${memory.related_task_id ? `\nLinked task exists.` : ""}`
+    : memory
+      ? `\n\n(Empty thread summary so far. This may be the first or second message.)`
+      : "";
+
+  const whatsappNote = isWhatsApp(msg)
+    ? `\n\nWhatsApp note: the body is a chat transcript with [INCOMING <ts>]/[OUTGOING <ts>] markers. Reason about the LAST line in the transcript.`
+    : "";
+
+  const systemPrompt = `You are a message classifier and thread-state tracker for a personal task management system.${identityBlock}${memoryBlock}${whatsappNote}
+
+You will receive the NEW message. Classify it AND update the running thread state in a single JSON response.
+
+Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
+{
+  "classification": "ACTIONABLE" | "INFORMATIONAL" | "SPAM",
+  "reason_he": "short Hebrew explanation",
+  "new_summary": "Hebrew, ≤ 400 chars. Incorporates this new message into the running thread context. State the current open question and who owes the next step.",
+  "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
+  "completion": true | false,
+  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string"
+}
+
+Classification rules:
+- ACTIONABLE = the user must take a concrete step now
+- INFORMATIONAL = no user step needed (acknowledgement, "Sure thanks", marketing, status, payment confirmations of completed transactions)
+- SPAM = clearly junk
+
+completion=true means: the prior task in this thread is DONE per the new message
+(payment confirmed, document signed and accepted, decision answered and acknowledged,
+question answered to closure). Be conservative — when unsure, set completion=false.
+
+IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
+already captured in new_summary's prior version. Base decisions on the FRESHLY
+written portion of the message only.
+
+If the user's own address is the sender:
+- Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
+- Just acknowledging closure → INFORMATIONAL`;
+
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
+
+  const result = await callClaude(model, systemPrompt, userMessage, 800);
+  const text = result.text.trim();
+  let parsed: any = null;
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+  } catch { /* fallthrough */ }
+
+  const fallbackClass = text.toUpperCase().startsWith("ACTIONABLE")
+    ? "actionable"
+    : text.toUpperCase().startsWith("SPAM")
+      ? "spam"
+      : "informational";
+
+  if (!parsed) {
+    return {
+      classification: fallbackClass as "actionable" | "informational" | "spam",
+      reason: text,
+      newSummary: memory?.summary ?? "",
+      state: memory?.state ?? "open",
+      completionSignal: false,
+      completionReason: "",
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      model,
+    };
+  }
+
+  const cls = String(parsed.classification ?? "").toLowerCase();
+  const classification: "actionable" | "informational" | "spam" =
+    cls === "actionable" ? "actionable" : cls === "spam" ? "spam" : "informational";
+  const validStates = ["open", "pending_user_action", "pending_other_party", "resolved"];
+  const state = validStates.includes(parsed.state) ? parsed.state : (memory?.state ?? "open");
+
+  return {
+    classification,
+    reason: String(parsed.reason_he ?? ""),
+    newSummary: String(parsed.new_summary ?? "").slice(0, 400),
+    state,
+    completionSignal: Boolean(parsed.completion),
+    completionReason: String(parsed.completion_reason_he ?? ""),
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    model,
+  };
+}
+
+async function appendUpdateToTask(
+  taskId: string,
+  msg: any,
+  analysis: ThreadAnalysis,
+  classification: string,
+) {
+  const { data: existing } = await supabase
+    .from("tasks")
+    .select("updates")
+    .eq("id", taskId)
+    .single();
+  const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
+
+  const updateFields: Record<string, unknown> = {
+    last_interaction_at: new Date().toISOString(),
+    has_unread_update: true,
+    updates: [
+      ...existingUpdates,
+      {
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        type: classification === "actionable" ? "ai_update" : "info_update",
+        actor: "system",
+        content: analysis.reason || msg.subject || "הודעת המשך בשרשור",
+        source_message_id: msg.id,
+        source_type: msg.source_type,
+        completion_signal: analysis.completionSignal,
+      },
+    ],
+  };
+
+  if (analysis.completionSignal) {
+    updateFields.status = "pending_completion";
+    updateFields.completion_signal_detected = true;
+    updateFields.completion_signal_reason = analysis.completionReason;
+  }
+
+  await supabase.from("tasks").update(updateFields).eq("id", taskId);
+  await supabase.from("task_activities").insert({
+    user_id: msg.user_id,
+    task_id: taskId,
+    activity_type: analysis.completionSignal ? "completion_signal" : "thread_followup",
+    note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
+    actor: "system",
+  });
+}
+
 const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the outgoing-mail rule above) ═══\nThe body is a chat transcript with lines like\n  [INCOMING <timestamp>] <text>\n  [OUTGOING <timestamp>] <text>\n[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.\nClassify by the LAST message in the transcript:\n  • Last line is [INCOMING] → ACTIONABLE (the user owes a response)\n  • Last line is [OUTGOING] containing a commitment ("אחזור", "אבדוק", "אשלח",\n    "אעדכן", "תוך X זמן", a specific time/date) → ACTIONABLE\n    (the user owes a follow-through on what they promised)\n  • Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה") → INFORMATIONAL\n  • Conversation appears closed and resolved → INFORMATIONAL\nThe generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
 
 async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
@@ -221,7 +423,7 @@ const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ══�
 async function createTasksFromMessage(msg: any, sys: SystemParams, userId: string, projectContext?: { projectId: string; brief: string }) {
   const model = sys.summary_model;
   const truncate = sys.body_truncate_task;
-  let systemPrompt = `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Status updates that need no human action\nThe caller will record an empty result as informational.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "Hebrew, starts with action verb",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  let systemPrompt = `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Status updates that need no human action\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nThe caller will record an empty result as informational.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "Hebrew, starts with action verb",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   if (isWhatsApp(msg)) systemPrompt += WHATSAPP_TASK_RULES;
   if (projectContext?.brief) systemPrompt += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   const contactMemory = await loadContactMemory(userId, msg);
@@ -289,8 +491,10 @@ async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: st
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, aiModel = "", classification = "", classificationReason = "";
+  let linkedTaskId: string | null = null;
   const preResult = preClassify(msg, settings, sys);
 
+  // ── Early exits that don't need AI ─────────────────────────────────────────
   if (preResult.result === "defer") {
     await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
     return "deferred";
@@ -302,73 +506,92 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     return;
   }
 
-  if (preResult.result === "check_followup") {
-    const followup = await checkFollowup(msg, sys);
-    totalInputTokens += followup.inputTokens; totalOutputTokens += followup.outputTokens;
-    if (!followup.isFollowup) {
-      await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
-      await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: "check_followup", ai_classification: "informational", classification_reason: followup.reason, ai_input_tokens: totalInputTokens, ai_output_tokens: totalOutputTokens, ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, "haiku"), processing_duration_ms: Date.now() - startTime });
-      return;
-    }
-    classification = "actionable"; classificationReason = followup.reason;
-  } else if (preResult.result === "customer_inquiry") {
-    classification = "actionable"; classificationReason = "customer_inquiry (office address)";
-    await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
-  } else if (preResult.result === "informational") {
+  if (preResult.result === "informational") {
     await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "informational", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     return;
-  } else {
+  }
+
+  // ── Load thread memory before AI runs so the prompt has running context ───
+  const tkey = threadKey(msg);
+  const memory = tkey ? await loadThreadMemory(msg.user_id, tkey) : null;
+
+  // ── Single AI call: classify + update summary + flag completion ───────────
+  let analysis: ThreadAnalysis;
+  try {
+    analysis = await analyzeWithMemory(msg, memory, settings, sys);
+    classification = analysis.classification;
+    classificationReason = analysis.reason;
+    totalInputTokens += analysis.inputTokens;
+    totalOutputTokens += analysis.outputTokens;
+    aiModel = analysis.model;
+  } catch (e) {
+    const retryCount = (msg.retry_count || 0) + 1;
+    await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: retryCount >= 3, processing_lock_at: null }).eq("id", msg.id);
+    await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
+    return;
+  }
+
+  // customer_inquiry pre-classification forces actionable regardless of AI
+  if (preResult.result === "customer_inquiry") {
+    classification = "actionable";
+    classificationReason = `${classificationReason} | pre:customer_inquiry`;
+    await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+  }
+
+  // ── Path 1: known existing task in this thread → always append ────────────
+  // Catches BOTH actionable_followup (the user owes more action) and
+  // informational_followup (payment confirmation, "thanks", etc.).
+  if (memory?.related_task_id && classification !== "spam") {
     try {
-      const classResult = await classifyMessage(msg, settings, sys);
-      classification = classResult.classification; classificationReason = classResult.reason;
-      totalInputTokens += classResult.inputTokens; totalOutputTokens += classResult.outputTokens;
-      aiModel = classResult.model;
+      await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
+      linkedTaskId = memory.related_task_id;
+      classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
+      classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
     } catch (e) {
-      const retryCount = (msg.retry_count || 0) + 1;
-      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: retryCount >= 3, processing_lock_at: null }).eq("id", msg.id);
-      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
-      return;
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
     }
   }
 
-  if (classification === "actionable") {
+  // ── Path 2: actionable + no linked task yet → maybe link via siblings, else create ──
+  if (!linkedTaskId && classification === "actionable") {
     try {
-      const linkedTask = await tryLinkToExistingTask(msg, msg.user_id);
-      if (linkedTask) {
-        await supabase.from("tasks").update({
-          updates: [...linkedTask.updates, { id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "ai_update", actor: "system", content: classificationReason || msg.subject || "הודעת המשך בשרשור", source_message_id: msg.id, source_type: msg.source_type }],
-          last_interaction_at: new Date().toISOString(),
-        }).eq("id", linkedTask.id);
-        await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: linkedTask.id, activity_type: "thread_followup", note: `Linked via ${msg.source_type}`, actor: "system" });
-        await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
-        await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "actionable_followup", classification_reason: `linked to task ${linkedTask.id} via ${msg.source_type}`, task_id: linkedTask.id, ai_model_used: aiModel, ai_input_tokens: totalInputTokens, ai_output_tokens: totalOutputTokens, ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, modelTypeFromName(aiModel)), processing_duration_ms: Date.now() - startTime });
-        return;
+      const sibling = await tryLinkToExistingTask(msg, msg.user_id);
+      if (sibling) {
+        await appendUpdateToTask(sibling.id, msg, analysis, "actionable");
+        linkedTaskId = sibling.id;
+        classification = "actionable_followup";
+        classificationReason = `linked to task ${sibling.id} via ${msg.source_type} (sibling-fallback)`;
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
     }
+  }
 
+  if (!linkedTaskId && classification === "actionable") {
     try {
       let projectContext: { projectId: string; brief: string } | undefined;
       const projectMatch = await detectProject(msg, sys, msg.user_id);
       if (projectMatch) {
-        totalInputTokens += projectMatch.inputTokens; totalOutputTokens += projectMatch.outputTokens;
+        totalInputTokens += projectMatch.inputTokens;
+        totalOutputTokens += projectMatch.outputTokens;
         const brief = await getProjectBrief(projectMatch.projectId);
         if (brief) projectContext = { projectId: projectMatch.projectId, brief };
       }
 
       const taskResult = await createTasksFromMessage(msg, sys, msg.user_id, projectContext);
-      totalInputTokens += taskResult.inputTokens; totalOutputTokens += taskResult.outputTokens;
+      totalInputTokens += taskResult.inputTokens;
+      totalOutputTokens += taskResult.outputTokens;
 
       if (taskResult.tasks.length === 0) {
         classification = "informational";
-        classificationReason = "Sonnet returned no actionable tasks (marketing, receipt, or status update).";
+        classificationReason = "Sonnet returned no actionable tasks.";
         aiModel = taskResult.model;
       } else {
         const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
         if (firstReason) classificationReason = firstReason;
         aiModel = taskResult.model;
+        let firstTaskId: string | null = null;
         for (const task of taskResult.tasks) {
           const { data: newTask } = await supabase.from("tasks").insert({
             user_id: msg.user_id, source_message_id: msg.id,
@@ -381,8 +604,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
             updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
           }).select("id").single();
-          if (newTask) await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+          if (newTask) {
+            if (!firstTaskId) firstTaskId = newTask.id as string;
+            await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+          }
         }
+        if (firstTaskId) linkedTaskId = firstTaskId;
         if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
       }
     } catch (e) {
@@ -390,9 +617,37 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     }
   }
 
+  // ── Persist thread memory ─────────────────────────────────────────────────
+  if (tkey) {
+    try {
+      await upsertThreadMemory(msg.user_id, tkey, {
+        summary: analysis.newSummary || memory?.summary || "",
+        state: analysis.state,
+        related_task_id: linkedTaskId ?? memory?.related_task_id ?? null,
+        last_message_id: msg.id,
+      });
+    } catch (e) {
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_memory", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+    }
+  }
+
   await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
   const costType = modelTypeFromName(aiModel);
-  await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: classification, classification_reason: classificationReason, ai_model_used: aiModel, ai_input_tokens: totalInputTokens, ai_output_tokens: totalOutputTokens, ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, costType), processing_duration_ms: Date.now() - startTime });
+  await supabase.from("log_entries").insert({
+    user_id: msg.user_id,
+    category: "ai_process",
+    status: "ok",
+    ...msgLogFields(msg),
+    pre_classification: preResult.result,
+    ai_classification: classification,
+    classification_reason: classificationReason,
+    task_id: linkedTaskId,
+    ai_model_used: aiModel,
+    ai_input_tokens: totalInputTokens,
+    ai_output_tokens: totalOutputTokens,
+    ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, costType),
+    processing_duration_ms: Date.now() - startTime,
+  });
 }
 
 function estimateCost(input: number, output: number, type: string): number {
@@ -447,7 +702,7 @@ Deno.serve(async (req) => {
       }
 
       for (const msg of allMessages) {
-        const { data: claimed } = await supabase.from("source_messages").update({ processing_lock_at: new Date().toISOString() }).eq("id", msg.id).is("processing_lock_at", null).select("id").single();
+        const { data: claimed } = await supabase.from("source_messages").update({ processing_lock_at: new Date().toISOString() }).eq("id", msg.id).eq("processing_status", "pending").is("processing_lock_at", null).select("id").single();
         if (!claimed) continue;
         try {
           const result = await processMessage(msg, settings, sys);
