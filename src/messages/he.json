@@ -34,7 +34,8 @@
     "newTask": "משימה חדשה",
     "update": "עדכון",
     "inbox": "תיבה",
-    "guide": "מדריך"
+    "guide": "מדריך",
+    "transcriptionExperiment": "ניסוי תמלול"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",
@@ -269,6 +270,34 @@
     "from": "מאת",
     "classification": "סיווג",
     "reason": "נימוק"
+  },
+  "transcriptionExperiment": {
+    "title": "ניסוי תמלול A/B",
+    "experimentStatus": "מצב",
+    "enabled": "פעיל",
+    "disabled": "כבוי",
+    "howToEnable": "הפעלה: Admin → App Secrets → TRANSCRIPTION_EXPERIMENT_ENABLED=true",
+    "stats": "סטטיסטיקה",
+    "totalRuns": "סה״כ הודעות",
+    "pending": "ממתין לסקירה",
+    "wins": "ניצחונות",
+    "totalCost": "עלות כוללת",
+    "perMessage": "להודעה",
+    "avgLatency": "השהיה ממוצעת",
+    "errors": "שגיאות",
+    "ties": "תיקו",
+    "skipped": "דולג",
+    "backfillDays": "ימים אחורה למילוי-רטרו (1-30)",
+    "triggerBackfill": "הרץ מילוי-רטרו",
+    "backfillQueued": "התחיל — {count} הודעות במסלול (טווח: {days} ימים)",
+    "toReview": "ממתינות לסקירה",
+    "nothingPending": "אין כלום לסקור כרגע",
+    "noAudio": "אין קובץ אודיו לנגן",
+    "playAudio": "נגן אודיו",
+    "aBetter": "A טוב יותר",
+    "bBetter": "B טוב יותר",
+    "tie": "שווה",
+    "skip": "דלג"
   },
   "log": {
     "title": "לוג מקורות",

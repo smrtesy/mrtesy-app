@@ -34,6 +34,7 @@ import { Router, Request, Response } from "express";
 import { db, createRunSession, closeRunSession, loadRules, getAppSecret } from "../../../db";
 import { transcribeAudio, performImageOcr } from "../../../gemini";
 import { fetchOpenTasksForUser, classifyRouterInput } from "./router";
+import { loadExperimentConfig, runDualTranscription } from "./transcription-experiment";
 
 const router = Router();
 
@@ -777,8 +778,53 @@ async function buildMessageRow(
       } else if (mediaId && accessToken) {
         try {
           const blob = await downloadMetaMedia(mediaId, accessToken);
+
+          // Persist audio to storage so the experiment UI (and any future
+          // audio-replay flow) can play it back. We use the same bucket
+          // + path convention images use. Failure here doesn't block the
+          // transcription, just disables playback for this message.
+          try {
+            const stored = await persistMediaBlobToStorage(
+              userId,
+              m.id ?? "",
+              blob,
+              `audio.${audioExtensionForMime(blob.mimeType)}`,
+              blob.mimeType,
+            );
+            mediaUrl = stored.path;
+          } catch (e) {
+            console.warn("[whatsapp-webhook] audio storage upload failed:", e);
+          }
+
+          // Production transcript: unchanged single Gemini call, so the
+          // webhook stays inside Meta's response window even when the
+          // experiment is enabled.
           const transcript = await transcribeAudio(blob.base64, blob.mimeType);
           body = "[תמלול אודיו]\n" + transcript;
+
+          // Experiment: fire-and-forget BOTH arms in the background.
+          // We pay the cost of an extra two Gemini calls per audio
+          // message during the experiment window, but the webhook
+          // response is unaffected.
+          const experimentConfig = await loadExperimentConfig();
+          if (experimentConfig.enabled && m.id) {
+            const wamid = m.id;
+            const chatId = nm.chatId;
+            const tsIso  = ts.toISOString();
+            const mime   = blob.mimeType;
+            const base64 = blob.base64;
+            void runDualTranscription({
+              userId,
+              wamid,
+              whatsappMessageId: null,
+              chatId,
+              audioMime: mime,
+              audioReceivedAt: tsIso,
+              base64,
+              source: "webhook",
+              config: experimentConfig,
+            }).catch((e) => console.warn(`[experiment] webhook dual-transcription failed for ${wamid}:`, e));
+          }
         } catch (e) {
           // Don't pollute the conversation with the raw Gemini error.
           // Log it and fall back to a clean placeholder.
@@ -1001,6 +1047,22 @@ async function persistMediaBlobToStorage(
   if (uploadErr) throw new Error(`storage upload: ${uploadErr.message}`);
 
   return { path, filename: safeName, size: buf.length };
+}
+
+/**
+ * Map an audio mime type to a short extension we can stuff into the storage
+ * filename. WhatsApp voice notes are ogg/opus, audio messages can also be
+ * mp3/m4a/wav depending on what was uploaded by the sender.
+ */
+function audioExtensionForMime(mime: string | null | undefined): string {
+  if (!mime) return "ogg";
+  const m = mime.toLowerCase().split(";")[0].trim();
+  if (m.includes("ogg") || m.includes("opus")) return "ogg";
+  if (m.includes("mpeg") || m.includes("mp3")) return "mp3";
+  if (m.includes("mp4") || m.includes("m4a") || m.includes("aac")) return "m4a";
+  if (m.includes("wav")) return "wav";
+  if (m.includes("webm")) return "webm";
+  return "ogg";
 }
 
 /**

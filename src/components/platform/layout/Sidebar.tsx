@@ -14,6 +14,7 @@ import {
   Shield,
   BookOpen,
   MessageCircle,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -37,8 +38,9 @@ const smrtTaskItems = [
 ] as const;
 
 const smrtTaskViewItems = [
-  { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
-  { key: "log",      href: "/log",      icon: FileText      },
+  { key: "whatsapp",                href: "/whatsapp",                icon: MessageCircle },
+  { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical },
+  { key: "log",                     href: "/log",                     icon: FileText      },
 ] as const;
 
 const managementItems = [

@@ -37,8 +37,83 @@ interface GeminiCandidate {
   finishReason?: string;
 }
 
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  thoughtsTokenCount?: number;
+  promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+}
+
 interface GeminiResponse {
   candidates?: GeminiCandidate[];
+  usageMetadata?: GeminiUsageMetadata;
+}
+
+/**
+ * Per-model pricing per 1M tokens (USD). Updated to May 2026 published rates.
+ * Caller falls back to "unknown" pricing if model not listed — cost will read
+ * 0 but the experiment is still useful for quality comparison.
+ */
+interface ModelPricing {
+  textInput: number;
+  audioInput: number;
+  imageInput: number;
+  output: number;       // thinking tokens billed at output rate
+}
+const PRICING: Record<string, ModelPricing> = {
+  "gemini-2.5-flash":          { textInput: 0.30, audioInput: 1.00,  imageInput: 0.30, output: 2.50 },
+  "gemini-2.5-pro":            { textInput: 1.25, audioInput: 1.25,  imageInput: 1.25, output: 10.0 },
+  "gemini-3-flash-preview":    { textInput: 0.50, audioInput: 1.00,  imageInput: 0.50, output: 3.00 },
+  "gemini-3-pro-preview":      { textInput: 1.50, audioInput: 2.50,  imageInput: 1.50, output: 12.0 },
+};
+
+const warnedMissingPricing = new Set<string>();
+function estimateGeminiCost(model: string, usage: GeminiUsageMetadata | undefined): number {
+  if (!usage) return 0;
+  const pricing = PRICING[model];
+  if (!pricing) {
+    if (!warnedMissingPricing.has(model)) {
+      console.warn(`[gemini] no pricing entry for model "${model}" — cost will read 0. Update PRICING table.`);
+      warnedMissingPricing.add(model);
+    }
+    return 0;
+  }
+
+  // Per-modality split when available, else attribute everything to text.
+  let audioTokens = 0;
+  let imageTokens = 0;
+  let textTokens  = 0;
+  if (Array.isArray(usage.promptTokensDetails)) {
+    for (const d of usage.promptTokensDetails) {
+      const n = d.tokenCount ?? 0;
+      const m = (d.modality ?? "").toUpperCase();
+      if (m === "AUDIO") audioTokens += n;
+      else if (m === "IMAGE" || m === "VIDEO") imageTokens += n;
+      else textTokens += n;
+    }
+  } else {
+    textTokens = usage.promptTokenCount ?? 0;
+  }
+
+  // Thinking tokens are billed at the output rate (Gemini convention).
+  const outTokens = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
+
+  return (
+    (audioTokens / 1_000_000) * pricing.audioInput +
+    (imageTokens / 1_000_000) * pricing.imageInput +
+    (textTokens  / 1_000_000) * pricing.textInput +
+    (outTokens   / 1_000_000) * pricing.output
+  );
+}
+
+export interface CallGeminiResult {
+  text: string;
+  costUsd: number;
+  latencyMs: number;
+  model: string;
+  thinkingLevel: string;
+  usage: GeminiUsageMetadata | null;
 }
 
 /**
@@ -47,7 +122,7 @@ interface GeminiResponse {
  * blocks the response — that way callers get something parseable rather
  * than crashing on missing text.
  */
-export async function callGemini(opts: GeminiCallOptions): Promise<string> {
+export async function callGeminiDetailed(opts: GeminiCallOptions): Promise<CallGeminiResult> {
   const apiKey = await getAppSecret("smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
 
@@ -94,6 +169,7 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
       body: JSON.stringify(body),
     });
 
+  const t0 = Date.now();
   let res = await fetchOnce();
   if (!res.ok && res.status >= 500 && res.status < 600) {
     await new Promise((r) => setTimeout(r, 3000));
@@ -106,18 +182,32 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
   }
 
   const data = (await res.json()) as GeminiResponse;
+  const latencyMs = Date.now() - t0;
+  const usage = data.usageMetadata ?? null;
+  const costUsd = estimateGeminiCost(model, data.usageMetadata);
+
   const candidate = data.candidates?.[0];
-  if (!candidate) return "[Gemini: אין תגובה]";
+  let text: string;
+  if (!candidate) {
+    text = "[Gemini: אין תגובה]";
+  } else if (candidate.finishReason === "SAFETY") {
+    text = '[Gemini: תוכן נחסם ע"י מסנני בטיחות]';
+  } else if (candidate.finishReason === "RECITATION") {
+    text = "[Gemini: נחסם בגלל ציטוט ידוע]";
+  } else {
+    const joined = candidate.content?.parts
+      ?.filter((p) => p.text)
+      .map((p) => p.text)
+      .join("\n");
+    text = joined ?? "[Gemini החזיר תגובה ריקה]";
+  }
 
-  if (candidate.finishReason === "SAFETY") return '[Gemini: תוכן נחסם ע"י מסנני בטיחות]';
-  if (candidate.finishReason === "RECITATION") return "[Gemini: נחסם בגלל ציטוט ידוע]";
+  return { text, costUsd, latencyMs, model, thinkingLevel, usage };
+}
 
-  const text = candidate.content?.parts
-    ?.filter((p) => p.text)
-    .map((p) => p.text)
-    .join("\n");
-
-  return text ?? "[Gemini החזיר תגובה ריקה]";
+/** Backwards-compat string wrapper for callers that just want the text. */
+export async function callGemini(opts: GeminiCallOptions): Promise<string> {
+  return (await callGeminiDetailed(opts)).text;
 }
 
 /**
@@ -125,16 +215,31 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
  * Apps Script that's been running in production — multi-language detection,
  * speaker labels, no hallucination on unclear audio.
  */
-export async function transcribeAudio(base64Data: string, mimeType: string): Promise<string> {
-  const prompt =
-    "תמלל במדויק את הקובץ הקולי. כללים:\n" +
-    "1. זהה את השפה המקורית (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה\n" +
-    "2. שמור על סימני פיסוק ופסקאות טבעיות\n" +
-    '3. אם יש כמה דוברים - סמן אותם כ"דובר 1", "דובר 2" וכו\'\n' +
-    "4. אם יש רקע לא ברור - ציין [לא ברור] ולא תמציא\n" +
-    "5. החזר רק את התמלול עצמו, ללא הקדמות או הערות מטא";
+const TRANSCRIPTION_PROMPT =
+  "תמלל במדויק את הקובץ הקולי. כללים:\n" +
+  "1. זהה את השפה המקורית (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה\n" +
+  "2. שמור על סימני פיסוק ופסקאות טבעיות\n" +
+  '3. אם יש כמה דוברים - סמן אותם כ"דובר 1", "דובר 2" וכו\'\n' +
+  "4. אם יש רקע לא ברור - ציין [לא ברור] ולא תמציא\n" +
+  "5. החזר רק את התמלול עצמו, ללא הקדמות או הערות מטא";
 
-  return callGemini({ prompt, base64Data, mimeType: mimeType || "audio/ogg" });
+export async function transcribeAudio(base64Data: string, mimeType: string): Promise<string> {
+  return callGemini({ prompt: TRANSCRIPTION_PROMPT, base64Data, mimeType: mimeType || "audio/ogg" });
+}
+
+/** Same prompt as transcribeAudio, but caller picks model/thinking and gets cost+latency back. */
+export async function transcribeAudioDetailed(
+  base64Data: string,
+  mimeType: string,
+  override: { model?: string; thinkingLevel?: string },
+): Promise<CallGeminiResult> {
+  return callGeminiDetailed({
+    prompt: TRANSCRIPTION_PROMPT,
+    base64Data,
+    mimeType: mimeType || "audio/ogg",
+    model: override.model,
+    thinkingLevel: override.thinkingLevel,
+  });
 }
 
 /**
