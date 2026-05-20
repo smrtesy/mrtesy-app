@@ -418,4 +418,66 @@ router.put(
   },
 );
 
+/**
+ * GET /admin/apps/:slug/connections/:phone_number_id/meta-subscription
+ *
+ * Diagnostic: asks Meta directly which fields the WABA's subscribed_apps
+ * are configured to receive. If `messages` is missing from the list,
+ * DualHook (or some upstream config) hasn't subscribed us to it — which
+ * is why incoming customer replies don't reach our webhook even though
+ * outgoing echoes do.
+ *
+ * Meta endpoint: GET /v21.0/{WABA_ID}/subscribed_apps
+ * Auth: needs a System User Access Token for the WABA (we use the
+ * connection's stored access_token from Vault).
+ */
+router.get(
+  "/admin/apps/:slug/connections/:phone_number_id/meta-subscription",
+  async (req: Request, res: Response) => {
+    const { phone_number_id } = req.params;
+
+    const { data: conn } = await db
+      .from("whatsapp_connections")
+      .select("waba_id, access_token_secret_id")
+      .eq("phone_number_id", phone_number_id)
+      .maybeSingle();
+    if (!conn) return res.status(404).json({ error: "connection not found" });
+    if (!conn.waba_id) {
+      return res.status(400).json({ error: "waba_id missing on this connection" });
+    }
+    if (!conn.access_token_secret_id) {
+      return res.status(400).json({ error: "access_token missing on this connection" });
+    }
+
+    const { data: tokenPlain, error: tokenErr } = await db.rpc("vault_read_secret", {
+      secret_id: conn.access_token_secret_id as string,
+    });
+    if (tokenErr) return res.status(500).json({ error: `vault: ${tokenErr.message}` });
+    const token = typeof tokenPlain === "string" ? tokenPlain : null;
+    if (!token) return res.status(500).json({ error: "access_token unreadable" });
+
+    const apiVersion = process.env.META_API_VERSION ?? "v21.0";
+    const url = `https://graph.facebook.com/${apiVersion}/${conn.waba_id}/subscribed_apps`;
+
+    const metaRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const metaJson = (await metaRes.json().catch(() => ({}))) as unknown;
+
+    if (!metaRes.ok) {
+      return res.status(502).json({
+        error: "meta_query_failed",
+        status: metaRes.status,
+        meta_response: metaJson,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      waba_id: conn.waba_id,
+      meta_response: metaJson,
+    });
+  },
+);
+
 export default router;
