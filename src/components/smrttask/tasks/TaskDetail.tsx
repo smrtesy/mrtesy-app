@@ -31,6 +31,7 @@ import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
+import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -503,6 +504,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 )}
               </div>
             )}
+
+            {/* Background materials — notes / links / files / contacts */}
+            <TaskMaterials
+              taskId={task.id}
+              items={task.task_materials ?? []}
+              onChange={onUpdate}
+            />
           </div>
         </ScrollArea>
 

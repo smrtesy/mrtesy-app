@@ -7,6 +7,24 @@ export interface ChecklistItem {
   created_by: "user" | "ai";
 }
 
+export type TaskMaterialType = "note" | "link" | "file" | "contact";
+
+export interface TaskMaterial {
+  id: string;
+  type: TaskMaterialType;
+  title: string;
+  content?: string;
+  url?: string;
+  file_path?: string;
+  file_size?: number;
+  file_mime?: string;
+  contact_name?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  created_at: string;
+  created_by: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -44,6 +62,7 @@ export interface Task {
     url: string;
   }>;
   checklist: ChecklistItem[];
+  task_materials: TaskMaterial[];
   related_contact: string | null;
   related_contact_email: string | null;
   related_contact_phone: string | null;

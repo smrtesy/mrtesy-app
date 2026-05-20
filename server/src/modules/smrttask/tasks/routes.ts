@@ -38,7 +38,7 @@ const UPDATABLE_FIELDS = new Set([
   "project_id", "project_confidence", "assigned_to_user_id",
   "manually_verified", "source_link",
   // JSON content fields — client sends the whole array after read-modify-write
-  "ai_generated_content", "linked_drive_docs", "checklist",
+  "ai_generated_content", "linked_drive_docs", "checklist", "task_materials",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed"];
@@ -78,6 +78,49 @@ function validateChecklist(value: unknown): void {
   }
 }
 
+/** Validate task_materials shape coming from a client PATCH.
+ *  Each item must declare type + id + title. type-specific optional fields
+ *  are validated lightly (string/number where present). Hard cap on the
+ *  serialized size to keep the row from ballooning. */
+const MATERIAL_TYPES = new Set(["note", "link", "file", "contact"]);
+const MAX_MATERIALS_ITEMS = 200;
+const MAX_MATERIALS_BYTES = 64 * 1024;
+
+function validateTaskMaterials(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error("task_materials must be an array");
+  }
+  if (value.length > MAX_MATERIALS_ITEMS) {
+    throw new Error(`task_materials exceeds ${MAX_MATERIALS_ITEMS} items`);
+  }
+  if (JSON.stringify(value).length > MAX_MATERIALS_BYTES) {
+    throw new Error("task_materials exceeds size limit");
+  }
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i] as Record<string, unknown> | null;
+    if (!item || typeof item !== "object") {
+      throw new Error(`task_materials[${i}] must be an object`);
+    }
+    if (typeof item.id !== "string" || !item.id) {
+      throw new Error(`task_materials[${i}].id must be a non-empty string`);
+    }
+    if (typeof item.type !== "string" || !MATERIAL_TYPES.has(item.type)) {
+      throw new Error(`task_materials[${i}].type must be one of note|link|file|contact`);
+    }
+    if (typeof item.title !== "string") {
+      throw new Error(`task_materials[${i}].title must be a string`);
+    }
+    for (const k of ["content", "url", "file_path", "file_mime", "contact_name", "contact_email", "contact_phone", "created_at", "created_by"] as const) {
+      if (item[k] !== undefined && typeof item[k] !== "string") {
+        throw new Error(`task_materials[${i}].${k} must be a string when present`);
+      }
+    }
+    if (item.file_size !== undefined && typeof item.file_size !== "number") {
+      throw new Error(`task_materials[${i}].file_size must be a number when present`);
+    }
+  }
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function pickUpdates(body: Record<string, unknown>) {
@@ -94,6 +137,9 @@ function pickUpdates(body: Record<string, unknown>) {
   }
   if (updates.checklist !== undefined) {
     validateChecklist(updates.checklist);
+  }
+  if (updates.task_materials !== undefined) {
+    validateTaskMaterials(updates.task_materials);
   }
   return updates;
 }
@@ -325,6 +371,61 @@ router.post("/tasks/:id/seen", async (req: Request, res: Response) => {
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+/** POST /tasks/:id/materials/upload — upload a file to task-materials bucket.
+ *  Body: { filename: string, mime?: string, data: <base64-string> }
+ *  Returns: { url, file_path, file_size, file_mime, filename }
+ *  Frontend then PATCHes /tasks/:id with the new task_materials array
+ *  containing this file entry (read-modify-write).
+ *  Size cap: 7MB raw (express.json limit is 10mb; base64 inflates ~1.37x). */
+router.post("/tasks/:id/materials/upload", async (req: Request, res: Response) => {
+  const { filename, mime, data } = req.body ?? {};
+  if (!filename || typeof filename !== "string") {
+    return res.status(400).json({ error: "filename is required" });
+  }
+  if (!data || typeof data !== "string") {
+    return res.status(400).json({ error: "data (base64) is required" });
+  }
+
+  // Confirm task is in this org before we burn storage.
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr)  return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+
+  const buf = Buffer.from(data, "base64");
+  if (buf.length > 7 * 1024 * 1024) {
+    return res.status(413).json({ error: "file too large (max 7MB)" });
+  }
+
+  const safeName = filename.replace(/[/\\]+/g, "_").slice(0, 200);
+  const path = `${req.org!.id}/${task.id}/${randomUUID()}-${safeName}`;
+  const contentType = (typeof mime === "string" && mime) || "application/octet-stream";
+
+  const { error: uploadErr } = await db.storage
+    .from("task-materials")
+    .upload(path, buf, { contentType, upsert: false });
+  if (uploadErr) return res.status(500).json({ error: `storage upload: ${uploadErr.message}` });
+
+  // 1-year signed URL — long enough that the UI doesn't refresh links on
+  // every view, short enough that revocation is meaningful.
+  const { data: signed, error: signErr } = await db.storage
+    .from("task-materials")
+    .createSignedUrl(path, 60 * 60 * 24 * 365);
+  if (signErr) return res.status(500).json({ error: `sign url: ${signErr.message}` });
+
+  res.status(201).json({
+    url:       signed?.signedUrl ?? "",
+    file_path: path,
+    file_size: buf.length,
+    file_mime: contentType,
+    filename:  safeName,
+  });
 });
 
 /** POST /tasks/:id/updates — append a manual note to updates[] */
