@@ -71,7 +71,8 @@
     "englishSuggestion": "English polish suggestion",
     "englishAccept": "Replace",
     "englishKeepMine": "Keep mine",
-    "englishChecking": "Polishing…"
+    "englishChecking": "Polishing…",
+    "noReceiptsTooltip": "Meta accepted the message. Delivery (✓✓) and read (blue ✓✓) receipts aren't available on the current DualHook setup — check the full status in the WhatsApp app on the phone."
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
