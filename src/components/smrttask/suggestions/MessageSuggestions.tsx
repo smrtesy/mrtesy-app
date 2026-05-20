@@ -47,11 +47,20 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
   const focusNodeRef = useRef<HTMLDivElement | null>(null);
+  // Tracks whether the first load has completed. Subsequent refetches
+  // (triggered by save/approve/dismiss → onUpdate) must NOT flip the
+  // global `loading` flag, because that unmounts the open <TaskDetail>
+  // sheet — and on remount the auto-edit effect re-fires against the
+  // stale `editTask` prop, making the form snap back to pre-save values.
+  const initialLoadDoneRef = useRef(false);
 
   const fetchSuggestions = useCallback(async () => {
-    setLoading(true);
+    if (!initialLoadDoneRef.current) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     const { data, count } = await supabase
       .from("tasks")
@@ -73,6 +82,14 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     setSuggestions(sorted);
     setTotalCount(count ?? sorted.length);
     setSelected(new Set());
+    // Re-bind editTask to the freshly fetched row so an open TaskDetail
+    // sheet renders the saved values instead of the pre-save snapshot.
+    // If the row no longer matches the suggestion filter (e.g. user
+    // changed status away from "inbox" inside the edit form), clear
+    // editTask — the sheet closes naturally via open={!!editTask}.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setEditTask((prev) => (prev ? ((sorted as any[]).find((s: any) => s.id === prev.id) as Task | undefined) ?? null : null));
+    initialLoadDoneRef.current = true;
     setLoading(false);
   }, [supabase]);
 
