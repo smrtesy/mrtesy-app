@@ -74,7 +74,16 @@
     "englishAccept": "Replace",
     "englishKeepMine": "Keep mine",
     "englishChecking": "Polishing…",
-    "noReceiptsTooltip": "Meta accepted the message. Delivery (✓✓) and read (blue ✓✓) receipts aren't available on the current DualHook setup — check the full status in the WhatsApp app on the phone."
+    "noReceiptsTooltip": "Meta accepted the message. Delivery (✓✓) and read (blue ✓✓) receipts aren't available on the current DualHook setup — check the full status in the WhatsApp app on the phone.",
+    "newChat": "New chat",
+    "newChatTitle": "Start a new conversation",
+    "newChatHint": "Enter an international phone number + your first message.",
+    "newChatPhoneLabel": "Phone number (international)",
+    "newChatMessageLabel": "First message",
+    "newChatInvalidPhone": "Invalid phone number",
+    "newChatNeedText": "Message is empty",
+    "newChatWindowClosed": "Meta blocks new conversations with contacts who haven't messaged you. An approved Template Message is required (not yet supported here).",
+    "newChatTemplateWarning": "⚠️ Meta only allows free-form messages within 24h of the contact's last message. Starting a brand-new conversation with someone who hasn't messaged you requires an approved Template Message."
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
