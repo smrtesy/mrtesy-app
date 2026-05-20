@@ -112,9 +112,14 @@
     "title": "משימות פעילות",
     "new": "משימה חדשה",
     "inbox": "ממתינות",
+    "pendingCompletion": "מחכה לאישורך לסגירה",
     "active": "פעילות",
     "completed": "הושלמו",
     "archived": "ארכיון",
+    "completionBanner": "הבינה זיהתה שהמשימה הזו אולי הושלמה — אשר סגירה או החזר ל-inbox.",
+    "approveClose": "אשר סגירה",
+    "reopenToInbox": "החזר ל-inbox",
+    "hasUnreadUpdate": "עדכון חדש",
     "view": {
       "list": "רשימה",
       "calendar": "לוח זמנים"

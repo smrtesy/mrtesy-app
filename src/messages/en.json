@@ -112,9 +112,14 @@
     "title": "Active Tasks",
     "new": "New Task",
     "inbox": "Pending",
+    "pendingCompletion": "Awaiting your approval to close",
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "completionBanner": "The AI thinks this task may be done — approve closing it or send it back to inbox.",
+    "approveClose": "Approve close",
+    "reopenToInbox": "Reopen",
+    "hasUnreadUpdate": "New update",
     "view": {
       "list": "List",
       "calendar": "Timeline"
