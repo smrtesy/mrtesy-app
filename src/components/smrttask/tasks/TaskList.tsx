@@ -132,10 +132,13 @@ export function TaskList({ locale }: { locale: string }) {
 
   function handleSelect(task: Task) {
     if (!task.seen_at) {
-      // Fire-and-forget; if it fails we just don't update the indicator
+      // Optimistic: drop the "new" indicator immediately so the blue stripe
+      // doesn't linger until the next refetch.
+      const nowIso = new Date().toISOString();
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
       api(`/api/tasks/${task.id}/seen`, { method: "POST" }).catch(() => {});
     }
-    setSelectedTask(task);
+    setSelectedTask({ ...task, seen_at: task.seen_at ?? new Date().toISOString() });
     setDetailOpen(true);
   }
 

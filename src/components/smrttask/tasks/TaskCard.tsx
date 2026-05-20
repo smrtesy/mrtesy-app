@@ -70,7 +70,7 @@ export function TaskCard({
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
-        isNew && "border-s-4 border-s-blue-500",
+        isNew && "border-s-2 border-s-blue-400/30",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
