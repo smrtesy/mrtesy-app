@@ -88,6 +88,14 @@ interface MetaMetadata {
   phone_number_id?: string;
 }
 
+interface MetaStatus {
+  id?: string;
+  status?: string;
+  timestamp?: string;
+  recipient_id?: string;
+  errors?: Array<{ code?: number; title?: string; message?: string }>;
+}
+
 interface MetaChange {
   field?: string;
   value?: {
@@ -105,7 +113,7 @@ interface MetaChange {
         messages?: MetaMessage[];
       }>;
     }>;
-    statuses?: unknown[];
+    statuses?: MetaStatus[];
   };
 }
 
@@ -468,6 +476,12 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
           }
         }
       } else if (change.field === "statuses") {
+        // Delivery/read receipts on outgoing messages. Process inline so
+        // the UI's checkmarks update without waiting for an unrelated
+        // event to wake the thread.
+        for (const s of value.statuses ?? []) {
+          await applyStatusUpdate(db, s);
+        }
         continue;
       } else {
         console.log(`[whatsapp-webhook] ignored field=${change.field}`);
@@ -482,6 +496,70 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
     const accessToken = tokenByUser.get(userId) ?? null;
     await processUserBatch(db, userId, messages, accessToken);
   }
+}
+
+/**
+ * Apply a Meta status event (sent/delivered/read/failed) to the matching
+ * outgoing message. We only advance the status MONOTONICALLY — once a
+ * message is `read`, a later `delivered` event (which Meta sometimes
+ * sends out of order) won't downgrade it.
+ */
+const STATUS_RANK: Record<string, number> = {
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 4, // terminal; never downgraded
+};
+
+async function applyStatusUpdate(db: SupabaseAdmin, s: MetaStatus): Promise<void> {
+  const wamid = s.id;
+  const newStatus = s.status;
+  if (!wamid || !newStatus || !(newStatus in STATUS_RANK)) return;
+
+  const ts = s.timestamp ? new Date(parseInt(s.timestamp, 10) * 1000).toISOString() : null;
+
+  // Look up the current status to decide whether this event is a real
+  // forward-tick. We also need user_id for the .eq filter scope.
+  const { data: existing } = await db
+    .from("whatsapp_messages")
+    .select("id, status, sent_at, delivered_at, read_at")
+    .eq("wamid", wamid)
+    .maybeSingle();
+  if (!existing) {
+    // Status arrived before the message echo did — rare but possible. We
+    // could buffer it, but the simpler move is to ignore: Meta resends
+    // the read receipt for unread messages occasionally, and the message
+    // will get its first status when the next event arrives.
+    return;
+  }
+
+  const currentRank = STATUS_RANK[(existing.status as string) ?? ""] ?? 0;
+  const incomingRank = STATUS_RANK[newStatus] ?? 0;
+
+  const update: Record<string, unknown> = {};
+  // Always populate the per-stage timestamp if we have one and haven't yet.
+  if (ts) {
+    if (newStatus === "sent" && !existing.sent_at) update.sent_at = ts;
+    if (newStatus === "delivered" && !existing.delivered_at) update.delivered_at = ts;
+    if (newStatus === "read" && !existing.read_at) update.read_at = ts;
+  }
+  // Only advance `status` if this event is later in the lifecycle (or is
+  // a `failed` event, which always wins as a terminal state).
+  if (incomingRank > currentRank || newStatus === "failed") {
+    update.status = newStatus;
+    if (newStatus === "failed") {
+      const errMsg = s.errors?.[0]?.message ?? s.errors?.[0]?.title ?? null;
+      if (errMsg) update.status_error = errMsg;
+    }
+  }
+
+  if (Object.keys(update).length === 0) return;
+
+  const { error } = await db
+    .from("whatsapp_messages")
+    .update(update)
+    .eq("wamid", wamid);
+  if (error) console.warn("[whatsapp-webhook] status update failed:", error.message);
 }
 
 function normalizeLive(

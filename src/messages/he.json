@@ -50,7 +50,14 @@
     "composeDisabled": "חלון 24 שעות סגור — לא ניתן לשלוח",
     "windowOpenUntil": "ניתן לשלוח חופשי עד {time}",
     "windowClosed": "חלון 24 השעות סגור. לפי כללי Meta, אפשר לשלוח רק תבניות מאושרות מחוץ לחלון. נא להמתין שאיש הקשר ישלח הודעה.",
-    "windowClosedShort": "חלון 24 שעות סגור — לא ניתן לשלוח free-text"
+    "windowClosedShort": "חלון 24 שעות סגור — לא ניתן לשלוח free-text",
+    "you": "אני",
+    "contact": "איש קשר",
+    "activeNow": "פעיל עכשיו",
+    "activeMinutesAgo": "פעיל לפני {count, plural, one {דקה} other {# דקות}}",
+    "activeHoursAgo": "פעיל לפני {count, plural, one {שעה} other {# שעות}}",
+    "activeDaysAgo": "פעיל לפני {count, plural, one {יום} other {# ימים}}",
+    "activeOnDate": "פעיל לאחרונה ב-{date}"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
