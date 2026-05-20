@@ -480,4 +480,75 @@ router.get(
   },
 );
 
+/**
+ * System params for an app. Currently only `smrttask` has a backing row
+ * (smrttask_system_params), so other slugs return 404. Super-admin only.
+ *
+ * GET   /admin/apps/:slug/parameters    → row
+ * PATCH /admin/apps/:slug/parameters    body: any subset of editable fields
+ */
+const SMRTTASK_PARAM_FIELDS = [
+  "classification_model",
+  "summary_model",
+  "batch_size",
+  "processing_lock_minutes",
+  "calendar_past_days",
+  "calendar_future_days",
+  "body_truncate_classify",
+  "body_truncate_project",
+  "body_truncate_task",
+] as const;
+
+router.get("/admin/apps/:slug/parameters", async (req: Request, res: Response) => {
+  if (req.params.slug !== "smrttask") {
+    return res.status(404).json({ error: "no system params for this app" });
+  }
+  const { data, error } = await db
+    .from("smrttask_system_params")
+    .select("*")
+    .eq("id", "smrttask")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "params row missing" });
+  return res.json(data);
+});
+
+router.patch("/admin/apps/:slug/parameters", async (req: Request, res: Response) => {
+  if (req.params.slug !== "smrttask") {
+    return res.status(404).json({ error: "no system params for this app" });
+  }
+  const userId = (req as Request & { user?: { id: string } }).user?.id ?? null;
+  const update: Record<string, unknown> = {};
+  for (const key of SMRTTASK_PARAM_FIELDS) {
+    if (!(key in req.body)) continue;
+    const val = (req.body as Record<string, unknown>)[key];
+    if (key === "classification_model" || key === "summary_model") {
+      if (typeof val !== "string" || !val.trim()) {
+        return res.status(400).json({ error: `${key} must be non-empty string` });
+      }
+      update[key] = val.trim();
+    } else {
+      const n = Number(val);
+      if (!Number.isFinite(n) || n <= 0) {
+        return res.status(400).json({ error: `${key} must be positive number` });
+      }
+      update[key] = Math.floor(n);
+    }
+  }
+  if (Object.keys(update).length === 0) {
+    return res.status(400).json({ error: "nothing to update" });
+  }
+  update.updated_at = new Date().toISOString();
+  update.updated_by = userId;
+
+  const { data, error } = await db
+    .from("smrttask_system_params")
+    .update(update)
+    .eq("id", "smrttask")
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+});
+
 export default router;

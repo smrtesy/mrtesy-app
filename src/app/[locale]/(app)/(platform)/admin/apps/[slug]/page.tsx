@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound } from "lucide-react";
+import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound, SlidersHorizontal } from "lucide-react";
 import { AppStatusCard } from "@/components/admin/AppStatusCard";
 
 interface AppRow {
@@ -63,6 +63,15 @@ export default async function AdminAppDetailPage({
       icon: KeyRound,
       href: `${base}/secrets`,
     },
+    ...(slug === "smrttask"
+      ? [{
+          key: "parameters",
+          title: t("appParametersTitle"),
+          description: t("appParametersDesc"),
+          icon: SlidersHorizontal,
+          href: `${base}/parameters`,
+        }]
+      : []),
     ...(app.guide_url
       ? [{
           key: "guide",
