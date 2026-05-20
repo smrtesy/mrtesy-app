@@ -105,6 +105,31 @@ export function TaskList({ locale }: { locale: string }) {
     }
   }
 
+  async function handleActivate(taskId: string) {
+    try {
+      await api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: { status: "in_progress" },
+      });
+      toast.success(t("actions.activate"));
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  async function handleDelete(taskId: string) {
+    if (!window.confirm(t("actions.deleteConfirm"))) return;
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      toast.success(t("actions.deleted"));
+      setDetailOpen(false);
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
   function handleSelect(task: Task) {
     if (!task.seen_at) {
       // Fire-and-forget; if it fails we just don't update the indicator
@@ -167,6 +192,7 @@ export function TaskList({ locale }: { locale: string }) {
               onSelect={handleSelect}
               onComplete={handleComplete}
               onSnooze={handleSnooze}
+              onActivate={handleActivate}
               onQuickAction={handleQuickAction}
               onDriveSearch={handleDriveSearch}
             />
@@ -181,6 +207,7 @@ export function TaskList({ locale }: { locale: string }) {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         onUpdate={fetchTasks}
+        onDelete={handleDelete}
         onQuickAction={handleQuickAction}
         onDriveSearch={handleDriveSearch}
       />

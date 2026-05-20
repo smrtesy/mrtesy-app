@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { ThreadList, type Thread } from "./ThreadList";
@@ -15,12 +15,14 @@ import { MessageCircle } from "lucide-react";
  */
 export function WhatsAppPageClient({ title }: { title: string }) {
   const { locale } = useParams();
+  const searchParams = useSearchParams();
   const t = useTranslations("whatsappPage");
   const isHe = locale === "he";
 
+  const initialChatId = searchParams.get("chat_id");
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(true);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(initialChatId);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);

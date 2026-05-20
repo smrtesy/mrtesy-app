@@ -1,5 +1,6 @@
 "use client";
 
+import { useParams } from "next/navigation";
 import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +34,7 @@ interface SourceLinkProps {
  * opens the original message/doc in a new tab.
  */
 export function SourceLink({ source, stopPropagation, className }: SourceLinkProps) {
+  const { locale } = useParams<{ locale: string }>();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
   if (!row?.serial_display && !row?.source_url) return null;
 
@@ -41,6 +43,31 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
 
   const base = "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground bg-muted/40";
   const interactive = "hover:bg-muted hover:text-foreground transition-colors";
+
+  // WhatsApp sources route to the in-app reader rather than wa.me — the user
+  // wants the conversation in the platform thread view, not a new chat in the
+  // native WhatsApp client.
+  const isWhatsapp = row.source_type === "whatsapp" || row.source_type === "whatsapp_echo";
+  if (isWhatsapp) {
+    // Backend stores wa.me/<digits-only>; we still strip non-digits defensively
+    // so a malformed URL (e.g. wa.me/+972…) degrades to "open WhatsApp tab"
+    // rather than silently linking to an unknown chat.
+    const phone = ((row.source_url ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
+    const href = phone
+      ? `/${locale ?? "he"}/whatsapp?chat_id=${encodeURIComponent(phone)}`
+      : `/${locale ?? "he"}/whatsapp`;
+    return (
+      <a
+        href={href}
+        onClick={(e) => { if (stopPropagation) e.stopPropagation(); }}
+        title={`${label} — open in WhatsApp tab`}
+        className={cn(base, interactive, className)}
+      >
+        <Icon className="h-3 w-3" />
+        <span>{label}</span>
+      </a>
+    );
+  }
 
   if (row.source_url) {
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
@@ -51,16 +78,6 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
 
       const ua = navigator.userAgent;
       const isAndroid = /Android/i.test(ua);
-
-      // WhatsApp: custom URL scheme works on both Android and iOS with JS navigation.
-      if (row.source_type === "whatsapp" || row.source_type === "whatsapp_echo") {
-        const m = (row.source_url ?? "").match(/wa\.me\/(\d+)/);
-        if (m) {
-          e.preventDefault();
-          window.location.href = `whatsapp://send?phone=${m[1]}`;
-          return;
-        }
-      }
 
       // Android Gmail: Intent URL opens Gmail app directly, bypassing the
       // "Open supported links" App Links setting. Falls back to the web URL
