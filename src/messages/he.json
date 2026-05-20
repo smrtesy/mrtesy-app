@@ -783,7 +783,32 @@
     "addDirectBtn": "הוסף",
     "addDirectSuccess": "{email} נוסף לארגון",
     "addDirectNotFound": "משתמש לא נמצא — שלח הזמנה במקום",
-    "addDirectAlreadyMember": "המשתמש כבר רשום בארגון"
+    "addDirectAlreadyMember": "המשתמש כבר רשום בארגון",
+    "appParametersTitle": "פרמטרים של מערכת",
+    "appParametersDesc": "מודלים, גדלי מקבץ, חלון יומן וחיתוכי גוף הודעה"
+  },
+  "adminParameters": {
+    "title": "פרמטרי מערכת",
+    "description": "ערכי בקרה גלובליים של עיבוד הבינה. שינוי כאן משפיע על כל המשתמשים.",
+    "loading": "טוען...",
+    "saved": "השינויים נשמרו",
+    "noChanges": "אין שינויים לשמירה",
+    "save": "שמור",
+    "lastUpdated": "עודכן: {when} ע\"י {who}",
+    "neverUpdated": "טרם עודכן",
+    "modelsTitle": "מודלי AI",
+    "modelsDesc": "המודלים שמשמשים לסיווג מקדים ויצירת משימה",
+    "classificationModel": "מודל סיווג (האייקו)",
+    "summaryModel": "מודל יצירת משימה (סונט)",
+    "limitsTitle": "מגבלות עיבוד",
+    "limitsDesc": "גדלי מקבץ, חלון לוח שנה וגודל הודעות שעוברות לבינה",
+    "batch_size": "גודל מקבץ (הודעות לריצה)",
+    "processing_lock_minutes": "זמן נעילת הודעה (דקות)",
+    "calendar_past_days": "חלון לוח שנה — עבר (ימים)",
+    "calendar_future_days": "חלון לוח שנה — עתיד (ימים)",
+    "body_truncate_classify": "חיתוך גוף הודעה — סיווג (תווים)",
+    "body_truncate_project": "חיתוך גוף הודעה — זיהוי פרויקט (תווים)",
+    "body_truncate_task": "חיתוך גוף הודעה — יצירת משימה (תווים)"
   },
   "inbox": {
     "title": "תיבה",
