@@ -286,17 +286,39 @@ export function LogPageClient({ locale }: { locale: string }) {
                       </p>
                     )}
                   </div>
-                  {log.source_url && (
-                    <a
-                      href={log.source_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 text-muted-foreground hover:text-primary"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  )}
+                  {log.source_url && (() => {
+                    // WhatsApp entries route into the in-app reader (same
+                    // logic as SourceLink) rather than wa.me, so clicking
+                    // a log row opens the conversation here instead of
+                    // bouncing to the native client.
+                    const isWa = log.source_type === "whatsapp" || log.source_type === "whatsapp_echo";
+                    if (isWa) {
+                      const phone = ((log.source_url ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
+                      const href = phone
+                        ? `/${locale}/whatsapp?chat_id=${encodeURIComponent(phone)}`
+                        : `/${locale}/whatsapp`;
+                      return (
+                        <a
+                          href={href}
+                          className="shrink-0 text-muted-foreground hover:text-primary"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      );
+                    }
+                    return (
+                      <a
+                        href={log.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-muted-foreground hover:text-primary"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    );
+                  })()}
                 </div>
 
                 {/* Row 3: classification reason (collapsed = 2 lines, expanded = full) */}
