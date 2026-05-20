@@ -277,6 +277,10 @@ function ComposeBox({
   const [transcribing, setTranscribing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  // True once Haiku has cleared the current text as "good as-is" — used
+  // to render a small ✓ confirming the English is fine. Reset every time
+  // the text changes.
+  const [englishApproved, setEnglishApproved] = useState(false);
   // Remember the last text we already sent to the English checker so we
   // don't re-call it on every keystroke after the user paused once.
   const lastCheckedRef = useRef<string>("");
@@ -380,9 +384,13 @@ function ComposeBox({
     if (!looksEnglish) {
       // Clear any prior suggestion if the user switched language.
       if (suggestion) setSuggestion(null);
+      if (englishApproved) setEnglishApproved(false);
       return;
     }
     if (trimmed === lastCheckedRef.current) return;
+    // Reset approval the moment the text changes — the ✓ only reflects
+    // the most recently checked draft.
+    setEnglishApproved(false);
 
     let cancelled = false;
     const handle = setTimeout(async () => {
@@ -394,15 +402,19 @@ function ComposeBox({
           { method: "POST", body: { text: trimmed } },
         );
         if (cancelled) return;
-        // Only surface the suggestion if the change is substantive.
-        // Haiku will sometimes strip a trailing arrow or normalize a
-        // period — `changed` flips true on any byte diff, so we
-        // additionally compare a lightly normalised form (lowercase,
-        // letters+digits+spaces only) and suppress if those match.
-        if (changed && s !== trimmed && normaliseForCompare(s) !== normaliseForCompare(trimmed)) {
+        // Decide between three outcomes: substantive suggestion, "good
+        // as-is" approval, or no signal. Haiku flips `changed` on any
+        // byte diff, so we compare a lightly normalised form
+        // (letters+digits only, lowercase) to filter out trivial
+        // punctuation tweaks like a stripped trailing arrow.
+        const substantive =
+          changed && s !== trimmed && normaliseForCompare(s) !== normaliseForCompare(trimmed);
+        if (substantive) {
           setSuggestion(s);
+          setEnglishApproved(false);
         } else {
           setSuggestion(null);
+          setEnglishApproved(true);
         }
       } catch {
         // Silent — the auto-check should never interrupt the user's flow.
@@ -415,7 +427,7 @@ function ComposeBox({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [text, looksEnglish, suggestion]);
+  }, [text, looksEnglish, suggestion, englishApproved]);
 
   function acceptSuggestion() {
     if (suggestion) setText(suggestion);
@@ -558,6 +570,15 @@ function ComposeBox({
         <p className="text-[10px] text-muted-foreground flex items-center gap-1">
           <Sparkles className="h-2.5 w-2.5" />
           {t("englishChecking")}
+        </p>
+      )}
+      {/* Positive confirmation: Haiku reviewed the draft and found
+          nothing to fix. Only shown when there's nothing else
+          competing for the slot (no in-flight check, no suggestion). */}
+      {englishApproved && !checking && !suggestion && (
+        <p className="text-[10px] text-green-700 flex items-center gap-1">
+          <Check className="h-2.5 w-2.5" />
+          {t("englishApproved")}
         </p>
       )}
     </div>
