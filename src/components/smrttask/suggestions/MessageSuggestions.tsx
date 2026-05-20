@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useTranslations } from "next-intl";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +29,9 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -36,6 +40,13 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // ?focus=<id> from a /whatsapp deep-link → scroll the matching
+  // suggestion card into view and briefly highlight it. The ref lets us
+  // attach a node to the focus target after render.
+  const focusId = searchParams.get("focus");
+  const focusedRef = useRef<string | null>(null);
+  const focusNodeRef = useRef<HTMLDivElement | null>(null);
 
   const fetchSuggestions = useCallback(async () => {
     setLoading(true);
@@ -68,6 +79,26 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   useEffect(() => {
     fetchSuggestions();
   }, [fetchSuggestions]);
+
+  // Scroll-to-focus when the inbox page is opened via a /whatsapp link
+  // like /he/inbox?focus=<task_id>. Runs once per focus id; cleans the
+  // URL after so a manual reload doesn't keep re-scrolling.
+  useEffect(() => {
+    if (!focusId || loading) return;
+    if (focusedRef.current === focusId) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const exists = suggestions.some((s: any) => s.id === focusId);
+    if (!exists) return;
+    focusedRef.current = focusId;
+    // Wait a frame for the DOM to settle before scrolling.
+    requestAnimationFrame(() => {
+      focusNodeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("focus");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [focusId, loading, suggestions, pathname, router, searchParams]);
 
   // Client-side filter on the loaded list. Server pagination is capped at 1000
   // which is well above the realistic backlog size, so filtering locally keeps
@@ -194,9 +225,20 @@ export function MessageSuggestions({ locale }: { locale: string }) {
           ? new Date(task.due_date as string).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
           : null;
         const isSelected = selected.has(task.id);
+        const isFocused = task.id === focusId;
 
         return (
-          <Card key={task.id} className={isSelected ? "ring-2 ring-primary/50" : undefined}>
+          <Card
+            key={task.id}
+            ref={isFocused ? focusNodeRef : undefined}
+            className={
+              isFocused
+                ? "ring-2 ring-amber-400 animate-pulse"
+                : isSelected
+                ? "ring-2 ring-primary/50"
+                : undefined
+            }
+          >
             <CardContent className="p-4">
               <div className="flex items-start gap-3">
                 <input

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskCard } from "./TaskCard";
@@ -14,15 +15,35 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import type { Task } from "@/types/task";
 
+const VALID_TABS = ["inbox", "active", "completed"] as const;
+type TabKey = (typeof VALID_TABS)[number];
+
 export function TaskList({ locale }: { locale: string }) {
   const t = useTranslations("tasks");
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Initial tab from ?tab=… so deep links from /whatsapp pick the right
+  // filter (e.g. ?tab=completed when the linked task is archived).
+  const initialTab: TabKey = (() => {
+    const raw = searchParams.get("tab");
+    return (VALID_TABS as readonly string[]).includes(raw ?? "") ? (raw as TabKey) : "inbox";
+  })();
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>("inbox");
+  const [filter, setFilter] = useState<string>(initialTab);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<Task[] | null>(null);
+
+  // ?focus=<task_id>: once we've loaded the matching tab, open that
+  // task's detail panel. `focusedRef` prevents re-opening it on every
+  // subsequent re-fetch (the user might have closed the panel manually).
+  const focusId = searchParams.get("focus");
+  const focusedRef = useRef<string | null>(null);
 
   // QuickAction state
   const [qaOpen, setQaOpen] = useState(false);
@@ -60,6 +81,26 @@ export function TaskList({ locale }: { locale: string }) {
       setLoading(false);
     }
   }, [filter]);
+
+  // Open the focused task's detail panel once we've loaded its tab.
+  // Runs after every fetch but only takes effect when (a) the URL still
+  // carries the focus id, (b) we haven't already opened it this session,
+  // and (c) the task is in the loaded list.
+  useEffect(() => {
+    if (!focusId || loading) return;
+    if (focusedRef.current === focusId) return;
+    const match = tasks.find((task) => task.id === focusId);
+    if (!match) return;
+    focusedRef.current = focusId;
+    setSelectedTask(match);
+    setDetailOpen(true);
+    // Clean the query param so a manual close doesn't re-open the panel
+    // on the next render (and so the URL is shareable without the focus).
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("focus");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [focusId, loading, tasks, pathname, router, searchParams]);
 
   useEffect(() => {
     fetchTasks();

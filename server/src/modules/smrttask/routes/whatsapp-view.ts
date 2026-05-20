@@ -14,6 +14,8 @@
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { simpleCall } from "../../../anthropic";
+import { transcribeAudio } from "../../../gemini";
 
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask")];
@@ -37,6 +39,36 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
     .limit(limit);
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // Tasks created from any of these chats — surfaced as a small badge
+  // on each thread row. We join tasks → source_messages and pivot on the
+  // `wa:{chat_id}` source_id our pipeline writes.
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("id, source_message_id, source_messages!inner(source_id, source_type, user_id)")
+    .eq("source_messages.source_type", "whatsapp")
+    .eq("source_messages.user_id", req.user!.id)
+    .neq("status", "archived")
+    .limit(2000);
+
+  const tasksByChat = new Map<string, number>();
+  for (const t of taskRows ?? []) {
+    const sm = (t as unknown as { source_messages?: { source_id?: string } | { source_id?: string }[] }).source_messages;
+    const sourceId = Array.isArray(sm) ? sm[0]?.source_id : sm?.source_id;
+    if (!sourceId?.startsWith("wa:")) continue;
+    const chatId = sourceId.slice("wa:".length);
+    tasksByChat.set(chatId, (tasksByChat.get(chatId) ?? 0) + 1);
+  }
+
+  // Per-chat last_read_at for unread badges.
+  const { data: reads } = await db
+    .from("whatsapp_chat_state")
+    .select("chat_id, last_read_at")
+    .eq("user_id", req.user!.id);
+  const lastReadByChat = new Map<string, string>();
+  for (const r of reads ?? []) {
+    if (r.chat_id) lastReadByChat.set(r.chat_id as string, r.last_read_at as string);
+  }
 
   // Two passes over the recent-messages window:
   //   * `latestAny`     — newest message per chat, of any direction. Drives
@@ -64,6 +96,28 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
 
   const threads = [...latestAny.entries()].map(([chatId, m]) => {
     const inc = latestIncoming.get(chatId);
+    // Unread = count of incoming messages with received_at > last_read_at
+    // for this chat. We compute against the window the SQL already
+    // returned (DESC by received_at, limit 500) — enough for any
+    // realistic unread count, and the badge cap at 99+ handles the rest.
+    const lastReadAt = lastReadByChat.get(chatId);
+    let unreadCount = 0;
+    if (lastReadAt) {
+      const lastReadMs = new Date(lastReadAt).getTime();
+      for (const row of data ?? []) {
+        if (row.chat_id !== chatId) continue;
+        if (row.direction !== "incoming") continue;
+        if (!row.received_at) continue;
+        if (new Date(row.received_at).getTime() > lastReadMs) unreadCount++;
+      }
+    } else if (m.direction === "incoming") {
+      // Never opened: treat every incoming as unread. Same window as above.
+      for (const row of data ?? []) {
+        if (row.chat_id !== chatId) continue;
+        if (row.direction === "incoming") unreadCount++;
+      }
+    }
+
     return {
       chat_id: chatId,
       last_message_at: m.received_at,
@@ -76,10 +130,31 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
       from_phone: inc?.from_phone ?? chatId,
       from_name: inc?.from_name ?? null,
       is_history: m.is_history,
+      unread_count: unreadCount,
+      task_count: tasksByChat.get(chatId) ?? 0,
     };
   });
 
   return res.json({ threads });
+});
+
+// ── Mark a chat as read ───────────────────────────────────────────────────
+// Upserts whatsapp_chat_state.last_read_at to now. The next GET /threads
+// uses it to compute unread_count.
+router.post("/whatsapp/threads/:chat_id/read", ...gate, async (req: Request, res: Response) => {
+  const { chat_id } = req.params;
+  const nowIso = new Date().toISOString();
+  const { error } = await db.from("whatsapp_chat_state").upsert(
+    {
+      user_id: req.user!.id,
+      chat_id,
+      last_read_at: nowIso,
+      updated_at: nowIso,
+    },
+    { onConflict: "user_id,chat_id" },
+  );
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
 });
 
 // ── Messages within a chat ────────────────────────────────────────────────
@@ -104,7 +179,35 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
 
   if (error) return res.status(500).json({ error: error.message });
 
-  return res.json({ messages: [...(data ?? [])].reverse() });
+  // Tasks created from this chat. Joined through source_messages to find
+  // every task whose source_id is `wa:{chatId}`. We expose them per-chat
+  // and let the frontend match each task to the message it most likely
+  // came from (closest received_at before task.created_at) — Part 3
+  // doesn't store a direct message-level link, but the heuristic is
+  // accurate in practice because Part 3 runs on a freshly-updated thread.
+  const { data: taskJoin } = await db
+    .from("tasks")
+    .select(
+      "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(source_id, source_type, user_id)",
+    )
+    .eq("source_messages.source_type", "whatsapp")
+    .eq("source_messages.source_id", `wa:${chatId}`)
+    .eq("source_messages.user_id", req.user!.id)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  const tasks = (taskJoin ?? []).map((t) => ({
+    id: t.id,
+    title: t.title,
+    title_he: t.title_he,
+    status: t.status,
+    priority: t.priority,
+    manually_verified: t.manually_verified,
+    created_at: t.created_at,
+    due_date: t.due_date,
+  }));
+
+  return res.json({ messages: [...(data ?? [])].reverse(), tasks });
 });
 
 // ── Signed URL for a stored document ──────────────────────────────────────
@@ -336,6 +439,228 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   }
 
   return res.json({ ok: true, wamid });
+});
+
+// ── Send a reaction (emoji) on an existing message ──────────────────────
+//
+// Meta Cloud API: POST /v{ver}/{phone_number_id}/messages with
+//   type: "reaction", reaction: { message_id, emoji }
+//
+// Same 24h-window rule applies as for free-form text. Sending an emoji
+// replaces any prior reaction we set on that message (WhatsApp UX).
+// Passing emoji = "" REMOVES our reaction.
+//
+// Body: { target_wamid: string, emoji: string }
+// Returns: { ok: true, wamid: string }
+router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Response) => {
+  const { target_wamid, emoji } = (req.body ?? {}) as {
+    target_wamid?: string;
+    emoji?: string;
+  };
+
+  if (!target_wamid || typeof target_wamid !== "string") {
+    return res.status(400).json({ error: "target_wamid is required" });
+  }
+  if (typeof emoji !== "string") {
+    return res.status(400).json({ error: "emoji is required (empty string = remove reaction)" });
+  }
+
+  // Find the original message so we know which chat and recipient to send to.
+  const { data: original, error: origErr } = await db
+    .from("whatsapp_messages")
+    .select("chat_id, from_phone, to_phone, direction")
+    .eq("user_id", req.user!.id)
+    .eq("wamid", target_wamid)
+    .maybeSingle();
+  if (origErr) return res.status(500).json({ error: origErr.message });
+  if (!original) return res.status(404).json({ error: "original message not found" });
+
+  const chatId = original.chat_id as string;
+  // Recipient = the OTHER side of the conversation. For an incoming
+  // message that's the original sender; for one we sent ourselves that's
+  // who we sent it to.
+  const recipient =
+    original.direction === "incoming"
+      ? (original.from_phone as string)
+      : (original.to_phone as string) || chatId;
+
+  // Resolve the user's connection + access token.
+  const { data: conn } = await db
+    .from("whatsapp_connections")
+    .select("phone_number_id, access_token_secret_id")
+    .eq("user_id", req.user!.id)
+    .is("disconnected_at", null)
+    .maybeSingle();
+  if (!conn) return res.status(404).json({ error: "no_whatsapp_connection" });
+
+  const secretId = conn.access_token_secret_id as string | null;
+  if (!secretId) return res.status(400).json({ error: "access_token_not_configured" });
+
+  const { data: tokenPlain, error: tokenErr } = await db.rpc("vault_read_secret", {
+    secret_id: secretId,
+  });
+  if (tokenErr) return res.status(500).json({ error: `vault: ${tokenErr.message}` });
+  const accessToken = typeof tokenPlain === "string" ? tokenPlain : null;
+  if (!accessToken) return res.status(500).json({ error: "access_token_unreadable" });
+
+  // 24h window — same rule as text sends.
+  const { data: lastIncoming } = await db
+    .from("whatsapp_messages")
+    .select("received_at")
+    .eq("user_id", req.user!.id)
+    .eq("chat_id", chatId)
+    .eq("direction", "incoming")
+    .order("received_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const lastIncomingAt = lastIncoming?.received_at
+    ? new Date(lastIncoming.received_at).getTime()
+    : null;
+  if (lastIncomingAt === null || Date.now() - lastIncomingAt >= 24 * 60 * 60 * 1000) {
+    return res.status(403).json({ error: "outside_24h_window" });
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: recipient.replace(/\D/g, ""),
+    type: "reaction",
+    reaction: {
+      message_id: target_wamid,
+      emoji, // empty string removes the reaction (Meta convention)
+    },
+  };
+
+  const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
+  const sendRes = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const sendJson = (await sendRes.json().catch(() => ({}))) as {
+    messages?: Array<{ id?: string }>;
+    error?: { message?: string };
+  };
+  if (!sendRes.ok) {
+    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+  }
+
+  const wamid = sendJson.messages?.[0]?.id ?? null;
+  if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
+
+  // Optimistically reflect the new reaction in the local store. We REPLACE
+  // any earlier outgoing reaction on this target (WhatsApp behavior: one
+  // reaction per user per message). Empty emoji = removal.
+  const nowIso = new Date().toISOString();
+
+  // Soft-delete prior outgoing reactions on the same target so the UI
+  // doesn't render them alongside the new one. We can do this by setting
+  // their reaction_emoji to "" — the ThreadView filters empties out.
+  await db
+    .from("whatsapp_messages")
+    .update({ reaction_emoji: "" })
+    .eq("user_id", req.user!.id)
+    .eq("direction", "outgoing")
+    .eq("is_reaction", true)
+    .eq("reply_to_wamid", target_wamid)
+    .neq("wamid", wamid);
+
+  if (emoji.trim()) {
+    await db.from("whatsapp_messages").upsert(
+      {
+        user_id: req.user!.id,
+        wamid,
+        chat_id: chatId,
+        direction: "outgoing",
+        from_phone: conn.phone_number_id,
+        from_name: "אני (מהמערכת)",
+        to_phone: recipient,
+        message_type: "reaction",
+        body_text: emoji,
+        reaction_emoji: emoji,
+        reply_to_wamid: target_wamid,
+        is_reaction: true,
+        is_history: false,
+        received_at: nowIso,
+        raw_payload: { sent_via: "smrttask", api_payload: payload },
+      },
+      { onConflict: "user_id,wamid" },
+    );
+  }
+
+  return res.json({ ok: true, wamid });
+});
+
+// ── Voice transcription for the compose box ──────────────────────────────
+//
+// Body: { audio_base64: string, mime_type: string }
+// Returns: { text: string }
+//
+// Uses the same Gemini Hebrew-aware transcription prompt our webhook uses
+// for incoming WhatsApp voice notes. The frontend records via the
+// browser's MediaRecorder API and posts the resulting blob here. The
+// transcript lands in the compose textarea so the user can review/edit
+// before sending.
+router.post("/whatsapp/compose/transcribe", ...gate, async (req: Request, res: Response) => {
+  const { audio_base64, mime_type } = (req.body ?? {}) as {
+    audio_base64?: string;
+    mime_type?: string;
+  };
+  if (!audio_base64 || typeof audio_base64 !== "string") {
+    return res.status(400).json({ error: "audio_base64 is required" });
+  }
+  const cleaned = audio_base64.replace(/^data:[^;]+;base64,/, "");
+  try {
+    const text = await transcribeAudio(cleaned, mime_type || "audio/webm");
+    return res.json({ text });
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ── English quality check (Claude Haiku) ─────────────────────────────────
+//
+// Body: { text: string }
+// Returns: { suggestion: string, changed: boolean, cost_usd: number }
+//
+// Cheap copy-edit pass on outgoing English text. Catches grammar, missing
+// articles, awkward phrasing — the kind of polish the operator wants
+// before a one-off note. Haiku is the cheapest Claude model in the
+// codebase and well-suited to a non-creative rewrite.
+router.post("/whatsapp/compose/check-english", ...gate, async (req: Request, res: Response) => {
+  const { text } = (req.body ?? {}) as { text?: string };
+  if (!text || typeof text !== "string" || !text.trim()) {
+    return res.status(400).json({ error: "text is required" });
+  }
+  const trimmed = text.trim();
+  if (trimmed.length > 4000) {
+    return res.status(400).json({ error: "text too long (max 4000 chars)" });
+  }
+
+  const systemPrompt =
+    "You are a copy-editor for short business WhatsApp messages. " +
+    "Given a draft, return a polished English version: fix grammar, punctuation, " +
+    "missing articles, awkward phrasing. Preserve the original meaning, tone, " +
+    "and length. Do NOT add greetings the original doesn't have. Do NOT add " +
+    "explanations. Return ONLY the polished message — no quotes, no markdown, " +
+    "no commentary. If the original is already correct, return it unchanged.";
+
+  try {
+    const { content, costUsd } = await simpleCall("haiku", systemPrompt, trimmed, 1024);
+    const suggestion = content.trim();
+    return res.json({
+      suggestion,
+      changed: suggestion !== trimmed,
+      cost_usd: costUsd,
+    });
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 export default router;
