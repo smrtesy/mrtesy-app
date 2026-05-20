@@ -30,7 +30,7 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
   const { data, error } = await db
     .from("whatsapp_messages")
     .select(
-      "chat_id, direction, body_text, received_at, from_phone, from_name, message_type, is_history",
+      "chat_id, direction, body_text, media_ocr_text, audio_transcript, received_at, from_phone, from_name, message_type, is_history",
     )
     .eq("user_id", req.user!.id)
     .order("received_at", { ascending: false })
@@ -69,7 +69,9 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
       last_message_at: m.received_at,
       last_direction: m.direction,
       last_message_type: m.message_type,
-      last_body_text: m.body_text,
+      // Fall back to transcript/OCR so audio + caption-less images don't
+      // show as empty preview lines in the chat list.
+      last_body_text: m.body_text || m.audio_transcript || m.media_ocr_text || null,
       // Identity always comes from the contact side — never from "us".
       from_phone: inc?.from_phone ?? chatId,
       from_name: inc?.from_name ?? null,
@@ -93,7 +95,7 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
   const { data, error } = await db
     .from("whatsapp_messages")
     .select(
-      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at, status, status_error, sent_at, delivered_at, read_at",
+      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_ocr_text, audio_transcript, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at, status, status_error, sent_at, delivered_at, read_at",
     )
     .eq("user_id", req.user!.id)
     .eq("chat_id", chatId)

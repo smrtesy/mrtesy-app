@@ -730,6 +730,12 @@ interface WhatsappMessageRow {
   to_phone: string | null;
   message_type: string;
   body_text: string | null;
+  /** Verbatim OCR/visual description of an image, displayed in its own
+   *  framed block in the UI so the user can tell it apart from the
+   *  caption (which lives in body_text). */
+  media_ocr_text: string | null;
+  /** Verbatim audio transcription. Same separation as media_ocr_text. */
+  audio_transcript: string | null;
   media_id: string | null;
   media_mime: string | null;
   media_url: string | null;
@@ -754,6 +760,8 @@ async function buildMessageRow(
   const ts = m.timestamp ? new Date(parseInt(m.timestamp, 10) * 1000) : new Date();
 
   let body = "";
+  let mediaOcrText: string | null = null;
+  let audioTranscript: string | null = null;
   let mediaId: string | null = null;
   let mediaMime: string | null = null;
   let mediaUrl: string | null = null;
@@ -796,11 +804,11 @@ async function buildMessageRow(
             console.warn("[whatsapp-webhook] audio storage upload failed:", e);
           }
 
-          // Production transcript: unchanged single Gemini call, so the
-          // webhook stays inside Meta's response window even when the
-          // experiment is enabled.
-          const transcript = await transcribeAudio(blob.base64, blob.mimeType);
-          body = "[תמלול אודיו]\n" + transcript;
+          // Production transcript: unchanged single Gemini call. The text
+          // goes into its own column so the UI can render it in a distinct
+          // frame from any user-typed caption (audio messages don't have
+          // captions, but we keep the separation for consistency).
+          audioTranscript = await transcribeAudio(blob.base64, blob.mimeType);
 
           // Experiment: fire-and-forget BOTH arms in the background.
           // We pay the cost of an extra two Gemini calls per audio
@@ -874,12 +882,14 @@ async function buildMessageRow(
           }
 
           try {
-            const ocr = await performImageOcr(blob.base64, blob.mimeType);
-            body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
+            mediaOcrText = await performImageOcr(blob.base64, blob.mimeType);
           } catch (e) {
             console.warn("[whatsapp-webhook] image OCR failed, using caption only:", e);
-            body = caption || "[תמונה]";
           }
+          // Caption (if any) lives in body_text and renders like a normal
+          // chat bubble; OCR lives in its own column and renders in a
+          // framed sub-block.
+          body = caption;
         } else {
           body = caption || "[תמונה - שגיאת הורדה]";
         }
@@ -981,7 +991,9 @@ async function buildMessageRow(
     from_name: nm.fromName || null,
     to_phone: nm.toPhone || null,
     message_type: type,
-    body_text: body,
+    body_text: body || null,
+    media_ocr_text: mediaOcrText,
+    audio_transcript: audioTranscript,
     media_id: mediaId,
     media_mime: mediaMime,
     media_url: mediaUrl,

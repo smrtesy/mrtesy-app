@@ -216,15 +216,73 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
  * speaker labels, no hallucination on unclear audio.
  */
 const TRANSCRIPTION_PROMPT =
-  "תמלל במדויק את הקובץ הקולי. כללים:\n" +
-  "1. זהה את השפה המקורית (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה\n" +
-  "2. שמור על סימני פיסוק ופסקאות טבעיות\n" +
-  '3. אם יש כמה דוברים - סמן אותם כ"דובר 1", "דובר 2" וכו\'\n' +
-  "4. אם יש רקע לא ברור - ציין [לא ברור] ולא תמציא\n" +
-  "5. החזר רק את התמלול עצמו, ללא הקדמות או הערות מטא";
+  "תמלל את הקובץ הקולי. חוקים מחייבים:\n" +
+  "• זהה את שפת הדיבור (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה — אל תתרגם.\n" +
+  "• שמור על סימני פיסוק ופסקאות טבעיות.\n" +
+  '• אם יש כמה דוברים — סמן "דובר 1:", "דובר 2:" וכו\'.\n' +
+  "• אם יש קטע לא ברור — כתוב [לא ברור]. אסור להמציא.\n" +
+  "\n" +
+  "פלט: אך ורק טקסט התמלול עצמו.\n" +
+  "אסור להוסיף שום הקדמה (כמו \"הנה התמלול\", \"בטח, הנה...\", \"להלן התמלול:\"),\n" +
+  "שום הערה בסוף (כמו \"מקווה שעזרתי\"), שום כותרת, שום סוגריים מטא,\n" +
+  "ושום markdown fences (```). הפלט שלך הולך ישירות לתוך הצ'אט של המשתמש כאילו זה מה שהוא כתב.";
+
+const OCR_PROMPT =
+  "חלץ טקסט מהתמונה. חוקים מחייבים:\n" +
+  "• אם יש טקסט — חלץ אותו במלואו ובדיוק, שמור על מבנה השורות והפסקאות.\n" +
+  "• אם יש כמה שפות — כל אחת בשפתה המקורית, אל תתרגם.\n" +
+  "• אם אין טקסט או שהוא מינימלי — תן תיאור תמציתי (משפט אחד) של התמונה.\n" +
+  "\n" +
+  "פלט: אך ורק התוצאה. בלי הקדמות (\"הנה הטקסט\", \"זהו OCR של התמונה\"),\n" +
+  "בלי כותרות, בלי סוגריים מטא, בלי markdown fences. הפלט הולך ישירות ל-UI.";
+
+/**
+ * Strip the common preamble patterns Gemini still emits despite instructions:
+ * leading "Sure, here's the transcript:", trailing "Hope this helps!",
+ * stray ```code fences```, and stray meta-bracket annotations on the first
+ * line. Conservative — only kills very high-confidence noise so legitimate
+ * transcripts aren't trimmed.
+ */
+function sanitizeModelOutput(text: string): string {
+  let out = text.trim();
+
+  // Strip markdown fences (with or without language tag) wrapping the body.
+  if (/^```/.test(out)) {
+    out = out.replace(/^```[a-zA-Z0-9]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+  }
+
+  // Drop one-line preamble if present. We're CONSERVATIVE — only strip
+  // lines that explicitly reference the transcription/OCR meta-task. A
+  // user-typed line like "הנה מה שצריך לעשות מחר:" must NOT match, even
+  // though it starts with "הנה" and ends in ":".
+  //
+  // Heuristic: the preamble must (a) start with a preamble verb AND
+  // (b) contain a meta-noun (transcript/OCR/text/etc.) AND (c) end with
+  // a colon. All three conditions together are very unlikely to appear
+  // in legitimate spoken-content transcripts.
+  const HE_META  = "תמלול|תרגום|טקסט|פלט|תוצאה|תיאור|פיענוח";
+  const EN_META  = "transcript(?:ion)?|ocr|text|output|result|translation|description";
+  const preamblePatterns: RegExp[] = [
+    new RegExp(`^(?:הנה|להלן|בטח[,!:]?\\s*הנה)[^\\n]{0,80}(?:${HE_META})[^\\n]{0,40}:\\s*\\n+`, "iu"),
+    new RegExp(`^(?:here(?:'s| is| are|\\s+you\\s+go)|sure[,!:]?\\s*here|below(?:\\s+is)?)[^\\n]{0,80}(?:${EN_META})[^\\n]{0,40}:\\s*\\n+`, "i"),
+    new RegExp(`^the\\s+(?:${EN_META})\\s+(?:is|reads|follows)[^\\n]{0,40}:?\\s*\\n+`, "i"),
+    /^\*\*[^\n*]{1,80}\*\*\s*\n+/,                                           // "**Transcription:**"
+    new RegExp(`^(?:${HE_META}|${EN_META})\\s*[:：]\\s*\\n+`, "i"),         // bare "תמלול:" or "Transcript:"
+  ];
+  for (const re of preamblePatterns) {
+    const next = out.replace(re, "");
+    if (next.length < out.length) { out = next; break; }
+  }
+
+  // Drop common closing pleasantries on their own line.
+  out = out.replace(/\n+(hope this helps[!.]?|let me know if[^\n]*|מקווה שעזרתי[!.]?|בהצלחה[!.]?)\s*$/i, "");
+
+  return out.trim();
+}
 
 export async function transcribeAudio(base64Data: string, mimeType: string): Promise<string> {
-  return callGemini({ prompt: TRANSCRIPTION_PROMPT, base64Data, mimeType: mimeType || "audio/ogg" });
+  const raw = await callGemini({ prompt: TRANSCRIPTION_PROMPT, base64Data, mimeType: mimeType || "audio/ogg" });
+  return sanitizeModelOutput(raw);
 }
 
 /** Same prompt as transcribeAudio, but caller picks model/thinking and gets cost+latency back. */
@@ -233,28 +291,21 @@ export async function transcribeAudioDetailed(
   mimeType: string,
   override: { model?: string; thinkingLevel?: string },
 ): Promise<CallGeminiResult> {
-  return callGeminiDetailed({
+  const res = await callGeminiDetailed({
     prompt: TRANSCRIPTION_PROMPT,
     base64Data,
     mimeType: mimeType || "audio/ogg",
     model: override.model,
     thinkingLevel: override.thinkingLevel,
   });
+  return { ...res, text: sanitizeModelOutput(res.text) };
 }
 
 /**
- * OCR + description for an inbound image. Matches the Apps Script prompt
- * so behavior post-migration is the same: extract text first, fall back
- * to a 1-2 sentence visual description if there's nothing textual.
+ * OCR + description for an inbound image. Extracts text verbatim when
+ * present, falls back to a one-sentence visual description otherwise.
  */
 export async function performImageOcr(base64Data: string, mimeType: string): Promise<string> {
-  const prompt =
-    "נתח את התמונה:\n" +
-    "1. אם יש טקסט - חלץ אותו במלואו ובדיוק, שמור על מבנה (שורות/פסקאות)\n" +
-    "2. אם יש כמה שפות - תמלל כל אחת בשפתה המקורית\n" +
-    "3. אם אין טקסט או שהוא מינימלי - תן תיאור תמציתי (1-2 משפטים) של התמונה\n" +
-    "4. אם זה צילום מסך של שיחה/מסמך - שמור על פורמט מובן\n" +
-    "5. החזר רק את התוצאה, ללא הקדמות";
-
-  return callGemini({ prompt, base64Data, mimeType: mimeType || "image/jpeg" });
+  const raw = await callGemini({ prompt: OCR_PROMPT, base64Data, mimeType: mimeType || "image/jpeg" });
+  return sanitizeModelOutput(raw);
 }

@@ -59,7 +59,9 @@
     "activeMinutesAgo": "Active {count, plural, one {1 minute} other {# minutes}} ago",
     "activeHoursAgo": "Active {count, plural, one {1 hour} other {# hours}} ago",
     "activeDaysAgo": "Active {count, plural, one {1 day} other {# days}} ago",
-    "activeOnDate": "Last active {date}"
+    "activeOnDate": "Last active {date}",
+    "ocrLabel": "Text from image",
+    "transcriptLabel": "Audio transcript"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

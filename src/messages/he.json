@@ -59,7 +59,9 @@
     "activeMinutesAgo": "פעיל לפני {count, plural, one {דקה} other {# דקות}}",
     "activeHoursAgo": "פעיל לפני {count, plural, one {שעה} other {# שעות}}",
     "activeDaysAgo": "פעיל לפני {count, plural, one {יום} other {# ימים}}",
-    "activeOnDate": "פעיל לאחרונה ב-{date}"
+    "activeOnDate": "פעיל לאחרונה ב-{date}",
+    "ocrLabel": "טקסט מתוך התמונה",
+    "transcriptLabel": "תמלול האודיו"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

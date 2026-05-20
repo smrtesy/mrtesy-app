@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, ScanText, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import type { Thread } from "./ThreadList";
 import { detectMessageDir } from "./utils";
+import { RichMessageText } from "./RichMessageText";
 
 export interface Message {
   id: string;
@@ -25,6 +26,11 @@ export interface Message {
   media_url: string | null;
   media_filename: string | null;
   media_size: number | null;
+  /** Verbatim image OCR / visual description. Rendered in a separate framed
+   *  block (distinct from the user-typed caption in body_text). */
+  media_ocr_text?: string | null;
+  /** Verbatim audio transcript. Same separation treatment as media_ocr_text. */
+  audio_transcript?: string | null;
   reply_to_wamid: string | null;
   reaction_emoji: string | null;
   is_reaction: boolean;
@@ -332,11 +338,14 @@ function MessageBubble({
 
   const ts = new Date(message.received_at);
 
-  // Per-message direction: determined by the language of the body, NOT by
-  // who sent it. Hebrew/Arabic content sits on the right edge; Latin
-  // content on the left. Color (green vs white) is what tells the user
-  // whether the message is outgoing or incoming.
-  const msgDir = detectMessageDir(message.body_text);
+  // Per-message direction: determined by the language of the user-typed
+  // body, NOT by who sent it. Hebrew content sits on the right edge,
+  // Latin content on the left. Color (green vs white) is what signals
+  // outgoing vs incoming. We fall back to OCR/transcript when there's no
+  // body so media-only messages still land on the right side of the
+  // viewport when their content is Hebrew.
+  const dirSource = message.body_text || message.audio_transcript || message.media_ocr_text || "";
+  const msgDir = detectMessageDir(dirSource);
   const flexAlign = msgDir === "rtl" ? "justify-end" : "justify-start";
 
   return (
@@ -402,11 +411,33 @@ function MessageBubble({
           </div>
         )}
 
-        {message.body_text && (
-          <p className="whitespace-pre-wrap break-words leading-snug">{message.body_text}</p>
+        {/* Body text — for an image with a caption this is the caption; for
+            text messages it's the user's message. Rendered through the
+            rich-text component so **bold** / *bold* / _italic_ / `code` /
+            URLs / per-line direction all work as expected. */}
+        {message.body_text && <RichMessageText text={message.body_text} />}
+
+        {/* Image OCR — distinct framed sub-block so the user can tell it
+            apart from the caption above. No "OCR:" label; the icon does it. */}
+        {message.media_ocr_text && (
+          <ExtractedBlock
+            icon={<ScanText className="h-3 w-3" />}
+            label={t("ocrLabel")}
+            text={message.media_ocr_text}
+          />
         )}
 
-        {/* Non-image media (documents, etc.) keep the download-button UX. */}
+        {/* Audio transcript — same treatment. The bubble itself is the
+            message; the transcript is decoration. */}
+        {message.audio_transcript && (
+          <ExtractedBlock
+            icon={<Mic className="h-3 w-3" />}
+            label={t("transcriptLabel")}
+            text={message.audio_transcript}
+          />
+        )}
+
+        {/* Non-image media (documents, audio, etc.) keep the download-button UX. */}
         {message.media_url && !isImage && (
           <button
             type="button"
@@ -446,6 +477,40 @@ function MessageBubble({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Visual frame around AI-extracted content (image OCR or audio transcript).
+ * Light tint + thin border + small icon — clearly distinct from the
+ * primary message body without shouting.
+ */
+function ExtractedBlock({
+  icon,
+  label,
+  text,
+}: {
+  icon: React.ReactNode;
+  /** Used as the screen-reader label and a visible-on-hover title; the
+   *  icon alone carries no semantics. */
+  label: string;
+  text: string;
+}) {
+  return (
+    <div
+      className="mt-1.5 rounded-md border border-black/10 bg-black/[0.03] px-2 py-1.5"
+      role="group"
+      aria-label={label}
+    >
+      <div
+        className="mb-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/70"
+        title={label}
+      >
+        {icon}
+        <span className="sr-only">{label}</span>
+      </div>
+      <RichMessageText text={text} className="text-[13px] text-gray-700" />
     </div>
   );
 }
