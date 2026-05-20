@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
@@ -173,6 +173,18 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
             message={m}
             reactions={reactionsByTarget.get(m.wamid) ?? []}
             quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
+            canReact={withinWindow}
+            onReact={async (emoji) => {
+              try {
+                await api("/api/whatsapp/messages/react", {
+                  method: "POST",
+                  body: { target_wamid: m.wamid, emoji },
+                });
+                onMessageSent?.();
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : String(e));
+              }
+            }}
           />
         ))}
       </div>
@@ -276,18 +288,45 @@ function ComposeBox({
   );
 }
 
+/** Quick-react palette — the same six emojis WhatsApp Web shows by default. */
+const QUICK_EMOJIS = ["❤️", "👍", "😂", "😮", "😢", "🙏"] as const;
+
 function MessageBubble({
   message,
   reactions,
   quotedMessage,
+  canReact,
+  onReact,
 }: {
   message: Message;
   reactions: Array<{ emoji: string; direction: string }>;
   /** The original message this one replies to, if it's in the loaded thread. */
   quotedMessage?: Message;
+  /** When false, the react button is hidden (24h window closed). */
+  canReact: boolean;
+  /** Called with the selected emoji (or "" to remove). */
+  onReact: (emoji: string) => void;
 }) {
   const t = useTranslations("whatsappPage");
   const isOutgoing = message.direction === "outgoing";
+
+  // Reaction-picker visibility per bubble. Click the react button to
+  // toggle. We close on outside click via a one-shot effect below.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (!pickerRef.current) return;
+      if (!pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [pickerOpen]);
+
+  // The user's currently-active reaction on THIS message (so the picker
+  // can highlight it, and clicking again removes it).
+  const myReaction = reactions.find((r) => r.direction === "outgoing")?.emoji ?? null;
 
   // Images: render inline. Other media (docs, etc.): fetch a fresh signed URL
   // on click and open in a new tab. We hold the signed URL in state so that
@@ -340,15 +379,31 @@ function MessageBubble({
   const flexAlign = msgDir === "rtl" ? "justify-end" : "justify-start";
 
   return (
-    <div className={`flex ${flexAlign}`}>
-      <div
-        dir={msgDir}
-        className={`max-w-[80%] rounded-lg px-3 py-1.5 text-sm shadow-sm ${
-          isOutgoing
-            ? "bg-emerald-100 text-emerald-950"
-            : "bg-white text-gray-900"
-        }`}
-      >
+    <div className={`group flex flex-col ${flexAlign}`}>
+      <div className={`relative flex items-center gap-1 ${flexAlign}`}>
+        {/* React button — hidden by default, appears on hover. Placed on
+            the OPPOSITE edge of the bubble's alignment so it doesn't crowd
+            the content side. */}
+        {canReact && msgDir === "rtl" && (
+          <ReactionButton
+            myReaction={myReaction}
+            pickerOpen={pickerOpen}
+            pickerRef={pickerRef}
+            onTogglePicker={() => setPickerOpen((v) => !v)}
+            onPick={(emoji) => {
+              setPickerOpen(false);
+              onReact(emoji);
+            }}
+          />
+        )}
+        <div
+          dir={msgDir}
+          className={`max-w-[80%] rounded-lg px-3 py-1.5 text-sm shadow-sm ${
+            isOutgoing
+              ? "bg-emerald-100 text-emerald-950"
+              : "bg-white text-gray-900"
+          }`}
+        >
         {message.from_name && !isOutgoing && (
           <p className="text-[11px] font-medium text-emerald-700">{message.from_name}</p>
         )}
@@ -435,17 +490,49 @@ function MessageBubble({
               failed    → red alert icon. */}
           {isOutgoing && <DeliveryReceipt status={message.status ?? null} />}
         </div>
-
-        {reactions.length > 0 && (
-          <div className="mt-1 flex gap-0.5 text-base leading-none">
-            {reactions.map((r, i) => (
-              <span key={i} title={r.direction}>
-                {r.emoji}
-              </span>
-            ))}
-          </div>
+        </div>
+        {/* React button on the LTR side — same component, just rendered
+            after the bubble so flex order puts it on the visual left. */}
+        {canReact && msgDir === "ltr" && (
+          <ReactionButton
+            myReaction={myReaction}
+            pickerOpen={pickerOpen}
+            pickerRef={pickerRef}
+            onTogglePicker={() => setPickerOpen((v) => !v)}
+            onPick={(emoji) => {
+              setPickerOpen(false);
+              onReact(emoji);
+            }}
+          />
         )}
       </div>
+
+      {/* Reactions — a compact pill UNDER the bubble (not inside it), the
+          way WhatsApp renders them. We aggregate by emoji and show count. */}
+      {reactions.length > 0 && (
+        <div className={`mt-[-2px] flex ${flexAlign}`}>
+          <div className="rounded-full border bg-white shadow-sm px-1.5 py-0.5 flex items-center gap-0.5 text-xs leading-none">
+            {aggregateReactions(reactions).map(({ emoji, count }) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => {
+                  // Tapping your own reaction removes it; tapping a peer's
+                  // emoji applies the same emoji as YOUR reaction.
+                  if (emoji === myReaction) onReact("");
+                  else onReact(emoji);
+                }}
+                className="inline-flex items-center gap-0.5 hover:bg-muted/60 rounded px-1 transition"
+                title={t("reactWith", { emoji })}
+              >
+                <span className="text-sm">{emoji}</span>
+                {count > 1 && <span className="text-[10px] text-muted-foreground">{count}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -486,4 +573,70 @@ function formatLastSeen(date: Date, t: (key: string, vals?: Record<string, strin
   const days = Math.floor(hrs / 24);
   if (days < 7) return t("activeDaysAgo", { count: days });
   return t("activeOnDate", { date: date.toLocaleDateString() });
+}
+
+/**
+ * The compact smiley button + quick-react palette popover that floats
+ * alongside each message bubble. WhatsApp Web shows this on hover; we
+ * keep the same UX but make the button always discoverable on mobile
+ * (where there's no hover).
+ */
+function ReactionButton({
+  myReaction,
+  pickerOpen,
+  pickerRef,
+  onTogglePicker,
+  onPick,
+}: {
+  myReaction: string | null;
+  pickerOpen: boolean;
+  pickerRef: React.MutableRefObject<HTMLDivElement | null>;
+  onTogglePicker: () => void;
+  onPick: (emoji: string) => void;
+}) {
+  return (
+    <div className="relative shrink-0" ref={pickerRef}>
+      <button
+        type="button"
+        onClick={onTogglePicker}
+        className="opacity-0 group-hover:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
+        aria-label="React"
+      >
+        <SmilePlus className="h-4 w-4 text-muted-foreground" />
+      </button>
+      {pickerOpen && (
+        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-10 rounded-full border bg-white shadow-lg px-1 py-1 flex gap-0.5">
+          {QUICK_EMOJIS.map((e) => (
+            <button
+              key={e}
+              type="button"
+              onClick={() => onPick(e === myReaction ? "" : e)}
+              className={`text-lg leading-none rounded-full w-8 h-8 flex items-center justify-center transition ${
+                e === myReaction ? "bg-emerald-100 scale-110" : "hover:bg-muted/60"
+              }`}
+              title={e}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Group an array of `{ emoji, direction }` into `{ emoji, count }` —
+ * one entry per unique emoji. Order: most-recently-added first
+ * (so a fresh reaction sits at the start of the pill).
+ */
+function aggregateReactions(
+  reactions: Array<{ emoji: string; direction: string }>,
+): Array<{ emoji: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const r of reactions) {
+    if (!r.emoji) continue;
+    counts.set(r.emoji, (counts.get(r.emoji) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([emoji, count]) => ({ emoji, count }));
 }
