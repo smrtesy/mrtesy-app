@@ -20,14 +20,22 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
     return res.status(400).json({ error: "X-Org-Id header is required" });
   }
 
-  // Single query: verify membership AND load org details
+  // Parallel queries: verify membership AND load org details simultaneously.
   // Service-role client bypasses RLS — that's intentional here.
-  const { data: member, error: mErr } = await db
-    .from("org_members")
-    .select("org_id, user_id, role")
-    .eq("org_id", orgId)
-    .eq("user_id", req.user.id)
-    .maybeSingle();
+  const [
+    { data: member, error: mErr },
+    { data: org, error: oErr },
+  ] = await Promise.all([
+    db.from("org_members")
+      .select("org_id, user_id, role")
+      .eq("org_id", orgId)
+      .eq("user_id", req.user.id)
+      .maybeSingle(),
+    db.from("organizations")
+      .select("id, slug, name")
+      .eq("id", orgId)
+      .single(),
+  ]);
 
   if (mErr) {
     return res.status(500).json({ error: `org lookup failed: ${mErr.message}` });
@@ -35,13 +43,6 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
   if (!member) {
     return res.status(403).json({ error: "You are not a member of this organization" });
   }
-
-  const { data: org, error: oErr } = await db
-    .from("organizations")
-    .select("id, slug, name")
-    .eq("id", orgId)
-    .single();
-
   if (oErr || !org) {
     return res.status(404).json({ error: "Organization not found" });
   }

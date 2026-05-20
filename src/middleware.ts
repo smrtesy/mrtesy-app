@@ -89,8 +89,23 @@ export async function middleware(request: NextRequest) {
   const hasLocalePrefix = pathnameLocale === "he" || pathnameLocale === "en";
   const locale = hasLocalePrefix ? pathnameLocale : "he";
 
-  // Prefer saved language for entry URLs
+  // Prefer saved language for entry URLs.
+  // Fast path: read from cookie (set on first visit, valid 24h) to skip DB.
   if (!hasLocalePrefix && user) {
+    const cachedLang = request.cookies.get("smrt_lang_pref")?.value;
+    if (cachedLang === "he" || cachedLang === "en") {
+      const target = new URL(
+        `/${cachedLang}${pathname === "/" ? "" : pathname}${request.nextUrl.search}`,
+        request.url,
+      );
+      const redirectResp = NextResponse.redirect(target);
+      response.cookies.getAll().forEach((cookie) => {
+        redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
+      });
+      return redirectResp;
+    }
+
+    // Slow path: DB lookup on first visit or after cookie expiry.
     const { data: settings } = await supabase
       .from("user_settings")
       .select("preferred_language")
@@ -105,6 +120,11 @@ export async function middleware(request: NextRequest) {
       const redirectResp = NextResponse.redirect(target);
       response.cookies.getAll().forEach((cookie) => {
         redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
+      });
+      redirectResp.cookies.set("smrt_lang_pref", pref, {
+        path: "/",
+        sameSite: "lax",
+        maxAge: 60 * 60 * 24, // 24h
       });
       return redirectResp;
     }
