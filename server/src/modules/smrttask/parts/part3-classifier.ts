@@ -47,6 +47,7 @@ interface ClassificationResult {
     category: string;
     tags: string[];
     suggested_actions: string[];
+    checklist?: string[];
   };
 }
 
@@ -357,6 +358,21 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         project_confidence: resolvedProjectId ? result.project_confidence ?? null : null,
       };
 
+      // Build the initial checklist from AI-suggested sub-items. ONLY applied
+      // on insert — we don't overwrite a checklist the user may have edited on
+      // a re-classification of the same source_message.
+      const aiChecklistTitles = Array.isArray(task.checklist)
+        ? task.checklist.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        : [];
+      const aiChecklist = aiChecklistTitles.map((title) => ({
+        id: crypto.randomUUID(),
+        title: title.trim(),
+        done: false,
+        created_at: new Date().toISOString(),
+        completed_at: null,
+        created_by: "ai" as const,
+      }));
+
       let taskWriteOk = false;
       if (existingTask) {
         const { error: updateErr } = await db.from("tasks").update(taskPayload)
@@ -365,7 +381,10 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         if (updateErr) errors.push(`update task ${existingTask.id}: ${updateErr.message}`);
         else { tasksUpdated++; taskWriteOk = true; }
       } else {
-        const { error: insertErr } = await db.from("tasks").insert(taskPayload);
+        const insertPayload = aiChecklist.length > 0
+          ? { ...taskPayload, checklist: aiChecklist }
+          : taskPayload;
+        const { error: insertErr } = await db.from("tasks").insert(insertPayload);
         if (insertErr) errors.push(`insert task for source_msg ${msg.id}: ${insertErr.message}`);
         else { tasksCreated++; taskWriteOk = true; }
       }

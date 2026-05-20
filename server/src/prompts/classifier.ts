@@ -70,9 +70,19 @@ For NEW ACTIONABLE task:
     "contact_person": "name + phone + email if mentioned",
     "category": "work|personal",
     "tags": ["payments","legal","family","tech","mortgage","calendar","drive"],
-    "suggested_actions": ["action1","action2","action3"]
+    "suggested_actions": ["action1","action2","action3"],
+    "checklist": ["sub-step 1","sub-step 2"]
   }
 }
+
+"checklist" rules — return [] in MOST cases. Only populate when the message
+clearly enumerates DISCRETE sub-items that the user has to track separately,
+such as:
+  - a shopping/packing/groceries list ("נא לקנות: חלב, לחם, ביצים")
+  - a meeting-prep list ("להכין לפני הפגישה: agenda, slides, link")
+  - a numbered/bulleted list of required documents or steps
+Each item is a short imperative phrase in Hebrew. Do NOT invent sub-items.
+A single action with no enumerated sub-items must return [].
 
 For INFORMATIONAL:
 {

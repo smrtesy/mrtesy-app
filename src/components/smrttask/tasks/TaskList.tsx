@@ -56,6 +56,8 @@ export function TaskList({ locale }: { locale: string }) {
   const [dsTaskId, setDsTaskId] = useState("");
   const [dsDescription, setDsDescription] = useState("");
 
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -110,13 +112,17 @@ export function TaskList({ locale }: { locale: string }) {
         "postgres_changes",
         { event: "*", schema: "public", table: "tasks" },
         () => {
-          fetchTasks(); // Re-fetch on any change
+          // Debounce: batch rapid changes (e.g. AI processing 20 tasks at once)
+          // into a single refetch 400ms after the last event.
+          if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+          refetchTimerRef.current = setTimeout(fetchTasks, 400);
         }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
     };
   }, [fetchTasks, supabase]);
 
@@ -140,12 +146,40 @@ export function TaskList({ locale }: { locale: string }) {
     }
   }
 
+  async function handleActivate(taskId: string) {
+    try {
+      await api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: { status: "in_progress" },
+      });
+      toast.success(t("actions.activate"));
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  async function handleDelete(taskId: string) {
+    if (!window.confirm(t("actions.deleteConfirm"))) return;
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      toast.success(t("actions.deleted"));
+      setDetailOpen(false);
+      fetchTasks();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
   function handleSelect(task: Task) {
     if (!task.seen_at) {
-      // Fire-and-forget; if it fails we just don't update the indicator
+      // Optimistic: drop the "new" indicator immediately so the blue stripe
+      // doesn't linger until the next refetch.
+      const nowIso = new Date().toISOString();
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
       api(`/api/tasks/${task.id}/seen`, { method: "POST" }).catch(() => {});
     }
-    setSelectedTask(task);
+    setSelectedTask({ ...task, seen_at: task.seen_at ?? new Date().toISOString() });
     setDetailOpen(true);
   }
 
@@ -202,6 +236,8 @@ export function TaskList({ locale }: { locale: string }) {
               onSelect={handleSelect}
               onComplete={handleComplete}
               onSnooze={handleSnooze}
+              onActivate={handleActivate}
+              onDelete={handleDelete}
               onQuickAction={handleQuickAction}
               onDriveSearch={handleDriveSearch}
             />
@@ -216,6 +252,7 @@ export function TaskList({ locale }: { locale: string }) {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         onUpdate={fetchTasks}
+        onDelete={handleDelete}
         onQuickAction={handleQuickAction}
         onDriveSearch={handleDriveSearch}
       />

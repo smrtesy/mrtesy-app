@@ -23,6 +23,7 @@ interface ParsedTask {
   priority: string;
   recurrence_rule: string | null;
   reminders: Array<{ days_before: number; message: string }>;
+  checklist: string[];
 }
 
 export function SmartTaskInput({ open, onClose, onCreated }: SmartTaskInputProps) {
@@ -43,17 +44,30 @@ export function SmartTaskInput({ open, onClose, onCreated }: SmartTaskInputProps
         method: "POST",
         body: {
           prompt: `Parse this natural language input into a task. Today is ${today}. Return ONLY valid JSON, no markdown fences:
-{"title_he":"Hebrew title","description":"details","due_date":"YYYY-MM-DD or null","priority":"urgent|high|medium|low","recurrence_rule":"RRULE string or null","reminders":[{"days_before":1,"message":"reminder text"}]}
+{"title_he":"Hebrew title","description":"details","due_date":"YYYY-MM-DD or null","priority":"urgent|high|medium|low","recurrence_rule":"RRULE string or null","reminders":[{"days_before":1,"message":"reminder text"}],"checklist":["item 1","item 2"]}
+
+For "checklist": only populate when the input clearly describes multiple discrete sub-items (e.g. a shopping list, a meeting-prep list, a packing list, "do A, then B, then C"). Each item should be a short imperative phrase in the same language as the input. If the input describes a single action with no sub-items, return an empty array.
 
 User input: "${input}"`,
-          max_tokens: 600,
+          max_tokens: 700,
         },
       });
 
       const jsonMatch = (result || "").match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const taskData = JSON.parse(jsonMatch[0]) as ParsedTask;
-        setParsed(taskData);
+        const taskData = JSON.parse(jsonMatch[0]) as Partial<ParsedTask>;
+        const checklist = Array.isArray(taskData.checklist)
+          ? taskData.checklist.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+          : [];
+        setParsed({
+          title_he: taskData.title_he ?? input,
+          description: taskData.description ?? "",
+          due_date: taskData.due_date ?? null,
+          priority: taskData.priority ?? "medium",
+          recurrence_rule: taskData.recurrence_rule ?? null,
+          reminders: Array.isArray(taskData.reminders) ? taskData.reminders : [],
+          checklist,
+        });
         setEditDueDate(taskData.due_date || "");
       } else {
         throw new Error("could not parse model output");
@@ -69,6 +83,7 @@ User input: "${input}"`,
         priority: "medium",
         recurrence_rule: null,
         reminders: [],
+        checklist: [],
       });
     } finally {
       setLoading(false);
@@ -81,6 +96,16 @@ User input: "${input}"`,
 
     try {
       // 1. Create the task via Express
+      const now = new Date().toISOString();
+      const checklist = (parsed.checklist ?? []).map((title) => ({
+        id: crypto.randomUUID(),
+        title,
+        done: false,
+        created_at: now,
+        completed_at: null,
+        created_by: "ai" as const,
+      }));
+
       const { task } = await api<{ task: { id: string } }>("/api/tasks", {
         method: "POST",
         body: {
@@ -91,6 +116,7 @@ User input: "${input}"`,
           status: "inbox",
           due_date: editDueDate || parsed.due_date || null,
           recurrence_rule: parsed.recurrence_rule,
+          ...(checklist.length > 0 ? { checklist } : {}),
         },
       });
 
@@ -187,6 +213,16 @@ User input: "${input}"`,
                     <Badge variant="secondary">Recurring</Badge>
                   )}
                 </div>
+                {parsed.checklist?.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-sm">
+                    {parsed.checklist.map((item, i) => (
+                      <li key={i} className="flex items-start gap-2" dir="auto">
+                        <span className="text-muted-foreground">☐</span>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               {/* Date editing */}

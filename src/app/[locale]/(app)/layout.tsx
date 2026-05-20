@@ -22,18 +22,18 @@ export default async function AppLayout({
     redirect(`/${locale}/login`);
   }
 
-  // Compute super-admin status BEFORE the onboarding gate: super-admins manage
-  // the platform itself and must be able to reach /admin even if they haven't
-  // gone through (or care about) the smrtesy onboarding flow.
-  let isAdmin = devBypass;
-  if (!isAdmin && user) {
-    const { data: row } = await supabase
-      .from("super_admins")
-      .select("user_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (row) isAdmin = true;
-  }
+  // Fetch super-admin status and onboarding flag in parallel to avoid two
+  // sequential round-trips on every page load. super-admins bypass onboarding.
+  const [superAdminResult, settingsResult] = await Promise.all([
+    user
+      ? supabase.from("super_admins").select("user_id").eq("user_id", user.id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    user && !devBypass
+      ? supabase.from("user_settings").select("onboarding_completed").eq("user_id", user.id).single()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  let isAdmin = devBypass || !!superAdminResult.data;
   if (!isAdmin) {
     const adminEmails = (process.env.ADMIN_EMAIL || "")
       .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
@@ -43,13 +43,7 @@ export default async function AppLayout({
   // Onboarding gate — skipped for super-admins (platform operators) and in
   // dev bypass. Regular users get pushed through onboarding once.
   if (user && !devBypass && !isAdmin) {
-    const { data: settings } = await supabase
-      .from("user_settings")
-      .select("onboarding_completed")
-      .eq("user_id", user.id)
-      .single();
-
-    if (!settings?.onboarding_completed) {
+    if (!settingsResult.data?.onboarding_completed) {
       redirect(`/${locale}/onboarding`);
     }
   }
@@ -91,8 +85,9 @@ export default async function AppLayout({
     <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* Desktop Sidebar */}
       <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
-      {/* Main content */}
-      <main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
+      {/* Main content — data-sidebar-main lets globals.css drop the inline-start
+          margin when the user collapses the sidebar from Sidebar.tsx. */}
+      <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
         <div className="w-full max-w-4xl mx-auto p-4 md:p-6">
           {children}
         </div>

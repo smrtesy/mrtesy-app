@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Play, RefreshCw, CheckCircle2, XCircle, Clock,
-  FileSearch, Zap,
+  FileSearch, Zap, StopCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/lib/api/client";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
@@ -122,9 +123,16 @@ export default function SettingsSyncPage() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+
+    // Replace 5s polling with realtime subscription — fires only on actual changes.
+    const channel = supabase
+      .channel("sync-page-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "run_sessions" }, loadData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sync_schedules" }, loadData)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [loadData, supabase]);
 
   async function triggerPart(part: "part0" | "part1" | "part3") {
     const { data: { session } } = await supabase.auth.getSession();
@@ -151,6 +159,19 @@ export default function SettingsSyncPage() {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning((r) => ({ ...r, [part]: false }));
+    }
+  }
+
+  async function cancelSession(sessionId?: string) {
+    try {
+      const result = await api<{ ok: boolean; cancelled: number }>("/api/sync/cancel", {
+        method: "POST",
+        body: sessionId ? { session_id: sessionId } : {},
+      });
+      toast.success(`Stopped ${result.cancelled} running session${result.cancelled === 1 ? "" : "s"}`);
+      loadData();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -191,10 +212,18 @@ export default function SettingsSyncPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold min-w-0 truncate">Sync Control</h1>
-        <Button variant="outline" size="sm" onClick={loadData} className="shrink-0 gap-1.5">
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {sessions.some((s) => s.status === "running") && (
+            <Button variant="destructive" size="sm" onClick={() => cancelSession()} className="gap-1.5">
+              <StopCircle className="h-4 w-4" />
+              Stop all
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={loadData} className="gap-1.5">
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Part cards */}
@@ -202,7 +231,8 @@ export default function SettingsSyncPage() {
         {PARTS.map((part) => {
           const Icon = part.icon;
           const sched = schedules[part.key];
-          const isRunning = running[part.key] || sessions.some((s) => s.part === part.key && s.status === "running");
+          const runningSession = sessions.find((s) => s.part === part.key && s.status === "running");
+          const isRunning = running[part.key] || !!runningSession;
           const last = recentByPart(part.key)[0];
 
           return (
@@ -250,6 +280,19 @@ export default function SettingsSyncPage() {
                     )}
                     {isRunning ? "Running…" : "Run Now"}
                   </Button>
+
+                  {runningSession && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="gap-1"
+                      onClick={() => cancelSession(runningSession.id)}
+                      title="Cancel this run"
+                    >
+                      <StopCircle className="h-4 w-4" />
+                      Stop
+                    </Button>
+                  )}
 
                   {!part.manualOnly && (
                     <Button

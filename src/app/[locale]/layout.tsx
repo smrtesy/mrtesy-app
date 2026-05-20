@@ -1,5 +1,6 @@
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
+import { RTLProvider } from "@/components/RTLProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 
@@ -16,10 +17,15 @@ export default async function LocaleLayout({
 
   return (
     <NextIntlClientProvider messages={messages}>
-      <TooltipProvider>
-        {children}
-        <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
-      </TooltipProvider>
+      {/* Radix primitives read direction from this context, not the html
+          dir attribute — without it ScrollArea/Sheet/etc. silently fall
+          back to LTR and inner flex rows render left-to-right on /he. */}
+      <RTLProvider dir={dir}>
+        <TooltipProvider>
+          {children}
+          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
+        </TooltipProvider>
+      </RTLProvider>
     </NextIntlClientProvider>
   );
 }

@@ -56,22 +56,38 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay />
-    <SheetPrimitive.Content
-      ref={ref}
-      className={cn(sheetVariants({ side }), className)}
-      {...props}
-    >
-      {children}
-      <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </SheetPrimitive.Close>
-    </SheetPrimitive.Content>
-  </SheetPortal>
-))
+>(({ side = "right", className, children, dir: dirProp, ...props }, ref) => {
+  // Radix Dialog renders into a portal at document.body. CSS `direction`
+  // inherits through the DOM tree so it *should* pick up `<html dir="rtl">`,
+  // but in practice we kept seeing children laid out LTR. Pin it explicitly
+  // from `documentElement.dir` so every sheet matches the page's direction
+  // unless a caller passes `dir` explicitly.
+  const [docDir, setDocDir] = React.useState<"ltr" | "rtl" | undefined>(undefined);
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    const v = document.documentElement.dir;
+    if (v === "rtl" || v === "ltr") setDocDir(v);
+  }, []);
+  const effectiveDir = dirProp ?? docDir;
+
+  return (
+    <SheetPortal>
+      <SheetOverlay />
+      <SheetPrimitive.Content
+        ref={ref}
+        dir={effectiveDir}
+        className={cn(sheetVariants({ side }), className)}
+        {...props}
+      >
+        {children}
+        <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </SheetPrimitive.Close>
+      </SheetPrimitive.Content>
+    </SheetPortal>
+  );
+})
 SheetContent.displayName = SheetPrimitive.Content.displayName
 
 const SheetHeader = ({
@@ -80,7 +96,7 @@ const SheetHeader = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex flex-col space-y-2 text-center sm:text-left",
+      "flex flex-col space-y-2 text-center sm:text-start",
       className
     )}
     {...props}

@@ -10,6 +10,9 @@ import {
   Clock,
   CheckCircle2,
   Folder,
+  CheckSquare,
+  Play,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
@@ -23,6 +26,8 @@ interface TaskCardProps {
   onSelect: (task: Task) => void;
   onComplete: (taskId: string) => void;
   onSnooze: (taskId: string) => void;
+  onActivate?: (taskId: string) => void;
+  onDelete?: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
   /** Optional bulk-select integration. When provided, a checkbox is shown. */
@@ -43,6 +48,8 @@ export function TaskCard({
   onSelect,
   onComplete,
   onSnooze,
+  onActivate,
+  onDelete,
   onQuickAction,
   onDriveSearch,
   selected,
@@ -55,12 +62,15 @@ export function TaskCard({
   const isNew = !task.seen_at;
   const aiActions = (task.ai_actions || []).slice(0, 2);
   const source = task.source_messages ?? null;
+  const checklist = task.checklist ?? [];
+  const checklistTotal = checklist.length;
+  const checklistDone = checklist.filter((it) => it.done).length;
 
   return (
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
-        isNew && "border-s-4 border-s-blue-500",
+        isNew && "border-s-2 border-s-blue-400/30",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
@@ -115,6 +125,12 @@ export function TaskCard({
           >
             <Folder className="h-2.5 w-2.5" />
             {locale === "he" && project.name_he ? project.name_he : project.name}
+          </span>
+        )}
+        {checklistTotal > 0 && (
+          <span className="flex items-center gap-1">
+            <CheckSquare className="h-3 w-3" />
+            {checklistDone}/{checklistTotal}
           </span>
         )}
       </div>
@@ -183,11 +199,39 @@ export function TaskCard({
           >
             <Clock className="h-4 w-4" />
           </Button>
+          {onActivate && task.status === "inbox" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 md:h-8 md:w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate(task.id);
+              }}
+              title={t("actions.activate")}
+            >
+              <Play className="h-4 w-4" />
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 md:h-8 md:w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(task.id);
+              }}
+              title={t("actions.delete")}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <Button
           variant="ghost"
           size="sm"
-          className="h-10 md:h-8 gap-1 text-green-600 hover:text-green-700 hover:bg-green-50"
+          className="h-10 md:h-8 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
           onClick={(e) => {
             e.stopPropagation();
             onComplete(task.id);

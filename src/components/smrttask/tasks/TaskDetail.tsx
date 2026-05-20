@@ -22,6 +22,7 @@ import {
   Pencil,
   X,
   Folder,
+  Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -30,6 +31,8 @@ import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
+import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
+import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -45,11 +48,12 @@ interface TaskDetailProps {
   open: boolean;
   onClose: () => void;
   onUpdate: () => void;
+  onDelete?: (taskId: string) => void;
   onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
 }
 
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction, onDriveSearch }: TaskDetailProps) {
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onQuickAction, onDriveSearch }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
@@ -194,10 +198,17 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
     }
   }
 
+  // Radix Dialog portals don't always inherit the html dir attribute, so we
+  // pin it explicitly on the SheetContent — without this the inner flex rows
+  // (badges, checklist controls, sticky footer buttons) render LTR even when
+  // the rest of the page is RTL.
+  const dir = locale === "he" ? "rtl" : "ltr";
+
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
+        dir={dir}
         className="w-full sm:max-w-[480px] p-0 flex flex-col max-md:!w-full max-md:!max-w-full max-md:!inset-0 max-md:!top-[10vh]"
       >
         <SheetHeader className="sticky top-0 z-10 bg-background border-b px-4 py-3">
@@ -357,6 +368,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
 
             <Separator />
 
+            {/* Checklist (subtasks) — persisted as task.checklist JSONB array */}
+            <TaskChecklist
+              taskId={task.id}
+              items={task.checklist ?? []}
+              onChange={onUpdate}
+            />
+
+            <Separator />
+
             {/* AI Actions — functional */}
             {task.ai_actions && task.ai_actions.length > 0 && (
               <div className="flex flex-wrap gap-2">
@@ -493,6 +513,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
                 )}
               </div>
             )}
+
+            {/* Background materials — notes / links / files / contacts */}
+            <TaskMaterials
+              taskId={task.id}
+              items={task.task_materials ?? []}
+              onChange={onUpdate}
+            />
           </div>
         </ScrollArea>
 
@@ -524,11 +551,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
             <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handleSnooze} title={t("actions.snooze")}>
               <Clock className="h-4 w-4" />
             </Button>
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 text-red-600 hover:text-red-700 hover:bg-red-50"
+                onClick={() => onDelete(task.id)}
+                title={t("actions.delete")}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
           <Button
-            variant="default"
+            variant="outline"
             size="sm"
-            className="gap-1 bg-green-600 hover:bg-green-700"
+            className="gap-1 border-green-600/40 text-green-600/60 hover:bg-green-600 hover:text-white hover:border-green-600 active:bg-green-700"
             onClick={handleComplete}
           >
             <CheckCircle2 className="h-4 w-4" />

@@ -3,6 +3,16 @@
 Operating instructions for Claude working in this repo. Read this at the start
 of every session before touching code.
 
+## smrtTask task-ingest mode (trigger-gated)
+
+If the user's first message in the session begins with the phrase
+**"עדכון משימות"**, read `CLAUDE-smrttask-ingest.md` before doing
+anything else and follow it for the entire session. The first action
+in that mode is to send the user an explicit acknowledgement that the
+file is active and that the rules apply (project matching, table
+preview, no DB writes without explicit approval). Do not invoke
+that flow unless the trigger phrase is present at the start.
+
 ## Pre-push review protocol — non-negotiable
 
 Before `git push` on any branch with non-trivial changes (anything beyond a

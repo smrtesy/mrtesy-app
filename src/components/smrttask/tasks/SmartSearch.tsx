@@ -49,7 +49,7 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
         .select("*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(40);
 
       if (!includeArchive) {
         q = q.neq("status", "archived");
@@ -57,27 +57,13 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
       return q;
     };
 
-    // Run 3 parallel searches on different columns
-    const [titleHeResult, descResult, titleResult] = await Promise.all([
-      baseQuery().ilike("title_he", `%${sanitized}%`),
-      baseQuery().ilike("description", `%${sanitized}%`),
-      baseQuery().ilike("title", `%${sanitized}%`),
-    ]);
+    // Single query across all searchable columns using .or()
+    // sanitizeFilter already strips %, (, ), comma, dot — safe to interpolate here.
+    const term = `%${sanitized}%`;
+    const { data } = await baseQuery()
+      .or(`title.ilike.${term},title_he.ilike.${term},description.ilike.${term}`);
 
-    // Merge and deduplicate results
-    const allResults = [
-      ...(titleHeResult.data || []),
-      ...(descResult.data || []),
-      ...(titleResult.data || []),
-    ];
-    const seen = new Set<string>();
-    const unique = allResults.filter((task) => {
-      if (seen.has(task.id)) return false;
-      seen.add(task.id);
-      return true;
-    });
-
-    onResults(unique as Task[]);
+    onResults((data ?? []) as Task[]);
   }
 
   return (

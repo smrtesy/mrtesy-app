@@ -107,6 +107,33 @@ router.post("/part4/build_brief", ...smrttaskGate, async (req: Request, res: Res
   }
 });
 
+// ── Cancel a stuck/running sync session ───────────────────────────────────
+// Marks one or all currently-running sessions as failed for the caller. The
+// backend pipelines (runPart1/runPart3) are best-effort interruptible by
+// flipping the row to 'failed' — the workers won't notice mid-run, but the UI
+// stops blocking on the stale "running" indicator and future runs are allowed.
+//   POST /api/sync/cancel  body: { session_id?: string }
+router.post("/cancel", ...smrttaskGate, async (req: Request, res: Response) => {
+  const sessionId = typeof req.body?.session_id === "string" ? req.body.session_id : null;
+  const now = new Date().toISOString();
+
+  let q = db
+    .from("run_sessions")
+    .update({
+      status: "failed",
+      ended_at: now,
+      summary: "Cancelled by user",
+    }, { count: "exact" })
+    .eq("user_id", req.user!.id)
+    .eq("status", "running");
+
+  if (sessionId) q = q.eq("id", sessionId);
+
+  const { count, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true, cancelled: count ?? 0 });
+});
+
 // ── Run sessions status (scoped to caller's user_id, not org-wide yet) ────
 router.get("/status", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const { data, error } = await db
