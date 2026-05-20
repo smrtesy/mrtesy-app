@@ -252,6 +252,14 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   );
 }
 
+// Drop everything that isn't a letter, digit, or single space, then
+// lowercase. Used to decide if a Haiku "polish" is substantive enough
+// to surface — "Appeal this decision →" vs "Appeal this decision."
+// collapse to the same string here.
+function normaliseForCompare(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
 function ComposeBox({
   chatId,
   withinWindow,
@@ -386,9 +394,12 @@ function ComposeBox({
           { method: "POST", body: { text: trimmed } },
         );
         if (cancelled) return;
-        // Only surface the suggestion if the user hasn't typed past it
-        // while we were waiting.
-        if (changed && s !== trimmed) {
+        // Only surface the suggestion if the change is substantive.
+        // Haiku will sometimes strip a trailing arrow or normalize a
+        // period — `changed` flips true on any byte diff, so we
+        // additionally compare a lightly normalised form (lowercase,
+        // letters+digits+spaces only) and suppress if those match.
+        if (changed && s !== trimmed && normaliseForCompare(s) !== normaliseForCompare(trimmed)) {
           setSuggestion(s);
         } else {
           setSuggestion(null);
