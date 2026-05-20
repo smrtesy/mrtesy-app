@@ -963,6 +963,17 @@ async function buildMessageRow(
       break;
     }
 
+    case "unsupported":
+    case "revoke":
+      // Meta sends `revoke` when the sender deletes a message in
+      // WhatsApp (the "Delete for everyone" action). `unsupported` is
+      // Meta's fallback for message types the API can't surface (e.g.,
+      // certain ephemeral payloads). We mark them as deleted in the
+      // conversation log so the UI shows a clear "Message deleted"
+      // placeholder instead of a cryptic "unrecognized type".
+      body = "[הודעה נמחקה]";
+      break;
+
     default:
       body = `[סוג לא מזוהה: ${type}]`;
   }
