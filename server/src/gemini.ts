@@ -68,6 +68,40 @@ const PRICING: Record<string, ModelPricing> = {
   "gemini-3-pro-preview":      { textInput: 1.50, audioInput: 2.50,  imageInput: 1.50, output: 12.0 },
 };
 
+/**
+ * Build the per-call thinkingConfig in the shape the target model accepts.
+ *
+ * Gemini 3 (preview) uses `thinkingLevel: "low"|"medium"|"high"`.
+ * Gemini 2.5 uses `thinkingBudget: <int tokens>` — -1 = dynamic (model picks),
+ * 0 = off, positive = hard cap.
+ *
+ * We accept a single string knob ("low"/"medium"/"high") from the operator
+ * and translate it per family so the same `GEMINI_THINKING_LEVEL` config
+ * works regardless of which model is selected.
+ */
+function buildThinkingConfig(model: string, level: string): Record<string, unknown> {
+  // Gemini 3 line — the API accepts the string directly.
+  if (/^gemini-3/.test(model)) {
+    return { thinkingLevel: level };
+  }
+  // Gemini 2.5 line — translate the level to a token budget.
+  if (/^gemini-2\.5/.test(model)) {
+    const budgets: Record<string, number> = {
+      off:     0,
+      none:    0,
+      low:     1024,
+      medium:  4096,
+      high:    16384,
+      dynamic: -1,
+    };
+    const budget = budgets[level.toLowerCase()] ?? -1;
+    return { thinkingBudget: budget };
+  }
+  // Unknown family — omit thinkingConfig entirely so we don't trip an
+  // INVALID_ARGUMENT error from a parameter the model doesn't recognize.
+  return {};
+}
+
 const warnedMissingPricing = new Set<string>();
 function estimateGeminiCost(model: string, usage: GeminiUsageMetadata | undefined): number {
   if (!usage) return 0;
@@ -150,7 +184,7 @@ export async function callGeminiDetailed(opts: GeminiCallOptions): Promise<CallG
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: opts.maxOutputTokens ?? 4096,
-      thinkingConfig: { thinkingLevel },
+      thinkingConfig: buildThinkingConfig(model, thinkingLevel),
     },
   };
 
