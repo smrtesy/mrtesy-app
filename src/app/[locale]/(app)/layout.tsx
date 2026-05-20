@@ -85,8 +85,9 @@ export default async function AppLayout({
     <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* Desktop Sidebar */}
       <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
-      {/* Main content */}
-      <main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
+      {/* Main content — data-sidebar-main lets globals.css drop the inline-start
+          margin when the user collapses the sidebar from Sidebar.tsx. */}
+      <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
         <div className="w-full max-w-4xl mx-auto p-4 md:p-6">
           {children}
         </div>

@@ -14,6 +14,8 @@ import {
   Shield,
   BookOpen,
   MessageCircle,
+  PanelRightClose,
+  PanelRightOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -71,6 +73,24 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const supabase = createClient();
+
+  // Restore + sync the desktop sidebar collapse state via a body attribute that
+  // globals.css uses to hide the aside, drop the main margin and unhide the
+  // floating "open" handle.
+  useEffect(() => {
+    const stored = typeof window !== "undefined"
+      ? window.localStorage.getItem("smrtesy.sidebar-collapsed")
+      : null;
+    document.body.setAttribute("data-sidebar-collapsed", stored === "true" ? "true" : "false");
+  }, []);
+
+  function toggleCollapse() {
+    const next = document.body.getAttribute("data-sidebar-collapsed") !== "true";
+    document.body.setAttribute("data-sidebar-collapsed", next ? "true" : "false");
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("smrtesy.sidebar-collapsed", next ? "true" : "false");
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -146,12 +166,33 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
   return (
     <>
+      {/* Floating "open" handle — only visible (via globals.css) while the
+          sidebar is collapsed on desktop. */}
+      <button
+        type="button"
+        data-sidebar-open-handle
+        onClick={toggleCollapse}
+        aria-label="Open sidebar"
+        className="fixed top-3 start-3 z-40 hidden md:flex items-center justify-center h-9 w-9 rounded-md border bg-background shadow-sm hover:bg-accent"
+      >
+        <PanelRightOpen className="h-4 w-4" />
+      </button>
+
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
-        <div className="flex h-16 items-center justify-center border-b">
+      <aside data-sidebar className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
+        <div className="relative flex h-16 items-center justify-center border-b">
           <Link href={basePath} className="text-xl font-bold text-[#1E4D8C]">
             smrtesy
           </Link>
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            aria-label="Collapse sidebar"
+            className="absolute end-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Collapse sidebar"
+          >
+            <PanelRightClose className="h-4 w-4" />
+          </button>
         </div>
         <div className="px-3 pt-3">
           <OrgSwitcher locale={locale} />

@@ -63,3 +63,19 @@
     text-align: start;
   }
 }
+
+/* Collapsible desktop sidebar — toggled by Sidebar.tsx via `data-sidebar-collapsed`
+   on <body>. The aside hides, main loses its inline-start margin, and a small
+   floating "open" handle appears. Mobile (<md) is unaffected because the
+   aside is already display:none there. */
+@media (min-width: 768px) {
+  body[data-sidebar-collapsed="true"] aside[data-sidebar] {
+    display: none;
+  }
+  body[data-sidebar-collapsed="true"] main[data-sidebar-main] {
+    margin-inline-start: 0 !important;
+  }
+  body:not([data-sidebar-collapsed="true"]) [data-sidebar-open-handle] {
+    display: none;
+  }
+}
