@@ -157,8 +157,15 @@ export function WhatsAppPageClient({ title }: { title: string }) {
                 // Re-fetch immediately rather than waiting for the next
                 // poll tick — the optimistic insert on the backend already
                 // wrote the row, so this just refreshes the list.
-                if (selectedChatId) loadMessages(selectedChatId);
-                loadThreads();
+                if (selectedChatId) {
+                  loadMessages(selectedChatId);
+                  // Replying = engaging with the chat. Mark anything that
+                  // arrived during the compose window as read so the
+                  // unread badge doesn't pop back up after `loadThreads()`.
+                  markChatRead(selectedChatId);
+                } else {
+                  loadThreads();
+                }
               }}
             />
           ) : (
