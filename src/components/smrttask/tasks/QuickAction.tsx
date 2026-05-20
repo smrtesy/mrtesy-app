@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ export function QuickAction({
   onDone,
 }: QuickActionProps) {
   const t = useTranslations("tasks.actions");
+  const { locale } = useParams<{ locale: string }>();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState(false);
@@ -123,7 +125,7 @@ export function QuickAction({
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="bottom" className="h-[70vh] sm:h-auto sm:max-h-[60vh] flex flex-col">
+      <SheetContent side="bottom" dir={locale === "he" ? "rtl" : "ltr"} className="h-[70vh] sm:h-auto sm:max-h-[60vh] flex flex-col">
         <SheetHeader>
           <SheetTitle className="text-start" dir="auto">{translateActionLabel(actionLabel, t)}</SheetTitle>
         </SheetHeader>

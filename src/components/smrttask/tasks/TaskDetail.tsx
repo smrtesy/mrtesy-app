@@ -198,10 +198,17 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }
   }
 
+  // Radix Dialog portals don't always inherit the html dir attribute, so we
+  // pin it explicitly on the SheetContent — without this the inner flex rows
+  // (badges, checklist controls, sticky footer buttons) render LTR even when
+  // the rest of the page is RTL.
+  const dir = locale === "he" ? "rtl" : "ltr";
+
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
+        dir={dir}
         className="w-full sm:max-w-[480px] p-0 flex flex-col max-md:!w-full max-md:!max-w-full max-md:!inset-0 max-md:!top-[10vh]"
       >
         <SheetHeader className="sticky top-0 z-10 bg-background border-b px-4 py-3">
