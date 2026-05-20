@@ -30,8 +30,10 @@ Deno.serve(async (req) => {
     let processed = 0;
 
     for (const reminder of dueReminders || []) {
-      // Skip if task is already archived/completed
-      if (reminder.tasks?.status === "archived" || reminder.tasks?.status === "completed") {
+      // Skip if task is already archived/completed/dismissed — we don't
+      // want to fire reminders on suggestions the user has thrown away.
+      const taskStatus = reminder.tasks?.status;
+      if (taskStatus === "archived" || taskStatus === "completed" || taskStatus === "dismissed") {
         await supabase.from("reminders").update({
           is_active: false,
           is_sent: true,
@@ -89,13 +91,15 @@ Deno.serve(async (req) => {
       processed++;
     }
 
-    // Also check for snoozed tasks that should wake up
+    // Also check for snoozed tasks that should wake up. Skip terminal
+    // statuses (archived/completed/dismissed) — a dismissed task with an
+    // old snoozed_until from before dismissal must NOT bounce back into inbox.
     const { data: snoozedTasks } = await supabase
       .from("tasks")
       .select("id, user_id, title_he")
       .lte("snoozed_until", now)
       .not("snoozed_until", "is", null)
-      .neq("status", "archived");
+      .not("status", "in", "(archived,completed,dismissed)");
 
     for (const task of snoozedTasks || []) {
       await supabase.from("tasks").update({

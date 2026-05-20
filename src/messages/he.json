@@ -34,6 +34,7 @@
     "newTask": "משימה חדשה",
     "update": "עדכון",
     "inbox": "תיבה",
+    "inboxIncoming": "נכנס",
     "guide": "מדריך",
     "transcriptionExperiment": "ניסוי תמלול"
   },
@@ -115,11 +116,12 @@
     "role_owner": "בעלים"
   },
   "tasks": {
-    "title": "משימות פעילות",
+    "title": "משימות",
     "new": "משימה חדשה",
     "inbox": "ממתינות",
     "active": "פעילות",
     "completed": "הושלמו",
+    "dismissed": "נדחו",
     "archived": "ארכיון",
     "view": {
       "list": "רשימה",
@@ -177,6 +179,15 @@
       "editDescription": "לחץ לעריכה",
       "noUpdates": "אין עדכונים עדיין",
       "openDraft": "פתח טיוטא"
+    },
+    "snooze": {
+      "title": "דחיית משימה",
+      "dateLabel": "תאריך",
+      "timeLabel": "שעה",
+      "confirmButton": "אישור",
+      "presetTomorrow": "מחר 09:00",
+      "presetTomorrowEvening": "מחר 18:00",
+      "presetNextWeek": "שבוע הבא"
     },
     "materials": {
       "title": "חומר רקע",

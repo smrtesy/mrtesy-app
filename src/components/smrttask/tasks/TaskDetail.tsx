@@ -33,6 +33,7 @@ import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
+import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import type { Task } from "@/types/task";
 
 interface ProjectOption {
@@ -83,6 +84,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [addingUpdate, setAddingUpdate] = useState(false);
   const [showGenerated, setShowGenerated] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
+  // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
 
   // Auto-expand the field editor when the sheet opens with
   // initialEditingFields=true. We track the task id we already triggered for
@@ -183,10 +186,18 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }
   }
 
-  async function handleSnooze() {
+  function handleSnooze() {
+    if (!task) return;
+    setSnoozeOpen(true);
+  }
+
+  async function handleSnoozeConfirm(untilIso: string) {
     if (!task) return;
     try {
-      await api(`/api/tasks/${task.id}/snooze`, { method: "POST" });
+      await api(`/api/tasks/${task.id}/snooze`, {
+        method: "POST",
+        body: { until: untilIso },
+      });
       toast.success(t("actions.snooze"));
       onClose();
       onUpdate();
@@ -293,6 +304,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       <option value="in_progress">{t("active")}</option>
                       <option value="snoozed">{t("actions.snooze")}</option>
                       <option value="archived">{t("archived")}</option>
+                      <option value="dismissed">{t("dismissed")}</option>
                     </select>
                   </div>
                 </div>
@@ -589,6 +601,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
           </Button>
         </div>
       </SheetContent>
+
+      <SnoozeDialog
+        open={snoozeOpen}
+        onClose={() => setSnoozeOpen(false)}
+        onConfirm={handleSnoozeConfirm}
+      />
     </Sheet>
   );
 }

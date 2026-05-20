@@ -1026,8 +1026,14 @@ function taskLinkFor(task: ChatTask, locale: string): string {
     return `/${locale}/inbox?focus=${task.id}`;
   }
   const status = task.status ?? "inbox";
-  if (status === "in_progress") return `/${locale}/tasks?tab=active&focus=${task.id}`;
-  if (status === "archived") return `/${locale}/tasks?tab=completed&focus=${task.id}`;
+  if (status === "in_progress")           return `/${locale}/tasks?tab=active&focus=${task.id}`;
+  if (status === "archived" || status === "completed") {
+    // Real completions live in the Completed tab. Dismissed tasks DON'T
+    // — they have their own status now and aren't surfaced in any tab
+    // by default. For those we fall through to the default Pending view
+    // so the user lands somewhere coherent instead of an empty tab.
+    return `/${locale}/tasks?tab=completed&focus=${task.id}`;
+  }
   return `/${locale}/tasks?focus=${task.id}`;
 }
 

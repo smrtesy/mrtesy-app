@@ -28,15 +28,18 @@ import { api, ApiError } from "@/lib/api/client";
 // Sidebar gates the whole smrtTask section via hasSmrtTask below — no per-item appSlug needed.
 //
 // Two sub-groups inside smrtTask:
-//   "active" — task management. Tasks owns both the list and the timeline view
-//              (calendar is /tasks?view=calendar), so the calendar entry is
-//              not its own nav item anymore.
+//   "active" — Inbox sits at the top with the unread-suggestions badge
+//              (it's the user's main entry point), then Tasks with an
+//              open-tasks-count badge, then Projects, then Guide. When
+//              smrtTask is active we don't ALSO show Inbox in the
+//              management section — it's not duplicated.
 //   "views"  — read-only data feeds. WhatsApp messages and the system run log
 //              are pure inspection surfaces — they don't drive any action.
 const smrtTaskItems = [
-  { key: "tasks",    href: "/tasks",       icon: CheckSquare },
-  { key: "projects", href: "/projects",    icon: FolderOpen  },
-  { key: "guide",    href: "/tasks/guide", icon: BookOpen    },
+  { key: "inboxIncoming", href: "/inbox",      icon: Bell        },
+  { key: "tasks",         href: "/tasks",      icon: CheckSquare },
+  { key: "projects",      href: "/projects",   icon: FolderOpen  },
+  { key: "guide",         href: "/tasks/guide", icon: BookOpen   },
 ] as const;
 
 const smrtTaskViewItems = [
@@ -45,7 +48,13 @@ const smrtTaskViewItems = [
   { key: "log",                     href: "/log",                     icon: FileText      },
 ] as const;
 
-const managementItems = [
+// When smrtTask is enabled the inbox moves into the smrtTask section
+// (as "נכנס") so we don't duplicate it here. Without smrtTask we still
+// surface it under Management.
+const managementItemsWithoutInbox = [
+  { key: "settings", href: "/settings", icon: Settings },
+] as const;
+const managementItemsWithInbox = [
   { key: "inbox",    href: "/inbox",    icon: Bell     },
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
@@ -74,6 +83,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [openTasksCount, setOpenTasksCount] = useState(0);
   const supabase = createClient();
 
   // Restore + sync the desktop sidebar collapse state via a body attribute that
@@ -99,8 +109,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
     async function fetchCount() {
       try {
-        const { count } = await api<{ count: number }>("/api/inbox/count");
-        if (mounted) setPendingCount(count);
+        const { count, open_tasks } = await api<{ count: number; open_tasks: number }>("/api/inbox/count");
+        if (!mounted) return;
+        setPendingCount(count);
+        setOpenTasksCount(open_tasks ?? 0);
       } catch (e) {
         if (mounted && !(e instanceof ApiError && e.status === 401)) {
           console.error("badge count:", e);
@@ -134,6 +146,20 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     return pathname.startsWith(fullPath);
   }
 
+  // Per-nav-item badge: inbox + inboxIncoming both surface the live
+  // unread suggestions count (red); the tasks link gets a separate badge
+  // for the open-tasks count (muted blue) so the user can see at a
+  // glance how much real work is pending without opening the page.
+  function badgeFor(itemKey: string): { count: number; tone: "red" | "blue" } | null {
+    if ((itemKey === "inbox" || itemKey === "inboxIncoming") && pendingCount > 0) {
+      return { count: pendingCount, tone: "red" };
+    }
+    if (itemKey === "tasks" && openTasksCount > 0) {
+      return { count: openTasksCount, tone: "blue" };
+    }
+    return null;
+  }
+
   function NavItem({
     itemKey,
     href,
@@ -143,6 +169,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     href: string;
     icon: React.ElementType;
   }) {
+    const badge = badgeFor(itemKey);
     return (
       <Link
         href={`${basePath}${href}`}
@@ -155,9 +182,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       >
         <div className="relative">
           <Icon className="h-5 w-5" />
-          {itemKey === "inbox" && pendingCount > 0 && (
-            <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
-              {pendingCount > 99 ? "99+" : pendingCount}
+          {badge && (
+            <span
+              className={cn(
+                "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
+                badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+              )}
+            >
+              {badge.count > 99 ? "99+" : badge.count}
             </span>
           )}
         </div>
@@ -216,9 +248,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             </>
           )}
 
-          {/* Management section */}
+          {/* Management section. Inbox only lives here when smrtTask is OFF —
+              otherwise it's already at the top of the smrtTask section. */}
           <SectionLabel>{t("sectionManagement")}</SectionLabel>
-          {managementItems.map((item) => (
+          {(hasSmrtTask ? managementItemsWithoutInbox : managementItemsWithInbox).map((item) => (
             <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
           ))}
 

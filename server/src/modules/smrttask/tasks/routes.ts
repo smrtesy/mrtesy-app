@@ -41,7 +41,7 @@ const UPDATABLE_FIELDS = new Set([
   "ai_generated_content", "linked_drive_docs", "checklist", "task_materials",
 ]);
 
-const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed"];
+const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 
 /** Validate the shape of a checklist array coming from a client PATCH.
@@ -725,10 +725,11 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   if (tErr)  return res.status(500).json({ error: tErr.message });
   if (!task) return res.status(404).json({ error: "task not found in this org" });
 
-  // Archive + record reason
+  // Dismiss + record reason. Separate status from completed tasks so the
+  // "Completed" tab only contains items the user explicitly finished.
   const now = new Date().toISOString();
   const dismissPatch = {
-    status: "archived",
+    status: "dismissed",
     manually_verified: true,
     dismissal_reason_code: reasonCode,
     dismissal_reason_text: reasonText || null,
@@ -890,7 +891,10 @@ router.post("/tasks/:id/dismiss-fast", async (req: Request, res: Response) => {
   const { error: uErr } = await db
     .from("tasks")
     .update({
-      status: "archived",
+      // Dismissed suggestions get a status of their own so the "Completed"
+      // tab — which the user reserves for tasks they explicitly finished —
+      // stays clean. `archived` is now only set by the /complete endpoint.
+      status: "dismissed",
       manually_verified: true,
       dismissal_reason_code: null,
       dismissal_reason_text: null,
@@ -936,7 +940,7 @@ router.post("/tasks/bulk-dismiss-fast", async (req: Request, res: Response) => {
   const { count, error } = await db
     .from("tasks")
     .update({
-      status: "archived",
+      status: "dismissed",
       manually_verified: true,
       dismissal_reason_code: null,
       dismissal_reason_text: null,

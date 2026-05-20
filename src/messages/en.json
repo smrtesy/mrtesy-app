@@ -35,6 +35,7 @@
     "update": "Update",
     "transcriptionExperiment": "Transcription Experiment",
     "inbox": "Inbox",
+    "inboxIncoming": "Incoming",
     "guide": "Guide"
   },
   "whatsappPage": {
@@ -115,12 +116,13 @@
     "role_owner": "Owner"
   },
   "tasks": {
-    "title": "Active Tasks",
+    "title": "Tasks",
     "new": "New Task",
     "inbox": "Pending",
     "active": "Active",
     "completed": "Completed",
     "archived": "Archive",
+    "dismissed": "Dismissed",
     "view": {
       "list": "List",
       "calendar": "Timeline"
@@ -177,6 +179,15 @@
       "editDescription": "Click to edit",
       "noUpdates": "No updates yet",
       "openDraft": "Open Draft"
+    },
+    "snooze": {
+      "title": "Snooze task",
+      "dateLabel": "Date",
+      "timeLabel": "Time",
+      "confirmButton": "Snooze",
+      "presetTomorrow": "Tomorrow 9 AM",
+      "presetTomorrowEvening": "Tomorrow 6 PM",
+      "presetNextWeek": "Next week"
     },
     "materials": {
       "title": "Background Materials",

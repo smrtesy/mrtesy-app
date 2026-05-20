@@ -10,6 +10,7 @@ import { TaskDetail } from "./TaskDetail";
 import { SmartSearch } from "./SmartSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
+import { SnoozeDialog } from "./SnoozeDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -136,9 +137,22 @@ export function TaskList({ locale }: { locale: string }) {
     }
   }
 
-  async function handleSnooze(taskId: string) {
+  // Snooze opens a date+time picker; the actual API call happens in the
+  // dialog's onConfirm so the user can pick *when* to resurface, not just
+  // accept the default "tomorrow 09:00".
+  const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
+
+  function handleSnooze(taskId: string) {
+    setSnoozeTaskId(taskId);
+  }
+
+  async function handleSnoozeConfirm(untilIso: string) {
+    if (!snoozeTaskId) return;
     try {
-      await api(`/api/tasks/${taskId}/snooze`, { method: "POST" });
+      await api(`/api/tasks/${snoozeTaskId}/snooze`, {
+        method: "POST",
+        body: { until: untilIso },
+      });
       toast.success(t("actions.snooze"));
       fetchTasks();
     } catch (e) {
@@ -274,6 +288,12 @@ export function TaskList({ locale }: { locale: string }) {
         open={dsOpen}
         onClose={() => setDsOpen(false)}
         onDone={fetchTasks}
+      />
+
+      <SnoozeDialog
+        open={!!snoozeTaskId}
+        onClose={() => setSnoozeTaskId(null)}
+        onConfirm={handleSnoozeConfirm}
       />
     </div>
   );
