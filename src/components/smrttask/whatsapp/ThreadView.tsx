@@ -429,26 +429,23 @@ function ComposeBox({
     };
   }, [text, looksEnglish, suggestion, englishApproved]);
 
-  function acceptSuggestion() {
-    if (suggestion) setText(suggestion);
-    setSuggestion(null);
-  }
-
   function rejectSuggestion() {
     setSuggestion(null);
   }
 
-  async function handleSend() {
-    const body = text.trim();
-    if (!body) return;
+  // Send `body` to Meta. Used by both the Send button (with the
+  // textarea contents) and the "Replace" suggestion button (with the
+  // polished text — straight to the wire, skipping the textarea).
+  async function sendMessage(body: string, opts: { restoreOnFail?: boolean } = {}) {
+    const trimmed = body.trim();
+    if (!trimmed) return;
     if (!withinWindow) {
       toast.error(t("windowClosedShort"));
       return;
     }
-    // Optimistically clear the input + drop the suggestion immediately so
-    // the operator can start typing the next message while Meta's send
-    // call (~1-2s) finishes in the background. `sending` still flips so
-    // the Send button shows a spinner, but the textarea stays enabled.
+    // Drop the textarea + suggestion immediately so the operator can
+    // start typing the next message while Meta's send call (~1-2s)
+    // finishes in the background.
     setText("");
     setSuggestion(null);
     setEnglishApproved(false);
@@ -457,17 +454,32 @@ function ComposeBox({
     try {
       await api("/api/whatsapp/messages/send", {
         method: "POST",
-        body: { to_phone: chatId, text: body },
+        body: { to_phone: chatId, text: trimmed },
       });
       onSent?.();
     } catch (e) {
-      // Restore the message text so the operator can retry — but only
-      // if they haven't already started typing something new.
-      setText((curr) => (curr.trim() ? curr : body));
+      // Only the textarea-driven send restores the draft; accepting a
+      // suggestion already wiped the original, restoring it would feel
+      // surprising.
+      if (opts.restoreOnFail) {
+        setText((curr) => (curr.trim() ? curr : trimmed));
+      }
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
+  }
+
+  // Accept the polish suggestion = send it immediately. The operator
+  // already saw the text and chose to use it; making them press a
+  // second button would be friction.
+  function acceptSuggestion() {
+    if (!suggestion) return;
+    sendMessage(suggestion);
+  }
+
+  async function handleSend() {
+    await sendMessage(text, { restoreOnFail: true });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -516,9 +528,10 @@ function ComposeBox({
               size="sm"
               className="h-7 text-[11px] gap-1"
               onClick={acceptSuggestion}
+              disabled={!withinWindow}
             >
-              <Check className="h-3 w-3" />
-              {t("englishAccept")}
+              <Send className="h-3 w-3" />
+              {t("englishSendPolished")}
             </Button>
           </div>
         </div>
