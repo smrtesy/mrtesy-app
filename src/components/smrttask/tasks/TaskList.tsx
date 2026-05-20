@@ -193,6 +193,7 @@ export function TaskList({ locale }: { locale: string }) {
               onComplete={handleComplete}
               onSnooze={handleSnooze}
               onActivate={handleActivate}
+              onDelete={handleDelete}
               onQuickAction={handleQuickAction}
               onDriveSearch={handleDriveSearch}
             />

@@ -296,8 +296,23 @@ Be professional, factual, and constructive.`,
         break;
       }
 
-      default:
-        result = `Action "${action_type}" is not yet implemented. Coming soon.`;
+      default: {
+        // Custom / AI-suggested action — the classifier emits free-form labels
+        // (e.g. "טיוטת קבלה לפרנצ'סקה סקולס") that aren't in the fixed switch
+        // above. Treat the label itself (or the explicit custom_action) as the
+        // LLM instruction and run the generic custom path.
+        const instruction = (typeof custom_action === "string" && custom_action.trim())
+          ? custom_action
+          : String(action_type);
+        const { content } = await simpleCall(
+          "sonnet",
+          `You are an AI assistant for ${userName}. Perform the requested action and return the deliverable directly (no preamble). Reply in Hebrew unless the request is clearly in another language.`,
+          `Task context:\n${taskContext}\n\nRequest:\n${instruction}\n\nOriginal message:\n${originalContent}`,
+          1500,
+        );
+        result = content;
+        break;
+      }
     }
 
     // Save result to task + ai_generated_content

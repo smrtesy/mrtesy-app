@@ -22,6 +22,7 @@ interface QuickActionProps {
 export function QuickAction({
   taskId,
   actionLabel,
+  actionPrompt,
   open,
   onClose,
   onDone,
@@ -53,7 +54,13 @@ export function QuickAction({
     try {
       const data = await api<{ result?: string }>("/api/actions/execute", {
         method: "POST",
-        body: { task_id: taskId, action_type: actionLabel },
+        body: {
+          task_id: taskId,
+          action_type: actionLabel,
+          // Pass the LLM instruction so custom/AI-suggested labels (which
+          // aren't in the fixed switch) can execute as a free-form prompt.
+          custom_action: actionPrompt || actionLabel,
+        },
       });
       setResult(data.result || "");
     } catch (e) {
