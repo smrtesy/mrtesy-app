@@ -17,6 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDateOnly } from "@/lib/date";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
@@ -134,7 +135,7 @@ export function TaskCard({
         {task.due_date && (
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            {new Date(task.due_date).toLocaleDateString(locale === "he" ? "he-IL" : "en-US")}
+            {formatDateOnly(task.due_date, locale)}
           </span>
         )}
         {task.related_contact && (
