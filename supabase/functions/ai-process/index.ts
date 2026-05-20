@@ -215,6 +215,30 @@ async function analyzeWithMemory(
 
   const systemPrompt = `You are a message classifier and thread-state tracker for a personal task management system.${identityBlock}${memoryBlock}${whatsappNote}
 
+═══ HARDEST RULE — READ FIRST ═══
+
+If the message comes from a service provider (lawyer, accountant, doctor's
+office, bank, vendor, agent, school, government office, contractor) and
+contains ANY of these signals:
+
+  • "we are looking into it"
+  • "we are working on it"
+  • "I'll get back to you"
+  • "we will update you"
+  • "we received your request/question/inquiry"
+  • "we are currently <verb-ing>"
+  • Hebrew equivalents: "אנחנו בודקים", "נחזור אליך", "נעדכן", "אנחנו עובדים על"
+
+then the classification is ACTIONABLE. No exceptions. The reasoning is:
+the user asked them to do something, they promised to follow up, and the
+user now needs a tracker so the promise does not silently expire. The
+title of the task should be in the form "לעקוב אחרי <party> על <topic>".
+
+NEVER classify such a message as INFORMATIONAL just because "no immediate
+step is required". The action IS the tracking.
+
+═══ FULL CLASSIFICATION RULES ═══
+
 You will receive the NEW message. Classify it AND update the running thread state in a single JSON response.
 
 Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
@@ -227,18 +251,9 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
   "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string"
 }
 
-Classification rules:
 - ACTIONABLE = either (a) the user must take a concrete step now, OR
   (b) the message is a pending matter the user MUST keep tracking until it
-  resolves.
-
-  PRIMARY RULE for case (b): if the message is a RESPONSE to a request the
-  user previously initiated — phrases like "we received your request",
-  "we are looking into it", "I'll get back to you", "we will update you
-  shortly", "we are working on it" — it is ACTIONABLE. The user asked,
-  the other side promised to follow up; the user now owes themselves a
-  tracker so the promise doesn't quietly slip. The task is "track <party>
-  on <topic> until they come back".
+  resolves. The HARDEST RULE above is the most common case of (b).
 
   Other ACTIONABLE pending matters (no immediate step, but must track):
     • Legal case / collection / dispute in progress
@@ -257,12 +272,12 @@ Classification rules:
     • Payment CONFIRMATION of an already-completed transaction the user initiated
       and considers closed
     • Closure acknowledgement: "thanks, all good", "סבבה", "תודה"
+    • System sender (Vercel, Railway, GitHub Actions) with no human follow-up
 
 - SPAM = clearly junk.
 
 Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
-to over-track than to lose visibility on a pending matter — especially
-when the message references something the user previously asked about.
+to over-track than to lose visibility on a pending matter.
 
 completion=true means: the prior task in this thread is DONE per the new message
 (payment confirmed, document signed and accepted, decision answered and acknowledged,
@@ -274,7 +289,15 @@ written portion of the message only.
 
 If the user's own address is the sender:
 - Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
-- Just acknowledging closure → INFORMATIONAL`;
+- Just acknowledging closure → INFORMATIONAL
+
+═══ WORKED EXAMPLE ═══
+Input: "Please be advised that we are currently looking into the
+collection action against your son. I will let you know as soon as we
+have an update." — from a law firm.
+Correct output: ACTIONABLE, state=pending_other_party. reason_he should
+reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
+INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
 
   const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
 
