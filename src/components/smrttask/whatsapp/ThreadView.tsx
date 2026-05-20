@@ -439,20 +439,31 @@ function ComposeBox({
   }
 
   async function handleSend() {
-    if (!text.trim() || sending) return;
+    const body = text.trim();
+    if (!body) return;
     if (!withinWindow) {
       toast.error(t("windowClosedShort"));
       return;
     }
+    // Optimistically clear the input + drop the suggestion immediately so
+    // the operator can start typing the next message while Meta's send
+    // call (~1-2s) finishes in the background. `sending` still flips so
+    // the Send button shows a spinner, but the textarea stays enabled.
+    setText("");
+    setSuggestion(null);
+    setEnglishApproved(false);
+    lastCheckedRef.current = "";
     setSending(true);
     try {
       await api("/api/whatsapp/messages/send", {
         method: "POST",
-        body: { to_phone: chatId, text: text.trim() },
+        body: { to_phone: chatId, text: body },
       });
-      setText("");
       onSent?.();
     } catch (e) {
+      // Restore the message text so the operator can retry — but only
+      // if they haven't already started typing something new.
+      setText((curr) => (curr.trim() ? curr : body));
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
@@ -549,7 +560,7 @@ function ComposeBox({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={withinWindow ? t("composePlaceholder") : t("composeDisabled")}
-          disabled={!withinWindow || sending || transcribing}
+          disabled={!withinWindow || transcribing}
           dir={dir}
           rows={1}
           className="resize-none min-h-[40px] max-h-[140px] text-sm"
@@ -557,7 +568,7 @@ function ComposeBox({
         <Button
           type="button"
           onClick={handleSend}
-          disabled={!withinWindow || !text.trim() || sending}
+          disabled={!withinWindow || !text.trim()}
           size="icon"
           aria-label={t("send")}
         >
