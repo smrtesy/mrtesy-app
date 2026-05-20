@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, ArrowRight, Loader2, FileText, Download, Send } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
@@ -31,6 +31,13 @@ export interface Message {
   is_history: boolean;
   history_phase: number | null;
   received_at: string;
+  // Read/delivery receipts — only populated for outgoing messages once
+  // Meta sends us the corresponding `statuses` webhook event.
+  status?: "sent" | "delivered" | "read" | "failed" | null;
+  status_error?: string | null;
+  sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
 }
 
 interface Props {
@@ -74,6 +81,35 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
 
   const displayName = thread?.from_name?.trim() || thread?.from_phone || chatId;
 
+  // Quick-lookup map for reply quotes — when a message has reply_to_wamid,
+  // we want to surface the original message's preview above the bubble.
+  const messagesByWamid = useMemo(() => {
+    const map = new Map<string, Message>();
+    for (const m of messages) map.set(m.wamid, m);
+    return map;
+  }, [messages]);
+
+  // "Last seen" approximation. The Meta Cloud API doesn't expose real
+  // presence/last-seen for arbitrary contacts (that's a WhatsApp consumer
+  // privacy feature). The best signal we have is the most recent moment we
+  // know the contact had WhatsApp open: either an incoming message they
+  // sent, or a `read` receipt on something we sent. We take the max.
+  const lastSeenAt = useMemo(() => {
+    let best: number | null = null;
+    for (const m of messages) {
+      if (m.is_reaction) continue;
+      if (m.direction === "incoming" && m.received_at) {
+        const t = new Date(m.received_at).getTime();
+        if (best === null || t > best) best = t;
+      }
+      if (m.direction === "outgoing" && m.read_at) {
+        const t = new Date(m.read_at).getTime();
+        if (best === null || t > best) best = t;
+      }
+    }
+    return best ? new Date(best) : null;
+  }, [messages]);
+
   // 24h-window status. We can compute it from the messages we already
   // have — find the most recent incoming message; if it's within 24h,
   // free-form sending is allowed.
@@ -101,10 +137,19 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
         </Button>
         <div className="min-w-0 flex-1">
           <p className="font-medium text-sm truncate">{displayName}</p>
-          {thread?.from_phone && thread.from_phone !== displayName && (
-            <p className="text-xs text-muted-foreground truncate" dir="ltr">
-              {thread.from_phone}
+          {/* Sub-line: "active a few minutes ago" approximation from
+              incoming + read receipts (real WhatsApp last-seen isn't
+              exposed by the Cloud API). Fall back to phone if no activity. */}
+          {lastSeenAt ? (
+            <p className="text-xs text-muted-foreground truncate">
+              {formatLastSeen(lastSeenAt, t)}
             </p>
+          ) : (
+            thread?.from_phone && thread.from_phone !== displayName && (
+              <p className="text-xs text-muted-foreground truncate" dir="ltr">
+                {thread.from_phone}
+              </p>
+            )
           )}
         </div>
         {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -123,7 +168,12 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
           <p className="text-center text-sm text-muted-foreground py-8">{t("emptyChat")}</p>
         )}
         {visibleMessages.map((m) => (
-          <MessageBubble key={m.id} message={m} reactions={reactionsByTarget.get(m.wamid) ?? []} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            reactions={reactionsByTarget.get(m.wamid) ?? []}
+            quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
+          />
         ))}
       </div>
 
@@ -229,9 +279,12 @@ function ComposeBox({
 function MessageBubble({
   message,
   reactions,
+  quotedMessage,
 }: {
   message: Message;
   reactions: Array<{ emoji: string; direction: string }>;
+  /** The original message this one replies to, if it's in the loaded thread. */
+  quotedMessage?: Message;
 }) {
   const t = useTranslations("whatsappPage");
   const isOutgoing = message.direction === "outgoing";
@@ -300,6 +353,29 @@ function MessageBubble({
           <p className="text-[11px] font-medium text-emerald-700">{message.from_name}</p>
         )}
 
+        {/* Reply quote — when this message is a reply to a previous one,
+            mimic WhatsApp's stacked-quote UI with a left/right accent bar
+            and a one-line preview of the original. */}
+        {quotedMessage && (
+          <div
+            className={`mb-1.5 rounded border-s-4 bg-black/[0.04] px-2 py-1 text-xs ${
+              quotedMessage.direction === "outgoing"
+                ? "border-emerald-500"
+                : "border-blue-500"
+            }`}
+            dir={detectMessageDir(quotedMessage.body_text)}
+          >
+            <p className="text-[10px] font-medium text-muted-foreground">
+              {quotedMessage.direction === "outgoing"
+                ? t("you")
+                : quotedMessage.from_name?.trim() || quotedMessage.from_phone || t("contact")}
+            </p>
+            <p className="line-clamp-2 break-words text-[11px] text-muted-foreground/80">
+              {quotedMessage.body_text?.slice(0, 200) || `[${quotedMessage.message_type}]`}
+            </p>
+          </div>
+        )}
+
         {/* Image preview — render before the body so the picture is what
             the user sees first, with the OCR/caption as supplementary text. */}
         {isImage && (
@@ -352,9 +428,12 @@ function MessageBubble({
           {message.is_history && (
             <span className="rounded bg-amber-100 px-1 text-amber-700">{t("history")}</span>
           )}
-          {isOutgoing && (
-            <ArrowRight className="h-3 w-3" aria-label={t("outgoing")} />
-          )}
+          {/* WhatsApp-style delivery ticks on outgoing only.
+              sent      → single grey check
+              delivered → double grey checks (CheckCheck)
+              read      → double blue checks (CheckCheck colored)
+              failed    → red alert icon. */}
+          {isOutgoing && <DeliveryReceipt status={message.status ?? null} />}
         </div>
 
         {reactions.length > 0 && (
@@ -369,4 +448,42 @@ function MessageBubble({
       </div>
     </div>
   );
+}
+
+/**
+ * WhatsApp-style delivery indicator for outgoing messages.
+ * - null / sent              → single grey check (still in flight / accepted by Meta)
+ * - delivered                → double grey checks
+ * - read                     → double blue checks
+ * - failed                   → red alert
+ */
+function DeliveryReceipt({ status }: { status: Message["status"] }) {
+  if (status === "failed") {
+    return <AlertCircle className="h-3.5 w-3.5 text-red-500" aria-label="failed" />;
+  }
+  if (status === "read") {
+    return <CheckCheck className="h-3.5 w-3.5 text-blue-500" aria-label="read" />;
+  }
+  if (status === "delivered") {
+    return <CheckCheck className="h-3.5 w-3.5 text-gray-400" aria-label="delivered" />;
+  }
+  // sent or unknown: single check (Meta accepted the message).
+  return <Check className="h-3.5 w-3.5 text-gray-400" aria-label="sent" />;
+}
+
+/**
+ * Format the "last seen" line in the chat header. Real WhatsApp
+ * last-seen isn't exposed by the Cloud API; we approximate from the
+ * most recent incoming message or read receipt.
+ */
+function formatLastSeen(date: Date, t: (key: string, vals?: Record<string, string | number>) => string): string {
+  const diffMs = Date.now() - date.getTime();
+  const min = Math.floor(diffMs / 60_000);
+  if (min < 5) return t("activeNow");
+  if (min < 60) return t("activeMinutesAgo", { count: min });
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return t("activeHoursAgo", { count: hrs });
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return t("activeDaysAgo", { count: days });
+  return t("activeOnDate", { date: date.toLocaleDateString() });
 }

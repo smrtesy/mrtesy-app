@@ -93,7 +93,7 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
   const { data, error } = await db
     .from("whatsapp_messages")
     .select(
-      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at",
+      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at, status, status_error, sent_at, delivered_at, read_at",
     )
     .eq("user_id", req.user!.id)
     .eq("chat_id", chatId)

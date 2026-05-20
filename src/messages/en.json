@@ -50,7 +50,14 @@
     "composeDisabled": "24-hour window closed — can't send",
     "windowOpenUntil": "Free-form replies allowed until {time}",
     "windowClosed": "The 24-hour window is closed. Per Meta's rules, only approved templates can be sent outside the window. Wait for the contact to message first.",
-    "windowClosedShort": "24-hour window closed — can't send free text"
+    "windowClosedShort": "24-hour window closed — can't send free text",
+    "you": "You",
+    "contact": "Contact",
+    "activeNow": "Active now",
+    "activeMinutesAgo": "Active {count, plural, one {1 minute} other {# minutes}} ago",
+    "activeHoursAgo": "Active {count, plural, one {1 hour} other {# hours}} ago",
+    "activeDaysAgo": "Active {count, plural, one {1 day} other {# days}} ago",
+    "activeOnDate": "Last active {date}"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
