@@ -1,16 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { ThreadList, type Thread } from "./ThreadList";
 import { ThreadView, type Message, type ChatTask } from "./ThreadView";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { MessageCircle, MessageSquarePlus, Loader2, X } from "lucide-react";
-import { toast } from "sonner";
 
 /**
  * Two-pane WhatsApp reader. Left: chat list. Right: messages in the
@@ -108,38 +103,24 @@ export function WhatsAppPageClient({ title }: { title: string }) {
   }, [selectedChatId, loadMessages, markChatRead]);
 
   return (
-    // Full-screen chat surface — no page title, no chat count. The two
-    // panes already carry enough context (chat names on the left, header
-    // inside the open thread on the right). h-[calc(100dvh-…)] uses
-    // dynamic viewport units so the layout fills the screen even when
-    // the mobile address bar collapses.
+    // Full-screen chat surface — no title, no chat count, no top bar.
+    // The two panes carry their own chrome (chat names on the left,
+    // contact header inside the open thread on the right). 100dvh fills
+    // the viewport even when the mobile address bar collapses. The
+    // sidebar's own toggle button floats fixed in the top-start corner
+    // (rendered from Sidebar.tsx), so we don't reserve any vertical
+    // space for it here.
     //
-    // We allow the page to overflow the outer app padding by pulling
-    // negative margins; the parent layout adds px-4 py-4 around every
-    // child. -mx-4 -my-4 cancels that for /whatsapp specifically so the
-    // chat truly hits the edges of the viewport. The mobile bottom-nav
-    // (h-12) still needs to fit, hence the per-breakpoint subtraction.
+    // -mx-4 -my-4 cancels the app shell's px-4 py-4 padding so the
+    // chat hits the screen edges.
     <div
-      className="-mx-4 -my-4 flex flex-col h-[calc(100dvh-3.5rem)] md:h-[calc(100dvh-1rem)]"
+      className="-mx-4 -my-4 flex flex-col h-[calc(100dvh-3.5rem)] md:h-[100dvh]"
       dir={isHe ? "rtl" : "ltr"}
     >
-      {/* Lightweight top bar: title kept off-screen for a11y, a small
-          "new chat" button right of the title position so the rest of
-          the area can be all chat. */}
-      <div className="flex items-center justify-end gap-2 px-2 py-1 border-b bg-muted/30">
-        <span className="sr-only">
-          <MessageCircle className="h-5 w-5" />
-          {title}
-        </span>
-        <NewChatButton
-          onCreated={(chatId) => {
-            // Open the brand-new thread and refresh the list so the new
-            // chat appears in the sidebar.
-            setSelectedChatId(chatId);
-            loadThreads();
-          }}
-        />
-      </div>
+      {/* Accessibility-only title — read by screen readers but invisible
+          and takes no layout space. The chat panes themselves are the
+          visible UI. */}
+      <h1 className="sr-only">{title}</h1>
 
       {error && (
         <div className="mb-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
@@ -187,156 +168,6 @@ export function WhatsAppPageClient({ title }: { title: string }) {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * "+ New chat" button in the top bar. Opens a small modal asking for a
- * phone number and an opening message, then posts to the existing
- * /api/whatsapp/messages/send endpoint. WhatsApp's 24h-window rule still
- * applies — if the recipient has never messaged us, Meta will reject the
- * send with `outside_24h_window`. We surface that error inline so the
- * user understands they need a template (out of scope for this commit).
- */
-function NewChatButton({ onCreated }: { onCreated: (chatId: string) => void }) {
-  const t = useTranslations("whatsappPage");
-  const [open, setOpen] = useState(false);
-  const [phone, setPhone] = useState("");
-  const [text, setText] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-
-  // Close on outside-click / Escape.
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (!dialogRef.current) return;
-      if (!dialogRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  async function handleSend() {
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length < 8) {
-      toast.error(t("newChatInvalidPhone"));
-      return;
-    }
-    if (!text.trim()) {
-      toast.error(t("newChatNeedText"));
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await api("/api/whatsapp/messages/send", {
-        method: "POST",
-        body: { to_phone: digits, text: text.trim() },
-      });
-      setPhone("");
-      setText("");
-      setOpen(false);
-      onCreated(digits);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // The backend returns code "outside_24h_window" when the recipient
-      // hasn't initiated. Translate to a friendly hint.
-      if (/outside_24h_window/.test(msg)) {
-        toast.error(t("newChatWindowClosed"));
-      } else {
-        toast.error(msg);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="relative">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={() => setOpen(true)}
-        className="gap-1"
-      >
-        <MessageSquarePlus className="h-4 w-4" />
-        <span className="hidden sm:inline">{t("newChat")}</span>
-      </Button>
-
-      {open && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-start justify-center p-4">
-          <div
-            ref={dialogRef}
-            className="mt-20 w-full max-w-md rounded-lg border bg-card shadow-xl p-4 space-y-3"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-medium">{t("newChatTitle")}</h3>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="rounded p-1 text-muted-foreground hover:bg-muted"
-                aria-label={t("close")}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-muted-foreground">{t("newChatHint")}</p>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">{t("newChatPhoneLabel")}</label>
-              <Input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+972501234567"
-                dir="ltr"
-                className="font-mono"
-                autoFocus
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">{t("newChatMessageLabel")}</label>
-              <Textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder={t("composePlaceholder")}
-                rows={3}
-                className="text-sm"
-              />
-            </div>
-
-            <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-              {t("newChatTemplateWarning")}
-            </p>
-
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
-                {t("close")}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleSend}
-                disabled={submitting || !phone.trim() || !text.trim()}
-                className="gap-1"
-              >
-                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                {t("send")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
