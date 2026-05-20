@@ -58,7 +58,9 @@
     "activeHoursAgo": "פעיל לפני {count, plural, one {שעה} other {# שעות}}",
     "activeDaysAgo": "פעיל לפני {count, plural, one {יום} other {# ימים}}",
     "activeOnDate": "פעיל לאחרונה ב-{date}",
-    "reactWith": "הגב עם {emoji}"
+    "reactWith": "הגב עם {emoji}",
+    "openTask": "פתח משימה",
+    "tasksFromChat": "{count, plural, one {משימה אחת מהשיחה} other {# משימות מהשיחה}}"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

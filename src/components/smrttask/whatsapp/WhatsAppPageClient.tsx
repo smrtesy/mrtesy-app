@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { ThreadList, type Thread } from "./ThreadList";
-import { ThreadView, type Message } from "./ThreadView";
+import { ThreadView, type Message, type ChatTask } from "./ThreadView";
 import { MessageCircle } from "lucide-react";
 
 /**
@@ -23,6 +23,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [tasks, setTasks] = useState<ChatTask[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,14 +41,27 @@ export function WhatsAppPageClient({ title }: { title: string }) {
   const loadMessages = useCallback(async (chatId: string) => {
     setLoadingMessages(true);
     try {
-      const { messages: m } = await api<{ messages: Message[] }>(
+      const { messages: m, tasks: t } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
         `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}`,
       );
       setMessages(m);
+      setTasks(t ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingMessages(false);
+    }
+  }, []);
+
+  /** Fire-and-forget: tells the backend the user has opened this chat
+   *  so the unread badge clears on the next /threads poll. */
+  const markChatRead = useCallback(async (chatId: string) => {
+    try {
+      await api(`/api/whatsapp/threads/${encodeURIComponent(chatId)}/read`, {
+        method: "POST",
+      });
+    } catch {
+      // Best-effort — a stale unread badge is harmless.
     }
   }, []);
 
@@ -61,16 +75,26 @@ export function WhatsAppPageClient({ title }: { title: string }) {
   useEffect(() => {
     if (!selectedChatId) {
       setMessages([]);
+      setTasks([]);
       return;
     }
     loadMessages(selectedChatId);
+    // Mark the chat as read so its unread badge clears on the next
+    // /threads poll. Fire-and-forget — the read state is best-effort.
+    markChatRead(selectedChatId);
     // Poll the open thread for new messages every 10s.
     const i = setInterval(() => loadMessages(selectedChatId), 10_000);
     return () => clearInterval(i);
-  }, [selectedChatId, loadMessages]);
+  }, [selectedChatId, loadMessages, markChatRead]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]" dir={isHe ? "rtl" : "ltr"}>
+    // Take the full viewport height minus the app shell chrome. 100dvh
+    // matters on mobile where the address bar can resize the viewport
+    // — using just 100vh leaves a gap when the bar hides.
+    <div
+      className="flex flex-col h-[calc(100dvh-7rem)] md:h-[calc(100dvh-5rem)]"
+      dir={isHe ? "rtl" : "ltr"}
+    >
       <div className="flex items-center gap-2 px-2 pb-3">
         <MessageCircle className="h-5 w-5 text-emerald-600" />
         <h1 className="text-2xl font-bold">{title}</h1>
@@ -85,7 +109,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3">
+      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-3">
         {/* Mobile: hide thread list when a chat is open */}
         <div
           className={`md:block min-h-0 ${selectedChatId ? "hidden" : "block"}`}
@@ -104,10 +128,12 @@ export function WhatsAppPageClient({ title }: { title: string }) {
           {selectedChatId ? (
             <ThreadView
               messages={messages}
+              tasks={tasks}
               loading={loadingMessages}
               onBack={() => setSelectedChatId(null)}
               chatId={selectedChatId}
               thread={threads.find((t) => t.chat_id === selectedChatId)}
+              locale={locale as string}
               onMessageSent={() => {
                 // Re-fetch immediately rather than waiting for the next
                 // poll tick — the optimistic insert on the backend already

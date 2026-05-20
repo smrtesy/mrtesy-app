@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
@@ -40,11 +41,26 @@ export interface Message {
   read_at?: string | null;
 }
 
+export interface ChatTask {
+  id: string;
+  title: string | null;
+  title_he: string | null;
+  status: string | null;
+  priority: string | null;
+  created_at: string;
+  due_date: string | null;
+}
+
 interface Props {
   messages: Message[];
+  /** Tasks created from this chat (across the whole conversation history),
+   *  passed through from the parent so we can render a per-message badge
+   *  next to the message that most likely produced each task. */
+  tasks: ChatTask[];
   loading: boolean;
   chatId: string;
   thread: Thread | undefined;
+  locale: string;
   onBack: () => void;
   /** Called after a successful send so the parent can refetch immediately. */
   onMessageSent?: () => void;
@@ -52,7 +68,7 @@ interface Props {
 
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export function ThreadView({ messages, loading, chatId, thread, onBack, onMessageSent }: Props) {
+export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -88,6 +104,35 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
     for (const m of messages) map.set(m.wamid, m);
     return map;
   }, [messages]);
+
+  // Map each whatsapp_message → tasks that were most likely created from
+  // it. Heuristic: each task is assigned to the LATEST message whose
+  // received_at is at or before task.created_at — because Part 3
+  // classifier runs on the freshly-updated thread, the triggering
+  // message is the most recent one when the task is created.
+  const tasksByMessageId = useMemo(() => {
+    const map = new Map<string, ChatTask[]>();
+    if (tasks.length === 0 || messages.length === 0) return map;
+    // Messages are already chronological (oldest → newest) per the API.
+    const messageList = messages.filter((m) => !m.is_reaction);
+    for (const t of tasks) {
+      const taskTime = new Date(t.created_at).getTime();
+      // Find the LATEST message with received_at <= taskTime.
+      let bestMessage: Message | null = null;
+      for (const m of messageList) {
+        if (!m.received_at) continue;
+        const mt = new Date(m.received_at).getTime();
+        if (mt <= taskTime) bestMessage = m;
+        else break; // messages are sorted, so we can stop
+      }
+      if (bestMessage) {
+        const existing = map.get(bestMessage.id) ?? [];
+        existing.push(t);
+        map.set(bestMessage.id, existing);
+      }
+    }
+    return map;
+  }, [tasks, messages]);
 
   // "Last seen" approximation. The Meta Cloud API doesn't expose real
   // presence/last-seen for arbitrary contacts (that's a WhatsApp consumer
@@ -173,6 +218,8 @@ export function ThreadView({ messages, loading, chatId, thread, onBack, onMessag
             message={m}
             reactions={reactionsByTarget.get(m.wamid) ?? []}
             quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
+            relatedTasks={tasksByMessageId.get(m.id) ?? []}
+            locale={locale}
             canReact={withinWindow}
             onReact={async (emoji) => {
               try {
@@ -295,6 +342,8 @@ function MessageBubble({
   message,
   reactions,
   quotedMessage,
+  relatedTasks,
+  locale,
   canReact,
   onReact,
 }: {
@@ -302,6 +351,9 @@ function MessageBubble({
   reactions: Array<{ emoji: string; direction: string }>;
   /** The original message this one replies to, if it's in the loaded thread. */
   quotedMessage?: Message;
+  /** Tasks created from this specific message (heuristic match). */
+  relatedTasks: ChatTask[];
+  locale: string;
   /** When false, the react button is hidden (24h window closed). */
   canReact: boolean;
   /** Called with the selected emoji (or "" to remove). */
@@ -474,6 +526,29 @@ function MessageBubble({
             </span>
             <Download className="h-3 w-3 ms-auto" />
           </button>
+        )}
+
+        {/* Tasks created from this message (heuristic match by created_at) —
+            small inline links per task so the user can jump from the
+            conversation context straight to the resulting task card. */}
+        {relatedTasks.length > 0 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            {relatedTasks.map((task) => {
+              const taskTitle =
+                locale === "he" && task.title_he ? task.title_he : task.title ?? t("contact");
+              return (
+                <Link
+                  key={task.id}
+                  href={`/${locale}/tasks?focus=${task.id}`}
+                  className="inline-flex items-center gap-1 self-start rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 hover:bg-blue-100 transition"
+                  title={t("openTask")}
+                >
+                  <CheckSquare className="h-3 w-3" />
+                  <span className="truncate max-w-[200px]">{taskTitle}</span>
+                </Link>
+              );
+            })}
+          </div>
         )}
 
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-gray-500">

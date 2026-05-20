@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { ArrowLeftRight, Loader2, MessageSquare } from "lucide-react";
+import { ArrowLeftRight, Loader2, MessageSquare, CheckSquare } from "lucide-react";
 import { detectMessageDir } from "./utils";
 
 export interface Thread {
@@ -13,6 +13,8 @@ export interface Thread {
   from_phone: string;
   from_name: string | null;
   is_history: boolean;
+  unread_count?: number;
+  task_count?: number;
 }
 
 interface Props {
@@ -54,12 +56,11 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
         const isSelected = th.chat_id === selectedChatId;
         const displayName = th.from_name?.trim() || th.from_phone || th.chat_id;
         const preview = th.last_body_text?.trim() || `[${th.last_message_type}]`;
-        // Align the preview line per the language of THIS specific message
-        // (Hebrew → right edge, English → left edge). The contact name on
-        // the line above stays left-aligned with the rest of the row chrome
-        // so it always lines up with the timestamp on the opposite side.
         const previewDir = detectMessageDir(preview);
         const nameDir = detectMessageDir(displayName);
+        const unread = th.unread_count ?? 0;
+        const taskCount = th.task_count ?? 0;
+        const hasUnread = unread > 0;
 
         return (
           <li key={th.chat_id}>
@@ -73,7 +74,10 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
               <div className="flex items-center gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-sm truncate" dir={nameDir}>
+                    <span
+                      className={`text-sm truncate ${hasUnread ? "font-semibold" : "font-medium"}`}
+                      dir={nameDir}
+                    >
                       {displayName}
                     </span>
                     {th.last_direction === "outgoing" && (
@@ -86,15 +90,39 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                     )}
                   </div>
                   <p
-                    className="text-xs text-muted-foreground truncate mt-0.5"
+                    className={`text-xs truncate mt-0.5 ${
+                      hasUnread ? "font-medium text-foreground" : "text-muted-foreground"
+                    }`}
                     dir={previewDir}
                   >
                     {preview.slice(0, 120)}
                   </p>
                 </div>
-                <span className="text-[10px] text-muted-foreground shrink-0">
-                  {formatRelative(th.last_message_at)}
-                </span>
+                <div className="flex flex-col items-end gap-0.5 shrink-0">
+                  <span
+                    className={`text-[10px] ${
+                      hasUnread ? "font-medium text-emerald-600" : "text-muted-foreground"
+                    }`}
+                  >
+                    {formatRelative(th.last_message_at)}
+                  </span>
+                  <div className="flex gap-1">
+                    {taskCount > 0 && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                        title={t("tasksFromChat", { count: taskCount })}
+                      >
+                        <CheckSquare className="h-2.5 w-2.5" />
+                        {taskCount}
+                      </span>
+                    )}
+                    {hasUnread && (
+                      <span className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             </button>
           </li>
