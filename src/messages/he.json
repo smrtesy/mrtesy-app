@@ -135,6 +135,23 @@
       "noUpdates": "אין עדכונים עדיין",
       "openDraft": "פתח טיוטא"
     },
+    "materials": {
+      "title": "חומר רקע",
+      "empty": "אין חומר רקע עדיין",
+      "addButton": "הוסף",
+      "addNote": "הערה",
+      "addLink": "קישור",
+      "addFile": "קובץ",
+      "addContact": "איש קשר",
+      "materialTitle": "כותרת",
+      "noteContent": "תוכן ההערה",
+      "linkUrl": "כתובת URL",
+      "uploading": "מעלה קובץ...",
+      "contactName": "שם",
+      "contactEmail": "אימייל",
+      "contactPhone": "טלפון",
+      "removeItem": "מחק"
+    },
     "checklist": {
       "title": "צ׳קליסט",
       "progress": "הושלמו {done} מתוך {total}",

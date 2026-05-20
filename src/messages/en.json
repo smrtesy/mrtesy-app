@@ -135,6 +135,23 @@
       "noUpdates": "No updates yet",
       "openDraft": "Open Draft"
     },
+    "materials": {
+      "title": "Background Materials",
+      "empty": "No materials yet",
+      "addButton": "Add",
+      "addNote": "Note",
+      "addLink": "Link",
+      "addFile": "File",
+      "addContact": "Contact",
+      "materialTitle": "Title",
+      "noteContent": "Note content",
+      "linkUrl": "URL",
+      "uploading": "Uploading file...",
+      "contactName": "Name",
+      "contactEmail": "Email",
+      "contactPhone": "Phone",
+      "removeItem": "Delete"
+    },
     "checklist": {
       "title": "Checklist",
       "progress": "{done} of {total} done",
