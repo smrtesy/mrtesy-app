@@ -344,6 +344,9 @@
   "settingsParameters": {
     "title": "smrtTask Parameters",
     "subtitle": "Tune classifier behaviour, project discovery, and WhatsApp sync. Leave blank to use the system default.",
+    "budgetSectionTitle": "Daily AI budget",
+    "dailyBudgetLabel": "Daily cap (USD)",
+    "dailyBudgetHint": "Once your daily AI spend exceeds this amount, new-message processing stops and per-task AI buttons return an error. Default $10.",
     "classifierSectionTitle": "Classifier (Part 3 / Part 4)",
     "modelLabel": "Classifier model",
     "modelHint": "Default: claude-sonnet-4-6. Pick haiku for cheap+fast, opus for higher quality.",

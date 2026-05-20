@@ -344,6 +344,9 @@
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",
     "subtitle": "ניהול פרמטרים שמשפיעים על הסיווג, חיפוש פרויקטים וסנכרון WhatsApp. השאר ריק כדי להשתמש בברירת המחדל של המערכת.",
+    "budgetSectionTitle": "תקציב בינה יומי",
+    "dailyBudgetLabel": "תקרה יומית (דולר)",
+    "dailyBudgetHint": "כשהוצאות הבינה היומיות שלך עוברות את הסכום הזה, עיבוד הודעות חדשות נעצר וכפתורי הבינה במשימות מחזירים שגיאה. ברירת מחדל 10 דולר.",
     "classifierSectionTitle": "מסווג (Part 3 / Part 4)",
     "modelLabel": "מודל לסיווג",
     "modelHint": "ברירת מחדל: claude-sonnet-4-6. בחר haiku לזול ומהיר, opus לאיכותי יותר.",
