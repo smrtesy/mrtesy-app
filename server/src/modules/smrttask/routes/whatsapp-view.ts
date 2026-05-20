@@ -186,7 +186,7 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
   const { data: taskJoin } = await db
     .from("tasks")
     .select(
-      "id, title, title_he, status, priority, created_at, due_date, source_messages!inner(source_id, source_type, user_id)",
+      "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(source_id, source_type, user_id)",
     )
     .eq("source_messages.source_type", "whatsapp")
     .eq("source_messages.source_id", `wa:${chatId}`)
@@ -200,6 +200,7 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
     title_he: t.title_he,
     status: t.status,
     priority: t.priority,
+    manually_verified: t.manually_verified,
     created_at: t.created_at,
     due_date: t.due_date,
   }));
