@@ -135,6 +135,14 @@
       "noUpdates": "אין עדכונים עדיין",
       "openDraft": "פתח טיוטא"
     },
+    "checklist": {
+      "title": "צ׳קליסט",
+      "progress": "הושלמו {done} מתוך {total}",
+      "addPlaceholder": "הוסף פריט...",
+      "addButton": "הוסף",
+      "removeItem": "הסר פריט",
+      "aiBadge": "AI"
+    },
     "search": {
       "placeholder": "חפש משימות...",
       "includeArchive": "כלול ארכיון",

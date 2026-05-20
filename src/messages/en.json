@@ -135,6 +135,14 @@
       "noUpdates": "No updates yet",
       "openDraft": "Open Draft"
     },
+    "checklist": {
+      "title": "Checklist",
+      "progress": "{done} of {total} done",
+      "addPlaceholder": "Add item...",
+      "addButton": "Add",
+      "removeItem": "Remove item",
+      "aiBadge": "AI"
+    },
     "search": {
       "placeholder": "Search tasks...",
       "includeArchive": "Include archive",

@@ -269,6 +269,7 @@ export type Database = {
           tags: string[] | null
           updates: Json | null
           linked_drive_docs: Json | null
+          checklist: Json
 
           // Action tracking
           requested_action: string | null

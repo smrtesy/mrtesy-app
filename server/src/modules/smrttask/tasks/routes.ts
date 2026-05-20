@@ -38,11 +38,45 @@ const UPDATABLE_FIELDS = new Set([
   "project_id", "project_confidence", "assigned_to_user_id",
   "manually_verified", "source_link",
   // JSON content fields — client sends the whole array after read-modify-write
-  "ai_generated_content", "linked_drive_docs",
+  "ai_generated_content", "linked_drive_docs", "checklist",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
+
+/** Validate the shape of a checklist array coming from a client PATCH.
+ *  Required: { id: string, title: string, done: boolean }.
+ *  Optional but typed when present: created_at, completed_at (string|null),
+ *  created_by ('user'|'ai'). */
+function validateChecklist(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error("checklist must be an array");
+  }
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i] as Record<string, unknown> | null;
+    if (!item || typeof item !== "object") {
+      throw new Error(`checklist[${i}] must be an object`);
+    }
+    if (typeof item.id !== "string" || !item.id) {
+      throw new Error(`checklist[${i}].id must be a non-empty string`);
+    }
+    if (typeof item.title !== "string") {
+      throw new Error(`checklist[${i}].title must be a string`);
+    }
+    if (typeof item.done !== "boolean") {
+      throw new Error(`checklist[${i}].done must be a boolean`);
+    }
+    if (item.created_at !== undefined && typeof item.created_at !== "string") {
+      throw new Error(`checklist[${i}].created_at must be a string when present`);
+    }
+    if (item.completed_at !== undefined && item.completed_at !== null && typeof item.completed_at !== "string") {
+      throw new Error(`checklist[${i}].completed_at must be string or null`);
+    }
+    if (item.created_by !== undefined && item.created_by !== "user" && item.created_by !== "ai") {
+      throw new Error(`checklist[${i}].created_by must be 'user' or 'ai'`);
+    }
+  }
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -57,6 +91,9 @@ function pickUpdates(body: Record<string, unknown>) {
   }
   if (updates.priority && !PRIORITIES.includes(updates.priority as string)) {
     throw new Error(`invalid priority: ${updates.priority}`);
+  }
+  if (updates.checklist !== undefined) {
+    validateChecklist(updates.checklist);
   }
   return updates;
 }
