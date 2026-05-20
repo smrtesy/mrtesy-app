@@ -58,7 +58,9 @@
     "activeHoursAgo": "Active {count, plural, one {1 hour} other {# hours}} ago",
     "activeDaysAgo": "Active {count, plural, one {1 day} other {# days}} ago",
     "activeOnDate": "Last active {date}",
-    "reactWith": "React with {emoji}"
+    "reactWith": "React with {emoji}",
+    "openTask": "Open task",
+    "tasksFromChat": "{count, plural, one {1 task from this chat} other {# tasks from this chat}}"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

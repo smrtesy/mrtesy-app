@@ -38,6 +38,36 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
 
   if (error) return res.status(500).json({ error: error.message });
 
+  // Tasks created from any of these chats — surfaced as a small badge
+  // on each thread row. We join tasks → source_messages and pivot on the
+  // `wa:{chat_id}` source_id our pipeline writes.
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("id, source_message_id, source_messages!inner(source_id, source_type, user_id)")
+    .eq("source_messages.source_type", "whatsapp")
+    .eq("source_messages.user_id", req.user!.id)
+    .neq("status", "archived")
+    .limit(2000);
+
+  const tasksByChat = new Map<string, number>();
+  for (const t of taskRows ?? []) {
+    const sm = (t as unknown as { source_messages?: { source_id?: string } | { source_id?: string }[] }).source_messages;
+    const sourceId = Array.isArray(sm) ? sm[0]?.source_id : sm?.source_id;
+    if (!sourceId?.startsWith("wa:")) continue;
+    const chatId = sourceId.slice("wa:".length);
+    tasksByChat.set(chatId, (tasksByChat.get(chatId) ?? 0) + 1);
+  }
+
+  // Per-chat last_read_at for unread badges.
+  const { data: reads } = await db
+    .from("whatsapp_chat_state")
+    .select("chat_id, last_read_at")
+    .eq("user_id", req.user!.id);
+  const lastReadByChat = new Map<string, string>();
+  for (const r of reads ?? []) {
+    if (r.chat_id) lastReadByChat.set(r.chat_id as string, r.last_read_at as string);
+  }
+
   // Two passes over the recent-messages window:
   //   * `latestAny`     — newest message per chat, of any direction. Drives
   //                       the preview text + timestamp shown in the list.
@@ -64,6 +94,28 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
 
   const threads = [...latestAny.entries()].map(([chatId, m]) => {
     const inc = latestIncoming.get(chatId);
+    // Unread = count of incoming messages with received_at > last_read_at
+    // for this chat. We compute against the window the SQL already
+    // returned (DESC by received_at, limit 500) — enough for any
+    // realistic unread count, and the badge cap at 99+ handles the rest.
+    const lastReadAt = lastReadByChat.get(chatId);
+    let unreadCount = 0;
+    if (lastReadAt) {
+      const lastReadMs = new Date(lastReadAt).getTime();
+      for (const row of data ?? []) {
+        if (row.chat_id !== chatId) continue;
+        if (row.direction !== "incoming") continue;
+        if (!row.received_at) continue;
+        if (new Date(row.received_at).getTime() > lastReadMs) unreadCount++;
+      }
+    } else if (m.direction === "incoming") {
+      // Never opened: treat every incoming as unread. Same window as above.
+      for (const row of data ?? []) {
+        if (row.chat_id !== chatId) continue;
+        if (row.direction === "incoming") unreadCount++;
+      }
+    }
+
     return {
       chat_id: chatId,
       last_message_at: m.received_at,
@@ -74,10 +126,31 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
       from_phone: inc?.from_phone ?? chatId,
       from_name: inc?.from_name ?? null,
       is_history: m.is_history,
+      unread_count: unreadCount,
+      task_count: tasksByChat.get(chatId) ?? 0,
     };
   });
 
   return res.json({ threads });
+});
+
+// ── Mark a chat as read ───────────────────────────────────────────────────
+// Upserts whatsapp_chat_state.last_read_at to now. The next GET /threads
+// uses it to compute unread_count.
+router.post("/whatsapp/threads/:chat_id/read", ...gate, async (req: Request, res: Response) => {
+  const { chat_id } = req.params;
+  const nowIso = new Date().toISOString();
+  const { error } = await db.from("whatsapp_chat_state").upsert(
+    {
+      user_id: req.user!.id,
+      chat_id,
+      last_read_at: nowIso,
+      updated_at: nowIso,
+    },
+    { onConflict: "user_id,chat_id" },
+  );
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
 });
 
 // ── Messages within a chat ────────────────────────────────────────────────
@@ -102,7 +175,34 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
 
   if (error) return res.status(500).json({ error: error.message });
 
-  return res.json({ messages: [...(data ?? [])].reverse() });
+  // Tasks created from this chat. Joined through source_messages to find
+  // every task whose source_id is `wa:{chatId}`. We expose them per-chat
+  // and let the frontend match each task to the message it most likely
+  // came from (closest received_at before task.created_at) — Part 3
+  // doesn't store a direct message-level link, but the heuristic is
+  // accurate in practice because Part 3 runs on a freshly-updated thread.
+  const { data: taskJoin } = await db
+    .from("tasks")
+    .select(
+      "id, title, title_he, status, priority, created_at, due_date, source_messages!inner(source_id, source_type, user_id)",
+    )
+    .eq("source_messages.source_type", "whatsapp")
+    .eq("source_messages.source_id", `wa:${chatId}`)
+    .eq("source_messages.user_id", req.user!.id)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  const tasks = (taskJoin ?? []).map((t) => ({
+    id: t.id,
+    title: t.title,
+    title_he: t.title_he,
+    status: t.status,
+    priority: t.priority,
+    created_at: t.created_at,
+    due_date: t.due_date,
+  }));
+
+  return res.json({ messages: [...(data ?? [])].reverse(), tasks });
 });
 
 // ── Signed URL for a stored document ──────────────────────────────────────
