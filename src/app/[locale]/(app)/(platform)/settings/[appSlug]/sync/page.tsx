@@ -122,9 +122,16 @@ export default function SettingsSyncPage() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+
+    // Replace 5s polling with realtime subscription — fires only on actual changes.
+    const channel = supabase
+      .channel("sync-page-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "run_sessions" }, loadData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sync_schedules" }, loadData)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [loadData, supabase]);
 
   async function triggerPart(part: "part0" | "part1" | "part3") {
     const { data: { session } } = await supabase.auth.getSession();

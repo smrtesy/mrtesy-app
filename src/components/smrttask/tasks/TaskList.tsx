@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
@@ -34,6 +34,8 @@ export function TaskList({ locale }: { locale: string }) {
   const [dsOpen, setDsOpen] = useState(false);
   const [dsTaskId, setDsTaskId] = useState("");
   const [dsDescription, setDsDescription] = useState("");
+
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -69,13 +71,17 @@ export function TaskList({ locale }: { locale: string }) {
         "postgres_changes",
         { event: "*", schema: "public", table: "tasks" },
         () => {
-          fetchTasks(); // Re-fetch on any change
+          // Debounce: batch rapid changes (e.g. AI processing 20 tasks at once)
+          // into a single refetch 400ms after the last event.
+          if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+          refetchTimerRef.current = setTimeout(fetchTasks, 400);
         }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
     };
   }, [fetchTasks, supabase]);
 
