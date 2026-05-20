@@ -15,7 +15,7 @@ export interface ParsedSkipRules {
   shouldSkip(msg: MessageHeaders): boolean;
 }
 
-const TRIGGER_RE = /^(from|sender|to|domain|category)\s*=\s*(.+)$/i;
+const TRIGGER_RE = /^(from|sender|to|domain|category|subject_contains|subject)\s*=\s*(.+)$/i;
 const CALENDAR_TRIGGER_RE = /^calendar\s*=\s*(.+)$/i;
 
 function extractEmail(field: string): string {
@@ -51,6 +51,15 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
       checks.push((from, to) => from.endsWith(suffix) || to.includes(suffix));
     } else if (key === "category") {
       queryFilters.push(`-category:${value}`);
+    } else if (key === "subject_contains" || key === "subject") {
+      // Gmail's q parameter supports `-subject:"..."` to exclude messages
+      // whose Subject contains the phrase (case-insensitive). Multi-word
+      // phrases must be quoted; single tokens don't need quotes but quoting
+      // is safe. No runtime shouldSkip check — subjects aren't in
+      // MessageHeaders, and WhatsApp/Calendar items don't have a subject
+      // anyway, so this rule is Gmail-only by design.
+      const escaped = value.replace(/"/g, "");
+      queryFilters.push(`-subject:"${escaped}"`);
     }
   }
 

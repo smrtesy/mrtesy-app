@@ -963,13 +963,55 @@ async function proposeRuleFromCustomDismiss(
 Return ONLY valid JSON, no prose, with this shape:
 { "trigger": "<concrete trigger>", "rule_type": "skip|skip_spam|bot|preference", "reason": "<short Hebrew explanation>", "confidence": 0.0-1.0 }
 
-trigger conventions (pick ONE that fits best):
-  - "from=<email>"              when the user is blocking a specific sender
-  - "domain=<domain>"           when blocking a whole company / domain
-  - "phone=<digits>"            when blocking a WhatsApp phone
-  - "category=promotions|social|forums|updates" — Gmail category
-  - "topic=<keyword>"           topic preference (pair with rule_type=preference)
-  - "keyword=<keyword>"         general keyword preference
+CORE PRINCIPLE — match the trigger's SCOPE to the user's reason:
+  - If the reason names a TYPE of mail (login notifications, OTP codes,
+    receipts, order confirmations, marketing, password resets, etc.) —
+    use the NARROW subject_contains= trigger, even if the user also names
+    a sender. The user is telling you *what kind* of mail to skip, not
+    that the sender is unwanted overall.
+  - Use from=/domain= only when the user clearly wants to block ALL
+    mail from a sender, with no qualifier about which mails matter.
+  - When in doubt, prefer the NARROWER trigger and lower confidence —
+    the user can broaden it later, but a too-wide rule silently hides
+    important mail and is hard to debug.
+
+trigger conventions (pick the NARROWEST one that fits the user's reason):
+  - "subject_contains=<text>"   block mails whose Subject contains <text>.
+                                Use this whenever the user names a type
+                                of mail (login, OTP, receipt, marketing,
+                                shipping update, etc.). Single keyword
+                                works best; pick an English token that
+                                actually appears in such subjects.
+  - "from=<email>"              block ALL mail from a specific sender.
+                                Only use when the user said nothing about
+                                what kind of mail — just "this sender".
+  - "domain=<domain>"           block an entire company / domain.
+  - "phone=<digits>"            block a WhatsApp phone.
+  - "category=promotions|social|forums|updates"  Gmail category.
+  - "topic=<keyword>"           topic preference (pair with rule_type=preference).
+  - "keyword=<keyword>"         general keyword preference.
+
+Examples (study these — they are the most common failure cases):
+  Reason: "התראות כניסה מ-DualHook לא צריכות ליצור משימות"
+    → { "trigger": "subject_contains=login", "rule_type": "skip",
+        "reason": "התראות כניסה לא יוצרות משימות", "confidence": 0.85 }
+    (NOT from=noreply@dualhook.com — the user named the TYPE, not the sender)
+
+  Reason: "אישורי הזמנה מ-Amazon לא מעניינים אותי"
+    → { "trigger": "subject_contains=order confirmation", "rule_type": "skip",
+        "reason": "אישורי הזמנה לא יוצרים משימות", "confidence": 0.8 }
+
+  Reason: "OTP / קודי אימות לא צריכים להיות משימה"
+    → { "trigger": "subject_contains=OTP", "rule_type": "skip",
+        "reason": "קודי אימות לא יוצרים משימות", "confidence": 0.85 }
+
+  Reason: "אני לא רוצה לקבל יותר אימיילים מ-marketing@foo.com"
+    → { "trigger": "from=marketing@foo.com", "rule_type": "skip",
+        "reason": "חסימת שולח", "confidence": 0.9 }
+
+  Reason: "כל מה שמגיע מ-newsletters.example.com"
+    → { "trigger": "domain=newsletters.example.com", "rule_type": "skip",
+        "reason": "חסימת דומיין", "confidence": 0.9 }
 
 rule_type (must be exactly one of these — case-sensitive, no other values are accepted):
   - skip       — don't create tasks from this trigger
@@ -977,6 +1019,11 @@ rule_type (must be exactly one of these — case-sensitive, no other values are 
   - bot        — known automated sender (WhatsApp phones, etc.)
   - preference — softer signal that should influence future classification but not auto-skip
                  (use this for topic/keyword triggers, not skip)
+
+Confidence:
+  - 0.85-0.95 when trigger scope matches the user's reason exactly
+  - 0.6-0.75  when you had to broaden (e.g. user named a type but you used from=)
+  - <0.5      when the reason is ambiguous and you're guessing
 
 Only return a rule if you can extract something concrete from the user's reason. If the reason is too vague ("not important"), return { "trigger": "", "rule_type": "preference", "reason": "<echo>", "confidence": 0 } and we'll discard it.`;
 
