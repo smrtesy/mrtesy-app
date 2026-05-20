@@ -60,7 +60,7 @@ export default function OnboardingSetup() {
   const supabase = createClient();
   const [scanning, setScanning] = useState(false);
   const [done, setDone] = useState(false);
-  const [stats, setStats] = useState<{ gmail: number; calendar: number } | null>(null);
+  const [stats, setStats] = useState<{ gmail: number; calendar: number; drive: number } | null>(null);
   const [gmailDays, setGmailDays] = useState(30);
   const [calMonths, setCalMonths] = useState(12);
   const [progress, setProgress] = useState({ gmail: 0, calendar: 0, phase: "" });
@@ -417,7 +417,9 @@ export default function OnboardingSetup() {
       }
 
       // api() auto-attaches Authorization + X-Org-Id from the active org in localStorage.
-      const data = await api<{ ok: true; session_id: string }>("/api/sync/part1", {
+      // We don't need the session_id any more — the summary counts come straight
+      // from source_messages, which is also what the rest of the app reads.
+      await api<{ ok: true; session_id: string }>("/api/sync/part1", {
         method: "POST",
         body: {
           gmail_days: gmailDays,
@@ -430,13 +432,32 @@ export default function OnboardingSetup() {
         },
       });
 
-      const { data: runSession } = await supabase
-        .from("run_sessions")
-        .select("items_processed")
-        .eq("id", data.session_id)
-        .single();
+      // Resolve per-source counts from source_messages so the summary screen
+      // reflects what actually landed in the DB (run_sessions.items_processed
+      // is a single combined number; the UI used to hard-code calendar=0).
+      const [gmailRes, calRes, driveRes] = await Promise.all([
+        supabase
+          .from("source_messages")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .in("source_type", ["gmail", "gmail_sent"]),
+        supabase
+          .from("source_messages")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("source_type", "google_calendar"),
+        supabase
+          .from("source_messages")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("source_type", "google_drive"),
+      ]);
 
-      setStats({ gmail: runSession?.items_processed ?? 0, calendar: 0 });
+      setStats({
+        gmail: gmailRes.count ?? 0,
+        calendar: calRes.count ?? 0,
+        drive: driveRes.count ?? 0,
+      });
       toast.success(t("step4.complete"));
 
       const { error: completionErr } = await supabase
@@ -822,6 +843,7 @@ export default function OnboardingSetup() {
                 <div className="text-center text-sm text-muted-foreground space-y-1">
                   <p>Gmail: {stats.gmail} {tSetup("messagesUnit")}</p>
                   <p>{tSetup("calendarLabel")}: {stats.calendar} {tSetup("eventsUnit")}</p>
+                  <p>{tSetup("driveLabel")}: {stats.drive} {tSetup("filesUnit")}</p>
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-2">

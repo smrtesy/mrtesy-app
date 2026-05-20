@@ -391,6 +391,8 @@
     "messagesUnit": "messages",
     "calendarLabel": "Calendar",
     "eventsUnit": "events",
+    "driveLabel": "Drive",
+    "filesUnit": "files",
     "savingMessages": "Saving messages... Processing will continue in the background.",
     "backgroundProcessing": "The system will process messages in the background and create tasks automatically.",
     "largeMailboxWarning": "Large mailbox ({count} messages) — background processing may take a few hours.",

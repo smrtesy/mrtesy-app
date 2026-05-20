@@ -391,6 +391,8 @@
     "messagesUnit": "הודעות",
     "calendarLabel": "לוח שנה",
     "eventsUnit": "אירועים",
+    "driveLabel": "דרייב",
+    "filesUnit": "קבצים",
     "savingMessages": "שומר הודעות... העיבוד ימשיך ברקע.",
     "backgroundProcessing": "המערכת תעבד את ההודעות ברקע ותיצור משימות אוטומטית.",
     "largeMailboxWarning": "יש הרבה הודעות ({count}) — העיבוד ברקע עשוי לקחת מספר שעות.",
