@@ -231,7 +231,7 @@ export function TaskCard({
         <Button
           variant="ghost"
           size="sm"
-          className="h-10 md:h-8 gap-1 text-green-600 hover:text-green-700 hover:bg-green-50"
+          className="h-10 md:h-8 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
           onClick={(e) => {
             e.stopPropagation();
             onComplete(task.id);

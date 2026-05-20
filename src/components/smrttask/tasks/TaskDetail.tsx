@@ -557,9 +557,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             )}
           </div>
           <Button
-            variant="default"
+            variant="outline"
             size="sm"
-            className="gap-1 bg-green-600 hover:bg-green-700"
+            className="gap-1 border-green-600/40 text-green-600/60 hover:bg-green-600 hover:text-white hover:border-green-600 active:bg-green-700"
             onClick={handleComplete}
           >
             <CheckCircle2 className="h-4 w-4" />
