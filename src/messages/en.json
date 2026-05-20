@@ -60,7 +60,18 @@
     "activeOnDate": "Last active {date}",
     "reactWith": "React with {emoji}",
     "openTask": "Open task",
-    "tasksFromChat": "{count, plural, one {1 task from this chat} other {# tasks from this chat}}"
+    "tasksFromChat": "{count, plural, one {1 task from this chat} other {# tasks from this chat}}",
+    "startRecording": "Start recording",
+    "stopRecording": "Stop recording",
+    "recording": "Recording…",
+    "transcribing": "Transcribing…",
+    "transcribeEmpty": "Transcription was empty — try again",
+    "micUnsupported": "Browser doesn't support recording",
+    "micPermissionError": "Microphone permission denied",
+    "englishSuggestion": "English polish suggestion",
+    "englishAccept": "Replace",
+    "englishKeepMine": "Keep mine",
+    "englishChecking": "Polishing…"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

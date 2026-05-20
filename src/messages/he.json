@@ -60,7 +60,18 @@
     "activeOnDate": "פעיל לאחרונה ב-{date}",
     "reactWith": "הגב עם {emoji}",
     "openTask": "פתח משימה",
-    "tasksFromChat": "{count, plural, one {משימה אחת מהשיחה} other {# משימות מהשיחה}}"
+    "tasksFromChat": "{count, plural, one {משימה אחת מהשיחה} other {# משימות מהשיחה}}",
+    "startRecording": "התחל הקלטה",
+    "stopRecording": "עצור הקלטה",
+    "recording": "מקליט…",
+    "transcribing": "מתמלל…",
+    "transcribeEmpty": "התמלול ריק — נסה שוב",
+    "micUnsupported": "הדפדפן לא תומך בהקלטה",
+    "micPermissionError": "אין גישה למיקרופון",
+    "englishSuggestion": "הצעה לשיפור באנגלית",
+    "englishAccept": "החלף",
+    "englishKeepMine": "השאר",
+    "englishChecking": "בודק אנגלית…"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

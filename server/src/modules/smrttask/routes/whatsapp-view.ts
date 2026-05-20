@@ -14,6 +14,8 @@
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { simpleCall } from "../../../anthropic";
+import { transcribeAudio } from "../../../gemini";
 
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask")];
@@ -585,6 +587,77 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
   }
 
   return res.json({ ok: true, wamid });
+});
+
+// ── Voice transcription for the compose box ──────────────────────────────
+//
+// Body: { audio_base64: string, mime_type: string }
+// Returns: { text: string }
+//
+// Uses the same Gemini Hebrew-aware transcription prompt our webhook uses
+// for incoming WhatsApp voice notes. The frontend records via the
+// browser's MediaRecorder API and posts the resulting blob here. The
+// transcript lands in the compose textarea so the user can review/edit
+// before sending.
+router.post("/whatsapp/compose/transcribe", ...gate, async (req: Request, res: Response) => {
+  const { audio_base64, mime_type } = (req.body ?? {}) as {
+    audio_base64?: string;
+    mime_type?: string;
+  };
+  if (!audio_base64 || typeof audio_base64 !== "string") {
+    return res.status(400).json({ error: "audio_base64 is required" });
+  }
+  const cleaned = audio_base64.replace(/^data:[^;]+;base64,/, "");
+  try {
+    const text = await transcribeAudio(cleaned, mime_type || "audio/webm");
+    return res.json({ text });
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ── English quality check (Claude Haiku) ─────────────────────────────────
+//
+// Body: { text: string }
+// Returns: { suggestion: string, changed: boolean, cost_usd: number }
+//
+// Cheap copy-edit pass on outgoing English text. Catches grammar, missing
+// articles, awkward phrasing — the kind of polish the operator wants
+// before a one-off note. Haiku is the cheapest Claude model in the
+// codebase and well-suited to a non-creative rewrite.
+router.post("/whatsapp/compose/check-english", ...gate, async (req: Request, res: Response) => {
+  const { text } = (req.body ?? {}) as { text?: string };
+  if (!text || typeof text !== "string" || !text.trim()) {
+    return res.status(400).json({ error: "text is required" });
+  }
+  const trimmed = text.trim();
+  if (trimmed.length > 4000) {
+    return res.status(400).json({ error: "text too long (max 4000 chars)" });
+  }
+
+  const systemPrompt =
+    "You are a copy-editor for short business WhatsApp messages. " +
+    "Given a draft, return a polished English version: fix grammar, punctuation, " +
+    "missing articles, awkward phrasing. Preserve the original meaning, tone, " +
+    "and length. Do NOT add greetings the original doesn't have. Do NOT add " +
+    "explanations. Return ONLY the polished message — no quotes, no markdown, " +
+    "no commentary. If the original is already correct, return it unchanged.";
+
+  try {
+    const { content, costUsd } = await simpleCall("haiku", systemPrompt, trimmed, 1024);
+    const suggestion = content.trim();
+    return res.json({
+      suggestion,
+      changed: suggestion !== trimmed,
+      cost_usd: costUsd,
+    });
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 export default router;
