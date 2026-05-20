@@ -87,6 +87,17 @@ export function WhatsAppPageClient({ title }: { title: string }) {
     return () => clearInterval(i);
   }, [loadThreads]);
 
+  // Tell the (app) layout to drop its max-width / padding wrapper so the
+  // chat surface can hit the screen edges. globals.css picks up the
+  // body attribute and overrides the wrapper. Cleared on unmount so
+  // other pages get their normal centered layout back.
+  useEffect(() => {
+    document.body.setAttribute("data-chat-fullscreen", "true");
+    return () => {
+      document.body.removeAttribute("data-chat-fullscreen");
+    };
+  }, []);
+
   useEffect(() => {
     if (!selectedChatId) {
       setMessages([]);
@@ -111,10 +122,13 @@ export function WhatsAppPageClient({ title }: { title: string }) {
     // (rendered from Sidebar.tsx), so we don't reserve any vertical
     // space for it here.
     //
-    // -mx-4 -my-4 cancels the app shell's px-4 py-4 padding so the
-    // chat hits the screen edges.
+    // The (app) layout's max-w-4xl + padding wrapper is neutralised by
+    // `body[data-chat-fullscreen="true"]` (set above + handled by
+    // globals.css), so this container can hit the screen edges
+    // directly without negative-margin hacks. h-[calc(100dvh-3.5rem)]
+    // on mobile leaves room for the bottom nav.
     <div
-      className="-mx-4 -my-4 flex flex-col h-[calc(100dvh-3.5rem)] md:h-[100dvh]"
+      className="flex flex-col h-[calc(100dvh-3.5rem)] md:h-[100dvh] p-2 md:p-3"
       dir={isHe ? "rtl" : "ltr"}
     >
       {/* Accessibility-only title — read by screen readers but invisible
@@ -128,10 +142,10 @@ export function WhatsAppPageClient({ title }: { title: string }) {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-3">
+      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)] gap-3">
         {/* Mobile: hide thread list when a chat is open */}
         <div
-          className={`md:block min-h-0 ${selectedChatId ? "hidden" : "block"}`}
+          className={`md:block min-h-0 min-w-0 ${selectedChatId ? "hidden" : "block"}`}
         >
           <ThreadList
             threads={threads}
@@ -143,7 +157,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
         </div>
 
         {/* Mobile: hide message view when no chat is selected */}
-        <div className={`min-h-0 ${selectedChatId ? "block" : "hidden md:block"}`}>
+        <div className={`min-h-0 min-w-0 ${selectedChatId ? "block" : "hidden md:block"}`}>
           {selectedChatId ? (
             <ThreadView
               messages={messages}
