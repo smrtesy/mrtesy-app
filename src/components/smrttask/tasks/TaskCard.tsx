@@ -12,6 +12,7 @@ import {
   Folder,
   CheckSquare,
   Play,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
@@ -26,6 +27,7 @@ interface TaskCardProps {
   onComplete: (taskId: string) => void;
   onSnooze: (taskId: string) => void;
   onActivate?: (taskId: string) => void;
+  onDelete?: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
   /** Optional bulk-select integration. When provided, a checkbox is shown. */
@@ -47,6 +49,7 @@ export function TaskCard({
   onComplete,
   onSnooze,
   onActivate,
+  onDelete,
   onQuickAction,
   onDriveSearch,
   selected,
@@ -208,6 +211,20 @@ export function TaskCard({
               title={t("actions.activate")}
             >
               <Play className="h-4 w-4" />
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 md:h-8 md:w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(task.id);
+              }}
+              title={t("actions.delete")}
+            >
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
