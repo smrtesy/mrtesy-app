@@ -79,3 +79,18 @@
     display: none;
   }
 }
+
+/* Chat-fullscreen mode — set by WhatsAppPageClient via
+   `data-chat-fullscreen` on <body>. Drops the inner wrapper's max-width,
+   padding, and bottom space-for-nav so the chat surface fills the
+   remaining main area edge-to-edge. The mobile bottom nav is still
+   visible (chat just gets h-[calc(100dvh-3.5rem)] from the component). */
+body[data-chat-fullscreen="true"] main[data-sidebar-main] {
+  padding: 0 !important;
+  padding-bottom: 0 !important;
+}
+body[data-chat-fullscreen="true"] main[data-sidebar-main] > div {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
