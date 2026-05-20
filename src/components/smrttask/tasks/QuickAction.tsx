@@ -6,7 +6,6 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, Mail, X } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { toast } from "sonner";
@@ -28,7 +27,6 @@ export function QuickAction({
   onDone,
 }: QuickActionProps) {
   const t = useTranslations("tasks.actions");
-  const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState(false);
@@ -53,29 +51,10 @@ export function QuickAction({
     setResult("");
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No session");
-
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/actions/execute`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            task_id: taskId,
-            action_type: actionLabel,
-          }),
-        }
-      );
-
-      const data = await resp.json();
-      if (data.error) throw new Error(data.error);
+      const data = await api<{ result?: string }>("/api/actions/execute", {
+        method: "POST",
+        body: { task_id: taskId, action_type: actionLabel },
+      });
       setResult(data.result || "");
     } catch (e) {
       toast.error((e as Error).message);
@@ -111,33 +90,17 @@ export function QuickAction({
   async function handleGmailDraft() {
     setSaving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No session");
-
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/actions/execute`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            task_id: taskId,
-            // Use the action's own label when it's an email-draft action; otherwise
-            // fall back to Hebrew reply draft (the most common case).
-            action_type: actionLabel.startsWith("draft_reply_") || actionLabel.startsWith("draft_settlement")
-              ? actionLabel
-              : "draft_reply_he",
-          }),
-        }
-      );
-
-      const data = await resp.json();
-      if (data.error) throw new Error(data.error);
+      const data = await api<{ draft_url?: string }>("/api/actions/execute", {
+        method: "POST",
+        body: {
+          task_id: taskId,
+          // Use the action's own label when it's an email-draft action; otherwise
+          // fall back to Hebrew reply draft (the most common case).
+          action_type: actionLabel.startsWith("draft_reply_") || actionLabel.startsWith("draft_settlement")
+            ? actionLabel
+            : "draft_reply_he",
+        },
+      });
 
       toast.success(t("gmailDraft"));
       if (data.draft_url) {

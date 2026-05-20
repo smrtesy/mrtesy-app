@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Folder,
   CheckSquare,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
@@ -24,6 +25,7 @@ interface TaskCardProps {
   onSelect: (task: Task) => void;
   onComplete: (taskId: string) => void;
   onSnooze: (taskId: string) => void;
+  onActivate?: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
   /** Optional bulk-select integration. When provided, a checkbox is shown. */
@@ -44,6 +46,7 @@ export function TaskCard({
   onSelect,
   onComplete,
   onSnooze,
+  onActivate,
   onQuickAction,
   onDriveSearch,
   selected,
@@ -193,6 +196,20 @@ export function TaskCard({
           >
             <Clock className="h-4 w-4" />
           </Button>
+          {onActivate && task.status === "inbox" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 md:h-8 md:w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate(task.id);
+              }}
+              title={t("actions.activate")}
+            >
+              <Play className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <Button
           variant="ghost"

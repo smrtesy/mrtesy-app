@@ -22,6 +22,7 @@ import {
   Pencil,
   X,
   Folder,
+  Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -47,11 +48,12 @@ interface TaskDetailProps {
   open: boolean;
   onClose: () => void;
   onUpdate: () => void;
+  onDelete?: (taskId: string) => void;
   onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
 }
 
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickAction, onDriveSearch }: TaskDetailProps) {
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onQuickAction, onDriveSearch }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
@@ -542,6 +544,17 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onQuickActio
             <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handleSnooze} title={t("actions.snooze")}>
               <Clock className="h-4 w-4" />
             </Button>
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 text-red-600 hover:text-red-700 hover:bg-red-50"
+                onClick={() => onDelete(task.id)}
+                title={t("actions.delete")}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
           <Button
             variant="default"
