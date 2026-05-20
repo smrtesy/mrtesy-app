@@ -26,7 +26,6 @@ import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
-import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -86,18 +85,10 @@ app.use(cors(corsOptions));
 // body-parsing or route logic. Some proxies (Railway, Vercel) otherwise 502.
 app.options(/.*/, cors(corsOptions));
 
-// `verify` exposes the raw, unparsed body to downstream handlers via
-// `req.rawBody`. The WhatsApp webhook needs the exact bytes Meta signed in
-// X-Hub-Signature-256, and re-stringifying the parsed JSON loses the
-// original whitespace/ordering. Limit bumped to 10mb for history chunks.
-app.use(
-  express.json({
-    limit: "10mb",
-    verify: (req, _res, buf) => {
-      (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
-    },
-  }),
-);
+// Limit bumped to 10mb for legacy WhatsApp history payloads — the webhook
+// has moved to Vercel but other routes (admin imports, batch payloads) may
+// rely on the headroom. Trim later if profile shows it's unused.
+app.use(express.json({ limit: "10mb" }));
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
@@ -105,15 +96,10 @@ app.get("/health", (_req, res) => {
 });
 
 // Public webhook FIRST — mounted at app level, before any auth-guarded
-// routers. Several sub-routers downstream (admin/users, admin/orgs,
-// admin/apps, smrttask/tasks, etc.) open with
-// `router.use(requireAuth, ...)` at root, which Express runs for EVERY
-// path that enters that router — including /api/webhooks/whatsapp. Even
-// after we put the webhook first inside smrttaskRouter, adminRouter is
-// still mounted earlier and was 401'ing the request. Mounting the webhook
-// at the app level gets it picked up before anything else.
-app.use("/api", whatsappWebhookRouter);
-
+// The WhatsApp webhook moved to Vercel (src/app/api/webhooks/whatsapp/
+// route.ts) so its mount-first dance at the app level is gone too. Public
+// routes that need to bypass auth-chained sub-routers should be mounted
+// here, above the smrttask/admin routers, the same way the webhook was.
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);

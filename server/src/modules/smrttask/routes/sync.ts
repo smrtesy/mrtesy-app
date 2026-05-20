@@ -79,8 +79,9 @@ router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
 });
 
 // Part 2 (WhatsApp) intentionally removed: WhatsApp ingestion is now
-// event-driven via /api/webhooks/whatsapp (see whatsapp-webhook.ts). The
-// previous /part2 route pulled from a Google Sheet on a 15-min cron.
+// event-driven via the Vercel Route Handler at
+// src/app/api/webhooks/whatsapp/route.ts. The previous /part2 route pulled
+// from a Google Sheet on a 15-min cron.
 
 // ── Part 3: classifier — proxied to the Supabase ai-process Edge Function ──
 // The Express part3-classifier was deleted in this same commit; ai-process

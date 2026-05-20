@@ -374,9 +374,10 @@ async function tryLinkToExistingTask(
   userId: string,
 ): Promise<{ id: string; updates: any[] } | null> {
   // ── WhatsApp path ─────────────────────────────────────────────────────
-  // whatsapp-webhook upserts ONE source_message per chat and resets
-  // processing_status='pending' on every incoming message. Without this
-  // dedup, ai-process would create a fresh task for every chat reply.
+  // The WhatsApp webhook (Vercel route at src/app/api/webhooks/whatsapp)
+  // upserts ONE source_message per chat and resets processing_status to
+  // 'pending' on every incoming message. Without this dedup, ai-process
+  // would create a fresh task for every chat reply.
   // Match on the same source_message_id and append to the existing task.
   if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
     const { data: openTask, error: taskErr } = await supabase

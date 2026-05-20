@@ -10,27 +10,23 @@ import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
 import actionsRouter from "./routes/actions";
 import syncRouter from "./routes/sync";
-import whatsappWebhookRouter from "./routes/whatsapp-webhook";
 import whatsappViewRouter from "./routes/whatsapp-view";
 
 const router = Router();
 
-// PUBLIC webhook FIRST — tasks/projects/reminders below register
-// `router.use(requireAuth, requireOrg, requireApp("smrttask"))` at their
-// top, and because they mount at root (no path), Express runs that auth
-// middleware for ANY path that enters smrttaskRouter — including
-// /webhooks/whatsapp. Meta's GET handshake carries no Authorization, so
-// it would get a 401 from the *wrong* router before reaching ours.
-// Putting the unauthenticated webhook first means the request is matched
-// and 200'd before the auth-guarded routers ever see it.
-router.use(whatsappWebhookRouter);
+// WhatsApp ingestion webhook moved to Vercel:
+// src/app/api/webhooks/whatsapp/route.ts (Next.js Route Handler). Express
+// no longer receives Meta POSTs — DualHook points to the Vercel URL.
 
 router.use(tasksRouter);
 router.use(projectsRouter);
 router.use(remindersRouter);
 router.use("/actions", actionsRouter);
 router.use("/sync", syncRouter);
-// Authenticated read API powering /[locale]/whatsapp.
+// Authenticated read API powering /[locale]/whatsapp (threads, messages, send,
+// media). Still on Express because moving it would require porting the
+// requireAuth/requireOrg/requireApp middleware chain — read-API downtime
+// doesn't drop data, unlike the webhook which moved for that exact reason.
 router.use(whatsappViewRouter);
 
 export default router;

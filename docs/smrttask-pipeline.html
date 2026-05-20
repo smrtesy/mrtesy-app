@@ -35,6 +35,7 @@
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
   .badge.edge { background: #ddd6fe; color: #5b21b6; }
   .badge.express { background: #fed7aa; color: #9a3412; }
+  .badge.vercel { background: #e5e7eb; color: #111827; }
   .badge.cron { background: #bbf7d0; color: #166534; }
   .badge.client { background: #bfdbfe; color: #1e40af; }
   .badge.deleted { background: #fecaca; color: #991b1b; text-decoration: line-through; }
@@ -152,9 +153,9 @@
 
 <h3>ד. WhatsApp (DualHook → Webhook)</h3>
 <table>
-<tr><th>פעולה</th><td>הודעות מ-WhatsApp Cloud API מועברות דרך DualHook → webhook ב-Express</td></tr>
-<tr><th>מיקום</th><td><span class="badge express">Express</span> <code>POST /api/webhooks/whatsapp</code> (Meta verification: <code>GET /api/webhooks/whatsapp</code>)</td></tr>
-<tr><th>קוד</th><td><span class="source">server/src/modules/smrttask/routes/whatsapp-webhook.ts</span> (1015 שורות; כתיבה ל-source_messages בשורות 988-1012)</td></tr>
+<tr><th>פעולה</th><td>הודעות מ-WhatsApp Cloud API מועברות דרך DualHook → webhook ב-Vercel</td></tr>
+<tr><th>מיקום</th><td><span class="badge vercel">Vercel</span> <code>POST /api/webhooks/whatsapp</code> (Meta verification: <code>GET /api/webhooks/whatsapp</code>) — Next.js Route Handler על דומיין ה-app</td></tr>
+<tr><th>קוד</th><td><span class="source">src/app/api/webhooks/whatsapp/route.ts</span> (PR #44; runtime=nodejs, force-dynamic)</td></tr>
 <tr><th>source_type</th><td><code>whatsapp</code> להודעות נכנסות, <code>whatsapp_echo</code> להודעות שיוצאות</td></tr>
 <tr><th>קיבוץ</th><td>שורה אחת ב-<code>source_messages</code> לכל "שיחה" (<code>chatId</code>), עם <code>raw_content</code> שמכיל 20 הודעות אחרונות</td></tr>
 <tr><th>אימות</th><td>HMAC signature + verify token (לא JWT)</td></tr>
@@ -563,39 +564,28 @@ context that the AI doesn't need to re-read this message.</code></pre>
 <li><strong>part4-projects כפול</strong> — קיים גם ב-Express (<code>parts/part4-projects.ts</code>) וגם כ-Edge Function <code>project-detection</code> (רץ <code>0 2 * * *</code>). שניהם פעילים, פוטנציאל לכפילות בהרצה. צריך לבחור אחד ולמחוק את השני.</li>
 </ul>
 
-<h3>נקודה 2 — Edge Function <code>whatsapp</code> v10: מה מצאתי</h3>
+<h3>נקודה 2 — WhatsApp עבר ל-Vercel (סגור)</h3>
 
-<p>בדקתי דרך <code>get_edge_function</code> את התוכן של whatsapp v10. הקובץ
-ACTIVE, ו<strong>גם הוא כותב ל-<code>source_messages</code></strong> בדיוק
-כמו ה-Express webhook — אותו <code>source_type='whatsapp'</code> /
-<code>'whatsapp_echo'</code>, עם <code>onConflict</code> על
-<code>(user_id, source_type, source_id)</code>. כלומר אם DualHook/Meta היה
-מפנה את ה-traffic לשני המקומות, היו נכתבות שורות כפולות.</p>
-
-<p><strong>מי באמת מקבל את התעבורה היום?</strong> בדקתי את שתי השורות
-האחרונות ב-<code>source_messages</code>:</p>
+<div class="callout ok">
+<div class="label">הוחלט ונסגר</div>
+<p>WhatsApp webhook עבר ב-PR #44 ל-Vercel Route Handler ב-
+<span class="source">src/app/api/webhooks/whatsapp/route.ts</span>.
+DualHook מצביע על הדומיין של ה-app ב-Vercel ולא יותר על Railway או על
+Supabase Edge. הסיבה: ה-instance ב-Railway היה לפעמים down, Meta הייתה
+מקבלת connection refused, וההודעות נופלות. Vercel נותן 99.99% SLA.</p>
+<p>מה שנמחק בעקבות זה (בקומיט הזה):</p>
 <ul>
-<li><code>source_id = wa:16469234230</code>, <code>wa:19293330248</code></li>
+<li><code>server/src/modules/smrttask/routes/whatsapp-webhook.ts</code> (1015 שורות) — נמחק</li>
+<li>הרישום של ה-router ב-<code>server/src/index.ts</code> + <code>modules/smrttask/index.ts</code> — נמחק</li>
+<li>ה-<code>verify</code> callback של <code>express.json</code> שתפס את <code>rawBody</code> ל-HMAC — נמחק (אין לו עוד צרכן)</li>
+<li>Edge Function <code>whatsapp</code> v10 — הוחלף ב-stub שמחזיר 410 Gone (מחיקה סופית דרך ה-dashboard)</li>
+<li>Edge Function <code>whatsapp-v11</code> + טבלת <code>source_messages_shadow</code> — אינפרא של שדואו רן שהוקמה בעבר ולא הופעלה; הטבלה נמחקה (migration <code>20260520000006</code>)</li>
+<li><code>server/src/prompts/whatsapp.ts</code> — קוד יתום (אף קובץ לא <code>import</code>-ב אותו), נמחק</li>
 </ul>
-<p>הפורמט <code>wa:&lt;phone&gt;</code> נוצר ע"י קוד ה-Express (ראה
-<span class="source">whatsapp-webhook.ts</span>). ה-Edge Function יוצר
-<code>source_id = msg.id</code> מ-Meta (פורמט <code>wamid.XXX</code>).
-המסקנה: <strong>Meta/DualHook מפנים רק ל-Express היום</strong>. ה-Edge
-Function הזה <em>פרוס אבל לא מקבל traffic</em>.</p>
-
-<p><strong>למה זה לא תואם להחלטה "להשאיר Edge, להוריד Express"?</strong>
-ההחלטה ההיא הייתה ל-<em>סיווג</em> (ai-process מנצח את part3-classifier).
-ל-WhatsApp, ה-Repo הלך בכיוון ההפוך ב-PR #36 (DualHook → Express webhook
-ישיר), אז Express הוא ה-source-of-truth בפועל. ה-Edge Function v10 הוא
-שריד מאיטרציה קודמת.</p>
-
-<div class="callout warn">
-<div class="label">החלטה דרושה</div>
-<p>אתה צריך לבחור אחד מהשניים — אי אפשר להשאיר את שניהם:</p>
-<ol>
-<li><strong>למחוק את ה-Edge Function</strong> (<code>delete_edge_function whatsapp</code>) — מקבל את ההחלטה של PR #36.</li>
-<li><strong>להפנות את DualHook ל-Edge ולמחוק את Express webhook</strong> — צריך להגדיר ב-DualHook/Meta את ה-URL החדש: <code>https://exjnlghuzuvqedlltztz.supabase.co/functions/v1/whatsapp?user_id=&lt;UUID&gt;</code>, ולמחוק את <code>whatsapp-webhook.ts</code> ב-Express. שים לב: ה-Edge Function v10 לא עושה את הקיבוץ-לפי-שיחה (אחת לכל chat) שה-Express עושה — הוא כותב שורה לכל הודעה. תצטרך פורט של ה-קיבוץ ל-Edge Function לפני שתעבור.</li>
-</ol>
+<p>מה שנשאר ב-Express ובכוונה: <code>whatsapp-view.ts</code> (read API
+לעמוד <code>/whatsapp</code> — threads/messages/send/media). הוא ימשיך לרוץ
+ב-Express עד שRailway ייסגר לגמרי כי דרושים לו ה-middlewares
+<code>requireAuth + requireOrg + requireApp("smrttask")</code>.</p>
 </div>
 
 <h3>נקודה 3 — Calendar: 0 שורות. מה השורש</h3>
