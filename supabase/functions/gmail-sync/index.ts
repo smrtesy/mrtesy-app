@@ -248,6 +248,12 @@ async function syncUserGmail(userId: string) {
           : new Date(parseInt(msg.internalDate)).toISOString(),
         processing_status: "pending",
         ai_classification: "pending",
+        // metadata.labels carries Gmail's own categorisation
+        // (CATEGORY_PROMOTIONS / SOCIAL / UPDATES / FORUMS / PERSONAL etc.).
+        // ai-process uses these in preClassify to decide informational vs
+        // needs_claude — replacing the previous hardcoded keyword list.
+        // threadId powers the follow-up linking in ai-process.
+        metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [] },
       },
       { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true }
     );

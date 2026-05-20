@@ -15,12 +15,40 @@ import { getUserPromptContext } from "../../../lib/user-context";
 
 const router = Router();
 
+const DEFAULT_DAILY_BUDGET_USD = 10;
+
 async function getUserId(req: Request): Promise<string | null> {
   const token = req.headers.authorization?.replace("Bearer ", "") ?? "";
   if (!token) return null;
   const { data, error } = await db.auth.getUser(token);
   if (error || !data?.user) return null;
   return data.user.id;
+}
+
+async function getDailyBudget(userId: string): Promise<number> {
+  const { data } = await db
+    .from("user_settings")
+    .select("daily_ai_budget_usd")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const raw = data?.daily_ai_budget_usd;
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_DAILY_BUDGET_USD;
+}
+
+async function getSpentToday(userId: string): Promise<number> {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const { data } = await db
+    .from("log_entries")
+    .select("ai_cost_usd")
+    .eq("user_id", userId)
+    .gte("created_at", todayStart.toISOString())
+    .not("ai_cost_usd", "is", null);
+  return (data ?? []).reduce(
+    (sum, row) => sum + (Number((row as { ai_cost_usd: number | null }).ai_cost_usd) || 0),
+    0,
+  );
 }
 
 router.post("/execute", async (req: Request, res: Response) => {
@@ -41,6 +69,18 @@ router.post("/execute", async (req: Request, res: Response) => {
     .single();
 
   if (taskErr || !task) return res.status(404).json({ error: "Task not found" });
+
+  // Daily budget gate — abort before any paid API call.
+  const budget = await getDailyBudget(userId);
+  const spentBefore = await getSpentToday(userId);
+  if (spentBefore >= budget) {
+    return res.status(429).json({
+      error: `התקציב היומי לבינה (${budget.toFixed(2)}$) הסתיים. כבר נוצלו ${spentBefore.toFixed(2)}$. נסה שוב מחר, או הגדל את התקציב בהגדרות.`,
+      code: "BUDGET_EXCEEDED",
+      spent_usd: spentBefore,
+      budget_usd: budget,
+    });
+  }
 
   // Load source message for context
   const { data: sourceMsg } = task.source_message_id
@@ -79,6 +119,11 @@ router.post("/execute", async (req: Request, res: Response) => {
   let result = "";
   let draftLink: string | undefined;
   let actionError: string | undefined;
+  let totalCost = 0;
+  const startedAt = Date.now();
+  const modelUsed = action_type === "financial_advisor" || action_type === "draft_settlement_request"
+    ? "claude-opus-4-7"
+    : "claude-sonnet-4-6";
 
   try {
     switch (action_type) {
@@ -87,13 +132,14 @@ router.post("/execute", async (req: Request, res: Response) => {
       case "draft_reply_en": {
         const lang = action_type.endsWith("_he") ? "Hebrew" : "English";
         const style = action_type.endsWith("_he") ? styleHe : styleEn;
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `Draft an email reply in ${lang} for ${userName}.\n${style ? `Writing style:\n${style}` : ""}`,
           `Original message:\n${originalContent}\n\nTask context:\n${taskContext}`,
           1024,
         );
         result = content;
+        totalCost += costUsd;
 
         // Auto-create Gmail draft if we have sender email
         if (sourceMsg?.sender_email) {
@@ -118,13 +164,14 @@ router.post("/execute", async (req: Request, res: Response) => {
       case "draft_whatsapp_en": {
         const lang = action_type.endsWith("_he") ? "Hebrew" : "English";
         const style = action_type.endsWith("_he") ? styleHe : styleEn;
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `Draft a WhatsApp message in ${lang} for ${userName}. Keep it concise and conversational.\n${style ? `Style:\n${style}` : ""}`,
           `Context:\n${taskContext}\n\nOriginal:\n${originalContent}`,
           512,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
 
@@ -146,13 +193,14 @@ router.post("/execute", async (req: Request, res: Response) => {
           history = snippets.join("\n---\n");
         }
 
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `Summarize communication history with ${contact} for ${userName}. Hebrew. 200-400 words. Include topics, status, open items.`,
           history || `No email history found. Task context:\n${taskContext}`,
           800,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
 
@@ -221,7 +269,7 @@ router.post("/execute", async (req: Request, res: Response) => {
 
       // ── Call preparation ────────────────────────────────────────────────────
       case "call_preparation": {
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `Prepare ${userName} for a phone call with ${task.related_contact ?? "the contact"}. Output in Hebrew:
 - Purpose of call
@@ -233,12 +281,13 @@ router.post("/execute", async (req: Request, res: Response) => {
           1024,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
 
       // ── Financial advisor ───────────────────────────────────────────────────
       case "financial_advisor": {
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "opus",
           `You are a financial advisor for ${userName}. Analyze and recommend optimal course of action.
 Output in Hebrew:
@@ -251,12 +300,13 @@ Output in Hebrew:
           2048,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
 
       // ── Draft settlement request ────────────────────────────────────────────
       case "draft_settlement_request": {
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "opus",
           `Draft a formal settlement request email in Hebrew for ${userName}.
 ${styleHe ? `Writing style:\n${styleHe}` : ""}
@@ -265,6 +315,7 @@ Be professional, factual, and constructive.`,
           1500,
         );
         result = content;
+        totalCost += costUsd;
         if (sourceMsg?.sender_email) {
           try {
             const draft = await createDraft(
@@ -286,13 +337,14 @@ Be professional, factual, and constructive.`,
           result = "Please specify what to do in the custom action field.";
           break;
         }
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `You are an AI assistant for ${userName}. Perform the requested action.`,
           `Task context:\n${taskContext}\n\nRequest:\n${custom_action}\n\nOriginal message:\n${originalContent}`,
           1500,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
 
@@ -304,13 +356,14 @@ Be professional, factual, and constructive.`,
         const instruction = (typeof custom_action === "string" && custom_action.trim())
           ? custom_action
           : String(action_type);
-        const { content } = await simpleCall(
+        const { content, costUsd } = await simpleCall(
           "sonnet",
           `You are an AI assistant for ${userName}. Perform the requested action and return the deliverable directly (no preamble). Reply in Hebrew unless the request is clearly in another language.`,
           `Task context:\n${taskContext}\n\nRequest:\n${instruction}\n\nOriginal message:\n${originalContent}`,
           1500,
         );
         result = content;
+        totalCost += costUsd;
         break;
       }
     }
@@ -323,7 +376,7 @@ Be professional, factual, and constructive.`,
       action_label: action_type,
       result,
       draft_url: draftLink,
-      model: action_type === "financial_advisor" ? "claude-opus-4-7" : "claude-sonnet-4-6",
+      model: modelUsed,
     };
 
     await db
@@ -347,7 +400,27 @@ Be professional, factual, and constructive.`,
       result: result.slice(0, 1000),
     });
 
-    return res.json({ result, draft_link: draftLink });
+    // Log cost to log_entries so the daily budget gate sees this run.
+    if (totalCost > 0) {
+      await db.from("log_entries").insert({
+        user_id: userId,
+        category: "ai_action",
+        status: "ok",
+        task_id,
+        task_title: task.title_he ?? task.title,
+        task_action: action_type,
+        ai_model_used: modelUsed,
+        ai_cost_usd: totalCost,
+        processing_duration_ms: Date.now() - startedAt,
+      });
+    }
+
+    const newSpent = spentBefore + totalCost;
+    return res.json({
+      result,
+      draft_link: draftLink,
+      budget: { spent_usd: newSpent, budget_usd: budget, cost_this_action_usd: totalCost },
+    });
   } catch (err) {
     actionError = err instanceof Error ? err.message : String(err);
 
@@ -368,6 +441,23 @@ Be professional, factual, and constructive.`,
       status: "failed",
       error: actionError,
     });
+
+    // Still log any cost incurred before the failure — partial calls bill too.
+    if (totalCost > 0) {
+      await db.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "ai_action",
+        status: "failed",
+        task_id,
+        task_title: task.title_he ?? task.title,
+        task_action: action_type,
+        ai_model_used: modelUsed,
+        ai_cost_usd: totalCost,
+        processing_duration_ms: Date.now() - startedAt,
+        error_message: actionError,
+      });
+    }
 
     return res.status(500).json({ error: actionError });
   }

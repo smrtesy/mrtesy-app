@@ -839,7 +839,32 @@
     "languageLabel": "Language: {lang}",
     "joinedLabel": "Joined: {date}",
     "slugPlaceholder": "e.g. crm",
-    "namePlaceholder": "e.g. CRM"
+    "namePlaceholder": "e.g. CRM",
+    "appParametersTitle": "System Parameters",
+    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits"
+  },
+  "adminParameters": {
+    "title": "System Parameters",
+    "description": "Global controls for the AI processing pipeline. Changes here affect every user.",
+    "loading": "Loading...",
+    "saved": "Changes saved",
+    "noChanges": "No changes to save",
+    "save": "Save",
+    "lastUpdated": "Updated: {when} by {who}",
+    "neverUpdated": "Never updated",
+    "modelsTitle": "AI Models",
+    "modelsDesc": "Models used for pre-classification and task creation",
+    "classificationModel": "Classification model (Haiku)",
+    "summaryModel": "Task-builder model (Sonnet)",
+    "limitsTitle": "Processing Limits",
+    "limitsDesc": "Batch sizes, calendar window, and how much body text goes to the AI",
+    "batch_size": "Batch size (messages per run)",
+    "processing_lock_minutes": "Processing lock (minutes)",
+    "calendar_past_days": "Calendar window — past (days)",
+    "calendar_future_days": "Calendar window — future (days)",
+    "body_truncate_classify": "Body truncate — classify (chars)",
+    "body_truncate_project": "Body truncate — project detect (chars)",
+    "body_truncate_task": "Body truncate — task build (chars)"
   },
   "inbox": {
     "title": "Inbox",
