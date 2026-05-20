@@ -141,6 +141,10 @@
       "addPlaceholder": "Add item...",
       "addButton": "Add",
       "removeItem": "Remove item",
+      "editItem": "Edit item",
+      "saveEdit": "Save",
+      "promoteItem": "Convert to task",
+      "promotedToast": "Item converted to a new task",
       "aiBadge": "AI"
     },
     "search": {

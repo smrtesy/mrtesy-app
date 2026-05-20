@@ -141,6 +141,10 @@
       "addPlaceholder": "הוסף פריט...",
       "addButton": "הוסף",
       "removeItem": "הסר פריט",
+      "editItem": "ערוך פריט",
+      "saveEdit": "שמור",
+      "promoteItem": "המר למשימה",
+      "promotedToast": "הפריט הומר למשימה חדשה",
       "aiBadge": "AI"
     },
     "search": {
