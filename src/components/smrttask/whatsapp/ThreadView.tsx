@@ -252,6 +252,14 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   );
 }
 
+// Drop everything that isn't a letter, digit, or single space, then
+// lowercase. Used to decide if a Haiku "polish" is substantive enough
+// to surface — "Appeal this decision →" vs "Appeal this decision."
+// collapse to the same string here.
+function normaliseForCompare(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
 function ComposeBox({
   chatId,
   withinWindow,
@@ -269,6 +277,10 @@ function ComposeBox({
   const [transcribing, setTranscribing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  // True once Haiku has cleared the current text as "good as-is" — used
+  // to render a small ✓ confirming the English is fine. Reset every time
+  // the text changes.
+  const [englishApproved, setEnglishApproved] = useState(false);
   // Remember the last text we already sent to the English checker so we
   // don't re-call it on every keystroke after the user paused once.
   const lastCheckedRef = useRef<string>("");
@@ -372,9 +384,13 @@ function ComposeBox({
     if (!looksEnglish) {
       // Clear any prior suggestion if the user switched language.
       if (suggestion) setSuggestion(null);
+      if (englishApproved) setEnglishApproved(false);
       return;
     }
     if (trimmed === lastCheckedRef.current) return;
+    // Reset approval the moment the text changes — the ✓ only reflects
+    // the most recently checked draft.
+    setEnglishApproved(false);
 
     let cancelled = false;
     const handle = setTimeout(async () => {
@@ -386,12 +402,19 @@ function ComposeBox({
           { method: "POST", body: { text: trimmed } },
         );
         if (cancelled) return;
-        // Only surface the suggestion if the user hasn't typed past it
-        // while we were waiting.
-        if (changed && s !== trimmed) {
+        // Decide between three outcomes: substantive suggestion, "good
+        // as-is" approval, or no signal. Haiku flips `changed` on any
+        // byte diff, so we compare a lightly normalised form
+        // (letters+digits only, lowercase) to filter out trivial
+        // punctuation tweaks like a stripped trailing arrow.
+        const substantive =
+          changed && s !== trimmed && normaliseForCompare(s) !== normaliseForCompare(trimmed);
+        if (substantive) {
           setSuggestion(s);
+          setEnglishApproved(false);
         } else {
           setSuggestion(null);
+          setEnglishApproved(true);
         }
       } catch {
         // Silent — the auto-check should never interrupt the user's flow.
@@ -404,36 +427,59 @@ function ComposeBox({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [text, looksEnglish, suggestion]);
-
-  function acceptSuggestion() {
-    if (suggestion) setText(suggestion);
-    setSuggestion(null);
-  }
+  }, [text, looksEnglish, suggestion, englishApproved]);
 
   function rejectSuggestion() {
     setSuggestion(null);
   }
 
-  async function handleSend() {
-    if (!text.trim() || sending) return;
+  // Send `body` to Meta. Used by both the Send button (with the
+  // textarea contents) and the "Replace" suggestion button (with the
+  // polished text — straight to the wire, skipping the textarea).
+  async function sendMessage(body: string, opts: { restoreOnFail?: boolean } = {}) {
+    const trimmed = body.trim();
+    if (!trimmed) return;
     if (!withinWindow) {
       toast.error(t("windowClosedShort"));
       return;
     }
+    // Drop the textarea + suggestion immediately so the operator can
+    // start typing the next message while Meta's send call (~1-2s)
+    // finishes in the background.
+    setText("");
+    setSuggestion(null);
+    setEnglishApproved(false);
+    lastCheckedRef.current = "";
     setSending(true);
     try {
       await api("/api/whatsapp/messages/send", {
         method: "POST",
-        body: { to_phone: chatId, text: text.trim() },
+        body: { to_phone: chatId, text: trimmed },
       });
-      setText("");
       onSent?.();
     } catch (e) {
+      // Only the textarea-driven send restores the draft; accepting a
+      // suggestion already wiped the original, restoring it would feel
+      // surprising.
+      if (opts.restoreOnFail) {
+        setText((curr) => (curr.trim() ? curr : trimmed));
+      }
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
+  }
+
+  // Accept the polish suggestion = send it immediately. The operator
+  // already saw the text and chose to use it; making them press a
+  // second button would be friction.
+  function acceptSuggestion() {
+    if (!suggestion) return;
+    sendMessage(suggestion);
+  }
+
+  async function handleSend() {
+    await sendMessage(text, { restoreOnFail: true });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -482,9 +528,10 @@ function ComposeBox({
               size="sm"
               className="h-7 text-[11px] gap-1"
               onClick={acceptSuggestion}
+              disabled={!withinWindow}
             >
-              <Check className="h-3 w-3" />
-              {t("englishAccept")}
+              <Send className="h-3 w-3" />
+              {t("englishSendPolished")}
             </Button>
           </div>
         </div>
@@ -526,7 +573,7 @@ function ComposeBox({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={withinWindow ? t("composePlaceholder") : t("composeDisabled")}
-          disabled={!withinWindow || sending || transcribing}
+          disabled={!withinWindow || transcribing}
           dir={dir}
           rows={1}
           className="resize-none min-h-[40px] max-h-[140px] text-sm"
@@ -534,7 +581,7 @@ function ComposeBox({
         <Button
           type="button"
           onClick={handleSend}
-          disabled={!withinWindow || !text.trim() || sending}
+          disabled={!withinWindow || !text.trim()}
           size="icon"
           aria-label={t("send")}
         >
@@ -547,6 +594,15 @@ function ComposeBox({
         <p className="text-[10px] text-muted-foreground flex items-center gap-1">
           <Sparkles className="h-2.5 w-2.5" />
           {t("englishChecking")}
+        </p>
+      )}
+      {/* Positive confirmation: Haiku reviewed the draft and found
+          nothing to fix. Only shown when there's nothing else
+          competing for the slot (no in-flight check, no suggestion). */}
+      {englishApproved && !checking && !suggestion && (
+        <p className="text-[10px] text-green-700 flex items-center gap-1">
+          <Check className="h-2.5 w-2.5" />
+          {t("englishApproved")}
         </p>
       )}
     </div>
