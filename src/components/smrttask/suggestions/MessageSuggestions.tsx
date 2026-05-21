@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -18,6 +18,7 @@ import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttas
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
 
@@ -41,7 +42,10 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  // searchResults: null = no active search, [] = search returned nothing,
+  // otherwise the SmartSearch matches scoped to this list (inbox + unverified).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   // ?focus=<id> from a /whatsapp deep-link → scroll the matching
@@ -121,24 +125,12 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [focusId, loading, suggestions, pathname, router, searchParams]);
 
-  // Client-side filter on the loaded list. Server pagination is capped at 1000
-  // which is well above the realistic backlog size, so filtering locally keeps
-  // the search snappy without round-trips.
-  const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return suggestions;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return suggestions.filter((task: any) => {
-      const haystack = [
-        task.title,
-        task.title_he,
-        task.description,
-        task.related_contact,
-        task.related_contact_email,
-      ].filter(Boolean).join(" ").toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [suggestions, searchQuery]);
+  // When SmartSearch is active, displayed rows come from it. Otherwise we show
+  // the regularly-fetched suggestion list. SmartSearch is scoped to the same
+  // filter as fetchSuggestions (status=inbox, manually_verified=false,
+  // source_message_id NOT NULL) via its refineQuery prop below, so the two
+  // sources are interchangeable from a row-shape perspective.
+  const displayed = searchResults ?? suggestions;
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -150,7 +142,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   }
 
   function selectAllFiltered() {
-    setSelected(new Set(filtered.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
+    setSelected(new Set(displayed.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
   }
 
   function clearSelection() { setSelected(new Set()); }
@@ -249,25 +241,42 @@ export function MessageSuggestions({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-3">
+      {/* Server-side search, same UX as the Tasks page.
+          The query is scoped to the suggestion filter (inbox + unverified +
+          has source_message) and pulls the same joined columns as
+          fetchSuggestions so search results render identically to the
+          un-searched list. */}
+      <SmartSearch
+        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
+        selectClause="*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color)"
+        refineQuery={(q) => q
+          .eq("status", "inbox")
+          .eq("manually_verified", false)
+          .not("source_message_id", "is", null)
+        }
+        hideArchiveToggle
+      />
+
       <SuggestionToolbar
         total={totalCount || suggestions.length}
-        filtered={filtered.length}
+        filtered={displayed.length}
         selectedCount={selected.size}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+        searchQuery=""
+        onSearchChange={() => {}}
         onSelectAll={selectAllFiltered}
         onClearSelection={clearSelection}
         onBulkApprove={handleBulkApprove}
         onBulkDismissFast={handleBulkDismissFast}
+        hideSearch
       />
 
-      {filtered.length === 0 && (
+      {displayed.length === 0 && (
         <div className="py-8 text-center text-muted-foreground text-sm">
           {t("noSuggestions")}
         </div>
       )}
 
-      {filtered.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
+      {displayed.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
         const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
         // YYYY-MM-DD parsed via new Date() lands at UTC midnight and shifts back a

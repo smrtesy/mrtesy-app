@@ -16,6 +16,9 @@ interface SuggestionToolbarProps {
   onBulkApprove?: () => void;
   onBulkDismissFast?: () => void;
   onBulkDismissWithReason?: () => void;
+  /** When true, skip rendering the built-in search input — the caller is
+   *  rendering its own search (e.g. the shared SmartSearch component). */
+  hideSearch?: boolean;
 }
 
 export function SuggestionToolbar({
@@ -29,37 +32,41 @@ export function SuggestionToolbar({
   onBulkApprove,
   onBulkDismissFast,
   onBulkDismissWithReason,
+  hideSearch,
 }: SuggestionToolbarProps) {
   const t = useTranslations("suggestions");
+  const searchActive = !hideSearch && !!searchQuery;
 
   return (
     <div className="space-y-2 pb-1">
-      {/* Search input */}
-      <div className="relative">
-        <Search className="absolute top-1/2 -translate-y-1/2 start-2 h-4 w-4 text-muted-foreground pointer-events-none" />
-        <Input
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder={t("searchPlaceholder")}
-          className="ps-8 pe-8 min-h-[40px]"
-          dir="auto"
-        />
-        {searchQuery && (
-          <button
-            type="button"
-            onClick={() => onSearchChange("")}
-            className="absolute top-1/2 -translate-y-1/2 end-2 text-muted-foreground hover:text-foreground"
-            aria-label={t("clearSelection")}
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+      {/* Search input — omitted when the caller renders its own (SmartSearch). */}
+      {!hideSearch && (
+        <div className="relative">
+          <Search className="absolute top-1/2 -translate-y-1/2 start-2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder={t("searchPlaceholder")}
+            className="ps-8 pe-8 min-h-[40px]"
+            dir="auto"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => onSearchChange("")}
+              className="absolute top-1/2 -translate-y-1/2 end-2 text-muted-foreground hover:text-foreground"
+              aria-label={t("clearSelection")}
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Count + select-all row */}
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground">
-          {searchQuery
+          {searchActive
             ? t("countLabel", { shown: filtered, total })
             : t("countLabel", { shown: total, total })}
         </span>
