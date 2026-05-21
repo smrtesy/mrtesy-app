@@ -99,6 +99,13 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     setEditTask((prev) => (prev ? ((sorted as any[]).find((s: any) => s.id === prev.id) as Task | undefined) ?? null : null));
     initialLoadDoneRef.current = true;
     setLoading(false);
+    // Nudge the sidebar to refetch its counters. The supabase Realtime
+    // subscription on tasks should also catch the underlying mutations,
+    // but firing a local event guarantees an instant update on the
+    // user's own actions without waiting for the round-trip.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("smrtesy:badge-refresh"));
+    }
   }, [supabase]);
 
   useEffect(() => {

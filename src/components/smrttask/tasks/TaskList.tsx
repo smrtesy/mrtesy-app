@@ -77,6 +77,11 @@ export function TaskList({ locale }: { locale: string }) {
         (a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
       );
       setTasks(sorted);
+      // Tell the sidebar to refetch counters — covers actions like
+      // complete/restore/dismiss whose Realtime event might lag.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("smrtesy:badge-refresh"));
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status !== 401) toast.error(e.message);
     } finally {

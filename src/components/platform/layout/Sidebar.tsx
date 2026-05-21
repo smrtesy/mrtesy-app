@@ -106,6 +106,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
   useEffect(() => {
     let mounted = true;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     async function fetchCount() {
       try {
@@ -120,21 +121,69 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       }
     }
 
+    // Push the current session token into the Realtime client BEFORE subscribing.
+    // createBrowserClient hydrates the session from cookies asynchronously, and
+    // the postgres_changes subscription can race that — without an auth token,
+    // RLS-checked tables ('tasks', 'notifications') silently drop events.
+    async function setupRealtimeAuth() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+    }
+
     fetchCount();
 
-    const channel = supabase
-      .channel("sidebar-inbox-count")
-      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" },         fetchCount)
-      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, fetchCount)
-      .subscribe();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    setupRealtimeAuth().then(() => {
+      if (!mounted) return;
+      channel = supabase
+        .channel("sidebar-inbox-count")
+        .on("postgres_changes", { event: "*", schema: "public", table: "tasks" },         fetchCount)
+        .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, fetchCount)
+        .subscribe((status: string) => {
+          // Diagnostic only — CHANNEL_ERROR / TIMED_OUT means the polling
+          // fallback below is doing the actual work and we should investigate.
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.warn("[sidebar] realtime status:", status);
+          }
+        });
+    });
+
+    // Token refresh: re-push the new access_token to realtime so the channel
+    // doesn't go stale after a few hours. Supabase rotates tokens roughly
+    // hourly; without this the realtime channel keeps the old JWT and starts
+    // failing silently.
+    const { data: authSub } = supabase.auth.onAuthStateChange((event: string, session: { access_token?: string } | null) => {
+      if (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") {
+        if (session?.access_token) {
+          supabase.realtime.setAuth(session.access_token);
+        }
+      }
+    });
+
+    // Local event — pages that mutate tasks (approve, dismiss, snooze,
+    // complete) dispatch this after a successful action so the badge
+    // refreshes instantly, without waiting for the Realtime round-trip.
+    const handleBadgeRefresh = () => fetchCount();
+    window.addEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
 
     const handleOrgChange = () => fetchCount();
     window.addEventListener("smrtesy:active-org-changed", handleOrgChange);
 
+    // Polling fallback. If realtime is healthy this is mostly idle work; if
+    // it's broken (cold network, expired JWT, publication misconfig) the
+    // sidebar still catches up within 30 s. Keep it generous on interval —
+    // the local event handler covers the user's own actions instantly.
+    pollTimer = setInterval(fetchCount, 30_000);
+
     return () => {
       mounted = false;
-      supabase.removeChannel(channel);
+      if (channel) supabase.removeChannel(channel);
+      authSub.subscription.unsubscribe();
       window.removeEventListener("smrtesy:active-org-changed", handleOrgChange);
+      window.removeEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [supabase]);
 
