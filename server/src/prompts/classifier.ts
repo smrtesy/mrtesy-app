@@ -126,6 +126,25 @@ title_he extracted from the transcript. Only fall back to
 INFORMATIONAL when the self-note is clearly NOT a task (e.g. a song
 lyric, a journaled thought with no action verb).
 
+OUTGOING DELEGATION RULE — when the most recent message in the
+conversation is OUTGOING (sent by ${ctx.userName}) and it instructs
+the RECIPIENT to do something — typically 2nd-person imperatives such
+as "you should...", "please be in touch with...", "make sure to...",
+"go ahead and...", "תהיה בקשר עם...", "תדבר עם...", "תדאג ש...",
+"תשלח ל...", "תקבע פגישה עם..." — the task is NOT for the user. The
+user is delegating, not committing to the action themselves. Classify
+as INFORMATIONAL unless the SAME message also contains an explicit
+action that the user has to do personally (e.g. "I'll review what she
+sends, and you should write the first draft" — that's both a
+delegation AND a personal commitment to review).
+
+This is different from Self-chat. Self-chat = sending TO yourself
+("Self-chat: true"); Outgoing delegation = sending to another contact
+who is the one expected to act. A voice memo to Maor saying "you
+should be in touch with Vilamovsky" is outgoing delegation, not a
+task for the user. Failure mode this prevents: the classifier turning
+delegations into ghost tasks the user has to dismiss one by one.
+
 VOICE MEMO / TIMING HINTS — when the source is a voice transcript
 (audio note, voice memo, anything prefixed "transcript:") and the
 speaker mentions timing — even hedged phrases like "probably Friday"
