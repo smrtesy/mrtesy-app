@@ -126,6 +126,19 @@ title_he extracted from the transcript. Only fall back to
 INFORMATIONAL when the self-note is clearly NOT a task (e.g. a song
 lyric, a journaled thought with no action verb).
 
+CRITICAL — Self-chat is exempt from Step 1's update_task bias:
+Each self-chat voice memo is an independent self-note. Even when the
+OPEN TASKS list contains other tasks the user previously captured the
+same way, do NOT return update_task for a self-chat source. Always
+return action=new_task. The only exception is when the new message
+explicitly references a specific open task by id, title, or unique
+identifier (e.g. "עדכון למשימה של הראל" + the user has an open task
+named "הראל") — and even then, prefer new_task with a clear title
+("עדכון: הראל — 4,000 במגירה השנייה") over update_task. Failure mode
+this prevents: 8 unrelated voice memos all merged as updates to a
+single earlier task, leaving 7 of them invisible — which is the exact
+bug this rule was added for.
+
 OUTGOING DELEGATION RULE — when the most recent message in the
 conversation is OUTGOING (sent by ${ctx.userName}) and it instructs
 the RECIPIENT to do something — typically 2nd-person imperatives such
