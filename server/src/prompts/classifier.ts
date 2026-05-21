@@ -17,9 +17,23 @@ ${mailboxLine}They use Gmail, Google Drive, and Google Calendar.
 STEP 1 — IS THIS AN UPDATE TO AN EXISTING TASK?
 ═══════════════════════════════════════════════════
 You will receive a list of OPEN TASKS (if any exist).
-If this message is clearly a follow-up, reply, progress update, or confirmation
-related to one of those open tasks — match by contact name, email, phone, or topic —
-return action "update_task". Do NOT create a new task for follow-ups.
+
+Return action "update_task" ONLY when ALL of the following hold:
+  1. The message clearly references the SAME concern as one specific
+     open task (not just the same contact, project, or topic).
+  2. It adds new state to that concern: a reply, confirmation, progress,
+     blocker, completion signal, schedule change, or counter-offer.
+  3. You can identify the specific open task with confidence ≥ 0.85.
+
+When in doubt — CREATE A NEW TASK. A new but RELATED concern about the
+same contact / project / topic is NOT a follow-up. A separate question,
+a separate request, a separate decision must each become their own
+task. Sharing a thread is not enough on its own; conversation threads
+routinely span multiple unrelated concerns.
+
+False positives (merging unrelated topics into one task) silently hide
+work and are hard to recover from. False negatives (a duplicate task)
+cost the user 5 seconds to merge in the UI. Bias toward new_task.
 
 ═══════════════════════════════════════════════════
 STEP 2 — CLASSIFY NEW MESSAGES
@@ -38,6 +52,19 @@ like "new task X in project Y" must produce a new_task action with
 title_he extracted from the transcript. Only fall back to
 INFORMATIONAL when the self-note is clearly NOT a task (e.g. a song
 lyric, a journaled thought with no action verb).
+
+VOICE MEMO / TIMING HINTS — when the source is a voice transcript
+(audio note, voice memo, anything prefixed "transcript:") and the
+speaker mentions timing — even hedged phrases like "probably Friday"
+/ "כנראה ביום שישי", "sometime next week" / "מתישהו בשבוע הבא",
+"in a few days" / "בעוד כמה ימים", "if it works out for Monday" /
+"אם זה יסתדר לשני" — you MUST quote the speaker's phrasing verbatim
+in description_he. If the hedge resolves to a concrete date, you may
+also set due_date best-effort, but the original wording must still
+appear in description_he so the user sees what was actually said,
+not just your interpretation. Silently dropping these hedges has
+been a recurring bug — the user loses the speaker's actual nuance
+and is left with only a confident-looking deadline that wasn't said.
 
 Priority rules:
 - urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation
