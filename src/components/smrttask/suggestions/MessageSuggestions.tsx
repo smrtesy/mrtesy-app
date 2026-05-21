@@ -9,13 +9,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Pencil } from "lucide-react";
+import { CheckCircle2, X, Bell, Pencil, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
+import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
 
@@ -38,6 +39,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
+  const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -164,6 +166,34 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     try {
       await api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" });
       toast.success(t("fastDismissed"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  // Mark an inbox suggestion as already done — for immediate tasks the user
+  // wants to log + close in one click instead of going through inbox → active
+  // → complete. /complete sets status=archived + completed_at, which also
+  // removes the row from the (status=inbox, manually_verified=false) filter.
+  async function handleComplete(taskId: string) {
+    try {
+      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+      toast.success(tTasks("actions.complete"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleSnoozeConfirm(untilIso: string) {
+    if (!snoozeTaskId) return;
+    try {
+      await api(`/api/tasks/${snoozeTaskId}/snooze`, {
+        method: "POST",
+        body: { until: untilIso },
+      });
+      toast.success(tTasks("actions.snooze"));
       fetchSuggestions();
     } catch (e) {
       toast.error((e as Error).message);
@@ -310,6 +340,8 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
                 onApprove={() => handleApprove(task.id as string)}
                 onEdit={() => setEditTask(task as Task)}
+                onSnooze={() => setSnoozeTaskId(task.id as string)}
+                onComplete={() => handleComplete(task.id as string)}
               />
             </CardContent>
           </Card>
@@ -332,13 +364,24 @@ export function MessageSuggestions({ locale }: { locale: string }) {
         onUpdate={fetchSuggestions}
         initialEditingFields
       />
+
+      <SnoozeDialog
+        open={!!snoozeTaskId}
+        onClose={() => setSnoozeTaskId(null)}
+        onConfirm={handleSnoozeConfirm}
+      />
     </div>
   );
 }
 
 /**
- * Per-card action row: AI trail icon (rightmost in RTL) + fast-X (red) + X! (orange)
- * + approve. The AI trail body expands inline below the row when toggled.
+ * Per-card action row, in RTL display order from start to end:
+ *   AI trail · edit · snooze · [flex] · fast-X (red) · X! (orange) · approve · done
+ *
+ * "approve" moves the suggestion into the active task list. "done" (green,
+ * matching the TaskCard complete button) marks the task as completed in one
+ * step — for users who want to log an immediate task and close it without
+ * the intermediate inbox stage.
  */
 function SuggestionActions({
   taskId,
@@ -346,14 +389,19 @@ function SuggestionActions({
   onDismissWithReason,
   onApprove,
   onEdit,
+  onSnooze,
+  onComplete,
 }: {
   taskId: string;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
   onEdit: () => void;
+  onSnooze: () => void;
+  onComplete: () => void;
 }) {
   const t = useTranslations("suggestions");
+  const tTasks = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const trail = useAITrail(taskId);
 
@@ -362,20 +410,30 @@ function SuggestionActions({
       <div className="flex gap-2 mt-3 items-center">
         <AITrailIconButton open={trail.open} onToggle={trail.toggle} />
         <Button
-          size="sm"
+          size="icon"
           variant="ghost"
-          className="h-9 min-w-[40px] gap-1"
+          className="h-9 w-9"
           onClick={onEdit}
           title={tCommon("edit")}
           aria-label={tCommon("edit")}
         >
           <Pencil className="h-4 w-4" />
         </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-9 w-9"
+          onClick={onSnooze}
+          title={tTasks("actions.snooze")}
+          aria-label={tTasks("actions.snooze")}
+        >
+          <Clock className="h-4 w-4" />
+        </Button>
         <div className="flex-1" />
         <Button
-          size="sm"
+          size="icon"
           variant="ghost"
-          className="h-9 min-w-[48px] gap-1 text-red-500 hover:text-red-600 hover:bg-red-50"
+          className="h-9 w-9 text-red-500 hover:text-red-600 hover:bg-red-50"
           onClick={onFastDismiss}
           title={t("fastDismiss")}
           aria-label={t("fastDismiss")}
@@ -383,9 +441,9 @@ function SuggestionActions({
           <X className="h-4 w-4" />
         </Button>
         <Button
-          size="sm"
+          size="icon"
           variant="ghost"
-          className="h-9 min-w-[48px] gap-0 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
+          className="h-9 w-9 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
           onClick={onDismissWithReason}
           title={t("dismissWithReason")}
           aria-label={t("dismissWithReason")}
@@ -394,12 +452,24 @@ function SuggestionActions({
           <span className="text-sm leading-none -ms-0.5">!</span>
         </Button>
         <Button
-          size="sm"
-          className="h-9 min-w-[48px] gap-1"
+          size="icon"
+          className="h-9 w-9"
           onClick={onApprove}
+          title={t("approve")}
+          aria-label={t("approve")}
         >
           <CheckCircle2 className="h-4 w-4" />
-          {t("approve")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-9 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          onClick={onComplete}
+          title={tTasks("actions.complete")}
+          aria-label={tTasks("actions.complete")}
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          <span className="hidden md:inline">{tTasks("actions.complete")}</span>
         </Button>
       </div>
 
