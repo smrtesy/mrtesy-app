@@ -114,9 +114,16 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
     // can detect follow-ups to messages that arrived moments ago and haven't
     // been approved yet — without this, a reply arriving before approval
     // creates a duplicate task instead of appending to the existing one.
+    // Join source_messages so each open-task line can also carry the original
+    // sender display name + received_at + age. Used by the classifier's
+    // "transactional follow-up" rule: when a new automated email arrives
+    // with sender "<Person> via <Service>" (DocuSign, Adobe Sign, Bill.com,
+    // HelloSign, ...), it can match an open task whose original sender was
+    // <Person> and whose title references <Service> — preventing the
+    // heads-up-then-actual-email pair from creating two duplicate tasks.
     const { data: openTasks } = await db
       .from("tasks")
-      .select("id, title_he, title, related_contact, related_contact_email, related_contact_phone, tags, source_message_id")
+      .select("id, title_he, title, description, related_contact, related_contact_email, related_contact_phone, tags, source_message_id, source_messages(sender, received_at)")
       .eq("organization_id", orgId)
       .in("status", ["inbox", "in_progress"])
       .order("created_at", { ascending: false })
@@ -124,9 +131,18 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
     const openTasksBlock = (openTasks ?? []).length > 0
       ? "OPEN TASKS (check for follow-ups before creating new):\n" +
-        (openTasks ?? []).map((t) =>
-          `[id:${t.id}] ${t.title_he ?? t.title} | contact: ${t.related_contact ?? ""} ${t.related_contact_email ?? ""} ${t.related_contact_phone ?? ""} | tags: ${(t.tags as string[] | null)?.join(",") ?? ""}`
-        ).join("\n")
+        (openTasks ?? []).map((t) => {
+          // Supabase returns the joined row as either a single object or an
+          // array depending on the relationship cardinality; normalize.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sm = Array.isArray(t.source_messages) ? t.source_messages[0] : (t.source_messages as any);
+          const originalSender = sm?.sender ?? "";
+          const ageHrs = sm?.received_at
+            ? Math.max(0, Math.round((Date.now() - new Date(sm.received_at as string).getTime()) / 3_600_000))
+            : null;
+          const ageHint = ageHrs != null ? ` | age_hrs: ${ageHrs}` : "";
+          return `[id:${t.id}] ${t.title_he ?? t.title} | contact: ${t.related_contact ?? ""} ${t.related_contact_email ?? ""} ${t.related_contact_phone ?? ""} | original_sender: ${originalSender} | tags: ${(t.tags as string[] | null)?.join(",") ?? ""}${ageHint}`;
+        }).join("\n")
       : "";
 
     // ── 3. Load active projects for matching (scoped to active org) ──────────
@@ -242,6 +258,33 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       if (result.action === "update_task" && result.task_id) {
         const targetTask = openTasks?.find((t) => t.id === result.task_id);
         if (targetTask) {
+          // NO-OP UPDATE GUARD: the prompt instructs the classifier to return
+          // update_he="" when the new message adds nothing new. In that case
+          // we still mark the source_message as classified (so it isn't
+          // re-processed) and bump last_interaction_at (the user did engage
+          // on the thread), but we DON'T append a noise entry to updates[].
+          const updateText = (result.update_he ?? "").trim();
+          const isNoOp = updateText.length === 0;
+
+          if (isNoOp) {
+            await db.from("tasks").update({
+              last_interaction_at: new Date().toISOString(),
+            })
+              .eq("id", result.task_id)
+              .eq("organization_id", orgId);
+            await db
+              .from("source_messages")
+              .update({ processing_status: "classified", ai_classification: "UPDATE_NOOP" })
+              .eq("id", msg.id);
+            tasksUpdated++;
+            if ((i + 1) % batchSize === 0) {
+              await db.from("run_sessions")
+                .update({ items_processed: itemsProcessed, tasks_updated: tasksUpdated })
+                .eq("id", sessionId);
+            }
+            continue;
+          }
+
           const { data: fullTask } = await db
             .from("tasks")
             .select("updates")
@@ -258,7 +301,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
                 created_at: new Date().toISOString(),
                 type: "ai_update",
                 actor: "claude",
-                content: result.update_he ?? "",
+                content: updateText,
                 source_message_id: msg.id,
                 source_type: msg.source_type,
               },

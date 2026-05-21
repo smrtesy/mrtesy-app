@@ -39,6 +39,37 @@ Common Hebrew follow-up openers to watch for:
   "אגב", "ולגבי", "מצורף", "כפי שדיברנו", "תזכורת" — these are almost
   always update_task.
 
+TRANSACTIONAL FOLLOW-UP PATTERN (signing / billing / e-sign services):
+Many automated services send mail with the sender display name in the
+form "<Person> via <Service>" — e.g. "Masha Blesofsky via Docusign",
+"Joe Smith via Adobe Sign", "Sarah via Bill.com", "X via HelloSign",
+"... via PandaDoc". The same person typically also sent a heads-up
+email from THEIR OWN address moments before ("FYI, you'll get a
+DocuSign from me to sign"). Without merging, you get two tasks for one
+real-world transaction.
+
+Detect this pattern and return update_task when ALL of the following hold:
+  1. The new message's sender display name matches the pattern
+     "^<Person> (via|on behalf of|for) <Service>$"  (case-insensitive,
+     trim whitespace). Examples of <Service>: Docusign, Adobe Sign,
+     HelloSign, Bill.com, PandaDoc, QuickBooks, Stripe, Square,
+     Notarize, SignNow.
+  2. There is an OPEN TASK whose original_sender display name equals
+     <Person> exactly (compare case-insensitive after trimming).
+     IMPORTANT: this is the original_sender field in the OPEN TASKS
+     list above, NOT related_contact — related_contact may be
+     Hebrew-normalized and is not reliable for this match.
+  3. <Service> (or a recognizable variant — "Docusign" / "DocuSign",
+     "Adobe Sign" / "AdobeSign") appears in that task's title_he or
+     description.
+  4. That task's age_hrs is ≤ 48 (the heads-up + actual email pair
+     should arrive within two days; older matches are likely
+     coincidence).
+
+If any of the 4 guards fails, do NOT apply this rule — fall back to
+the general heuristics. The 4-way match keeps blast radius small;
+do not weaken any clause.
+
 Only return "new_task" when:
   - No open task plausibly matches the concern; OR
   - Content is about a different concern even though the
@@ -48,6 +79,34 @@ Only return "new_task" when:
 Bias toward update_task on borderline cases. A wrong merge is easy to
 undo from the UI; a missed merge buries the update under a duplicate
 task and the user never sees the connection.
+
+DO NOT CLAIM TRUNCATION — never write update_he or description_he
+saying "the message was cut off", "the link was incomplete", "ההודעה
+חתוכה", "הקישור לא הושלם", or similar UNLESS you can see explicit
+truncation evidence:
+  - an ellipsis ('...') at the end of the message, OR
+  - a word that ends mid-character, OR
+  - the message body is empty / null.
+A long URL (100+ characters, including Google Forms / Drive share
+links) is NORMAL — not truncated. OCR'd page content that includes
+UI strings like "Draft saved", "Switch account", "Not shared",
+"Indicates required question" describes the form/page being EDITED in
+a browser, not a truncated WhatsApp message. Mistaking either for
+truncation has been a recurring noise bug.
+
+NO-OP UPDATE GUARD — when you decide action=update_task but the new
+message contributes NO new information vs. the existing task title +
+description + most recent update, return update_he as an empty string
+(""). The pipeline will skip writing a noisy "still in progress" /
+"waiting on X" entry that just restates what's already known. Cases
+that warrant update_he="":
+  - bare acknowledgments: "ok", "tx", "thanks", "got it", "👍",
+    "תודה", "סבבה", "מעולה"
+  - the user's own outbound nudge with no new content
+  - re-statements of the same status the last update already captured
+Only return a non-empty update_he when the message ADDS something:
+new commitment, new date, new attachment, real status change, an
+answer to an outstanding question, a completion signal.
 
 ═══════════════════════════════════════════════════
 STEP 2 — CLASSIFY NEW MESSAGES
