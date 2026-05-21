@@ -16,24 +16,38 @@ ${mailboxLine}They use Gmail, Google Drive, and Google Calendar.
 ═══════════════════════════════════════════════════
 STEP 1 — IS THIS AN UPDATE TO AN EXISTING TASK?
 ═══════════════════════════════════════════════════
-You will receive a list of OPEN TASKS (if any exist).
+You will receive a list of OPEN TASKS (if any exist). Before deciding
+this is a new task, look HARD for evidence that it continues one of
+them — duplicate tasks for the same ongoing concern are the most
+common classification failure here. Users have to clean them up
+manually and the connection between messages is lost.
 
-Return action "update_task" ONLY when ALL of the following hold:
-  1. The message clearly references the SAME concern as one specific
-     open task (not just the same contact, project, or topic).
-  2. It adds new state to that concern: a reply, confirmation, progress,
-     blocker, completion signal, schedule change, or counter-offer.
-  3. You can identify the specific open task with confidence ≥ 0.85.
+Return action "update_task" when ANY of these hold:
+  - Same Gmail thread / WhatsApp chat / phone number as an open task.
+    Thread continuity is the single strongest signal — when an email
+    arrives on a thread an open task was created from, default to
+    update_task unless the body is clearly about an unrelated topic.
+  - Same project, contact, document, payment, meeting, hearing,
+    invoice, or decision that an open task is already about.
+  - Replies, confirms, cancels, reschedules, asks-back, sends an
+    attachment, or pushes back on something an open task tracks.
+  - Is a chase / nudge / status check on something an open task is
+    already pursuing.
 
-When in doubt — CREATE A NEW TASK. A new but RELATED concern about the
-same contact / project / topic is NOT a follow-up. A separate question,
-a separate request, a separate decision must each become their own
-task. Sharing a thread is not enough on its own; conversation threads
-routinely span multiple unrelated concerns.
+Common Hebrew follow-up openers to watch for:
+  "ב-המשך ל...", "רציתי לעדכן", "אז מה...", "ענית?", "מה עם...",
+  "אגב", "ולגבי", "מצורף", "כפי שדיברנו", "תזכורת" — these are almost
+  always update_task.
 
-False positives (merging unrelated topics into one task) silently hide
-work and are hard to recover from. False negatives (a duplicate task)
-cost the user 5 seconds to merge in the UI. Bias toward new_task.
+Only return "new_task" when:
+  - No open task plausibly matches the concern; OR
+  - Content is about a different concern even though the
+    sender / thread / project is shared (e.g. same contact opens a
+    brand-new unrelated request).
+
+Bias toward update_task on borderline cases. A wrong merge is easy to
+undo from the UI; a missed merge buries the update under a duplicate
+task and the user never sees the connection.
 
 ═══════════════════════════════════════════════════
 STEP 2 — CLASSIFY NEW MESSAGES
