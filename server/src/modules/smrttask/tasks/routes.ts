@@ -596,11 +596,21 @@ router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
 // so the user doesn't have to dismiss each one individually.
 const DISMISSAL_CODES = new Set([
   "sender_unimportant",
+  // "from this sender, but only this TYPE of mail" — narrow rule that pairs
+  // the sender with a subject_contains keyword extracted by an AI proposer
+  // (and confirmable by the user in the dialog). Distinct from
+  // sender_unimportant which blocks ALL mail from the sender.
+  "sender_type_unimportant",
   "spam",
   "custom",
 ]);
 
-const CASCADING_CODES = new Set(["sender_unimportant", "spam"]);
+// Codes that cascade: dismissing one suggestion also dismisses other
+// pending suggestions in the same scope. sender_unimportant + spam cascade
+// over ALL pending tasks from the same sender. sender_type_unimportant
+// cascades over a narrower scope (same sender AND subject keyword) — its
+// preview is computed separately because the keyword affects the count.
+const CASCADING_CODES = new Set(["sender_unimportant", "spam", "sender_type_unimportant"]);
 
 type SenderResolution = {
   /** column on source_messages we filter by */
@@ -709,12 +719,48 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   const reasonCode = (req.body?.reason_code ?? "") as string;
   const reasonText = typeof req.body?.reason_text === "string" ? req.body.reason_text.trim() : "";
   const cascadeRequested = req.body?.cascade !== false;  // default true; pass false to opt out
+  // For sender_type_unimportant only: the subject keyword the user
+  // confirmed in the dialog (AI-proposed and possibly hand-edited). We
+  // require a non-empty value — without it the rule would collapse to
+  // `from=X` (block ALL mail from sender), which defeats the whole point
+  // of the "only this type" option.
+  const subjectKeyword = typeof req.body?.subject_keyword === "string"
+    ? req.body.subject_keyword.trim()
+    : "";
 
   if (!DISMISSAL_CODES.has(reasonCode)) {
     return res.status(400).json({ error: "invalid reason_code" });
   }
   if (reasonCode === "custom" && !reasonText) {
     return res.status(400).json({ error: "reason_text is required when reason_code='custom'" });
+  }
+  if (reasonCode === "sender_type_unimportant" && !subjectKeyword) {
+    return res.status(400).json({ error: "subject_keyword is required when reason_code='sender_type_unimportant'" });
+  }
+  // `&` is the clause separator for composite triggers. A keyword that
+  // contains `&` would split the persisted trigger into bogus clauses on
+  // the next parse. Reject it; the user can re-enter without the `&`.
+  if (reasonCode === "sender_type_unimportant" && subjectKeyword.includes("&")) {
+    return res.status(400).json({ error: "subject_keyword cannot contain the '&' character" });
+  }
+
+  // Narrow dismiss is gmail-only: `subject_contains=` has no meaning for
+  // WhatsApp / Calendar messages, which have no subject field. The UI
+  // hides the option for non-gmail tasks; this is the server-side guard.
+  if (reasonCode === "sender_type_unimportant") {
+    const { data: smGate } = await db
+      .from("tasks")
+      .select("source_messages(source_type)")
+      .eq("organization_id", req.org!.id)
+      .eq("id", req.params.id)
+      .maybeSingle();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const smGateRaw = (smGate as any)?.source_messages;
+    const smGateRow = (Array.isArray(smGateRaw) ? smGateRaw[0] : smGateRaw) as { source_type?: string | null } | null;
+    const srcType = smGateRow?.source_type ?? "";
+    if (srcType !== "gmail" && srcType !== "gmail_sent") {
+      return res.status(400).json({ error: "narrow dismiss is only available for email suggestions" });
+    }
   }
 
   // Load task + linked source message in one round-trip
@@ -753,15 +799,25 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
   } | null;
   const sender = CASCADING_CODES.has(reasonCode) ? resolveSender(sm, reasonCode) : null;
 
-  // 1. rules_memory — block the sender for future syncs.
+  // For sender_type_unimportant we compose a NARROW trigger from the
+  // sender filter plus the user-confirmed subject keyword. The rule is
+  // still rule_type=skip (or skip_spam for WhatsApp bots — though
+  // sender_type_unimportant is currently gated to gmail-only in the
+  // propose endpoint, so this branch is effectively Gmail).
+  const isNarrow = reasonCode === "sender_type_unimportant" && subjectKeyword.length > 0;
+  const composedTrigger = sender && isNarrow
+    ? `${sender.trigger}&subject_contains=${subjectKeyword}`
+    : sender?.trigger ?? null;
+
+  // 1. rules_memory — block the sender (or sender+type) for future syncs.
   let ruleCreated: { id: string; trigger: string; rule_type: string } | null = null;
-  if (sender) {
+  if (sender && composedTrigger) {
     const { data: rule, error: rErr } = await db
       .from("rules_memory")
       .insert({
         user_id: task.user_id,
         app_slug: "smrttask",
-        trigger:    sender.trigger,
+        trigger:    composedTrigger,
         rule_type:  sender.ruleType,
         category:   sender.category,
         action:     "skip",
@@ -778,24 +834,39 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
     }
   }
 
-  // 2. Cascade — archive every OTHER pending suggestion from the same sender.
+  // 2. Cascade — archive every OTHER pending suggestion that matches the rule.
+  //    For sender_unimportant/spam:        same sender, any subject.
+  //    For sender_type_unimportant:        same sender AND subject contains keyword.
   //    Skipped when cascade=false in body (the dialog's "סגור גם N אחרות" checkbox).
   let cascadedCount = 0;
   if (sender && cascadeRequested) {
+    // For narrow rules we need source_messages.subject in the filter step.
+    // The query is the same shape either way; we always pull subject so the
+    // narrow path can substring-match in JS (PostgREST has ilike support
+    // but mixing ilike with .in() for a list of subjects is messier than
+    // post-filtering the small candidate set we already have).
     const { data: matchingSms } = await db
       .from("source_messages")
-      .select("id")
+      .select("id, subject")
       .eq("user_id", task.user_id)
       .eq(sender.filterCol, sender.filterVal);
-    const smIds = (matchingSms ?? []).map((r) => r.id).filter((id) => id !== task.source_message_id);
 
-    if (smIds.length > 0) {
+    const candidateIds = (matchingSms ?? [])
+      .filter((r) => r.id !== task.source_message_id)
+      .filter((r) => {
+        if (!isNarrow) return true;
+        const subj = (r.subject ?? "").toLowerCase();
+        return subj.includes(subjectKeyword.toLowerCase());
+      })
+      .map((r) => r.id);
+
+    if (candidateIds.length > 0) {
       const { count, error: cErr } = await db
         .from("tasks")
         .update(dismissPatch, { count: "exact" })
         .eq("organization_id", req.org!.id)
         .eq("status", "inbox")
-        .in("source_message_id", smIds);
+        .in("source_message_id", candidateIds);
       if (cErr) {
         console.error("[dismiss] cascade update error:", cErr.message);
       } else {
@@ -1051,5 +1122,143 @@ Only return a rule if you can extract something concrete from the user's reason.
     confidence: parsed.confidence,
   };
 }
+
+/** Ask Claude Haiku to extract a short subject keyword that identifies the
+ *  TYPE of mail represented by this message — used by the narrow-dismiss
+ *  flow ("dismiss from this sender, only this type"). Returns the keyword
+ *  plus a confidence. When confidence is below 0.6 the UI shows an empty
+ *  field instead of a guess so the user types the keyword themselves. */
+async function proposeSubjectKeyword(
+  taskDescription: string,
+  subject: string,
+  bodyPreview: string,
+): Promise<{ subject_keyword: string; confidence: number } | null> {
+  const system = `You extract a short subject KEYWORD that identifies the *type* of email represented by this message — for use in a narrow skip rule "from this sender, only this type".
+
+Return ONLY valid JSON, no prose, with this shape:
+{ "subject_keyword": "<1-3 word keyword that appears in subjects of this type>", "confidence": 0.0-1.0 }
+
+CORE PRINCIPLE — the keyword must identify the TYPE/TEMPLATE of the email, not the unique instance:
+  - GOOD: "Deployment Failed" — identifies all Vercel deployment-failure alerts
+  - BAD:  "Build #4537 failed for project foo" — that's THIS specific build, not the type
+  - GOOD: "Invoice"           — identifies all invoices from a billing service
+  - BAD:  "Invoice INV-2024-0042 for $1,250" — that's THIS specific invoice
+  - GOOD: "Login alert"       — identifies all login notifications
+  - GOOD: "Order shipped"     — identifies all shipping confirmations
+
+Aim for 1-3 words. Prefer an English token if the subject is English; Hebrew if the subject is Hebrew. The keyword MUST be a substring that actually appears (case-insensitive) in subjects of this template — Gmail will match it as a substring at runtime.
+
+Confidence:
+  - 0.85-0.95 when the subject clearly follows a recognizable template
+  - 0.6-0.8   when the type is plausible but the subject is generic
+  - < 0.6     when there's no clear pattern — return whatever guess you have and let the UI surface that the user should confirm
+
+If the subject is too generic to extract a useful keyword (e.g. "Notification", "Hello", a single name, empty), return { "subject_keyword": "", "confidence": 0 } and the UI will ask the user to type one.`;
+
+  const userMsg = `Subject: ${subject}\n\nBody preview:\n${bodyPreview}\n\nTask context (what we created):\n${taskDescription}`;
+
+  try {
+    const { content } = await simpleCall("haiku", system, userMsg, 128);
+    const parsed = parseJsonResponse<{ subject_keyword: string; confidence: number }>(content);
+    if (!parsed) return null;
+    // `&` is the trigger-clause separator. Strip it from any AI output so
+    // the value can be safely composed into "from=X&subject_contains=Y"
+    // and round-tripped through parseSkipRules.
+    const keyword = (parsed.subject_keyword ?? "").replace(/&/g, "").trim();
+    const conf = typeof parsed.confidence === "number"
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : 0;
+    return { subject_keyword: keyword, confidence: conf };
+  } catch (e) {
+    console.error("[proposeSubjectKeyword] failed:", e);
+    return null;
+  }
+}
+
+/** GET /tasks/:id/narrow-dismiss-propose
+ *  AI-suggested subject keyword for the "dismiss from this sender, only this
+ *  type" flow. Returns the proposed keyword + cascade preview filtered on
+ *  same-sender AND subject contains the keyword. The UI shows the keyword
+ *  in an editable input so the user can correct a bad guess before
+ *  committing to a rule.
+ */
+router.get("/tasks/:id/narrow-dismiss-propose", async (req: Request, res: Response) => {
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, user_id, title_he, title, description, related_contact, source_message_id, source_messages(source_type, sender_email, sender_phone, sender, subject, body_text)")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+  if (!task.source_message_id) return res.status(400).json({ error: "task has no linked source message" });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const smRaw = (task as any).source_messages;
+  const sm = (Array.isArray(smRaw) ? smRaw[0] : smRaw) as {
+    source_type?: string | null; sender_email?: string | null; sender_phone?: string | null;
+    sender?: string | null; subject?: string | null; body_text?: string | null;
+  } | null;
+
+  // Narrow dismiss is Gmail-only. WhatsApp/Calendar messages have no subject
+  // so a "subject_contains=" clause can't be paired with the sender filter.
+  if (!sm || (sm.source_type !== "gmail" && sm.source_type !== "gmail_sent")) {
+    return res.status(400).json({ error: "narrow dismiss is only available for email suggestions" });
+  }
+
+  const sender = resolveSender(sm, "sender_unimportant");
+  if (!sender) return res.status(400).json({ error: "could not resolve sender" });
+
+  // Ask Claude for a keyword. The proposer can fail (network, rate limit)
+  // or return an empty keyword for generic subjects — both end with the UI
+  // showing an empty editable field and letting the user type one in.
+  const taskDesc = [
+    `Task: ${task.title_he ?? task.title ?? ""}`,
+    task.description ? `Description: ${task.description}` : "",
+    task.related_contact ? `Contact: ${task.related_contact}` : "",
+  ].filter(Boolean).join("\n");
+  const bodyPreview = (sm.body_text ?? "").slice(0, 1200);
+  const proposal = await proposeSubjectKeyword(taskDesc, sm.subject ?? "", bodyPreview);
+
+  const proposed = proposal && proposal.confidence >= 0.6 ? proposal.subject_keyword : "";
+
+  // Cascade preview: count OTHER pending suggestions from the same sender
+  // whose source_message.subject contains the proposed keyword. When the
+  // keyword is empty (low confidence / generic subject) we fall back to a
+  // sender-only count so the dialog still shows something meaningful.
+  let cascadeCount = 0;
+  const composedTrigger = proposed
+    ? `${sender.trigger}&subject_contains=${proposed}`
+    : sender.trigger;
+  {
+    const { data: matchingSms } = await db
+      .from("source_messages")
+      .select("id, subject")
+      .eq("user_id", task.user_id)
+      .eq(sender.filterCol, sender.filterVal);
+    const filtered = (matchingSms ?? [])
+      .filter((r) => r.id !== task.source_message_id)
+      .filter((r) => !proposed || (r.subject ?? "").toLowerCase().includes(proposed.toLowerCase()));
+    const smIds = filtered.map((r) => r.id);
+    if (smIds.length > 0) {
+      const { count } = await db
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", req.org!.id)
+        .eq("status", "inbox")
+        .in("source_message_id", smIds);
+      cascadeCount = count ?? 0;
+    }
+  }
+
+  res.json({
+    subject_keyword: proposed,
+    sender_trigger: sender.trigger,
+    composed_trigger: composedTrigger,
+    cascade_count: cascadeCount,
+    // Used by the UI to decide whether to pre-fill or prompt for entry.
+    has_proposal: proposed.length > 0,
+  });
+});
 
 export default router;

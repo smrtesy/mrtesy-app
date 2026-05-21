@@ -8,6 +8,12 @@ export interface MessageHeaders {
   from?: string | null;
   to?: string | null;
   senderEmail?: string | null;
+  /** Email Subject — needed for narrow rules whose clauses include
+   *  subject_contains=, including composite triggers like
+   *  `from=X&subject_contains=Y`. WhatsApp/Calendar items have no
+   *  subject, so a composite rule that includes subject_contains
+   *  cannot match those sources by design. */
+  subject?: string | null;
 }
 
 export interface ParsedSkipRules {
@@ -15,12 +21,93 @@ export interface ParsedSkipRules {
   shouldSkip(msg: MessageHeaders): boolean;
 }
 
-const TRIGGER_RE = /^(from|sender|to|domain|category|subject_contains|subject)\s*=\s*(.+)$/i;
+const CLAUSE_RE = /^(from|sender|to|domain|category|subject_contains|subject)\s*=\s*(.+)$/i;
 const CALENDAR_TRIGGER_RE = /^calendar\s*=\s*(.+)$/i;
 
 function extractEmail(field: string): string {
   const m = field.match(/<([^>]+)>/);
   return (m ? m[1] : field).trim().toLowerCase();
+}
+
+interface Clause {
+  key: string;
+  value: string;
+}
+
+function parseClauses(trigger: string): Clause[] {
+  // A trigger may be a single clause ("from=x@y.com") or several joined by
+  // "&" ("from=x@y.com&subject_contains=Deployment Failed"). All clauses in
+  // a composite trigger are AND-ed together — both at the Gmail query level
+  // (emitted as a single -(... ...) group) and at runtime (shouldSkip).
+  return trigger
+    .split("&")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const m = part.match(CLAUSE_RE);
+      if (!m) return null;
+      const value = m[2].trim().toLowerCase();
+      if (!value) return null;
+      return { key: m[1].toLowerCase(), value };
+    })
+    .filter((c): c is Clause => c !== null);
+}
+
+/** Build the Gmail `q` exclusion fragment for a single clause. Returns "" when
+ *  the clause has no Gmail representation (currently never, but kept for
+ *  symmetry with future clause types). */
+function clauseToGmailQuery(c: Clause): string {
+  switch (c.key) {
+    case "from":
+    case "sender":
+      return `from:${c.value}`;
+    case "to":
+      return `to:${c.value}`;
+    case "domain":
+      // Domain excludes mail to OR from. For composite (AND) rules with a
+      // domain clause we still use from: because the AND semantics make
+      // "to:" + "from:" combined incoherent — domain-narrow rules are
+      // unusual; the typical composite is from + subject_contains.
+      return `from:${c.value}`;
+    case "category":
+      return `category:${c.value}`;
+    case "subject_contains":
+    case "subject": {
+      const escaped = c.value.replace(/"/g, "");
+      // Gmail tolerates unquoted single-token subjects, but multi-word
+      // phrases need quotes to be matched as a contiguous substring.
+      return `subject:"${escaped}"`;
+    }
+    default:
+      return "";
+  }
+}
+
+/** Build a runtime checker for a single clause. Returns null when the clause
+ *  cannot be evaluated against {from, to, subject} at runtime (rare —
+ *  category= falls into this bucket: it depends on Gmail's category
+ *  classification, not on the raw headers). */
+function clauseToRuntimeCheck(
+  c: Clause,
+): ((args: { from: string; to: string; subject: string }) => boolean) | null {
+  switch (c.key) {
+    case "from":
+    case "sender":
+      return ({ from }) => from === c.value || from.includes(c.value);
+    case "to":
+      return ({ to }) => to.includes(c.value);
+    case "domain": {
+      const suffix = `@${c.value}`;
+      return ({ from, to }) => from.endsWith(suffix) || to.includes(suffix);
+    }
+    case "subject_contains":
+    case "subject":
+      return ({ subject }) => subject.includes(c.value);
+    case "category":
+      return null;
+    default:
+      return null;
+  }
 }
 
 export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
@@ -29,46 +116,44 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
   );
 
   const queryFilters: string[] = [];
-  const checks: Array<(from: string, to: string) => boolean> = [];
+  const checks: Array<(args: { from: string; to: string; subject: string }) => boolean> = [];
 
   for (const r of skipRules) {
-    const m = r.trigger.match(TRIGGER_RE);
-    if (!m) continue;
-    const key = m[1].toLowerCase();
-    const value = m[2].trim().toLowerCase();
-    if (!value) continue;
+    const clauses = parseClauses(r.trigger);
+    if (clauses.length === 0) continue;
 
-    if (key === "from" || key === "sender") {
-      queryFilters.push(`-from:${value}`);
-      checks.push((from) => from === value || from.includes(value));
-    } else if (key === "to") {
-      queryFilters.push(`-to:${value}`);
-      checks.push((_, to) => to.includes(value));
-    } else if (key === "domain") {
-      queryFilters.push(`-from:${value}`);
-      queryFilters.push(`-to:${value}`);
-      const suffix = `@${value}`;
-      checks.push((from, to) => from.endsWith(suffix) || to.includes(suffix));
-    } else if (key === "category") {
-      queryFilters.push(`-category:${value}`);
-    } else if (key === "subject_contains" || key === "subject") {
-      // Gmail's q parameter supports `-subject:"..."` to exclude messages
-      // whose Subject contains the phrase (case-insensitive). Multi-word
-      // phrases must be quoted; single tokens don't need quotes but quoting
-      // is safe. No runtime shouldSkip check — subjects aren't in
-      // MessageHeaders, and WhatsApp/Calendar items don't have a subject
-      // anyway, so this rule is Gmail-only by design.
-      const escaped = value.replace(/"/g, "");
-      queryFilters.push(`-subject:"${escaped}"`);
+    // ── Gmail-side: emit either a single -clause or a grouped -(c1 c2 …)
+    // when the trigger has more than one clause. Gmail interprets the
+    // group as an AND: messages must match every clause inside the group
+    // to be excluded — which is exactly the AND semantics we want for
+    // composite rules like `from=alerts@vercel.com&subject_contains=Failed`.
+    const gmailFrags = clauses.map(clauseToGmailQuery).filter(Boolean);
+    if (gmailFrags.length === 1) {
+      queryFilters.push(`-${gmailFrags[0]}`);
+    } else if (gmailFrags.length > 1) {
+      queryFilters.push(`-(${gmailFrags.join(" ")})`);
+    }
+
+    // ── Runtime: AND of the clauses' checkers. If any clause has no
+    // runtime checker (e.g. category=) and the rule is composite, we skip
+    // the runtime check for the rule overall — Gmail still filters at
+    // fetch time, but stuff that slipped through won't be re-skipped by
+    // shouldSkip. (shouldSkip currently has no callers, so this is
+    // a safety net for future use.)
+    const runtimeChecks = clauses.map(clauseToRuntimeCheck);
+    if (runtimeChecks.every((c) => c !== null)) {
+      const checkers = runtimeChecks as Array<NonNullable<(typeof runtimeChecks)[number]>>;
+      checks.push((args) => checkers.every((check) => check(args)));
     }
   }
 
   return {
     gmailQueryFilters: queryFilters,
-    shouldSkip: ({ from, to, senderEmail }) => {
+    shouldSkip: ({ from, to, senderEmail, subject }) => {
       const fromVal = extractEmail((senderEmail ?? from ?? "").toString());
       const toVal = (to ?? "").toString().toLowerCase();
-      return checks.some((check) => check(fromVal, toVal));
+      const subjectVal = (subject ?? "").toString().toLowerCase();
+      return checks.some((check) => check({ from: fromVal, to: toVal, subject: subjectVal }));
     },
   };
 }

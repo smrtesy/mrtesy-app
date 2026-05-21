@@ -225,8 +225,11 @@ async function syncUserGmail(userId: string) {
     const senderEmail = extractEmail(h.from);
     const isSent = msg.labelIds?.includes("SENT") || false;
 
-    // Apply skip rules from rules_memory (single source of truth)
-    if (skipFilter.shouldSkip({ from: h.from, to: h.to, senderEmail })) {
+    // Apply skip rules from rules_memory (single source of truth). Pass
+    // subject too so composite rules `from=X&subject_contains=Y` can match
+    // at runtime — Gmail's query exclusion catches most of these at fetch
+    // time, but the runtime check is the safety net.
+    if (skipFilter.shouldSkip({ from: h.from, to: h.to, senderEmail, subject: h.subject })) {
       continue;
     }
 

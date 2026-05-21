@@ -39,7 +39,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
+  const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   // searchResults: null = no active search, [] = search returned nothing,
@@ -218,8 +218,8 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     }
   }
 
-  function openDismissDialog(taskId: string, title: string) {
-    setDismissTarget({ id: taskId, title });
+  function openDismissDialog(taskId: string, title: string, sourceType: string | null) {
+    setDismissTarget({ id: taskId, title, sourceType });
   }
 
   if (loading) {
@@ -350,7 +350,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
               <SuggestionActions
                 taskId={task.id as string}
                 onFastDismiss={() => handleFastDismiss(task.id as string)}
-                onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string)}
+                onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string, source?.source_type ?? null)}
                 onApprove={() => handleApprove(task.id as string)}
                 onEdit={() => setEditTask(task as Task)}
                 onSnooze={() => setSnoozeTaskId(task.id as string)}
@@ -364,6 +364,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       <DismissDialog
         taskId={dismissTarget?.id ?? null}
         taskTitle={dismissTarget?.title}
+        sourceType={dismissTarget?.sourceType ?? null}
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
         onDismissed={fetchSuggestions}
