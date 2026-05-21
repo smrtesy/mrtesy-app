@@ -57,8 +57,36 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
       return q;
     };
 
-    // Single query across all searchable columns using .or()
-    // sanitizeFilter already strips %, (, ), comma, dot — safe to interpolate here.
+    // 1) Task serial — exact match on "T<n>" / "t<n>"
+    const taskMatch = sanitized.match(/^[Tt](\d+)$/);
+    if (taskMatch) {
+      const { data } = await baseQuery().eq("serial_display", `T${taskMatch[1]}`);
+      onResults((data ?? []) as Task[]);
+      return;
+    }
+
+    // 2) Source-message serial — match "G<n>", "S<n>", "W<n>", "E<n>", "D<n>", "C<n>".
+    // Look up the source_message first, then return tasks linked to it.
+    const srcMatch = sanitized.match(/^([GSWEDCgswedc])(\d+)$/);
+    if (srcMatch) {
+      const display = `${srcMatch[1].toUpperCase()}${srcMatch[2]}`;
+      const { data: srcRows } = await supabase
+        .from("source_messages")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("serial_display", display)
+        .limit(1);
+      const srcIds = (srcRows ?? []).map((r: { id: string }) => r.id);
+      if (srcIds.length === 0) {
+        onResults([]);
+        return;
+      }
+      const { data } = await baseQuery().in("source_message_id", srcIds);
+      onResults((data ?? []) as Task[]);
+      return;
+    }
+
+    // 3) Free-text search across title / title_he / description (existing).
     const term = `%${sanitized}%`;
     const { data } = await baseQuery()
       .or(`title.ilike.${term},title_he.ilike.${term},description.ilike.${term}`);

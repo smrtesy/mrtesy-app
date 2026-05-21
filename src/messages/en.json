@@ -224,7 +224,7 @@
       "aiBadge": "AI"
     },
     "search": {
-      "placeholder": "Search tasks...",
+      "placeholder": "Search tasks, T<#>, or source G/S/W/E/D/C<#>...",
       "includeArchive": "Include archive",
       "naturalLanguage": "What about the bank?"
     },
