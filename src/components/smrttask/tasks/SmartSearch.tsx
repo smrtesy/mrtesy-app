@@ -9,6 +9,23 @@ import type { Task } from "@/types/task";
 
 interface SmartSearchProps {
   onResults: (tasks: Task[]) => void;
+  /** Override the .select() clause. Defaults to "*". Use this when the
+   *  caller needs to render search results with joined relations (e.g.
+   *  the suggestion list expects source_messages + projects). */
+  selectClause?: string;
+  /** Optional refinement applied AFTER user_id and the archive toggle,
+   *  BEFORE the free-text / serial filters. Use to scope the search to
+   *  a subset of tasks (e.g. only inbox suggestions). The parameter is
+   *  the same PostgREST builder; return it after chaining .eq / .not /
+   *  etc. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  refineQuery?: (q: any) => any;
+  /** Hide the "include archive" checkbox — appropriate for scopes that
+   *  inherently exclude archived rows (suggestions never are). */
+  hideArchiveToggle?: boolean;
+  /** Translation key (under `tasks.search`) for the input placeholder.
+   *  Defaults to the tasks search placeholder; suggestions can override. */
+  placeholderKey?: string;
 }
 
 // Sanitize input for PostgREST filter expressions
@@ -17,7 +34,7 @@ function sanitizeFilter(value: string): string {
   return value.replace(/[%(),.*\\]/g, "").trim();
 }
 
-export function SmartSearch({ onResults }: SmartSearchProps) {
+export function SmartSearch({ onResults, selectClause, refineQuery, hideArchiveToggle, placeholderKey }: SmartSearchProps) {
   const t = useTranslations("tasks.search");
   const [query, setQuery] = useState("");
   const [includeArchive, setIncludeArchive] = useState(false);
@@ -44,15 +61,19 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
 
     // Use individual .ilike() calls combined manually instead of .or() with string interpolation
     const baseQuery = () => {
-      let q = supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = supabase
         .from("tasks")
-        .select("*")
+        .select(selectClause ?? "*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(40);
 
-      if (!includeArchive) {
+      if (!hideArchiveToggle && !includeArchive) {
         q = q.neq("status", "archived");
+      }
+      if (refineQuery) {
+        q = refineQuery(q);
       }
       return q;
     };
@@ -101,18 +122,20 @@ export function SmartSearch({ onResults }: SmartSearchProps) {
         <Input
           value={query}
           onChange={(e) => handleChange(e.target.value)}
-          placeholder={t("placeholder")}
+          placeholder={t(placeholderKey ?? "placeholder")}
           className="ps-10 min-h-[48px] text-start"
         />
       </div>
-      <label className="flex items-center gap-2 text-xs text-muted-foreground">
-        <input
-          type="checkbox"
-          checked={includeArchive}
-          onChange={(e) => setIncludeArchive(e.target.checked)}
-        />
-        {t("includeArchive")}
-      </label>
+      {!hideArchiveToggle && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={includeArchive}
+            onChange={(e) => setIncludeArchive(e.target.checked)}
+          />
+          {t("includeArchive")}
+        </label>
+      )}
     </div>
   );
 }
