@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import { BuildBriefButton } from "@/components/smrttask/tasks/BuildBriefButton";
 import { BriefFactVerifier } from "@/components/smrttask/projects/BriefFactVerifier";
 import { EditProjectSheet } from "@/components/smrttask/projects/EditProjectSheet";
+import { formatDateOnly } from "@/lib/date";
 
 export default async function ProjectDetailPage({
   params,
@@ -217,7 +218,7 @@ export default async function ProjectDetailPage({
                 <div className="flex items-center gap-2">
                   {task.due_date && (
                     <span className="text-xs text-muted-foreground">
-                      {new Date(task.due_date).toLocaleDateString(locale === "he" ? "he-IL" : "en-US")}
+                      {formatDateOnly(task.due_date as string, locale)}
                     </span>
                   )}
                   <Badge variant="outline" className="text-[10px]">{task.priority}</Badge>

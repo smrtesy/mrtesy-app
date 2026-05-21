@@ -13,6 +13,7 @@ import { CheckCircle2, X, Bell, Pencil, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { formatDateOnly } from "@/lib/date";
 import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
@@ -77,10 +78,11 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       .order("created_at", { ascending: false })
       .limit(1000);  // PostgREST default cap; the user wants to see every pending suggestion
 
-    const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-    const sorted = (data || []).sort(
-      (a: any, b: any) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2) // eslint-disable-line @typescript-eslint/no-explicit-any
-    );
+    // Show newest-first by creation order. Previously we re-sorted by
+    // priority client-side, which pinned old urgent items to the top and
+    // hid fresh suggestions below them. Priority is still visible as a
+    // badge on each card.
+    const sorted = (data || []) as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
     setSuggestions(sorted);
     setTotalCount(count ?? sorted.length);
     setSelected(new Set());
@@ -268,8 +270,10 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       {filtered.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
         const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
+        // YYYY-MM-DD parsed via new Date() lands at UTC midnight and shifts back a
+        // day in negative UTC offsets — same bug TaskCard fixed in 29484ef.
         const dueDate = task.due_date
-          ? new Date(task.due_date as string).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })
+          ? formatDateOnly(task.due_date as string, locale, { day: "numeric", month: "short" })
           : null;
         const isSelected = selected.has(task.id);
         const isFocused = task.id === focusId;
