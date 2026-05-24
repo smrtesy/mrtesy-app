@@ -186,7 +186,7 @@ export default function SettingsSyncPage() {
         part,
         is_auto: !currentAuto,
         is_enabled: true,
-        next_run_at: !currentAuto ? new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() : null,
+        next_run_at: !currentAuto ? new Date().toISOString() : null,
       },
       { onConflict: "user_id,app_slug,part" },
     );
