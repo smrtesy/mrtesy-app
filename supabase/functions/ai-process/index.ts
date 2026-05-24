@@ -279,9 +279,32 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
 Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
 to over-track than to lose visibility on a pending matter.
 
-completion=true means: the prior task in this thread is DONE per the new message
-(payment confirmed, document signed and accepted, decision answered and acknowledged,
-question answered to closure). Be conservative — when unsure, set completion=false.
+completion=true means: the open matter the prior task was tracking has been
+ANSWERED or RESOLVED in this message. Specifically:
+  • Payment confirmed
+  • Document signed and accepted
+  • Decision made and communicated
+  • Pending information / answer / quote / ETA / date was provided
+  • The other party closed the loop on what the user was waiting for
+
+CRITICAL — TASKS THAT TRACK A PENDING RESPONSE:
+When the task title is "לחכות לתשובת X על Y" / "לעקוב אחרי X על Y" /
+"wait for X's response about Y" / "follow up with X about Y", and X has
+now PROVIDED that information / decision / commitment — set completion=true,
+even if the user hasn't yet written back. The system has a "pending_completion"
+state for exactly this case: it surfaces the resolved task for one-click
+confirmation so the user doesn't have to dig through the inbox to close it.
+Withholding completion=true just because the user hasn't acknowledged YET
+defeats this mechanism and leaves answered questions stuck in the inbox.
+
+Conversely, if NEW pending matters surface in the same thread (e.g. the
+other party now wants something back), you still set completion=true for
+the ORIGINAL open question — a new task will be created downstream for the
+new matter. One task = one open question.
+
+Be conservative only when the answer is genuinely partial or ambiguous
+(e.g. "I'll check and get back to you" — that's still pending). When the
+requested answer is plainly in the message, set completion=true.
 
 IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
 already captured in new_summary's prior version. Base decisions on the FRESHLY
