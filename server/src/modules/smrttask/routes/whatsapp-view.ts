@@ -179,24 +179,59 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Tasks created from this chat. Joined through source_messages to find
-  // every task whose source_id is `wa:{chatId}`. We expose them per-chat
-  // and let the frontend match each task to the message it most likely
-  // came from (closest received_at before task.created_at) — Part 3
-  // doesn't store a direct message-level link, but the heuristic is
-  // accurate in practice because Part 3 runs on a freshly-updated thread.
-  const { data: taskJoin } = await db
-    .from("tasks")
-    .select(
-      "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(source_id, source_type, user_id)",
-    )
-    .eq("source_messages.source_type", "whatsapp")
-    .eq("source_messages.source_id", `wa:${chatId}`)
-    .eq("source_messages.user_id", req.user!.id)
-    .order("created_at", { ascending: true })
-    .limit(500);
+  // Tasks created from this chat. Two source-message shapes can produce
+  // tasks for the SAME chat:
+  //   1. Legacy thread-level rows: source_type='whatsapp',
+  //      source_id='wa:<chatId>' — one row per chat, one classification per
+  //      reprocess. Still used for regular (non self-chat) threads.
+  //   2. Per-message rows: source_type='whatsapp_echo',
+  //      source_id='wa:<chatId>:<wamid>' — one row per outgoing voice memo
+  //      in a self-chat thread. Each gets its own classification.
+  // We need both. PostgREST doesn't let us OR across two columns through
+  // an !inner join cleanly, so issue two queries and merge.
+  const [legacyTasksRes, echoTasksRes] = await Promise.all([
+    db
+      .from("tasks")
+      .select(
+        "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(id, source_id, source_type, user_id)",
+      )
+      .eq("source_messages.source_type", "whatsapp")
+      .eq("source_messages.source_id", `wa:${chatId}`)
+      .eq("source_messages.user_id", req.user!.id)
+      .order("created_at", { ascending: true })
+      .limit(500),
+    db
+      .from("tasks")
+      .select(
+        "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_message_id, source_messages!inner(id, source_id, source_type, user_id)",
+      )
+      .eq("source_messages.source_type", "whatsapp_echo")
+      .like("source_messages.source_id", `wa:${chatId}:%`)
+      .eq("source_messages.user_id", req.user!.id)
+      .order("created_at", { ascending: true })
+      .limit(500),
+  ]);
 
-  const tasks = (taskJoin ?? []).map((t) => ({
+  // Map echo source_message.id → wamid (parsed from source_id suffix) so
+  // the frontend can pair each task with its exact originating whatsapp
+  // message — no heuristic guesswork needed for the per-message path.
+  const echoWamidByTaskId = new Map<string, string>();
+  for (const t of echoTasksRes.data ?? []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sm = (t as any).source_messages;
+    const row = (Array.isArray(sm) ? sm[0] : sm) as { source_id?: string } | null;
+    const srcId = row?.source_id ?? "";
+    const idx = srcId.indexOf(":", 3); // skip "wa:" prefix
+    if (idx > 0) {
+      const wamid = srcId.slice(idx + 1);
+      if (wamid) echoWamidByTaskId.set(t.id as string, wamid);
+    }
+  }
+
+  const tasks = [
+    ...(legacyTasksRes.data ?? []),
+    ...(echoTasksRes.data ?? []),
+  ].map((t) => ({
     id: t.id,
     title: t.title,
     title_he: t.title_he,
@@ -205,6 +240,9 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
     manually_verified: t.manually_verified,
     created_at: t.created_at,
     due_date: t.due_date,
+    // Exact wamid the task came from (only for whatsapp_echo per-message
+    // rows). When present, frontend prefers this over the time heuristic.
+    source_wamid: echoWamidByTaskId.get(t.id as string) ?? null,
   }));
 
   return res.json({ messages: [...(data ?? [])].reverse(), tasks });

@@ -821,6 +821,29 @@ async function buildMessageRow(
       } else if (mediaId && accessToken) {
         try {
           const blob = await downloadMetaMedia(db, mediaId, accessToken);
+          // Persist the audio blob to storage alongside images. Without this
+          // media_url stays NULL and the WhatsApp thread view can only show
+          // the transcript — no inline playback. The user explicitly asked
+          // for the recording itself.
+          try {
+            const ext = blob.mimeType.includes("ogg") ? "ogg"
+              : blob.mimeType.includes("mp4") || blob.mimeType.includes("m4a") ? "m4a"
+              : blob.mimeType.includes("wav") ? "wav"
+              : "audio";
+            const stored = await persistMediaBlobToStorage(
+              db,
+              userId,
+              m.id!,
+              blob,
+              `audio_${m.id!}.${ext}`,
+            );
+            mediaUrl = stored.path;
+            mediaFilename = stored.filename;
+            mediaSize = stored.size;
+          } catch (e) {
+            console.error("[whatsapp-webhook] audio storage upload failed:", e);
+          }
+
           const transcript = await transcribeAudio(db, blob.base64, blob.mimeType);
           body = "[תמלול אודיו]\n" + transcript;
         } catch (e) {

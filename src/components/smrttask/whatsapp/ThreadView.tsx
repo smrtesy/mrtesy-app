@@ -58,6 +58,10 @@ export interface ChatTask {
   manually_verified: boolean | null;
   created_at: string;
   due_date: string | null;
+  /** When the task was created from a per-message source_message
+   *  (source_type='whatsapp_echo'), this is the exact wamid it came from.
+   *  Prefer this over the time-based heuristic — it's a precise link. */
+  source_wamid?: string | null;
 }
 
 interface Props {
@@ -114,25 +118,41 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
     return map;
   }, [messages]);
 
-  // Map each whatsapp_message → tasks that were most likely created from
-  // it. Heuristic: each task is assigned to the LATEST message whose
-  // received_at is at or before task.created_at — because Part 3
-  // classifier runs on the freshly-updated thread, the triggering
-  // message is the most recent one when the task is created.
+  // Map each whatsapp_message → tasks created from it. Two strategies:
+  //   1. EXACT match by wamid — when the task came from a per-message
+  //      whatsapp_echo source_message, the server returns source_wamid.
+  //      Use it directly.
+  //   2. HEURISTIC by time — for legacy thread-level tasks
+  //      (source_type='whatsapp'): assign each task to the LATEST message
+  //      whose received_at is at or before task.created_at. Part 3 runs
+  //      on a freshly-updated thread so the triggering message is the
+  //      most recent one when the task is created.
   const tasksByMessageId = useMemo(() => {
     const map = new Map<string, ChatTask[]>();
     if (tasks.length === 0 || messages.length === 0) return map;
-    // Messages are already chronological (oldest → newest) per the API.
     const messageList = messages.filter((m) => !m.is_reaction);
+    const messageByWamid = new Map<string, Message>();
+    for (const m of messageList) messageByWamid.set(m.wamid, m);
+
     for (const t of tasks) {
+      // Strategy 1: exact wamid match (preferred when present).
+      if (t.source_wamid) {
+        const exact = messageByWamid.get(t.source_wamid);
+        if (exact) {
+          const existing = map.get(exact.id) ?? [];
+          existing.push(t);
+          map.set(exact.id, existing);
+          continue;
+        }
+      }
+      // Strategy 2: time-window heuristic for legacy thread tasks.
       const taskTime = new Date(t.created_at).getTime();
-      // Find the LATEST message with received_at <= taskTime.
       let bestMessage: Message | null = null;
       for (const m of messageList) {
         if (!m.received_at) continue;
         const mt = new Date(m.received_at).getTime();
         if (mt <= taskTime) bestMessage = m;
-        else break; // messages are sorted, so we can stop
+        else break;
       }
       if (bestMessage) {
         const existing = map.get(bestMessage.id) ?? [];
@@ -660,16 +680,19 @@ function MessageBubble({
   // can highlight it, and clicking again removes it).
   const myReaction = reactions.find((r) => r.direction === "outgoing")?.emoji ?? null;
 
-  // Images: render inline. Other media (docs, etc.): fetch a fresh signed URL
-  // on click and open in a new tab. We hold the signed URL in state so that
-  // for images the <img> below has a real src and can render right away.
+  // Images: render inline. Audio: render inline with a native <audio> player.
+  // Other media (docs, etc.): fetch a fresh signed URL on click and open in
+  // a new tab. We hold the signed URL in state so that for images the <img>
+  // (and for audio the <audio>) has a real src and can render right away.
   const [imageSignedUrl, setImageSignedUrl] = useState<string | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
 
   const isImage = message.message_type === "image" && Boolean(message.media_url);
+  const isAudio = (message.message_type === "audio" || message.message_type === "voice")
+    && Boolean(message.media_url);
 
   useEffect(() => {
-    if (!isImage || !message.media_url) return;
+    if ((!isImage && !isAudio) || !message.media_url) return;
     let cancelled = false;
     setImageLoading(true);
     api<{ url: string }>(
@@ -679,7 +702,7 @@ function MessageBubble({
         if (!cancelled) setImageSignedUrl(url);
       })
       .catch((e) => {
-        if (!cancelled) console.error("image signed URL failed:", e);
+        if (!cancelled) console.error("media signed URL failed:", e);
       })
       .finally(() => {
         if (!cancelled) setImageLoading(false);
@@ -687,7 +710,7 @@ function MessageBubble({
     return () => {
       cancelled = true;
     };
-  }, [isImage, message.media_url]);
+  }, [isImage, isAudio, message.media_url]);
 
   async function openMedia() {
     if (!message.media_url) return;
@@ -792,6 +815,28 @@ function MessageBubble({
           </div>
         )}
 
+        {/* Audio player — for voice memos / audio messages with a stored
+            media_url, render a native <audio> control so the user can hit
+            play and listen to the original. The transcript (rendered as an
+            ExtractedBlock below) stays as the readable representation. */}
+        {isAudio && (
+          <div className="mt-1 mb-1.5 min-w-[220px]">
+            {imageSignedUrl ? (
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <audio
+                controls
+                preload="none"
+                src={imageSignedUrl}
+                className="w-full max-w-xs"
+              />
+            ) : imageLoading ? (
+              <div className="h-10 w-56 animate-pulse rounded-full bg-black/10" />
+            ) : (
+              <div className="h-10 w-56 rounded-full bg-black/10" />
+            )}
+          </div>
+        )}
+
         {/* Body text — for an image with a caption this is the caption; for
             text messages it's the user's message. Rendered through the
             rich-text component so **bold** / *bold* / _italic_ / `code` /
@@ -818,8 +863,9 @@ function MessageBubble({
           />
         )}
 
-        {/* Non-image media (documents, audio, etc.) keep the download-button UX. */}
-        {message.media_url && !isImage && (
+        {/* Other media (documents, etc.) keep the download-button UX. Image
+            and audio render inline above; documents/PDFs stay download-only. */}
+        {message.media_url && !isImage && !isAudio && (
           <button
             type="button"
             onClick={openMedia}
