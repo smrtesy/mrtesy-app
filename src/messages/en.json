@@ -432,7 +432,13 @@
     "skipRulesAndStyle": "Skip Rules & Style",
     "syncSchedules": "Sync Schedules",
     "classifierParameters": "Classifier Parameters",
-    "smrtTaskSection": "smrtTask"
+    "smrtTaskSection": "smrtTask",
+    "deployInfoTitle": "Build info",
+    "deployInfoLoading": "Loading deploy info...",
+    "deployFrontend": "Frontend",
+    "deployBackend": "Backend",
+    "deployBootedAgo": "running for {when}",
+    "deployUnreachable": "unreachable"
   },
   "settingsParameters": {
     "title": "smrtTask Parameters",

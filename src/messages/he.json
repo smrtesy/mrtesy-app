@@ -432,7 +432,13 @@
     "skipRulesAndStyle": "כללי דילוג וסגנון",
     "syncSchedules": "תזמון סנכרון",
     "classifierParameters": "פרמטרים של המסווג",
-    "smrtTaskSection": "smrtTask"
+    "smrtTaskSection": "smrtTask",
+    "deployInfoTitle": "פרטי גרסה",
+    "deployInfoLoading": "טוען מידע על הדפלוי...",
+    "deployFrontend": "Frontend",
+    "deployBackend": "Backend",
+    "deployBootedAgo": "התחיל לרוץ לפני {when}",
+    "deployUnreachable": "לא זמין"
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",

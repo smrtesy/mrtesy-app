@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { DeployInfoCard } from "@/components/platform/settings/DeployInfoCard";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
   CheckCircle2, XCircle, RefreshCw, Trash2, RotateCcw, Shield,
@@ -355,6 +356,8 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <DeployInfoCard />
 
       <Separator />
 

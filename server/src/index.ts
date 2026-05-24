@@ -99,9 +99,31 @@ app.use(
   }),
 );
 
+// Captured at module load — when this Node process booted. Servers a deploy
+// "tag" the frontend can show next to its own one, so the user can spot
+// staleness without leaving the app.
+const BACKEND_BOOT_AT = new Date().toISOString();
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+// Deploy info — commit SHA + boot time from Railway env vars (or any other
+// host that injects RAILWAY_GIT_*). Used by /settings to show which backend
+// the frontend is talking to. Intentionally open (no auth) so the frontend
+// can call it before login too.
+app.get("/api/version", (_req, res) => {
+  const commit = process.env.RAILWAY_GIT_COMMIT_SHA ?? "";
+  res.json({
+    commit:          commit || null,
+    commit_short:    commit ? commit.slice(0, 7) : null,
+    branch:          process.env.RAILWAY_GIT_BRANCH ?? null,
+    commit_message:  process.env.RAILWAY_GIT_COMMIT_MESSAGE ?? null,
+    deployment_id:   process.env.RAILWAY_DEPLOYMENT_ID ?? null,
+    boot_at:         BACKEND_BOOT_AT,
+    uptime_seconds:  Math.floor(process.uptime()),
+  });
 });
 
 // Public webhook FIRST — mounted at app level, before any auth-guarded
