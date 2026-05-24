@@ -39,6 +39,21 @@ Common Hebrew follow-up openers to watch for:
   "אגב", "ולגבי", "מצורף", "כפי שדיברנו", "תזכורת" — these are almost
   always update_task.
 
+MULTI-RECIPIENT DUPLICATE — many automated services (Google
+Workspace alerts, monitoring tools, billing services, mailing lists)
+send the *same* message body to multiple addresses the user owns
+(personal Gmail + work alias). Each delivery becomes its own
+source_message, and without dedup each turns into its own task.
+
+When the OPEN TASKS list — or the JUST CREATED IN THIS BATCH block
+at the top of the user message, when present — contains a task whose
+sender_email AND subject byte-match the new message (trim whitespace
+on the subject), return action=update_task pointing at it. Time
+window: same 24-hour period. This catches the canonical case of the
+same automated alert (Google Workspace "Approaching pooled storage
+limit", billing reminders, security notifications) delivered to both
+the user's personal address and their org alias.
+
 TRANSACTIONAL FOLLOW-UP PATTERN (signing / billing / e-sign services):
 Many automated services send mail with the sender display name in the
 form "<Person> via <Service>" — e.g. "Masha Blesofsky via Docusign",

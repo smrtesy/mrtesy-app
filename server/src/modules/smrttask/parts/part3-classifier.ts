@@ -189,6 +189,19 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
     }
 
     // ── 6. Process in batches of BATCH_SIZE ───────────────────────────────────
+    // Track tasks created within this Part3 run so subsequent messages in the
+    // same batch see them as "open tasks" — otherwise duplicates produced
+    // back-to-back (e.g. the same Google Workspace storage alert delivered
+    // to two of the user's aliases) each turn into their own task because
+    // the openTasks query ran once at the top of the loop and is stale.
+    const batchCreated: Array<{
+      id: string;
+      title_he: string;
+      sender: string;
+      sender_email: string;
+      subject: string;
+    }> = [];
+
     for (let i = 0; i < pending.length; i++) {
       const msg = pending[i];
       itemsProcessed++;
@@ -208,8 +221,21 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .neq("status", "archived")
         .maybeSingle();
 
+      // Fresh "just created in this batch" section — appended to the user
+      // message (NOT the cached rulesContext) so the prompt cache stays
+      // warm. The classifier's Step 1 already knows to bias toward
+      // update_task when an open task matches; this just gives it the
+      // tasks that aren't in the snapshot-time openTasks yet.
+      const batchBlock = batchCreated.length > 0
+        ? "JUST CREATED IN THIS BATCH (treat as open tasks for update_task matching):\n" +
+          batchCreated.map((t) =>
+            `[id:${t.id}] ${t.title_he} | from: ${t.sender} <${t.sender_email}> | subject: ${t.subject}`
+          ).join("\n") + "\n\n"
+        : "";
+
       // Build user message
       const userMsg = [
+        batchBlock,
         `Source: ${msg.source_type}`,
         `Received: ${msg.received_at}`,
         msg.sender ? `From: ${msg.sender}` : "",
@@ -417,6 +443,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       }));
 
       let taskWriteOk = false;
+      let createdTaskId: string | null = null;
       if (existingTask) {
         const { error: updateErr } = await db.from("tasks").update(taskPayload)
           .eq("id", existingTask.id)
@@ -427,9 +454,28 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         const insertPayload = aiChecklist.length > 0
           ? { ...taskPayload, checklist: aiChecklist }
           : taskPayload;
-        const { error: insertErr } = await db.from("tasks").insert(insertPayload);
+        const { data: inserted, error: insertErr } = await db
+          .from("tasks")
+          .insert(insertPayload)
+          .select("id")
+          .single();
         if (insertErr) errors.push(`insert task for source_msg ${msg.id}: ${insertErr.message}`);
-        else { tasksCreated++; taskWriteOk = true; }
+        else { tasksCreated++; taskWriteOk = true; createdTaskId = inserted?.id ?? null; }
+      }
+
+      // Record the new task in the in-memory batch list so subsequent
+      // messages in this same Part3 run see it via the JUST CREATED block
+      // built into userMsg — prevents back-to-back duplicates (same alert
+      // delivered to two of the user's aliases, e.g. G335/G336 storage
+      // warnings → T234/T235).
+      if (createdTaskId && !existingTask) {
+        batchCreated.push({
+          id: createdTaskId,
+          title_he: task.title_he,
+          sender: msg.sender ?? "",
+          sender_email: msg.sender_email ?? "",
+          subject: msg.subject ?? "",
+        });
       }
 
       // Only mark classified once the task row is committed; on failure leave as
