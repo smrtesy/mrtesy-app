@@ -200,7 +200,29 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       return { sessionId };
     }
 
-    // ── 7. Process in batches of BATCH_SIZE ───────────────────────────────────
+    // ── 7. Filter out future calendar events not yet due ─────────────────────
+    // Calendar events are only actionable when the user is close enough to
+    // prepare. Rule: classify starting from 1 Israeli business day before the
+    // event (Israeli week = Sun–Thu; Fri and Sat are off).
+    // Past events (follow-up candidates) are always eligible.
+    const now = new Date();
+    const eligible = pending.filter((msg) => {
+      if (msg.source_type !== "google_calendar") return true;
+      const eventStart = new Date(msg.received_at as string);
+      if (eventStart <= now) return true; // past — always eligible
+      // Find the start of the previous business day (skip Fri=5 and Sat=6)
+      const trigger = new Date(eventStart);
+      trigger.setHours(0, 0, 0, 0);
+      trigger.setDate(trigger.getDate() - 1);
+      while (trigger.getDay() === 5 || trigger.getDay() === 6) {
+        trigger.setDate(trigger.getDate() - 1);
+      }
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      return todayStart >= trigger;
+    });
+
+    // ── 8. Process in batches of BATCH_SIZE ───────────────────────────────────
     // Track tasks created within this Part3 run so subsequent messages in the
     // same batch see them as "open tasks" — otherwise duplicates produced
     // back-to-back (e.g. the same Google Workspace storage alert delivered
@@ -214,8 +236,8 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       subject: string;
     }> = [];
 
-    for (let i = 0; i < pending.length; i++) {
-      const msg = pending[i];
+    for (let i = 0; i < eligible.length; i++) {
+      const msg = eligible[i];
       itemsProcessed++;
 
       await db
