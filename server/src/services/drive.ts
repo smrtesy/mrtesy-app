@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { getOAuthClient } from "./token-refresh";
 import { db } from "../db";
+import { callGemini } from "../gemini";
 
 export async function getDriveClient(userId: string) {
   const auth = await getOAuthClient(userId, "google_drive");
@@ -48,14 +49,17 @@ export async function listNewFiles(
   return res.data.files ?? [];
 }
 
+const PDF_EXTRACT_PROMPT =
+  "מסמך זה הועלה ל-Google Drive. חלץ את תוכנו:\n" +
+  "1. זהה את סוג המסמך (חשבונית, חוזה, מכתב, טופס, דו\"ח וכו').\n" +
+  "2. חלץ את כל הטקסט הרלוונטי — תאריכים, סכומים, שמות, כתובות, מספרי הפניה.\n" +
+  "3. אם המסמך בעברית — פלט בעברית. אם באנגלית — פלט באנגלית.\n" +
+  "פלט: טקסט גולמי בלבד, ללא כותרות, ללא הקדמות.";
+
 export async function getFileContent(userId: string, fileId: string): Promise<string> {
   const drive = await getDriveClient(userId);
-  // `files.export` only works for Google Workspace files (Docs/Sheets/Slides).
-  // Non-Workspace files (PDFs, images, scanned docs from ScanSnap, etc.)
-  // throw 403 "Export only supports Docs Editors files". For those we just
-  // want metadata in source_messages — body extraction can come later
-  // (OCR, PDF parsing). Returning "" keeps the upsert path alive.
   try {
+    // Google Workspace files (Docs/Sheets/Slides) — export as plain text.
     const res = await drive.files.export(
       { fileId, mimeType: "text/plain" },
       { responseType: "text" },
@@ -64,9 +68,27 @@ export async function getFileContent(userId: string, fileId: string): Promise<st
     return text.slice(0, 3000);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (/Export only supports|fileNotExportable/i.test(msg)) {
+    if (!/Export only supports|fileNotExportable/i.test(msg)) throw err;
+    // Non-Workspace file (PDF, scanned doc, image) — download binary and
+    // send to Gemini for text extraction / OCR. Cap at 15 MB to stay
+    // within Gemini's inline_data limit.
+    try {
+      const dlRes = await drive.files.get(
+        { fileId, alt: "media" } as Parameters<typeof drive.files.get>[0],
+        { responseType: "arraybuffer" },
+      );
+      const buf = Buffer.from(dlRes.data as ArrayBuffer);
+      if (buf.length > 15 * 1024 * 1024) return "";
+      const base64Data = buf.toString("base64");
+      const text = await callGemini({
+        prompt: PDF_EXTRACT_PROMPT,
+        base64Data,
+        mimeType: "application/pdf",
+        maxOutputTokens: 2048,
+      });
+      return text.slice(0, 3000);
+    } catch {
       return "";
     }
-    throw err;
   }
 }
