@@ -27,8 +27,13 @@ Return action "update_task" when ANY of these hold:
     Thread continuity is the single strongest signal — when an email
     arrives on a thread an open task was created from, default to
     update_task unless the body is clearly about an unrelated topic.
-  - Same project, contact, document, payment, meeting, hearing,
-    invoice, or decision that an open task is already about.
+  - Same document, payment, meeting, hearing, invoice, or decision
+    that an open task is already about — the MESSAGE must concern the
+    SAME SPECIFIC MATTER, not just the same person.
+  - Same contact AND the message is about the SAME SPECIFIC CONCERN
+    the open task tracks (same deal, same project, same pending
+    question). IMPORTANT: contact alone is NOT sufficient — if the same
+    person is writing about a DIFFERENT topic, create a new task.
   - Replies, confirms, cancels, reschedules, asks-back, sends an
     attachment, or pushes back on something an open task tracks.
   - Is a chase / nudge / status check on something an open task is

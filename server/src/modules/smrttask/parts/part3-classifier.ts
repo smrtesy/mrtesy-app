@@ -13,6 +13,7 @@ import { db, loadRules, createRunSession, closeRunSession } from "../../../db";
 import { cachedCall, parseJsonResponse, MODELS, type ModelKey } from "../../../anthropic";
 import { buildDeepClassifierSystem } from "../../../prompts/classifier";
 import { getUserPromptContext } from "../../../lib/user-context";
+import { parseSkipRules } from "../lib/rule-filters";
 import { loadPrompt } from "../../../lib/prompt-loader";
 
 const DEFAULT_BATCH_SIZE = 5;
@@ -222,6 +223,31 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       return todayStart >= trigger;
     });
 
+    // ── 7b. Apply skip rules to already-collected messages ───────────────────
+    // Part1's Gmail query filter only blocks new fetches; messages that were
+    // collected before a skip rule was created (or that slipped past the
+    // Gmail filter) would otherwise be classified and proposed. Calling
+    // shouldSkip() here ensures skip rules are always enforced, regardless
+    // of when the message was collected.
+    const skipFilter = parseSkipRules(rules as Parameters<typeof parseSkipRules>[0]);
+    const skipIds: string[] = [];
+    const afterSkip = eligible.filter((msg) => {
+      if (msg.source_type !== "gmail") return true; // Drive/Calendar not sender-filtered
+      const skip = skipFilter.shouldSkip({
+        from: (msg.sender_email as string | null) ?? (msg.sender as string | null) ?? "",
+        to: (msg.reply_to_context as string | null) ?? "",
+        subject: (msg.subject as string | null) ?? "",
+      });
+      if (skip) skipIds.push(msg.id);
+      return !skip;
+    });
+    if (skipIds.length > 0) {
+      await db
+        .from("source_messages")
+        .update({ processing_status: "classified", ai_classification: "skipped" })
+        .in("id", skipIds);
+    }
+
     // ── 8. Process in batches of BATCH_SIZE ───────────────────────────────────
     // Track tasks created within this Part3 run so subsequent messages in the
     // same batch see them as "open tasks" — otherwise duplicates produced
@@ -236,8 +262,8 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       subject: string;
     }> = [];
 
-    for (let i = 0; i < eligible.length; i++) {
-      const msg = eligible[i];
+    for (let i = 0; i < afterSkip.length; i++) {
+      const msg = afterSkip[i];
       itemsProcessed++;
 
       await db
