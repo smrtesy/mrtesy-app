@@ -202,19 +202,19 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
     // ── 7. Filter out future calendar events not yet due ─────────────────────
     // Calendar events are only actionable when the user is close enough to
-    // prepare. Rule: classify starting from 1 Israeli business day before the
-    // event (Israeli week = Sun–Thu; Fri and Sat are off).
+    // prepare. Rule: classify starting from 1 business day before the event
+    // (work week = Mon–Fri; Sat=6 and Sun=0 are off).
     // Past events (follow-up candidates) are always eligible.
     const now = new Date();
     const eligible = pending.filter((msg) => {
       if (msg.source_type !== "google_calendar") return true;
       const eventStart = new Date(msg.received_at as string);
       if (eventStart <= now) return true; // past — always eligible
-      // Find the start of the previous business day (skip Fri=5 and Sat=6)
+      // Find the start of the previous business day (skip Sat=6 and Sun=0)
       const trigger = new Date(eventStart);
       trigger.setHours(0, 0, 0, 0);
       trigger.setDate(trigger.getDate() - 1);
-      while (trigger.getDay() === 5 || trigger.getDay() === 6) {
+      while (trigger.getDay() === 6 || trigger.getDay() === 0) {
         trigger.setDate(trigger.getDate() - 1);
       }
       const todayStart = new Date(now);
