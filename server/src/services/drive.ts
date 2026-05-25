@@ -73,13 +73,20 @@ export async function getFileContent(userId: string, fileId: string): Promise<st
     // send to Gemini for text extraction / OCR. Cap at 15 MB to stay
     // within Gemini's inline_data limit.
     try {
-      const dlRes = await drive.files.get(
-        { fileId, alt: "media" } as Parameters<typeof drive.files.get>[0],
-        { responseType: "arraybuffer" },
+      const streamRes = await drive.files.get(
+        { fileId, alt: "media" },
+        { responseType: "stream" },
       );
-      const buf = Buffer.from(dlRes.data as ArrayBuffer);
-      // 15 MB binary ≈ 20 MB base64 — Gemini's inline_data hard cap.
-      if (buf.length > 15 * 1024 * 1024) return "";
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of streamRes.data) {
+        const c = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+        total += c.length;
+        // 15 MB binary ≈ 20 MB base64 — Gemini's inline_data hard cap.
+        if (total > 15 * 1024 * 1024) return "";
+        chunks.push(c);
+      }
+      const buf = Buffer.concat(chunks);
       const base64Data = buf.toString("base64");
       const text = await callGemini({
         prompt: PDF_EXTRACT_PROMPT,
