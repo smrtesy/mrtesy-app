@@ -254,10 +254,21 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
 
       const seenIds = new Set<string>();
 
+      // Only fetch events modified since the last calendar sync.
+      // Without this, every Part1 run resets ALL events in the ±N month
+      // window back to 'pending', causing Part3 to re-classify them
+      // on every cron tick.
+      // First run (no checkpoint): updatedMin is omitted → fetch all
+      // events in the window so the initial seed is complete.
+      // Subsequent runs: only events modified since the last sync are
+      // returned; already-classified unchanged events stay untouched.
+      const lastCalSync = checkpoint("calendar");
+      const calUpdatedMin = lastCalSync ?? undefined;
+
       for (const calendarId of calendarIds) {
         let calEvents;
         try {
-          calEvents = await listEvents(userId, timeMin, timeMax, 100, calendarId);
+          calEvents = await listEvents(userId, timeMin, timeMax, 100, calendarId, calUpdatedMin);
         } catch {
           continue;
         }

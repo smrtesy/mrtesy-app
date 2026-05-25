@@ -32,6 +32,7 @@ export async function listEvents(
   timeMax: string,
   maxResults = 100,
   calendarId = "primary",
+  updatedMin?: string,
 ) {
   const cal = await getCalendarClient(userId);
   const res = await cal.events.list({
@@ -41,6 +42,7 @@ export async function listEvents(
     maxResults,
     singleEvents: true,
     orderBy: "startTime",
+    ...(updatedMin ? { updatedMin } : {}),
   });
   return res.data.items ?? [];
 }
