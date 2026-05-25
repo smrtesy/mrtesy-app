@@ -3,6 +3,23 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskCard } from "./TaskCard";
@@ -11,13 +28,83 @@ import { SmartSearch } from "./SmartSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
 import { SnoozeDialog } from "./SnoozeDialog";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { GripVertical, ChevronDown, ChevronUp } from "lucide-react";
 import type { Task } from "@/types/task";
 
-const VALID_TABS = ["inbox", "pending_completion", "active", "completed"] as const;
-type TabKey = (typeof VALID_TABS)[number];
+/** Wrapper that adds drag handle + sortable behaviour to a TaskCard in the Today list. */
+function SortableTaskCard({
+  task,
+  locale,
+  onSelect,
+  onComplete,
+  onSnooze,
+  onActivate,
+  onDelete,
+  onQuickAction,
+  onDriveSearch,
+  onRemoveFromToday,
+}: {
+  task: Task;
+  locale: string;
+  onSelect: (t: Task) => void;
+  onComplete: (id: string) => void;
+  onSnooze: (id: string) => void;
+  onActivate: (id: string) => void;
+  onDelete: (id: string) => void;
+  onQuickAction: (id: string, action: { label: string; prompt: string }) => void;
+  onDriveSearch: (id: string, description: string) => void;
+  onRemoveFromToday: (id: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: task.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="flex gap-2 items-start">
+      {/* Drag handle */}
+      <button
+        {...attributes}
+        {...listeners}
+        className="mt-3 text-muted-foreground/40 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
+        aria-label="גרור לשינוי סדר"
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <div className="flex-1">
+        <TaskCard
+          task={task}
+          locale={locale}
+          onSelect={onSelect}
+          onComplete={onComplete}
+          onSnooze={onSnooze}
+          onActivate={onActivate}
+          onDelete={onDelete}
+          onQuickAction={onQuickAction}
+          onDriveSearch={onDriveSearch}
+          extraActions={
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground"
+              onClick={(e) => { e.stopPropagation(); onRemoveFromToday(task.id); }}
+            >
+              <ChevronDown className="h-3 w-3 me-1" />
+              הסר מהיום
+            </Button>
+          }
+        />
+      </div>
+    </div>
+  );
+}
 
 export function TaskList({ locale }: { locale: string }) {
   const t = useTranslations("tasks");
@@ -26,25 +113,23 @@ export function TaskList({ locale }: { locale: string }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  // Initial tab from ?tab=… so deep links from /whatsapp pick the right
-  // filter (e.g. ?tab=completed when the linked task is archived).
-  const initialTab: TabKey = (() => {
-    const raw = searchParams.get("tab");
-    return (VALID_TABS as readonly string[]).includes(raw ?? "") ? (raw as TabKey) : "inbox";
-  })();
-
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [todayTasks, setTodayTasks] = useState<Task[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>(initialTab);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<Task[] | null>(null);
 
-  // ?focus=<task_id>: once we've loaded the matching tab, open that
-  // task's detail panel. `focusedRef` prevents re-opening it on every
-  // subsequent re-fetch (the user might have closed the panel manually).
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   // QuickAction state
   const [qaOpen, setQaOpen] = useState(false);
@@ -57,28 +142,28 @@ export function TaskList({ locale }: { locale: string }) {
   const [dsTaskId, setDsTaskId] = useState("");
   const [dsDescription, setDsDescription] = useState("");
 
-  const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (filter === "inbox")     { params.set("status", "inbox"); params.set("verified", "true"); }
-      else if (filter === "pending_completion") { params.set("status", "pending_completion"); }
-      else if (filter === "active")    { params.set("status", "in_progress"); }
-      else if (filter === "completed") { params.set("status", "archived"); }
-      params.set("limit", "50");
+      const activeStatuses = "inbox,in_progress,pending_completion";
 
-      const { tasks: rows } = await api<{ tasks: Task[] }>(`/api/tasks?${params}`);
-
-      // Sort by priority: urgent > high > medium > low
-      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-      const sorted = (rows ?? []).sort(
-        (a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
+      // Fetch Today tasks (today_position IS NOT NULL), sorted by position
+      const { tasks: todayRows } = await api<{ tasks: Task[] }>(
+        `/api/tasks?today=true&status=${activeStatuses}&verified=true&limit=100`,
       );
-      setTasks(sorted);
-      // Tell the sidebar to refetch counters — covers actions like
-      // complete/restore/dismiss whose Realtime event might lag.
+      const sortedToday = (todayRows ?? []).sort(
+        (a, b) => (a.today_position ?? 0) - (b.today_position ?? 0),
+      );
+      setTodayTasks(sortedToday);
+
+      // Fetch All tasks (today_position IS NULL), sorted by created_at desc
+      const { tasks: allRows } = await api<{ tasks: Task[] }>(
+        `/api/tasks?today=false&status=${activeStatuses}&verified=true&limit=200`,
+      );
+      setAllTasks(allRows ?? []);
+
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("smrtesy:badge-refresh"));
       }
@@ -87,51 +172,50 @@ export function TaskList({ locale }: { locale: string }) {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
-  // Open the focused task's detail panel once we've loaded its tab.
-  // Runs after every fetch but only takes effect when (a) the URL still
-  // carries the focus id, (b) we haven't already opened it this session,
-  // and (c) the task is in the loaded list.
+  const fetchCompleted = useCallback(async () => {
+    try {
+      const { tasks: rows } = await api<{ tasks: Task[] }>(
+        `/api/tasks?status=archived&limit=50`,
+      );
+      setCompletedTasks(rows ?? []);
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  // Open focused task detail after load
   useEffect(() => {
     if (!focusId || loading) return;
     if (focusedRef.current === focusId) return;
-    const match = tasks.find((task) => task.id === focusId);
+    const match = [...todayTasks, ...allTasks].find((t) => t.id === focusId);
     if (!match) return;
     focusedRef.current = focusId;
     setSelectedTask(match);
     setDetailOpen(true);
-    // Clean the query param so a manual close doesn't re-open the panel
-    // on the next render (and so the URL is shareable without the focus).
     const params = new URLSearchParams(searchParams.toString());
     params.delete("focus");
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [focusId, loading, tasks, pathname, router, searchParams]);
+  }, [focusId, loading, todayTasks, allTasks, pathname, router, searchParams]);
 
   useEffect(() => {
     fetchTasks();
-
-    // Realtime subscription for task changes
     const channel = supabase
       .channel("tasks-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tasks" },
-        () => {
-          // Debounce: batch rapid changes (e.g. AI processing 20 tasks at once)
-          // into a single refetch 400ms after the last event.
-          if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
-          refetchTimerRef.current = setTimeout(fetchTasks, 400);
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, () => {
+        if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+        refetchTimerRef.current = setTimeout(fetchTasks, 400);
+      })
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
       if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
     };
   }, [fetchTasks, supabase]);
+
+  // ── Actions ────────────────────────────────────────────────────────────────
 
   async function handleComplete(taskId: string) {
     try {
@@ -143,22 +227,10 @@ export function TaskList({ locale }: { locale: string }) {
     }
   }
 
-  // Snooze opens a date+time picker; the actual API call happens in the
-  // dialog's onConfirm so the user can pick *when* to resurface, not just
-  // accept the default "tomorrow 09:00".
-  const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
-
-  function handleSnooze(taskId: string) {
-    setSnoozeTaskId(taskId);
-  }
-
   async function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
     try {
-      await api(`/api/tasks/${snoozeTaskId}/snooze`, {
-        method: "POST",
-        body: { until: untilIso },
-      });
+      await api(`/api/tasks/${snoozeTaskId}/snooze`, { method: "POST", body: { until: untilIso } });
       toast.success(t("actions.snooze"));
       fetchTasks();
     } catch (e) {
@@ -168,16 +240,9 @@ export function TaskList({ locale }: { locale: string }) {
 
   async function handleActivate(taskId: string) {
     try {
-      // Also clear AI follow-up flags so a "reopen from pending_completion"
-      // doesn't leave the green/amber banner up after the user has decided.
       await api(`/api/tasks/${taskId}`, {
         method: "PATCH",
-        body: {
-          status: "in_progress",
-          has_unread_update: false,
-          completion_signal_detected: false,
-          completion_signal_reason: null,
-        },
+        body: { status: "in_progress", has_unread_update: false, completion_signal_detected: false, completion_signal_reason: null },
       });
       toast.success(t("actions.activate"));
       fetchTasks();
@@ -200,10 +265,9 @@ export function TaskList({ locale }: { locale: string }) {
 
   function handleSelect(task: Task) {
     if (!task.seen_at) {
-      // Optimistic: drop the "new" indicator immediately so the blue stripe
-      // doesn't linger until the next refetch.
       const nowIso = new Date().toISOString();
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
+      setTodayTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
+      setAllTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
       api(`/api/tasks/${task.id}/seen`, { method: "POST" }).catch(() => {});
     }
     setSelectedTask({ ...task, seen_at: task.seen_at ?? new Date().toISOString() });
@@ -211,69 +275,207 @@ export function TaskList({ locale }: { locale: string }) {
   }
 
   function handleQuickAction(taskId: string, action: { label: string; prompt: string }) {
-    setQaTaskId(taskId);
-    setQaLabel(action.label);
-    setQaPrompt(action.prompt);
-    setQaOpen(true);
+    setQaTaskId(taskId); setQaLabel(action.label); setQaPrompt(action.prompt); setQaOpen(true);
   }
 
   function handleDriveSearch(taskId: string, description: string) {
-    setDsTaskId(taskId);
-    setDsDescription(description);
-    setDsOpen(true);
+    setDsTaskId(taskId); setDsDescription(description); setDsOpen(true);
   }
 
-  const displayTasks = searchResults !== null ? searchResults : tasks;
+  // Move a task from All → Today (append to end of Today list)
+  async function handleAddToToday(taskId: string) {
+    const maxPos = todayTasks.reduce((m, t) => Math.max(m, t.today_position ?? -1), -1);
+    const newPos = maxPos + 1;
+    // Optimistic update
+    const task = allTasks.find((t) => t.id === taskId);
+    if (task) {
+      setAllTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setTodayTasks((prev) => [...prev, { ...task, today_position: newPos }]);
+    }
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { today_position: newPos } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
+    }
+  }
+
+  // Remove a task from Today → back to All
+  async function handleRemoveFromToday(taskId: string) {
+    const task = todayTasks.find((t) => t.id === taskId);
+    if (task) {
+      setTodayTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setAllTasks((prev) => [{ ...task, today_position: null as unknown as number }, ...prev]);
+    }
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { today_position: null } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
+    }
+  }
+
+  // Drag end → recompute today_position for all Today tasks
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = todayTasks.findIndex((t) => t.id === active.id);
+    const newIndex = todayTasks.findIndex((t) => t.id === over.id);
+    const reordered = arrayMove(todayTasks, oldIndex, newIndex).map((t, i) => ({
+      ...t,
+      today_position: i,
+    }));
+    setTodayTasks(reordered);
+
+    // Persist new positions
+    await Promise.all(
+      reordered.map((t) =>
+        api(`/api/tasks/${t.id}`, { method: "PATCH", body: { today_position: t.today_position } }),
+      ),
+    );
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  const displayAll = searchResults !== null ? searchResults : allTasks;
 
   return (
-    <div className="space-y-4">
-      {/* Search */}
+    <div className="space-y-6">
       <SmartSearch
         onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
       />
 
-      {/* Filter Tabs */}
-      <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSearchResults(null); }} dir={locale === "he" ? "rtl" : "ltr"}>
-        <TabsList>
-          <TabsTrigger value="inbox">{t("inbox")}</TabsTrigger>
-          <TabsTrigger value="pending_completion">{t("pendingCompletion")}</TabsTrigger>
-          <TabsTrigger value="active">{t("active")}</TabsTrigger>
-          <TabsTrigger value="completed">{t("completed")}</TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      {/* Task Cards */}
       {loading ? (
         <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-32 rounded-lg" />
-          ))}
-        </div>
-      ) : displayTasks.length === 0 ? (
-        <div className="py-12 text-center text-muted-foreground">
-          <p>{t("title")}</p>
-          <p className="text-sm mt-1">{t("noTasksInView")}</p>
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 rounded-lg" />)}
         </div>
       ) : (
-        <div className="space-y-3">
-          {displayTasks.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              locale={locale}
-              onSelect={handleSelect}
-              onComplete={handleComplete}
-              onSnooze={handleSnooze}
-              onActivate={handleActivate}
-              onDelete={handleDelete}
-              onQuickAction={handleQuickAction}
-              onDriveSearch={handleDriveSearch}
-            />
-          ))}
-        </div>
+        <>
+          {/* ── TODAY section ────────────────────────────────────────── */}
+          <section>
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              היום
+            </h2>
+            {todayTasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                {`גרור משימות מ"הכל" לכאן לתכנון יום העבודה`}
+              </p>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={todayTasks.map((t) => t.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-3">
+                    {todayTasks.map((task) => (
+                      <SortableTaskCard
+                        key={task.id}
+                        task={task}
+                        locale={locale}
+                        onSelect={handleSelect}
+                        onComplete={handleComplete}
+                        onSnooze={(id) => setSnoozeTaskId(id)}
+                        onActivate={handleActivate}
+                        onDelete={handleDelete}
+                        onQuickAction={handleQuickAction}
+                        onDriveSearch={handleDriveSearch}
+                        onRemoveFromToday={handleRemoveFromToday}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            )}
+          </section>
+
+          {/* ── ALL section ──────────────────────────────────────────── */}
+          <section>
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              הכל
+            </h2>
+            {displayAll.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                {t("noTasksInView")}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {displayAll.map((task) => (
+                  <div key={task.id} className="flex gap-2 items-start">
+                    <div className="flex-1">
+                      <TaskCard
+                        task={task}
+                        locale={locale}
+                        onSelect={handleSelect}
+                        onComplete={handleComplete}
+                        onSnooze={(id) => setSnoozeTaskId(id)}
+                        onActivate={handleActivate}
+                        onDelete={handleDelete}
+                        onQuickAction={handleQuickAction}
+                        onDriveSearch={handleDriveSearch}
+                        extraActions={
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={(e) => { e.stopPropagation(); handleAddToToday(task.id); }}
+                          >
+                            <ChevronUp className="h-3 w-3 me-1" />
+                            הוסף להיום
+                          </Button>
+                        }
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* ── COMPLETED section (collapsible) ──────────────────────── */}
+          <section>
+            <button
+              className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 hover:text-foreground"
+              onClick={() => {
+                setShowCompleted((v) => {
+                  if (!v) fetchCompleted();
+                  return !v;
+                });
+              }}
+            >
+              {showCompleted ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              הושלמו
+            </button>
+            {showCompleted && (
+              <div className="space-y-3">
+                {completedTasks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-2 text-center">{t("noTasksInView")}</p>
+                ) : (
+                  completedTasks.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      locale={locale}
+                      onSelect={handleSelect}
+                      onComplete={handleComplete}
+                      onSnooze={(id) => setSnoozeTaskId(id)}
+                      onActivate={handleActivate}
+                      onDelete={handleDelete}
+                      onQuickAction={handleQuickAction}
+                      onDriveSearch={handleDriveSearch}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+          </section>
+        </>
       )}
 
-      {/* Task Detail Panel */}
       <TaskDetail
         task={selectedTask}
         locale={locale}
@@ -285,7 +487,6 @@ export function TaskList({ locale }: { locale: string }) {
         onDriveSearch={handleDriveSearch}
       />
 
-      {/* Quick Action Sheet */}
       <QuickAction
         taskId={qaTaskId}
         actionLabel={qaLabel}
@@ -295,7 +496,6 @@ export function TaskList({ locale }: { locale: string }) {
         onDone={fetchTasks}
       />
 
-      {/* Drive Search Sheet */}
       <DriveSearch
         taskId={dsTaskId}
         taskDescription={dsDescription}

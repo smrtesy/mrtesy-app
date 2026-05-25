@@ -41,6 +41,8 @@ const UPDATABLE_FIELDS = new Set([
   "ai_generated_content", "linked_drive_docs", "checklist", "task_materials",
   // Follow-up signals from ai-process (clearing when user reads the task)
   "has_unread_update", "completion_signal_detected", "completion_signal_reason",
+  // Today work-plan position (null = הכל, 0+ = position in היום list)
+  "today_position",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
@@ -162,7 +164,7 @@ function pickUpdates(body: Record<string, unknown>) {
 function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T }>(
   q: T, query: Request["query"],
 ): T {
-  const { status, verified, project_id, assigned_to, has_source, task_type } = query;
+  const { status, verified, project_id, assigned_to, has_source, task_type, today } = query;
   if (typeof status === "string") {
     const list = status.split(",").map((s) => s.trim()).filter(Boolean);
     if (list.length === 1) q = q.eq("status", list[0]);
@@ -179,6 +181,10 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
   if (typeof assigned_to === "string") q = q.eq("assigned_to_user_id", assigned_to);
   if (has_source === "true")  q = q.not("source_message_id", "is", null);
   if (has_source === "false") q = q.is("source_message_id", null);
+  // today=true → today_position IS NOT NULL (tasks in the Today work-plan)
+  // today=false → today_position IS NULL
+  if (today === "true")  q = q.not("today_position", "is", null);
+  if (today === "false") q = q.is("today_position", null);
   return q;
 }
 

@@ -72,6 +72,7 @@ export interface Task {
   ai_confidence: number | null;
   ai_model_used: string | null;
   manually_verified: boolean;
+  today_position: number | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;

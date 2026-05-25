@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,8 @@ interface TaskCardProps {
   /** Optional bulk-select integration. When provided, a checkbox is shown. */
   selected?: boolean;
   onToggleSelect?: (taskId: string) => void;
+  /** Optional extra action buttons rendered at the bottom of the card. */
+  extraActions?: ReactNode;
 }
 
 const priorityColors: Record<string, string> = {
@@ -57,6 +60,7 @@ export function TaskCard({
   onDriveSearch,
   selected,
   onToggleSelect,
+  extraActions,
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
@@ -310,6 +314,11 @@ export function TaskCard({
           <span className="hidden md:inline">{t("actions.complete")}</span>
         </Button>
       </div>
+      )}
+      {extraActions && (
+        <div className="px-4 pb-2 border-t border-border/40 pt-2">
+          {extraActions}
+        </div>
       )}
     </div>
   );
