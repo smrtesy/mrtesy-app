@@ -76,13 +76,17 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           ? new Date(lastGmailSync)
           : new Date(Date.now() - effectiveGmailDays * 24 * 60 * 60 * 1000);
 
-      const afterDate = `${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
+      // Gmail `after:` accepts Unix timestamps (seconds) — exact to the
+      // second. The old YYYY/MM/DD form truncates to midnight, causing every
+      // Part1 run on the same day to re-fetch all that day's emails, reset
+      // them to 'pending', and re-generate already-dismissed tasks.
+      const afterUnix = Math.floor(since.getTime() / 1000);
 
       // `in:inbox` is essential: without it, Gmail's `q` searches ALL labels,
       // pulling Sent/Chats/Archive into source_messages and creating
       // "reply-to-yourself" task suggestions from the user's own outbound mail.
       const query = [
-        `after:${afterDate}`,
+        `after:${afterUnix}`,
         `in:inbox`,
         ...skipFilter.gmailQueryFilters,
         `-in:drafts`,
