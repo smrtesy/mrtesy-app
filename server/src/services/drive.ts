@@ -78,6 +78,7 @@ export async function getFileContent(userId: string, fileId: string): Promise<st
         { responseType: "arraybuffer" },
       );
       const buf = Buffer.from(dlRes.data as ArrayBuffer);
+      // 15 MB binary ≈ 20 MB base64 — Gemini's inline_data hard cap.
       if (buf.length > 15 * 1024 * 1024) return "";
       const base64Data = buf.toString("base64");
       const text = await callGemini({
