@@ -157,12 +157,10 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
               received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
               processing_status: "pending",
               reply_to_context: toEmail,
-              // Use Gmail search-by-Message-ID so the URL survives mobile redirects.
-              // rfc822msgid:<id> is guaranteed unique; falls back to #all/<id> if
-              // the header is missing.
-              source_url: rfc822MsgId
-                ? `https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(rfc822MsgId)}`
-                : `https://mail.google.com/mail/u/0/#all/${id}`,
+              // Direct message link (#all/<id>) opens instantly without a search
+              // round-trip. The rfc822msgid search URL is kept as fallback only
+              // for cases where the Gmail internal ID is somehow unavailable.
+              source_url: `https://mail.google.com/mail/u/0/#all/${id}`,
               metadata: { threadId, to: toEmail },
             },
             { onConflict: "user_id,source_type,source_id" },
