@@ -173,7 +173,19 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       .filter(Boolean)
       .join("\n\n");
 
-    // ── 5. Fetch pending messages (FIFO) ──────────────────────────────────────
+    // ── 5. Rescue transient failures before fetching ──────────────────────────
+    // Messages marked 'failed' with ai_classification='error: max retries'
+    // failed due to a transient error (API credits exhausted, network blip),
+    // not a permanent data problem. Reset them so this run can retry them
+    // instead of requiring manual SQL intervention.
+    await db
+      .from("source_messages")
+      .update({ processing_status: "pending" })
+      .eq("user_id", userId)
+      .eq("processing_status", "failed")
+      .eq("ai_classification", "error: max retries");
+
+    // ── 6. Fetch pending messages (FIFO) ──────────────────────────────────────
     const { data: pending, error: fetchError } = await db
       .from("source_messages")
       .select("*")
@@ -188,7 +200,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
       return { sessionId };
     }
 
-    // ── 6. Process in batches of BATCH_SIZE ───────────────────────────────────
+    // ── 7. Process in batches of BATCH_SIZE ───────────────────────────────────
     // Track tasks created within this Part3 run so subsequent messages in the
     // same batch see them as "open tasks" — otherwise duplicates produced
     // back-to-back (e.g. the same Google Workspace storage alert delivered
