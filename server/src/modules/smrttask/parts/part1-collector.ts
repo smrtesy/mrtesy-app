@@ -167,7 +167,11 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
               source_url: `https://mail.google.com/mail/u/0/#all/${id}`,
               metadata: { threadId, to: toEmail },
             },
-            { onConflict: "user_id,source_type,source_id" },
+            // ignoreDuplicates: true → ON CONFLICT DO NOTHING.
+            // Emails are immutable; if a source_message already exists
+            // (classified or pending), keep its current state so dismissed
+            // tasks don't get re-queued on forced resyncs (gmailDays=7).
+            { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
           );
           if (gmailUpsertErr) throw new Error(gmailUpsertErr.message);
           itemsProcessed++;

@@ -273,13 +273,31 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
 
       // Check for existing task linked to this source_message (dedup — scoped to active org).
       // tasks.source_message_id is a UUID FK → source_messages.id, so use msg.id, not msg.source_id.
-      const { data: existingTask } = await db
+      // We include ALL statuses (including archived) so a dismissed task blocks
+      // re-creation. Without this, a forced resync (gmailDays=7) re-queues the
+      // source_message as pending, existingTask comes back null, and a duplicate
+      // task is inserted for a message the user already dismissed.
+      const { data: anyExistingTask } = await db
         .from("tasks")
         .select("id, status, updates")
         .eq("organization_id", orgId)
         .eq("source_message_id", msg.id)
-        .neq("status", "archived")
         .maybeSingle();
+
+      if (anyExistingTask?.status === "archived") {
+        // Source was already dismissed — mark classified so it won't be
+        // re-queued again and move on without running Claude.
+        await db
+          .from("source_messages")
+          .update({ processing_status: "classified", ai_classification: "skipped" })
+          .eq("id", msg.id);
+        itemsProcessed++;
+        continue;
+      }
+
+      // For non-archived existing tasks, use the task object as before
+      // (update path at line ~509 will refresh its fields).
+      const existingTask = anyExistingTask?.status !== "archived" ? anyExistingTask : null;
 
       // Fresh "just created in this batch" section — appended to the user
       // message (NOT the cached rulesContext) so the prompt cache stays
