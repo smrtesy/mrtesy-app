@@ -186,6 +186,19 @@ not just your interpretation. Silently dropping these hedges has
 been a recurring bug — the user loses the speaker's actual nuance
 and is left with only a confident-looking deadline that wasn't said.
 
+CONFIRMED REQUEST RULE — when the last incoming message in a conversation
+is a clear confirmation (👍, ✓, "אוקי", "בסדר", "כן", "sure", "ok",
+"מעולה", "יאללה", or any unambiguous agreement) to something the user
+asked for, treat the task as ALREADY CONFIRMED. Frame the title as the
+confirmed action, NOT as something still to be arranged:
+  WRONG: "לקבוע ישיבה עם מאור מחר" (to schedule a meeting)
+  RIGHT: "ישיבה עם מאור מחר" (meeting with Maor tomorrow)
+  WRONG: "לתאם שיחה עם דן" (to coordinate a call with Dan)
+  RIGHT: "שיחה עם דן" (call with Dan)
+This prevents tasks from reading as pending-scheduling when the other
+party already confirmed. The action the user needs to perform is showing
+up / preparing, not arranging.
+
 Priority rules:
 - urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation
 - high: deadline within 7 days, payment failure, important meeting
