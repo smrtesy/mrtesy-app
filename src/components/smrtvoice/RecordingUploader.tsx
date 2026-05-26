@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ interface Props {
  * silence-split it into per-line segments during the orchestrator run.
  */
 export function RecordingUploader({ projectId, existingPath, onUploaded }: Props) {
+  const t = useTranslations("smrtVoice.recordingUploader");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
@@ -26,7 +28,7 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
     if (!file) return;
     setBusy(true);
     try {
-      setProgress("מקבל URL להעלאה…");
+      setProgress(t("progressGettingUrl"));
       const { upload_url, path } = await api<{
         upload_url: string;
         path: string;
@@ -35,7 +37,7 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
         body: { fileName: file.name },
       });
 
-      setProgress(`מעלה ${file.name}…`);
+      setProgress(t("progressUploading", { fileName: file.name }));
       const resp = await fetch(upload_url, {
         method: "PUT",
         headers: { "Content-Type": file.type || "audio/wav" },
@@ -45,13 +47,12 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
         throw new Error(`Upload failed: ${resp.status} ${await resp.text()}`);
       }
 
-      // Persist the path on the project so /generate can pick it up.
       await api(`/api/voice/projects/${projectId}`, {
         method: "PATCH",
         body: { input_recording_path: path },
       });
 
-      toast.success("הקלטה הועלתה");
+      toast.success(t("success"));
       onUploaded?.(path);
       setFile(null);
     } catch (err) {
@@ -66,13 +67,13 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">
-          {existingPath ? "החלף הקלטת עורך" : "העלה הקלטת עורך (STS)"}
+          {existingPath ? t("titleReplace") : t("titleNew")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {existingPath && (
           <p className="text-xs text-muted-foreground break-all">
-            קיים: {existingPath}
+            {t("existingLabel", { path: existingPath })}
           </p>
         )}
         <input
@@ -83,12 +84,9 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
         />
         {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
         <Button onClick={onUpload} disabled={!file || busy}>
-          {busy ? "מעלה…" : existingPath ? "החלף" : "העלה"}
+          {busy ? t("uploading") : existingPath ? t("submitReplace") : t("submitNew")}
         </Button>
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          קובץ WAV/MP3 של ההקלטה המלאה. voice-engine יחתוך אותה לפי שתיקות
-          ויתאים לכל שורה את הקטע המתאים.
-        </p>
+        <p className="text-xs text-muted-foreground leading-relaxed">{t("help")}</p>
       </CardContent>
     </Card>
   );

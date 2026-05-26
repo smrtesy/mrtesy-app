@@ -1013,7 +1013,34 @@
       "title": "דמויות",
       "subtitle": "ניהול קלוני קולות לדמויות",
       "new": "דמות חדשה",
-      "empty": "אין דמויות עדיין"
+      "empty": "אין דמויות עדיין",
+      "form": {
+        "nameLabel": "שם (כפי שמופיע בסקריפט)",
+        "namePlaceholder": "דובי",
+        "displayNameLabel": "שם תצוגה",
+        "displayNamePlaceholder": "דוד'לה",
+        "descriptionLabel": "תיאור",
+        "descriptionPlaceholder": "ילד בן 7, סקרן, אנרגטי...",
+        "languageLabel": "שפה",
+        "voiceTypeLabel": "סוג קלון",
+        "voiceTypePro": "Pro (איכותי, אימון)",
+        "voiceTypeRapid": "Rapid (מיידי)",
+        "ageGroupLabel": "גיל",
+        "ageGroupNone": "—",
+        "ageGroupChild": "ילד",
+        "ageGroupTeen": "נער",
+        "ageGroupAdult": "מבוגר",
+        "ageGroupElderly": "קשיש",
+        "genderLabel": "מין",
+        "genderNone": "—",
+        "genderMale": "זכר",
+        "genderFemale": "נקבה",
+        "genderNeutral": "ניטרלי",
+        "personalityPromptLabel": "Personality prompt (English, ל-LLM)",
+        "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "submit": "צור דמות",
+        "cancel": "ביטול"
+      }
     },
     "lines": {
       "title": "שורות הסקריפט",
@@ -1039,6 +1066,34 @@
     "budget": {
       "label": "תקציב חודשי",
       "warningTitle": "התקציב מתקרב"
+    },
+    "cloneUploader": {
+      "titleNew": "יצירת קלון קול",
+      "titleReplace": "החלף קלון קול",
+      "voiceTypeLabel": "סוג קלון",
+      "voiceTypePro": "Pro — איכות גבוהה, ~כמה דקות אימון",
+      "voiceTypeRapid": "Rapid — מיידי, איכות נמוכה יותר",
+      "uploading": "מעלה…",
+      "submitNew": "צור קלון",
+      "submitReplace": "החלף",
+      "progressGettingUrl": "מקבל URL להעלאה…",
+      "progressUploading": "מעלה {fileName}…",
+      "progressCloning": "יוצר קלון ברזמבל…",
+      "successReady": "הקלון מוכן!",
+      "successTraining": "הקלון בתהליך אימון (ידע אותך כשמוכן)",
+      "help": "העלה הקלטה של 30–60 שניות באיכות נקייה (בלי רעש רקע, בלי מוזיקה). רזמבל ילמד את הקול ומחזיר voice_id שמשמש לייצור."
+    },
+    "recordingUploader": {
+      "titleNew": "העלה הקלטת עורך (STS)",
+      "titleReplace": "החלף הקלטת עורך",
+      "existingLabel": "קיים: {path}",
+      "uploading": "מעלה…",
+      "submitNew": "העלה",
+      "submitReplace": "החלף",
+      "progressGettingUrl": "מקבל URL להעלאה…",
+      "progressUploading": "מעלה {fileName}…",
+      "success": "הקלטה הועלתה",
+      "help": "קובץ WAV/MP3 של ההקלטה המלאה. voice-engine יחתוך אותה לפי שתיקות ויתאים לכל שורה את הקטע המתאים."
     }
   }
 }

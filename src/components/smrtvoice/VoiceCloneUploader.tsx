@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ interface Props {
 type VoiceType = "rapid" | "pro";
 
 export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: Props) {
+  const t = useTranslations("smrtVoice.cloneUploader");
   const [file, setFile] = useState<File | null>(null);
   const [voiceType, setVoiceType] = useState<VoiceType>("pro");
   const [busy, setBusy] = useState(false);
@@ -24,9 +26,8 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
   async function onUpload() {
     if (!file) return;
     setBusy(true);
-    setProgress("מקבל URL להעלאה…");
+    setProgress(t("progressGettingUrl"));
     try {
-      // 1. Ask smrtesy for a signed upload URL.
       const { upload_url, path } = await api<{
         upload_url: string;
         path: string;
@@ -35,8 +36,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         body: { fileName: file.name },
       });
 
-      // 2. Upload the file directly to Supabase Storage (bypasses our backend).
-      setProgress(`מעלה ${file.name}…`);
+      setProgress(t("progressUploading", { fileName: file.name }));
       const uploadResp = await fetch(upload_url, {
         method: "PUT",
         headers: { "Content-Type": file.type || "audio/wav" },
@@ -46,8 +46,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         throw new Error(`Upload failed: ${uploadResp.status} ${await uploadResp.text()}`);
       }
 
-      // 3. Tell smrtesy to forward this sample to voice-engine → Resemble.
-      setProgress("יוצר קלון ברזמבל…");
+      setProgress(t("progressCloning"));
       const { status, character } = await api<{
         status: string;
         character: { resemble_voice_id: string };
@@ -56,9 +55,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         body: { sample_path: path, voice_type: voiceType },
       });
 
-      toast.success(
-        status === "ready" ? "הקלון מוכן!" : "הקלון בתהליך אימון (ידע אותך כשמוכן)",
-      );
+      toast.success(status === "ready" ? t("successReady") : t("successTraining"));
       onCloned?.(character.resemble_voice_id);
       setFile(null);
     } catch (err) {
@@ -73,7 +70,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">
-          {hasExistingVoice ? "החלף קלון קול" : "יצירת קלון קול"}
+          {hasExistingVoice ? t("titleReplace") : t("titleNew")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -85,28 +82,25 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         />
 
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">סוג קלון</label>
+          <label className="text-xs text-muted-foreground">{t("voiceTypeLabel")}</label>
           <select
             className="w-full rounded-md border bg-background px-3 py-2 text-sm"
             value={voiceType}
             onChange={(e) => setVoiceType(e.target.value as VoiceType)}
             disabled={busy}
           >
-            <option value="pro">Pro — איכות גבוהה, ~כמה דקות אימון</option>
-            <option value="rapid">Rapid — מיידי, איכות נמוכה יותר</option>
+            <option value="pro">{t("voiceTypePro")}</option>
+            <option value="rapid">{t("voiceTypeRapid")}</option>
           </select>
         </div>
 
         {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
 
         <Button onClick={onUpload} disabled={!file || busy}>
-          {busy ? "מעלה…" : hasExistingVoice ? "החלף" : "צור קלון"}
+          {busy ? t("uploading") : hasExistingVoice ? t("submitReplace") : t("submitNew")}
         </Button>
 
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          העלה הקלטה של 30–60 שניות באיכות נקייה (בלי רעש רקע, בלי מוזיקה).
-          רזמבל ילמד את הקול ומחזיר voice_id שמשמש לייצור.
-        </p>
+        <p className="text-xs text-muted-foreground leading-relaxed">{t("help")}</p>
       </CardContent>
     </Card>
   );

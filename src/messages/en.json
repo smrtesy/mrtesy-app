@@ -1013,7 +1013,34 @@
       "title": "Characters",
       "subtitle": "Manage voice clones",
       "new": "New character",
-      "empty": "No characters yet"
+      "empty": "No characters yet",
+      "form": {
+        "nameLabel": "Name (as it appears in the script)",
+        "namePlaceholder": "Dovi",
+        "displayNameLabel": "Display name",
+        "displayNamePlaceholder": "Dovi'le",
+        "descriptionLabel": "Description",
+        "descriptionPlaceholder": "7-year-old boy, curious, energetic...",
+        "languageLabel": "Language",
+        "voiceTypeLabel": "Clone type",
+        "voiceTypePro": "Pro (high quality, trained)",
+        "voiceTypeRapid": "Rapid (instant)",
+        "ageGroupLabel": "Age",
+        "ageGroupNone": "—",
+        "ageGroupChild": "Child",
+        "ageGroupTeen": "Teen",
+        "ageGroupAdult": "Adult",
+        "ageGroupElderly": "Elderly",
+        "genderLabel": "Gender",
+        "genderNone": "—",
+        "genderMale": "Male",
+        "genderFemale": "Female",
+        "genderNeutral": "Neutral",
+        "personalityPromptLabel": "Personality prompt (English, for LLM)",
+        "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "submit": "Create character",
+        "cancel": "Cancel"
+      }
     },
     "lines": {
       "title": "Script lines",
@@ -1039,6 +1066,34 @@
     "budget": {
       "label": "Monthly budget",
       "warningTitle": "Budget approaching limit"
+    },
+    "cloneUploader": {
+      "titleNew": "Create voice clone",
+      "titleReplace": "Replace voice clone",
+      "voiceTypeLabel": "Clone type",
+      "voiceTypePro": "Pro — high quality, ~few minutes of training",
+      "voiceTypeRapid": "Rapid — instant, lower quality",
+      "uploading": "Uploading…",
+      "submitNew": "Create clone",
+      "submitReplace": "Replace",
+      "progressGettingUrl": "Getting upload URL…",
+      "progressUploading": "Uploading {fileName}…",
+      "progressCloning": "Creating clone in Resemble…",
+      "successReady": "Clone ready!",
+      "successTraining": "Clone is training (we'll notify you when ready)",
+      "help": "Upload a clean 30–60 second recording (no background noise, no music). Resemble learns the voice and returns a voice_id used for generation."
+    },
+    "recordingUploader": {
+      "titleNew": "Upload editor recording (STS)",
+      "titleReplace": "Replace editor recording",
+      "existingLabel": "Existing: {path}",
+      "uploading": "Uploading…",
+      "submitNew": "Upload",
+      "submitReplace": "Replace",
+      "progressGettingUrl": "Getting upload URL…",
+      "progressUploading": "Uploading {fileName}…",
+      "success": "Recording uploaded",
+      "help": "WAV/MP3 file of the full recording. voice-engine will split it by silence and match each line to the matching segment."
     }
   }
 }
