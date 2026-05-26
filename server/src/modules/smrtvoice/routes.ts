@@ -486,7 +486,15 @@ router.post("/voice/projects/:id/parse", async (req: Request, res: Response) => 
     if (updateErr) return res.status(500).json({ error: updateErr.message });
     res.json({ parsed: result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    let message = err instanceof Error ? err.message : "Unknown error";
+    if (err instanceof VoiceEngineError && err.details) {
+      const d = err.details as { detail?: unknown };
+      const detail =
+        d && typeof d === "object" && "detail" in d ? d.detail : err.details;
+      if (detail) {
+        message += ` — ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+      }
+    }
     await notifyError(req.org!.id, "smrtvoice", {
       title: "Failed to parse script",
       body: message,
