@@ -130,13 +130,47 @@ router.patch(
   },
 );
 
+// POST /voice/characters/:id/sample-upload-url — get a signed URL to upload
+// a voice sample directly to Supabase Storage. Returns { upload_url, path }.
+router.post(
+  "/voice/characters/:id/sample-upload-url",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const characterId = req.params.id;
+    const fileName: string = (req.body?.fileName as string) || "sample.wav";
+
+    const { data: character, error: charErr } = await db
+      .from("smrtvoice_characters")
+      .select("id")
+      .eq("id", characterId)
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+
+    if (charErr) return res.status(500).json({ error: charErr.message });
+    if (!character) return res.status(404).json({ error: "Character not found" });
+
+    const path = `${req.org!.id}/characters/${characterId}/samples/${fileName}`;
+
+    const { data, error } = await db.storage
+      .from("smrtvoice-audio")
+      .createSignedUploadUrl(path);
+
+    if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
+    res.json({ upload_url: data.signedUrl, path: data.path, token: data.token });
+  },
+);
+
+// POST /voice/characters/:id/clone — body: { sample_path, voice_type? }
+// `sample_path` is the storage path returned from /sample-upload-url after
+// the client uploads. We turn it into a signed download URL and hand it to
+// voice-engine, which downloads + multipart-uploads to Resemble.
 router.post(
   "/voice/characters/:id/clone",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { sample_url, voice_type } = req.body ?? {};
-    if (!sample_url) {
-      return res.status(400).json({ error: "sample_url is required" });
+    const { sample_path, voice_type } = req.body ?? {};
+    if (!sample_path) {
+      return res.status(400).json({ error: "sample_path is required" });
     }
 
     const { data: character, error: charError } = await db
@@ -149,10 +183,19 @@ router.post(
     if (charError) return res.status(500).json({ error: charError.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
+    // Sign the sample so voice-engine (Python service, no Supabase auth) can fetch it.
+    const { data: signed, error: signErr } = await db.storage
+      .from("smrtvoice-audio")
+      .createSignedUrl(sample_path, 3600);
+
+    if (signErr || !signed) {
+      return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+    }
+
     try {
       const client = getVoiceEngineClient();
       const result = await client.createVoiceClone({
-        sample_url,
+        sample_url: signed.signedUrl,
         name: character.name,
         voice_type: voice_type ?? "pro",
         language: character.language,
@@ -169,6 +212,20 @@ router.post(
         return res.status(500).json({ error: updateError.message });
       }
 
+      // Persist the sample row for traceability. Non-fatal: log if the row
+      // can't be written but don't fail the clone.
+      const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
+        org_id: req.org!.id,
+        character_id: character.id,
+        created_by: req.user!.id,
+        storage_path: sample_path,
+        uploaded_to_resemble: true,
+        resemble_sample_id: result.voice_id,
+      });
+      if (sampleErr) {
+        console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
+      }
+
       await emitEvent(
         req.org!.id,
         "smrtvoice",
@@ -178,7 +235,7 @@ router.post(
         { voice_id: result.voice_id },
       );
 
-      res.json({ character: updated });
+      res.json({ character: updated, status: result.status });
     } catch (err) {
       const message =
         err instanceof VoiceEngineError
@@ -300,6 +357,39 @@ router.post("/voice/projects", async (req: Request, res: Response) => {
   );
 
   res.status(201).json({ project: data });
+});
+
+// PATCH /voice/projects/:id — whitelisted field updates.
+const PROJECT_UPDATABLE = new Set([
+  "name",
+  "description",
+  "language",
+  "google_doc_url",
+  "google_doc_id",
+  "generation_mode",
+  "input_recording_path",
+]);
+
+router.patch("/voice/projects/:id", async (req: Request, res: Response) => {
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (PROJECT_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+
+  const { data, error } = await db
+    .from("smrtvoice_projects")
+    .update(updates)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select()
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Not found" });
+  res.json({ project: data });
 });
 
 router.get("/voice/projects/:id", async (req: Request, res: Response) => {

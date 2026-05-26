@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api/client";
+
+import { VoiceCloneUploader } from "./VoiceCloneUploader";
+import { VoiceProfileEditor } from "./VoiceProfileEditor";
 
 interface Character {
   id: string;
@@ -33,27 +36,24 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const [{ character }, { profiles }] = await Promise.all([
-          api<{ character: Character }>(`/api/voice/characters/${characterId}`),
-          api<{ profiles: VoiceProfile[] }>(
-            `/api/voice/characters/${characterId}/profiles`,
-          ),
-        ]);
-        if (!mounted) return;
-        setCharacter(character);
-        setProfiles(profiles);
-      } catch (err) {
-        if (mounted) setError(err instanceof Error ? err.message : "Unknown error");
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
+  const refresh = useCallback(async () => {
+    try {
+      const [{ character }, { profiles }] = await Promise.all([
+        api<{ character: Character }>(`/api/voice/characters/${characterId}`),
+        api<{ profiles: VoiceProfile[] }>(
+          `/api/voice/characters/${characterId}/profiles`,
+        ),
+      ]);
+      setCharacter(character);
+      setProfiles(profiles);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    }
   }, [characterId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!character) return <p className="text-sm text-muted-foreground">…</p>;
@@ -80,9 +80,16 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
         </CardContent>
       </Card>
 
+      <VoiceCloneUploader
+        characterId={characterId}
+        hasExistingVoice={!!character.resemble_voice_id}
+        onCloned={refresh}
+      />
+
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 flex flex-row items-center justify-between">
           <CardTitle className="text-base">Profiles</CardTitle>
+          <VoiceProfileEditor characterId={characterId} onCreated={refresh} />
         </CardHeader>
         <CardContent className="text-sm space-y-2">
           {profiles.length === 0 ? (

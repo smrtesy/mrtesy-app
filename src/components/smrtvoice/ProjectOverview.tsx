@@ -10,6 +10,7 @@ import { api, ApiError } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 
 import { ProjectStatusBadge } from "./ProjectStatusBadge";
+import { RecordingUploader } from "./RecordingUploader";
 
 interface Project {
   id: string;
@@ -23,6 +24,7 @@ interface Project {
   failed_lines: number;
   total_cost_usd: number;
   generation_mode: "sts" | "tts";
+  input_recording_path: string | null;
 }
 
 export function ProjectOverview({ projectId }: { projectId: string }) {
@@ -141,6 +143,16 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
           </a>
         )}
       </div>
+
+      {project.generation_mode === "sts" && (
+        <RecordingUploader
+          projectId={projectId}
+          existingPath={project.input_recording_path}
+          onUploaded={() => {
+            // Realtime channel will trigger refresh; nothing else needed.
+          }}
+        />
+      )}
     </div>
   );
 }

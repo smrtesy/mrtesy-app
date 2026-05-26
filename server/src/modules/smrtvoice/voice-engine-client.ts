@@ -87,7 +87,12 @@ class VoiceEngineClient {
     voice_type?: "rapid" | "pro";
     language?: string;
   }): Promise<{ voice_id: string; status: string }> {
-    return this.request("POST", "/voices/clone", params);
+    return this.request("POST", "/voices/clone", {
+      sample_audio_url: params.sample_url,
+      voice_name: params.name,
+      voice_type: params.voice_type ?? "pro",
+      language: params.language ?? "he",
+    });
   }
 
   /**
