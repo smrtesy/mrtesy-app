@@ -27,6 +27,7 @@ import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter, { runPart1, runPart3 } from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
+import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -136,9 +137,14 @@ app.get("/api/version", (_req, res) => {
 // at the app level gets it picked up before anything else.
 app.use("/api", whatsappWebhookRouter);
 
+// smrtVoice webhook is also unauthenticated — voice-engine signs it with HMAC,
+// so it must come BEFORE the auth-guarded routers (same reasoning as above).
+app.use(smrtvoiceWebhookRouter);
+
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
+app.use("/api", smrtvoiceRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

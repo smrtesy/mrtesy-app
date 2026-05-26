@@ -36,7 +36,12 @@
     "transcriptionExperiment": "Transcription Experiment",
     "inbox": "Inbox",
     "inboxIncoming": "Incoming",
-    "guide": "Guide"
+    "guide": "Guide",
+    "voiceProjects": "Voice projects",
+    "voiceCharacters": "Voice characters",
+    "voiceSettings": "Voice settings",
+    "voiceGuide": "smrtVoice guide",
+    "sectionVoice": "smrtVoice"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",
@@ -531,7 +536,6 @@
     "accessTokenHint": "From DualHook → Account Details → Access Token. Stored encrypted in Supabase Vault. Required for audio transcription, image OCR, and document storage.",
     "appSecretLabel": "App Secret",
     "appSecretHint": "From Meta Business → App → Settings → Basic → App Secret. Used to verify HMAC on inbound webhooks from Meta.",
-    "verifyTokenLabel": "Verify Token",
     "verifyTokenHint": "Pick any random string. Paste it here AND into DualHook → Webhook Override → Verify Token. We use it to validate Meta's initial GET handshake.",
     "confirmConnection": "Confirm Connection",
     "connectError": "Connection failed: {error}",
@@ -970,5 +974,71 @@
     "typeStyle": "Style",
     "typePreference": "Preference",
     "typeFinancial": "Financial"
+  },
+  "smrtVoice": {
+    "appName": "smrtVoice",
+    "navSection": "smrtVoice",
+    "projects": {
+      "title": "Projects",
+      "subtitle": "Manage voice generation projects",
+      "new": "New project",
+      "empty": "No projects yet",
+      "createFirst": "Create your first project",
+      "form": {
+        "name": "Project name",
+        "namePlaceholder": "e.g. NM57",
+        "description": "Description (optional)",
+        "language": "Language",
+        "googleDocUrl": "Google Doc URL",
+        "generationMode": "Generation mode",
+        "stsMode": "STS — from editor recording",
+        "ttsMode": "TTS — text only",
+        "submit": "Create project",
+        "cancel": "Cancel"
+      },
+      "status": {
+        "draft": "Draft",
+        "parsed": "Parsed",
+        "ready": "Ready",
+        "queued": "Queued",
+        "processing": "Processing",
+        "audio_ready": "Audio ready",
+        "completed": "Completed",
+        "archiving": "Archiving",
+        "archived": "Archived",
+        "failed": "Failed"
+      }
+    },
+    "characters": {
+      "title": "Characters",
+      "subtitle": "Manage voice clones",
+      "new": "New character",
+      "empty": "No characters yet"
+    },
+    "lines": {
+      "title": "Script lines",
+      "regenerate": "Regenerate",
+      "play": "Play"
+    },
+    "audio": {
+      "title": "Audio files",
+      "download": "Download all"
+    },
+    "settings": {
+      "title": "smrtVoice settings",
+      "monthlyBudget": "Monthly budget (USD)",
+      "defaultAdapter": "Default engine",
+      "defaultModel": "Default Resemble model",
+      "archiveAfterDays": "Archive after (days)",
+      "save": "Save"
+    },
+    "guide": {
+      "title": "smrtVoice guide",
+      "intro": "Full pipeline: create characters → import script → record → generate → outputs."
+    },
+    "budget": {
+      "label": "Monthly budget",
+      "warningTitle": "Budget approaching limit"
+    }
   }
 }

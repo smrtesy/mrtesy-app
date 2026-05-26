@@ -36,7 +36,12 @@
     "inbox": "תיבה",
     "inboxIncoming": "נכנס",
     "guide": "מדריך",
-    "transcriptionExperiment": "ניסוי תמלול"
+    "transcriptionExperiment": "ניסוי תמלול",
+    "voiceProjects": "פרויקטי קול",
+    "voiceCharacters": "דמויות קול",
+    "voiceSettings": "הגדרות קול",
+    "voiceGuide": "מדריך smrtVoice",
+    "sectionVoice": "smrtVoice"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",
@@ -531,7 +536,6 @@
     "accessTokenHint": "מ-DualHook → Account Details → Access Token. נשמר מוצפן ב-Supabase Vault. נדרש לתמלול אודיו, OCR לתמונות ושמירת מסמכים.",
     "appSecretLabel": "App Secret",
     "appSecretHint": "מ-Meta Business → App → Settings → Basic → App Secret. משמש לאימות HMAC על webhooks נכנסים מ-Meta.",
-    "verifyTokenLabel": "Verify Token",
     "verifyTokenHint": "בחר מחרוזת אקראית כלשהי. הדבק אותה גם כאן וגם ב-DualHook → Webhook Override → Verify Token. נשתמש בה כדי לאמת את ה-handshake הראשוני של Meta.",
     "confirmConnection": "אשר חיבור",
     "connectError": "שגיאה בחיבור: {error}",
@@ -872,16 +876,6 @@
     "serviceGoogleCalendar": "Google Calendar",
     "serviceWhatsapp": "WhatsApp",
     "roleUpdated": "התפקיד עודכן",
-    "allApps": "כל האפליקציות",
-    "orgsCount": "{count, plural, one {# ארגון} other {# ארגונים}}",
-    "appServicesTitle": "סטטוס שירותים",
-    "appServicesDesc": "סטטוס סנכרון Gmail, Drive, Calendar ו-WhatsApp לכל משתמש",
-    "appPromptsTitle": "פרומפטים AI",
-    "appPromptsDesc": "צפייה וניהול פרומפטים של AI עבור אפליקציה זו",
-    "appSecretsTitle": "מפתחות וסודות",
-    "appSecretsDesc": "ניהול מפתחות API פלטפורמתיים וסודות מטא של חיבורי WhatsApp",
-    "appGuideTitle": "מדריך למשתמש",
-    "appGuideDesc": "פתח את דף המדריך של האפליקציה",
     "inviteSection": "הזמן משתמש",
     "inviteEmailPlaceholder": "כתובת אימייל...",
     "inviteSendBtn": "שלח הזמנה",
@@ -980,5 +974,71 @@
     "typeStyle": "סגנון",
     "typePreference": "העדפה",
     "typeFinancial": "פיננסי"
+  },
+  "smrtVoice": {
+    "appName": "smrtVoice",
+    "navSection": "smrtVoice",
+    "projects": {
+      "title": "פרויקטים",
+      "subtitle": "ניהול פרויקטי הקראת קול",
+      "new": "פרויקט חדש",
+      "empty": "אין פרויקטים עדיין",
+      "createFirst": "צור את הפרויקט הראשון שלך",
+      "form": {
+        "name": "שם הפרויקט",
+        "namePlaceholder": "לדוגמה: NM57",
+        "description": "תיאור (אופציונלי)",
+        "language": "שפה",
+        "googleDocUrl": "קישור לגוגל דוקס",
+        "generationMode": "מצב ייצור",
+        "stsMode": "STS — מקלטת לעורך",
+        "ttsMode": "TTS — מטקסט בלבד",
+        "submit": "צור פרויקט",
+        "cancel": "ביטול"
+      },
+      "status": {
+        "draft": "טיוטה",
+        "parsed": "פורסר",
+        "ready": "מוכן",
+        "queued": "בתור",
+        "processing": "בייצור",
+        "audio_ready": "אודיו מוכן",
+        "completed": "הושלם",
+        "archiving": "בארכוב",
+        "archived": "בארכיון",
+        "failed": "נכשל"
+      }
+    },
+    "characters": {
+      "title": "דמויות",
+      "subtitle": "ניהול קלוני קולות לדמויות",
+      "new": "דמות חדשה",
+      "empty": "אין דמויות עדיין"
+    },
+    "lines": {
+      "title": "שורות הסקריפט",
+      "regenerate": "הקלט מחדש",
+      "play": "השמע"
+    },
+    "audio": {
+      "title": "קבצי אודיו",
+      "download": "הורד הכל"
+    },
+    "settings": {
+      "title": "הגדרות smrtVoice",
+      "monthlyBudget": "תקציב חודשי (USD)",
+      "defaultAdapter": "מנוע ברירת מחדל",
+      "defaultModel": "מודל ברירת מחדל ברזמבל",
+      "archiveAfterDays": "ארכוב אחרי (ימים)",
+      "save": "שמור"
+    },
+    "guide": {
+      "title": "מדריך smrtVoice",
+      "intro": "מסלול עבודה מלא: יצירת דמויות → ייבוא סקריפט → הקלטה → ייצור → תוצרים."
+    },
+    "budget": {
+      "label": "תקציב חודשי",
+      "warningTitle": "התקציב מתקרב"
+    }
   }
 }

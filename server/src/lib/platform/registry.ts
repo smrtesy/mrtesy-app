@@ -1,5 +1,6 @@
 import type { AppManifest } from "./types";
 import { manifest as smrttaskManifest } from "../../apps/smrttask/manifest";
+import { manifest as smrtvoiceManifest } from "../../apps/smrtvoice/manifest";
 
 /**
  * All app manifests registered here.
@@ -7,4 +8,5 @@ import { manifest as smrttaskManifest } from "../../apps/smrttask/manifest";
  */
 export const APP_REGISTRY: AppManifest[] = [
   smrttaskManifest,
+  smrtvoiceManifest,
 ];

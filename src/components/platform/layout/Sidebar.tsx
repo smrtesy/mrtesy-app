@@ -17,6 +17,8 @@ import {
   FlaskConical,
   PanelRightClose,
   PanelRightOpen,
+  Mic,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -46,6 +48,14 @@ const smrtTaskViewItems = [
   { key: "whatsapp",                href: "/whatsapp",                icon: MessageCircle },
   { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical },
   { key: "log",                     href: "/log",                     icon: FileText      },
+] as const;
+
+// smrtVoice section — shown when the active org has smrtvoice enabled.
+const smrtVoiceItems = [
+  { key: "voiceProjects",   href: "/voice",            icon: Mic       },
+  { key: "voiceCharacters", href: "/voice/characters", icon: Users     },
+  { key: "voiceSettings",   href: "/voice/settings",   icon: Settings  },
+  { key: "voiceGuide",      href: "/voice/guide",      icon: BookOpen  },
 ] as const;
 
 // When smrtTask is enabled the inbox moves into the smrtTask section
@@ -79,6 +89,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
+  const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -292,6 +303,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
               <SectionLabel>{t("sectionViews")}</SectionLabel>
               {smrtTaskViewItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
+              ))}
+            </>
+          )}
+
+          {/* smrtVoice section — shown when the active org has smrtvoice enabled. */}
+          {hasSmrtVoice && (
+            <>
+              <SectionLabel>{t("sectionVoice")}</SectionLabel>
+              {smrtVoiceItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon} />
               ))}
             </>
