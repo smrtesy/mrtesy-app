@@ -5,7 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, GitBranch } from "lucide-react";
 import { NewProjectButton } from "@/components/smrttask/projects/NewProjectButton";
 
 export default async function ProjectsPage({
@@ -39,6 +39,18 @@ export default async function ProjectsPage({
     countMap[item.project_id] = (countMap[item.project_id] || 0) + 1;
   }
 
+  // Separate root projects from sub-projects
+  const allProjects = projects || [];
+  const rootProjects = allProjects.filter((p) => !p.parent_id);
+  const subProjectMap = new Map<string, typeof allProjects>();
+  for (const p of allProjects) {
+    if (p.parent_id) {
+      const children = subProjectMap.get(p.parent_id) ?? [];
+      children.push(p);
+      subProjectMap.set(p.parent_id, children);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -46,7 +58,7 @@ export default async function ProjectsPage({
         <NewProjectButton locale={locale} label={tc("new")} />
       </div>
 
-      {(!projects || projects.length === 0) ? (
+      {rootProjects.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <FolderOpen className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noProjects")}</p>
@@ -54,48 +66,84 @@ export default async function ProjectsPage({
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {projects.map((project) => {
+          {rootProjects.map((project) => {
             const brief = Array.isArray(project.project_briefs)
               ? project.project_briefs[0]
               : project.project_briefs;
             const openTasks = countMap[project.id] || 0;
             const name = locale === "he" && project.name_he ? project.name_he : project.name;
+            const children = subProjectMap.get(project.id) ?? [];
 
             return (
-              <Link key={project.id} href={`/${locale}/projects/${project.id}`}>
-                <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-base">
-                        {project.color && (
-                          <span
-                            className="inline-block h-3 w-3 rounded-full me-2"
-                            style={{ backgroundColor: project.color }}
-                          />
-                        )}
-                        {name}
-                      </CardTitle>
-                      {openTasks > 0 && (
-                        <Badge variant="secondary" className="text-xs">
-                          {openTasks} {tc("tasks")}
+              <div key={project.id} className="space-y-1">
+                <Link href={`/${locale}/projects/${project.id}`}>
+                  <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-base">
+                          {project.color && (
+                            <span
+                              className="inline-block h-3 w-3 rounded-full me-2"
+                              style={{ backgroundColor: project.color }}
+                            />
+                          )}
+                          {name}
+                        </CardTitle>
+                        <div className="flex items-center gap-1.5">
+                          {children.length > 0 && (
+                            <Badge variant="outline" className="text-[10px] gap-1">
+                              <GitBranch className="h-2.5 w-2.5" />
+                              {children.length}
+                            </Badge>
+                          )}
+                          {openTasks > 0 && (
+                            <Badge variant="secondary" className="text-xs">
+                              {openTasks} {tc("tasks")}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {brief?.purpose ? (
+                        <p className="text-xs text-muted-foreground line-clamp-2">{brief.purpose}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground italic">{t("noBrief")}</p>
+                      )}
+                      {brief?.current_status && (
+                        <Badge variant="outline" className="mt-2 text-[10px]">
+                          {brief.current_status}
                         </Badge>
                       )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    {brief?.purpose ? (
-                      <p className="text-xs text-muted-foreground line-clamp-2">{brief.purpose}</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic">{t("noBrief")}</p>
-                    )}
-                    {brief?.current_status && (
-                      <Badge variant="outline" className="mt-2 text-[10px]">
-                        {brief.current_status}
-                      </Badge>
-                    )}
-                  </CardContent>
-                </Card>
-              </Link>
+                    </CardContent>
+                  </Card>
+                </Link>
+
+                {/* Sub-projects nested below parent */}
+                {children.map((child) => {
+                  const childName = locale === "he" && child.name_he ? child.name_he : child.name;
+                  const childTasks = countMap[child.id] || 0;
+                  return (
+                    <Link key={child.id} href={`/${locale}/projects/${child.id}`} className="block ms-4">
+                      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 hover:bg-accent/50 transition-colors cursor-pointer">
+                        <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        {child.color && (
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: child.color }}
+                          />
+                        )}
+                        <span className="text-sm font-medium flex-1 truncate">{childName}</span>
+                        {childTasks > 0 && (
+                          <Badge variant="secondary" className="text-[10px] shrink-0">
+                            {childTasks}
+                          </Badge>
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
             );
           })}
         </div>

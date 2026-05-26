@@ -4,11 +4,12 @@ import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, CheckCircle2, Tag, User } from "lucide-react";
+import { ExternalLink, CheckCircle2, Tag, User, GitBranch } from "lucide-react";
 import { notFound } from "next/navigation";
 import { BuildBriefButton } from "@/components/smrttask/tasks/BuildBriefButton";
 import { BriefFactVerifier } from "@/components/smrttask/projects/BriefFactVerifier";
 import { EditProjectSheet } from "@/components/smrttask/projects/EditProjectSheet";
+import { NewProjectButton } from "@/components/smrttask/projects/NewProjectButton";
 import { formatDateOnly } from "@/lib/date";
 
 export default async function ProjectDetailPage({
@@ -32,7 +33,7 @@ export default async function ProjectDetailPage({
 
   if (!project) notFound();
 
-  const [briefResult, tasksResult] = await Promise.all([
+  const [briefResult, tasksResult, subProjectsResult] = await Promise.all([
     supabase.from("project_briefs").select("*").eq("project_id", id).single(),
     supabase
       .from("tasks")
@@ -42,10 +43,18 @@ export default async function ProjectDetailPage({
       .neq("status", "archived")
       .order("created_at", { ascending: false })
       .limit(20),
+    supabase
+      .from("projects")
+      .select("id, name, name_he, color")
+      .eq("parent_id", id)
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .order("created_at", { ascending: true }),
   ]);
 
   const brief = briefResult.data;
   const tasks = tasksResult.data || [];
+  const subProjects = subProjectsResult.data || [];
   const name = locale === "he" && project.name_he ? project.name_he : project.name;
 
   const pendingFacts = (brief?.pending_facts as Array<{
@@ -202,6 +211,44 @@ export default async function ProjectDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {/* Sub-projects */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            {tDetail("subProjects")}
+            {subProjects.length > 0 && (
+              <span className="text-sm font-normal text-muted-foreground">({subProjects.length})</span>
+            )}
+          </h2>
+          <NewProjectButton locale={locale} label={tDetail("addSubProject")} parentId={id} />
+        </div>
+        {subProjects.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{tDetail("noSubProjects")}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {subProjects.map((sub) => {
+              const subName = locale === "he" && sub.name_he ? sub.name_he : sub.name;
+              return (
+                <a
+                  key={sub.id}
+                  href={`/${locale}/projects/${sub.id}`}
+                  className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2.5 hover:bg-accent/50 transition-colors"
+                >
+                  {sub.color && (
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: sub.color as string }}
+                    />
+                  )}
+                  <span className="text-sm font-medium">{subName}</span>
+                </a>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Linked Tasks */}
       <div>

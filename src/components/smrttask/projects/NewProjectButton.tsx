@@ -15,7 +15,15 @@ const COLORS = [
   "#8B5CF6", "#EC4899", "#06B6D4", "#6366F1",
 ];
 
-export function NewProjectButton({ locale, label }: { locale: string; label: string }) {
+export function NewProjectButton({
+  locale,
+  label,
+  parentId,
+}: {
+  locale: string;
+  label: string;
+  parentId?: string;
+}) {
   const router = useRouter();
   const tNew = useTranslations("newProject");
   const [open, setOpen] = useState(false);
@@ -28,9 +36,11 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
     setLoading(true);
 
     try {
+      const body: Record<string, unknown> = { name: name.trim(), name_he: name.trim(), color };
+      if (parentId) body.parent_id = parentId;
       const { project } = await api<{ project: { id: string } }>("/api/projects", {
         method: "POST",
-        body: { name: name.trim(), name_he: name.trim(), color },
+        body,
       });
 
       toast.success(tNew("projectCreated"));
@@ -55,7 +65,7 @@ export function NewProjectButton({ locale, label }: { locale: string; label: str
         <SheetContent side="bottom" className="h-auto max-h-[60vh]">
           <SheetHeader>
             <SheetTitle className="text-start">
-              {tNew("newProjectTitle")}
+              {parentId ? tNew("newSubProjectTitle") : tNew("newProjectTitle")}
             </SheetTitle>
           </SheetHeader>
           <div className="space-y-4 py-4">

@@ -379,7 +379,9 @@
     "targetAudience": "Target Audience",
     "status": "Status",
     "aiContext": "AI Context",
-    "links": "Links"
+    "links": "Links",
+    "subProjects": "Sub-projects",
+    "addSubProject": "Add sub-project"
   },
   "onboarding": {
     "welcome": "Welcome to smrtesy",
@@ -629,12 +631,16 @@
   "newProject": {
     "projectCreated": "Project created",
     "newProjectTitle": "New Project",
+    "newSubProjectTitle": "New Sub-project",
     "projectNamePlaceholder": "Project name",
     "color": "Color",
     "createProject": "Create Project"
   },
   "projectDetail": {
-    "verifiedFacts": "Verified facts"
+    "verifiedFacts": "Verified facts",
+    "subProjects": "Sub-projects",
+    "addSubProject": "Add sub-project",
+    "noSubProjects": "No sub-projects yet"
   },
   "logPage": {
     "filterAll": "All",

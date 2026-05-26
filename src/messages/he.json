@@ -379,7 +379,9 @@
     "targetAudience": "קהל יעד",
     "status": "סטטוס",
     "aiContext": "הקשר AI",
-    "links": "קישורים"
+    "links": "קישורים",
+    "subProjects": "תת-פרויקטים",
+    "addSubProject": "הוסף תת-פרויקט"
   },
   "onboarding": {
     "welcome": "ברוך הבא ל-smrtesy",
@@ -629,12 +631,16 @@
   "newProject": {
     "projectCreated": "פרויקט נוצר",
     "newProjectTitle": "פרויקט חדש",
+    "newSubProjectTitle": "תת-פרויקט חדש",
     "projectNamePlaceholder": "שם הפרויקט",
     "color": "צבע",
     "createProject": "צור פרויקט"
   },
   "projectDetail": {
-    "verifiedFacts": "עובדות מאומתות"
+    "verifiedFacts": "עובדות מאומתות",
+    "subProjects": "תת-פרויקטים",
+    "addSubProject": "הוסף תת-פרויקט",
+    "noSubProjects": "אין תת-פרויקטים עדיין"
   },
   "logPage": {
     "filterAll": "הכל",
