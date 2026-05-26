@@ -173,6 +173,16 @@ export function MessageSuggestions({ locale }: { locale: string }) {
     }
   }
 
+  async function handleComplete(taskId: string) {
+    try {
+      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+      toast.success(tTasks("actions.complete"));
+      fetchSuggestions();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   async function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
     try {
@@ -347,6 +357,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
                 onApprove={() => handleApprove(task.id as string)}
                 onEdit={() => setEditTask(task as Task)}
                 onSnooze={() => setSnoozeTaskId(task.id as string)}
+                onComplete={() => handleComplete(task.id as string)}
               />
             </CardContent>
           </Card>
@@ -396,6 +407,7 @@ function SuggestionActions({
   onApprove,
   onEdit,
   onSnooze,
+  onComplete,
 }: {
   taskId: string;
   onFastDismiss: () => void;
@@ -403,6 +415,7 @@ function SuggestionActions({
   onApprove: () => void;
   onEdit: () => void;
   onSnooze: () => void;
+  onComplete: () => void;
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
@@ -463,6 +476,17 @@ function SuggestionActions({
           aria-label={t("approve")}
         >
           <CheckCircle2 className="h-4 w-4" />
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-9 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          onClick={onComplete}
+          title={tTasks("actions.complete")}
+          aria-label={tTasks("actions.complete")}
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          <span className="hidden md:inline">{tTasks("actions.complete")}</span>
         </Button>
       </div>
 
