@@ -199,6 +199,7 @@ export interface CreateJobRequest {
   adapter?: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   mode: "sts" | "tts";
   google_doc_id?: string;
+  google_oauth_token?: string;
   input_audio_url?: string;
   callback_url: string;
   callback_secret?: string;

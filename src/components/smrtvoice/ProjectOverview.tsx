@@ -7,6 +7,7 @@ import { useLocale } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api/client";
+import { createClient } from "@/lib/supabase/client";
 
 import { ProjectStatusBadge } from "./ProjectStatusBadge";
 
@@ -32,16 +33,40 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
+
+    async function refresh() {
       try {
         const { project } = await api<{ project: Project }>(`/api/voice/projects/${projectId}`);
         if (mounted) setProject(project);
       } catch (err) {
         if (mounted) setError(err instanceof Error ? err.message : "Unknown error");
       }
-    })();
+    }
+
+    refresh();
+
+    // Realtime: refetch on any row update for this project. Cheap and reliable —
+    // the row is small. Lines come in separately on the script page.
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`smrtvoice_project_${projectId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "smrtvoice_projects",
+          filter: `id=eq.${projectId}`,
+        },
+        () => {
+          if (mounted) refresh();
+        },
+      )
+      .subscribe();
+
     return () => {
       mounted = false;
+      supabase.removeChannel(channel);
     };
   }, [projectId]);
 

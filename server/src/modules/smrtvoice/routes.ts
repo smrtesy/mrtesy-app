@@ -14,6 +14,7 @@ import type { Request, Response } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
 import { emitEvent, notifyError } from "../../lib/platform";
+import { getOAuthClient } from "../../services/token-refresh";
 
 import { getVoiceEngineClient, VoiceEngineError } from "./voice-engine-client";
 import type {
@@ -327,8 +328,22 @@ router.post("/voice/projects/:id/parse", async (req: Request, res: Response) => 
   if (!project.google_doc_id) return res.status(400).json({ error: "Project has no Google Doc" });
 
   try {
+    // voice-engine needs the user's Google access token to fetch the doc.
+    let googleAccessToken: string | undefined;
+    try {
+      const oauthClient = await getOAuthClient(req.user!.id, "drive");
+      googleAccessToken = oauthClient.credentials.access_token ?? undefined;
+    } catch {
+      return res.status(400).json({
+        error: "Google Drive is not connected for this user. Connect via Settings → Connections.",
+      });
+    }
+    if (!googleAccessToken) {
+      return res.status(400).json({ error: "Failed to obtain Google access token" });
+    }
+
     const client = getVoiceEngineClient();
-    const result = await client.parseScript(project.google_doc_id);
+    const result = await client.parseScript(project.google_doc_id, googleAccessToken);
 
     const { error: updateErr } = await db
       .from("smrtvoice_projects")
@@ -430,6 +445,20 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       inputAudioUrl = urlData?.signedUrl;
     }
 
+    // voice-engine needs the user's Google access token to fetch the doc when
+    // running the orchestrator. We pass it along on every job that has a doc.
+    let googleAccessToken: string | undefined;
+    if (project.google_doc_id) {
+      try {
+        const oauthClient = await getOAuthClient(req.user!.id, "drive");
+        googleAccessToken = oauthClient.credentials.access_token ?? undefined;
+      } catch {
+        return res.status(400).json({
+          error: "Google Drive is not connected. Connect via Settings → Connections before generating.",
+        });
+      }
+    }
+
     const client = getVoiceEngineClient();
     const engineJob = await client.createJob({
       org_id: req.org!.id,
@@ -439,6 +468,7 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       adapter: settings?.default_adapter ?? "resemble",
       mode: project.generation_mode,
       google_doc_id: project.google_doc_id ?? undefined,
+      google_oauth_token: googleAccessToken,
       input_audio_url: inputAudioUrl,
     });
 
