@@ -60,6 +60,16 @@ router.post(
       return res.status(400).json({ error: "name is required" });
     }
 
+    // New characters inherit the org's default Resemble model. The column
+    // has a DB default of 'chatterbox', but the org setting (editable in
+    // /voice/settings) takes precedence so a studio can switch its default
+    // model once and have every new character pick it up.
+    const { data: orgSettings } = await db
+      .from("smrtvoice_settings")
+      .select("default_resemble_model")
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+
     const { data, error } = await db
       .from("smrtvoice_characters")
       .insert({
@@ -73,6 +83,9 @@ router.post(
         age_group: body.age_group ?? null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
+        ...(orgSettings?.default_resemble_model
+          ? { resemble_model: orgSettings.default_resemble_model }
+          : {}),
       })
       .select()
       .single();
@@ -111,11 +124,38 @@ router.get("/voice/characters/:id", async (req: Request, res: Response) => {
   res.json({ character: data });
 });
 
+// Whitelisted columns for PATCH — prevents a client from overwriting
+// org_id / created_by / resemble_voice_id (the last is set only by the
+// clone flow, not by free-form edits).
+const CHARACTER_UPDATABLE = new Set([
+  "name",
+  "display_name",
+  "description",
+  "notes",
+  "language",
+  "voice_type",
+  "age_group",
+  "gender",
+  "personality_prompt",
+  "resemble_model",
+  "default_exaggeration",
+  "default_pitch",
+  "default_pace",
+  "is_active",
+]);
+
 router.patch(
   "/voice/characters/:id",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const updates = req.body as Partial<CreateCharacterRequest>;
+    const updates: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.body ?? {})) {
+      if (CHARACTER_UPDATABLE.has(k)) updates[k] = v;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No updatable fields in body" });
+    }
+
     const { data, error } = await db
       .from("smrtvoice_characters")
       .update(updates)
