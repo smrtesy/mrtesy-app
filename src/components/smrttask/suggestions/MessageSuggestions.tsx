@@ -28,7 +28,7 @@ interface SourceJoin {
   serial_display: string | null;
 }
 
-export function MessageSuggestions({ locale }: { locale: string }) {
+export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpdate?: () => void }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const supabase = createClient();
@@ -155,12 +155,14 @@ export function MessageSuggestions({ locale }: { locale: string }) {
   function clearSelection() { setSelected(new Set()); }
 
   async function handleApprove(taskId: string) {
-    await supabase
+    const { error } = await supabase
       .from("tasks")
       .update({ manually_verified: true, seen_at: new Date().toISOString() })
       .eq("id", taskId);
+    if (error) { toast.error(error.message); return; }
     toast.success(t("approve"));
     fetchSuggestions();
+    onUpdate?.();
   }
 
   async function handleFastDismiss(taskId: string) {
@@ -168,6 +170,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       await api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" });
       toast.success(t("fastDismissed"));
       fetchSuggestions();
+      onUpdate?.();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -178,6 +181,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
       toast.success(tTasks("actions.complete"));
       fetchSuggestions();
+      onUpdate?.();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -192,6 +196,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       });
       toast.success(tTasks("actions.snooze"));
       fetchSuggestions();
+      onUpdate?.();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -204,6 +209,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       await api(`/api/tasks/bulk-approve`, { method: "POST", body: { task_ids: ids } });
       toast.success(t("approve"));
       fetchSuggestions();
+      onUpdate?.();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -216,6 +222,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
       await api(`/api/tasks/bulk-dismiss-fast`, { method: "POST", body: { task_ids: ids } });
       toast.success(t("fastDismissed"));
       fetchSuggestions();
+      onUpdate?.();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -370,7 +377,7 @@ export function MessageSuggestions({ locale }: { locale: string }) {
         sourceType={dismissTarget?.sourceType ?? null}
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
-        onDismissed={fetchSuggestions}
+        onDismissed={() => { fetchSuggestions(); onUpdate?.(); }}
       />
 
       <TaskDetail
