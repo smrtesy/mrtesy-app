@@ -600,6 +600,7 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       google_doc_id: project.google_doc_id ?? undefined,
       google_oauth_token: googleAccessToken,
       input_audio_url: inputAudioUrl,
+      llm_model: settings?.default_llm_model ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -781,13 +782,41 @@ router.get("/voice/settings", async (req: Request, res: Response) => {
   res.json({ settings: data });
 });
 
+// Whitelisted settings columns — blocks a client from rewriting id/org_id/
+// timestamps via free-form PATCH body.
+const SETTINGS_UPDATABLE = new Set([
+  "monthly_budget_usd",
+  "budget_warning_threshold",
+  "budget_block_threshold",
+  "default_adapter",
+  "default_resemble_model",
+  "default_llm_model",
+  "archive_after_days",
+  "archive_auto_enabled",
+  "gdrive_archive_folder_id",
+  "gdrive_archive_folder_url",
+  "project_folder_template",
+  "audio_file_template",
+  "notify_on_completion",
+  "notify_on_budget_warn",
+  "notify_via_whatsapp",
+]);
+
 router.patch(
   "/voice/settings",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
+    const updates: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.body ?? {})) {
+      if (SETTINGS_UPDATABLE.has(k)) updates[k] = v;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No updatable fields in body" });
+    }
+
     const { data, error } = await db
       .from("smrtvoice_settings")
-      .update(req.body)
+      .update(updates)
       .eq("org_id", req.org!.id)
       .select()
       .single();

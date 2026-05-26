@@ -174,6 +174,7 @@ export interface Settings {
   budget_block_threshold: number;
   default_adapter: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   default_resemble_model: string | null;
+  default_llm_model: string | null;
   archive_after_days: number;
   archive_auto_enabled: boolean;
   gdrive_archive_folder_id: string | null;
@@ -201,6 +202,7 @@ export interface CreateJobRequest {
   google_doc_id?: string;
   google_oauth_token?: string;
   input_audio_url?: string;
+  llm_model?: string;
   callback_url: string;
   callback_secret?: string;
   characters?: Array<{ name: string; resemble_voice_id?: string }>;

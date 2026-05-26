@@ -12,6 +12,7 @@ interface Settings {
   monthly_budget_usd: number;
   default_adapter: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   default_resemble_model: string | null;
+  default_llm_model: string | null;
   archive_after_days: number;
 }
 
@@ -48,6 +49,7 @@ export function SettingsForm() {
             monthly_budget_usd: settings.monthly_budget_usd,
             default_adapter: settings.default_adapter,
             default_resemble_model: settings.default_resemble_model,
+            default_llm_model: settings.default_llm_model,
             archive_after_days: settings.archive_after_days,
           },
         },
@@ -113,6 +115,24 @@ export function SettingsForm() {
           <option value="chatterbox-turbo">chatterbox-turbo</option>
           <option value="resemble-ultra">resemble-ultra</option>
         </select>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("defaultLlmModel")}</label>
+        {/* Free text rather than a fixed dropdown — Claude model IDs change
+            over time, and the studio may have access to specific models.
+            Empty = use voice-engine's LLM_MODEL env default. */}
+        <Input
+          type="text"
+          value={settings.default_llm_model ?? ""}
+          onChange={(e) =>
+            setSettings({
+              ...settings,
+              default_llm_model: e.target.value.trim() || null,
+            })
+          }
+          placeholder={t("defaultLlmModelDefault")}
+        />
       </div>
 
       <div className="space-y-1">

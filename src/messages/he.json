@@ -1057,7 +1057,9 @@
       "defaultAdapter": "מנוע ברירת מחדל",
       "defaultModel": "מודל ברירת מחדל ברזמבל",
       "archiveAfterDays": "ארכוב אחרי (ימים)",
-      "save": "שמור"
+      "save": "שמור",
+      "defaultLlmModel": "מודל LLM (עיבוד סקריפט)",
+      "defaultLlmModelDefault": "ברירת מחדל (שרת)"
     },
     "guide": {
       "title": "מדריך smrtVoice",

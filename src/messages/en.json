@@ -1057,7 +1057,9 @@
       "defaultAdapter": "Default engine",
       "defaultModel": "Default Resemble model",
       "archiveAfterDays": "Archive after (days)",
-      "save": "Save"
+      "save": "Save",
+      "defaultLlmModel": "LLM model (script preprocessing)",
+      "defaultLlmModelDefault": "Default (server)"
     },
     "guide": {
       "title": "smrtVoice guide",
