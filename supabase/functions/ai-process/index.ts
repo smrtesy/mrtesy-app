@@ -143,7 +143,12 @@ function threadKey(msg: any): string | null {
     const tid = msg.metadata?.threadId as string | undefined;
     return tid ? `gmail:${tid}` : null;
   }
-  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+  // whatsapp_echo rows are per-message self-chat captures; each is an
+  // independent new intention and should NOT share thread memory with the
+  // parent WhatsApp chat (which would link every voice memo to the same
+  // task via related_task_id and lose 7 of 8 captures).
+  if (msg.source_type === "whatsapp_echo") return null;
+  if (msg.source_type === "whatsapp") {
     const cid = msg.metadata?.chatId as string | undefined;
     return cid ? `whatsapp:${cid}` : null;
   }
