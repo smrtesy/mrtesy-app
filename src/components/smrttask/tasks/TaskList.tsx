@@ -29,7 +29,6 @@ import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
 import { SnoozeDialog } from "./SnoozeDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { GripVertical, ChevronDown, ChevronUp } from "lucide-react";
 import type { Task } from "@/types/task";
@@ -41,22 +40,20 @@ function SortableTaskCard({
   onSelect,
   onComplete,
   onSnooze,
-  onActivate,
   onDelete,
   onQuickAction,
   onDriveSearch,
-  onRemoveFromToday,
+  onToggleToday,
 }: {
   task: Task;
   locale: string;
   onSelect: (t: Task) => void;
   onComplete: (id: string) => void;
   onSnooze: (id: string) => void;
-  onActivate: (id: string) => void;
   onDelete: (id: string) => void;
   onQuickAction: (id: string, action: { label: string; prompt: string }) => void;
   onDriveSearch: (id: string, description: string) => void;
-  onRemoveFromToday: (id: string) => void;
+  onToggleToday: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.id });
@@ -85,21 +82,10 @@ function SortableTaskCard({
           onSelect={onSelect}
           onComplete={onComplete}
           onSnooze={onSnooze}
-          onActivate={onActivate}
           onDelete={onDelete}
           onQuickAction={onQuickAction}
           onDriveSearch={onDriveSearch}
-          extraActions={
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs text-muted-foreground hover:text-foreground"
-              onClick={(e) => { e.stopPropagation(); onRemoveFromToday(task.id); }}
-            >
-              <ChevronDown className="h-3 w-3 me-1" />
-              הסר מהיום
-            </Button>
-          }
+          onToggleToday={onToggleToday}
         />
       </div>
     </div>
@@ -380,11 +366,10 @@ export function TaskList({ locale }: { locale: string }) {
                         onSelect={handleSelect}
                         onComplete={handleComplete}
                         onSnooze={(id) => setSnoozeTaskId(id)}
-                        onActivate={handleActivate}
                         onDelete={handleDelete}
                         onQuickAction={handleQuickAction}
                         onDriveSearch={handleDriveSearch}
-                        onRemoveFromToday={handleRemoveFromToday}
+                        onToggleToday={handleRemoveFromToday}
                       />
                     ))}
                   </div>
@@ -413,21 +398,10 @@ export function TaskList({ locale }: { locale: string }) {
                         onSelect={handleSelect}
                         onComplete={handleComplete}
                         onSnooze={(id) => setSnoozeTaskId(id)}
-                        onActivate={handleActivate}
                         onDelete={handleDelete}
                         onQuickAction={handleQuickAction}
                         onDriveSearch={handleDriveSearch}
-                        extraActions={
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                            onClick={(e) => { e.stopPropagation(); handleAddToToday(task.id); }}
-                          >
-                            <ChevronUp className="h-3 w-3 me-1" />
-                            הוסף להיום
-                          </Button>
-                        }
+                        onToggleToday={handleAddToToday}
                       />
                     </div>
                   </div>

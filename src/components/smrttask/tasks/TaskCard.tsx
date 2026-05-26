@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   Folder,
   CheckSquare,
-  Play,
+  Sunrise,
+  Sunset,
   Trash2,
   Bell,
   RotateCcw,
@@ -30,6 +31,7 @@ interface TaskCardProps {
   onSelect: (task: Task) => void;
   onComplete: (taskId: string) => void;
   onSnooze: (taskId: string) => void;
+  onToggleToday?: (taskId: string) => void;
   onActivate?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
@@ -54,6 +56,7 @@ export function TaskCard({
   onSelect,
   onComplete,
   onSnooze,
+  onToggleToday,
   onActivate,
   onDelete,
   onQuickAction,
@@ -272,19 +275,28 @@ export function TaskCard({
           >
             <Clock className="h-4 w-4" />
           </Button>
-          {onActivate && task.status === "inbox" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10 md:h-8 md:w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-              onClick={(e) => {
-                e.stopPropagation();
-                onActivate(task.id);
-              }}
-              title={t("actions.activate")}
-            >
-              <Play className="h-4 w-4" />
-            </Button>
+          {onToggleToday && (
+            task.today_position != null ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 md:h-8 md:w-8 text-amber-500 hover:text-amber-600 hover:bg-amber-50"
+                onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
+                title="הסר מהיום"
+              >
+                <Sunset className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 md:h-8 md:w-8 text-orange-400 hover:text-orange-500 hover:bg-orange-50"
+                onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
+                title="הוסף להיום"
+              >
+                <Sunrise className="h-4 w-4" />
+              </Button>
+            )
           )}
           {onDelete && (
             <Button
