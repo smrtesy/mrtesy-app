@@ -21,7 +21,6 @@ import type {
   CreateCharacterRequest,
   CreateProjectRequest,
   CreateVoiceProfileRequest,
-  UpdateLineRequest,
 } from "./types";
 
 const router = Router();
@@ -697,8 +696,26 @@ router.get("/voice/projects/:id/lines", async (req: Request, res: Response) => {
   res.json({ lines: data ?? [] });
 });
 
+const LINE_UPDATABLE = new Set([
+  "text_clean",
+  "text_for_tts",
+  "character_id",
+  "emotion_profile_id",
+  "final_exaggeration",
+  "final_pitch",
+  "final_pace",
+  "status",
+]);
+
 router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
-  const updates = req.body as UpdateLineRequest;
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (LINE_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+
   const { data, error } = await db
     .from("smrtvoice_lines")
     .update(updates)

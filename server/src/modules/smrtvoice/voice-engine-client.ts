@@ -104,6 +104,7 @@ class VoiceEngineClient {
     signature: string,
     timestamp: string,
   ): boolean {
+    if (!this.webhookSecret) return false;
     if (!signature || !timestamp) return false;
 
     const now = Math.floor(Date.now() / 1000);
