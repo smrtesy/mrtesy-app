@@ -273,7 +273,9 @@
       "priority": "עדיפות",
       "checklist": "צ'קליסט",
       "subtasks": "תת-משימות להוספה",
-      "updateText": "טקסט ההערה"
+      "updateText": "טקסט ההערה",
+      "project": "פרויקט",
+      "noProject": "ללא פרויקט"
     }
   },
   "suggestions": {

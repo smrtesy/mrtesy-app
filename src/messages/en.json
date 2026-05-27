@@ -273,7 +273,9 @@
       "priority": "Priority",
       "checklist": "Checklist",
       "subtasks": "Subtasks to add",
-      "updateText": "Note text"
+      "updateText": "Note text",
+      "project": "Project",
+      "noProject": "No project"
     }
   },
   "suggestions": {
