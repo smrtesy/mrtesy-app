@@ -659,7 +659,12 @@
     "verifiedFacts": "עובדות מאומתות",
     "subProjects": "תת-פרויקטים",
     "addSubProject": "הוסף תת-פרויקט",
-    "noSubProjects": "אין תת-פרויקטים עדיין"
+    "noSubProjects": "אין תת-פרויקטים עדיין",
+    "infoCenter": "מרכז מידע",
+    "infoCenterEmpty": "אין פריטים עדיין — שמור מידע ומשימות לפרויקט זה ויופיעו כאן.",
+    "sectionSuggestions": "הצעות",
+    "sectionTasks": "משימות",
+    "sectionInfoItems": "מידע שמור"
   },
   "logPage": {
     "filterAll": "הכל",
