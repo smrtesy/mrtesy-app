@@ -34,14 +34,9 @@ import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { ProjectCombobox } from "@/components/smrttask/tasks/ProjectCombobox";
+import type { ProjectOption } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { Task } from "@/types/task";
-
-interface ProjectOption {
-  id: string;
-  name: string;
-  name_he: string | null;
-  color: string | null;
-}
 
 interface TaskDetailProps {
   task: Task | null;
@@ -121,7 +116,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
       try {
         const { projects } = await api<{ projects: ProjectOption[] }>("/api/projects");
         setSelectorProjects(projects ?? []);
-      } catch { /* ignore — selector just stays empty */ }
+      } catch { /* ignore — ProjectCombobox fetches its own data if list is empty */ }
     }
     if (selectorMembers.length === 0) {
       try {
@@ -251,12 +246,18 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             {task.projects && (() => {
               const proj = task.projects!;
               const projName = locale === "he" && proj.name_he ? proj.name_he : proj.name;
+              const parentProj = proj.parent_id
+                ? selectorProjects.find((p) => p.id === proj.parent_id)
+                : null;
               return (
                 <span
                   className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
                   style={proj.color ? { borderColor: proj.color, color: proj.color } : undefined}
                 >
                   <Folder className="h-3 w-3" />
+                  {parentProj && (
+                    <><span className="opacity-60">{locale === "he" && parentProj.name_he ? parentProj.name_he : parentProj.name}</span><span className="opacity-60">/</span></>
+                  )}
                   {projName}
                 </span>
               );
@@ -314,18 +315,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 </div>
                 <div>
                   <label className="text-xs font-medium">{tDetail("projectLabel")}</label>
-                  <select
+                  <ProjectCombobox
                     value={editProjectId}
-                    onChange={(e) => setEditProjectId(e.target.value)}
-                    className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-                  >
-                    <option value="">{tDetail("noProjectOption")}</option>
-                    {selectorProjects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {locale === "he" && p.name_he ? p.name_he : p.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setEditProjectId}
+                    locale={locale}
+                    initialProjects={selectorProjects}
+                    onProjectCreated={(p) => setSelectorProjects((prev) => [...prev, p])}
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium">{tDetail("assignedToLabel")}</label>

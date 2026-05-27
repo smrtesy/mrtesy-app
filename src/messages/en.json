@@ -1124,5 +1124,15 @@
       "success": "Recording uploaded",
       "help": "WAV/MP3 file of the full recording. voice-engine will split it by silence and match each line to the matching segment."
     }
+  },
+  "projectCombobox": {
+    "none": "No project",
+    "search": "Search project...",
+    "noResults": "No results",
+    "createNew": "New project...",
+    "namePlaceholder": "Project name",
+    "topLevel": "Top-level project",
+    "create": "Create",
+    "created": "Project created"
   }
 }

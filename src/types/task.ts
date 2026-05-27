@@ -80,8 +80,8 @@ export interface Task {
   updated_at: string;
   project_id: string | null;
   assigned_to_user_id: string | null;
-  /** Embedded via Supabase left-join: projects(id, name, name_he, color) */
-  projects?: { id: string; name: string; name_he: string | null; color: string | null } | null;
+  /** Embedded via Supabase left-join: projects(id, name, name_he, color, parent_id) */
+  projects?: { id: string; name: string; name_he: string | null; color: string | null; parent_id: string | null } | null;
   source_message_id: string | null;
   /** Embedded via Supabase left-join: source_messages(source_type, source_url, serial_display) */
   source_messages?: { source_type: string | null; source_url: string | null; serial_display: string | null } | null;
