@@ -44,7 +44,7 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "inbox").eq("manually_verified", false).not("source_message_id", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
-        .eq("user_id", user.id).eq("status", "snoozed").eq("manually_verified", false).not("source_message_id", "is", null).not("snoozed_until", "is", null),
+        .eq("user_id", user.id).eq("status", "snoozed").not("snoozed_until", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("task_type", "project_suggestion").eq("status", "inbox"),
       supabase.from("notifications").select("*", { count: "exact", head: true })

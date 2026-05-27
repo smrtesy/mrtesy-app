@@ -8,7 +8,11 @@ import { createClient } from "@/lib/supabase/client";
 import type { Task } from "@/types/task";
 
 interface SmartSearchProps {
-  onResults: (tasks: Task[]) => void;
+  /** Called with the matched rows while a search is active (an empty array
+   *  means "searched, nothing matched"), or `null` when the search box is
+   *  cleared / too short — i.e. no active search. Callers must distinguish
+   *  these: `null` falls back to the normal list, `[]` shows an empty state. */
+  onResults: (tasks: Task[] | null) => void;
   /** Override the .select() clause. Defaults to "*". Use this when the
    *  caller needs to render search results with joined relations (e.g.
    *  the suggestion list expects source_messages + projects). */
@@ -52,7 +56,7 @@ export function SmartSearch({ onResults, selectClause, refineQuery, hideArchiveT
   async function handleSearch(value: string) {
     const sanitized = sanitizeFilter(value);
     if (sanitized.length < 2) {
-      onResults([]);
+      onResults(null);
       return;
     }
 

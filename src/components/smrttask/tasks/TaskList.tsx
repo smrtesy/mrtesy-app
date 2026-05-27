@@ -330,18 +330,45 @@ export function TaskList({ locale }: { locale: string }) {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const displayAll = searchResults !== null ? searchResults : allTasks;
+  const searching = searchResults !== null;
 
   return (
     <div className="space-y-6">
-      <SmartSearch
-        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
-      />
+      <SmartSearch onResults={setSearchResults} />
 
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 rounded-lg" />)}
         </div>
+      ) : searching ? (
+        /* ── SEARCH RESULTS ─────────────────────────────────────────── */
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            {t("search.results")}
+          </h2>
+          {searchResults!.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              {t("search.noResults")}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {searchResults!.map((task) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  locale={locale}
+                  onSelect={handleSelect}
+                  onComplete={handleComplete}
+                  onSnooze={(id) => setSnoozeTaskId(id)}
+                  onActivate={handleActivate}
+                  onDelete={handleDelete}
+                  onQuickAction={handleQuickAction}
+                  onDriveSearch={handleDriveSearch}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       ) : (
         <>
           {/* ── TODAY section ────────────────────────────────────────── */}
@@ -389,13 +416,13 @@ export function TaskList({ locale }: { locale: string }) {
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
               הכל
             </h2>
-            {displayAll.length === 0 ? (
+            {allTasks.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {t("noTasksInView")}
               </p>
             ) : (
               <div className="space-y-3">
-                {displayAll.map((task) => (
+                {allTasks.map((task) => (
                   <div key={task.id} className="flex gap-2 items-start">
                     <div className="flex-1">
                       <TaskCard

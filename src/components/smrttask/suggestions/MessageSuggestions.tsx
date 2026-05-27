@@ -257,7 +257,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           fetchSuggestions so search results render identically to the
           un-searched list. */}
       <SmartSearch
-        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
+        onResults={(results) => setSearchResults(results)}
         selectClause="*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
         refineQuery={(q) => q
           .eq("status", "inbox")

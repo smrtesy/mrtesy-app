@@ -237,6 +237,8 @@
     "search": {
       "placeholder": "חפש משימות, T<מס׳>, או מקור G/S/W/E/D/C<מס׳>...",
       "includeArchive": "כלול ארכיון",
+      "results": "תוצאות חיפוש",
+      "noResults": "לא נמצאו משימות תואמות",
       "naturalLanguage": "מה עם הבנק?"
     },
     "smartInput": {

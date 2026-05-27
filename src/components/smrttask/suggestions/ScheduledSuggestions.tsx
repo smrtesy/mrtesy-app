@@ -43,13 +43,13 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     setLoading(true);
     try {
       // Reminders come from the existing /api/reminders endpoint. Snoozed
-      // suggestions come straight from supabase: a snoozed task IS just a
-      // hidden inbox suggestion that will re-surface at snoozed_until. The
-      // worker (reminders-check edge function) flips status back to "inbox"
-      // when the time arrives. We restrict to source_message-backed,
-      // unverified tasks so this tab only shows snoozed *suggestions*, not
-      // snoozed approved tasks (those have their own home in the active
-      // tasks list).
+      // items come straight from supabase: a snoozed task IS just a hidden
+      // task/suggestion that will re-surface at snoozed_until. The worker
+      // (reminders-check edge function) flips status back to "inbox" when the
+      // time arrives. We show ALL snoozed tasks here — both unverified
+      // suggestions and approved tasks — because the active tasks list
+      // (Today/All) only surfaces inbox/in_progress/pending statuses, so a
+      // snoozed approved task would otherwise have nowhere to live.
       const [remindersResp, { data: { user } }] = await Promise.all([
         api<{ reminders: ReminderRow[] }>("/api/reminders?active=true&limit=30").catch((e) => {
           if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
@@ -66,8 +66,6 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
           .select("id, title, title_he, snoozed_until, priority")
           .eq("user_id", user.id)
           .eq("status", "snoozed")
-          .eq("manually_verified", false)
-          .not("source_message_id", "is", null)
           .not("snoozed_until", "is", null)
           .order("snoozed_until", { ascending: true })
           .limit(200);
