@@ -164,6 +164,8 @@
       "aiChat": "Chat with AI",
       "searchDocs": "Search Documents",
       "gmailDraft": "Gmail Draft",
+      "openInWhatsapp": "Open in WhatsApp",
+      "noWhatsappContact": "No WhatsApp number for this task",
       "saveDraft": "Save Draft",
       "processing": "Claude is processing...",
       "labels": {

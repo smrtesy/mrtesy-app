@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText } from "lucide-react";
@@ -298,8 +299,25 @@ function ComposeBox({
   onSent?: () => void;
 }) {
   const t = useTranslations("whatsappPage");
+  const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Prefill the composer when arriving from a smrtTask "open in WhatsApp"
+  // draft (?draft=…). Read once, then strip the param so it doesn't refill
+  // after the user edits or sends.
+  const draftConsumedRef = useRef(false);
+  useEffect(() => {
+    if (draftConsumedRef.current) return;
+    const draft = searchParams.get("draft");
+    if (draft) {
+      draftConsumedRef.current = true;
+      setText(draft);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("draft");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [searchParams]);
   const [transcribing, setTranscribing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);

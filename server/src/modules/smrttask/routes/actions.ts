@@ -86,7 +86,7 @@ router.post("/execute", async (req: Request, res: Response) => {
   const { data: sourceMsg } = task.source_message_id
     ? await db
         .from("source_messages")
-        .select("raw_content, body_text, sender, sender_email, subject")
+        .select("raw_content, body_text, sender, sender_email, subject, source_type, metadata")
         .eq("source_id", task.source_message_id)
         .eq("user_id", userId)
         .maybeSingle()
@@ -130,25 +130,30 @@ router.post("/execute", async (req: Request, res: Response) => {
       // ── Draft reply (email) ─────────────────────────────────────────────────
       case "draft_reply_he":
       case "draft_reply_en": {
-        const lang = action_type.endsWith("_he") ? "Hebrew" : "English";
-        const style = action_type.endsWith("_he") ? styleHe : styleEn;
+        // Language is driven by the ORIGINAL message, not the action label —
+        // an English inbound must get an English reply even if the classifier
+        // suggested draft_reply_he. Both style guides are supplied so the model
+        // matches the one for whichever language it writes in.
         const { content, costUsd } = await simpleCall(
           "sonnet",
-          `Draft an email reply in ${lang} for ${userName}.\n${style ? `Writing style:\n${style}` : ""}`,
+          `Draft an email reply for ${userName}. CRITICAL: write the reply in the SAME language as the original message below — if the original is in English reply in English, if in Hebrew reply in Hebrew. Match the writing style for that language.${styleHe ? `\n\nHebrew style:\n${styleHe}` : ""}${styleEn ? `\n\nEnglish style:\n${styleEn}` : ""}`,
           `Original message:\n${originalContent}\n\nTask context:\n${taskContext}`,
           1024,
         );
         result = content;
         totalCost += costUsd;
 
-        // Auto-create Gmail draft if we have sender email
+        // Auto-create Gmail draft as a threaded reply if we have sender email
         if (sourceMsg?.sender_email) {
           try {
+            const meta = (sourceMsg.metadata as { threadId?: string; rfc822MsgId?: string } | null) ?? null;
             const draft = await createDraft(
               userId,
               sourceMsg.sender_email,
               `Re: ${sourceMsg.subject ?? task.title}`,
               content,
+              meta?.threadId,
+              meta?.rfc822MsgId,
             );
             draftLink = draft.link;
             await db.from("tasks").update({ draft_link: draft.link }).eq("id", task_id);
@@ -318,11 +323,14 @@ Be professional, factual, and constructive.`,
         totalCost += costUsd;
         if (sourceMsg?.sender_email) {
           try {
+            const meta = (sourceMsg.metadata as { threadId?: string; rfc822MsgId?: string } | null) ?? null;
             const draft = await createDraft(
               userId,
               sourceMsg.sender_email,
               `בקשת פשרה — ${sourceMsg.subject ?? task.title}`,
               content,
+              meta?.threadId,
+              meta?.rfc822MsgId,
             );
             draftLink = draft.link;
             await db.from("tasks").update({ draft_link: draft.link }).eq("id", task_id);

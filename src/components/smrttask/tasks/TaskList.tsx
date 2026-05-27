@@ -122,6 +122,8 @@ export function TaskList({ locale }: { locale: string }) {
   const [qaTaskId, setQaTaskId] = useState("");
   const [qaLabel, setQaLabel] = useState("");
   const [qaPrompt, setQaPrompt] = useState("");
+  const [qaSourceType, setQaSourceType] = useState<string | null>(null);
+  const [qaPhone, setQaPhone] = useState<string | null>(null);
 
   // DriveSearch state
   const [dsOpen, setDsOpen] = useState(false);
@@ -261,7 +263,11 @@ export function TaskList({ locale }: { locale: string }) {
   }
 
   function handleQuickAction(taskId: string, action: { label: string; prompt: string }) {
-    setQaTaskId(taskId); setQaLabel(action.label); setQaPrompt(action.prompt); setQaOpen(true);
+    const task = [...todayTasks, ...allTasks].find((t) => t.id === taskId);
+    setQaTaskId(taskId); setQaLabel(action.label); setQaPrompt(action.prompt);
+    setQaSourceType(task?.source_messages?.source_type ?? null);
+    setQaPhone(task?.related_contact_phone ?? null);
+    setQaOpen(true);
   }
 
   function handleDriveSearch(taskId: string, description: string) {
@@ -465,6 +471,8 @@ export function TaskList({ locale }: { locale: string }) {
         taskId={qaTaskId}
         actionLabel={qaLabel}
         actionPrompt={qaPrompt}
+        sourceType={qaSourceType}
+        contactPhone={qaPhone}
         open={qaOpen}
         onClose={() => setQaOpen(false)}
         onDone={fetchTasks}

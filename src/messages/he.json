@@ -164,6 +164,8 @@
       "aiChat": "צור שיחה ב-AI",
       "searchDocs": "חפש מסמכים",
       "gmailDraft": "טיוטת Gmail",
+      "openInWhatsapp": "פתח בוואטסאפ",
+      "noWhatsappContact": "אין מספר וואטסאפ למשימה זו",
       "saveDraft": "שמור טיוטא",
       "processing": "Claude מעבד...",
       "labels": {
