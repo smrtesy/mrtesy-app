@@ -23,6 +23,7 @@ const GMAIL_REVIEW_LABELS = {
   skipped: "smrtTask/דילוג",
   INFORMATIONAL: "smrtTask/אינפו",
   ACTIONABLE: "smrtTask/הצעה",
+  UPDATE: "smrtTask/עדכון",
 } as const;
 
 const DEFAULT_BATCH_SIZE = 5;
@@ -422,6 +423,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
               .from("source_messages")
               .update({ processing_status: "classified", ai_classification: "UPDATE_NOOP" })
               .eq("id", msg.id);
+            await labelGmailMessage((msg as any).source_id, msg.source_type, "UPDATE");
             tasksUpdated++;
             if ((i + 1) % batchSize === 0) {
               await db.from("run_sessions")
@@ -464,6 +466,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
               .from("source_messages")
               .update({ processing_status: "classified", ai_classification: "UPDATE" })
               .eq("id", msg.id);
+            await labelGmailMessage((msg as any).source_id, msg.source_type, "UPDATE");
             tasksUpdated++;
           }
 
