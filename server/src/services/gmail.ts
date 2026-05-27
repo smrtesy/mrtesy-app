@@ -98,6 +98,60 @@ export async function getThreadMessages(
   });
 }
 
+/**
+ * Ensure each of `names` exists as a Gmail label for the user, creating any
+ * that are missing. Gmail renders a "Parent/Child" name as a nested label, so
+ * passing "smrtTask/דילוג" produces a label nested under "smrtTask". Returns a
+ * name → labelId map for the requested names.
+ */
+export async function getOrCreateLabels(
+  userId: string,
+  names: string[],
+): Promise<Map<string, string>> {
+  const gmail = await getGmailClient(userId);
+  const existing = await gmail.users.labels.list({ userId: "me" });
+  const byName = new Map<string, string>();
+  for (const l of existing.data.labels ?? []) {
+    if (l.name && l.id) byName.set(l.name, l.id);
+  }
+  for (const name of names) {
+    if (byName.has(name)) continue;
+    try {
+      const created = await gmail.users.labels.create({
+        userId: "me",
+        requestBody: {
+          name,
+          labelListVisibility: "labelShow",
+          messageListVisibility: "show",
+        },
+      });
+      if (created.data.id) byName.set(name, created.data.id);
+    } catch {
+      // A concurrent run may have created the label between our list and
+      // create (409). Re-list once to resolve it instead of failing the
+      // whole batch; if still unresolved, skip just this name.
+      const refreshed = await gmail.users.labels.list({ userId: "me" });
+      const match = (refreshed.data.labels ?? []).find((l) => l.name === name);
+      if (match?.id) byName.set(name, match.id);
+    }
+  }
+  return byName;
+}
+
+/** Add one label to a message. Idempotent — re-adding an existing label is a no-op. */
+export async function addLabelToMessage(
+  userId: string,
+  messageId: string,
+  labelId: string,
+): Promise<void> {
+  const gmail = await getGmailClient(userId);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id: messageId,
+    requestBody: { addLabelIds: [labelId] },
+  });
+}
+
 export async function createDraft(
   userId: string,
   to: string,
