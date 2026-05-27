@@ -357,3 +357,25 @@ export async function performImageOcr(base64Data: string, mimeType: string): Pro
   const raw = await callGemini({ prompt: OCR_PROMPT, base64Data, mimeType: mimeType || "image/jpeg" });
   return sanitizeModelOutput(raw);
 }
+
+const DOCUMENT_EXTRACTION_PROMPT =
+  "חלץ את הטקסט מהמסמך. חוקים מחייבים:\n" +
+  "• חלץ את כל הטקסט במלואו ובדיוק, שמור על סדר הכותרות, הפסקאות והרשימות.\n" +
+  "• אם יש כמה שפות — כל אחת בשפתה המקורית, אל תתרגם.\n" +
+  "• אם המסמך סרוק/תמונה — בצע OCR. אם אין טקסט קריא — תן תיאור תמציתי (משפט אחד) של תוכן המסמך.\n" +
+  "\n" +
+  "פלט: אך ורק תוכן המסמך. בלי הקדמות (\"הנה הטקסט\", \"להלן תוכן המסמך\"),\n" +
+  "בלי כותרות-על משלך, בלי סוגריים מטא, ובלי markdown fences. הפלט הולך ישירות ל-UI.";
+
+/**
+ * Extract text from an inbound document (PDF, etc.) via Gemini. Mirrors
+ * performImageOcr but tuned for multi-page text documents.
+ */
+export async function extractDocumentText(base64Data: string, mimeType: string): Promise<string> {
+  const raw = await callGemini({
+    prompt: DOCUMENT_EXTRACTION_PROMPT,
+    base64Data,
+    mimeType: mimeType || "application/pdf",
+  });
+  return sanitizeModelOutput(raw);
+}

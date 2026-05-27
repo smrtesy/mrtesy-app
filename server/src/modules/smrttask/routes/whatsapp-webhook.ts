@@ -32,7 +32,7 @@
 import crypto from "node:crypto";
 import { Router, Request, Response } from "express";
 import { db, createRunSession, closeRunSession, loadRules, getAppSecret } from "../../../db";
-import { transcribeAudio, performImageOcr } from "../../../gemini";
+import { transcribeAudio, performImageOcr, extractDocumentText } from "../../../gemini";
 import { fetchOpenTasksForUser, classifyRouterInput, fetchProjectsForUser } from "./router";
 import { loadExperimentConfig, runDualTranscription } from "./transcription-experiment";
 
@@ -551,9 +551,10 @@ async function processUserBatch(
   );
 
   const touchedChats = new Set<string>();
-  // wamid → voice transcript, captured during persistence so the self-note
-  // router loop below can classify voice notes (which carry no text body).
-  const transcriptByWamid = new Map<string, string | null>();
+  // wamid → extracted text (voice transcript or image/PDF OCR), captured
+  // during persistence so the self-note router loop below can classify
+  // media notes that carry no typed text body.
+  const extractedByWamid = new Map<string, string | null>();
   let inserted = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -576,7 +577,10 @@ async function processUserBatch(
       if (error) throw new Error(error.message);
       inserted++;
       touchedChats.add(nm.chatId);
-      transcriptByWamid.set(nm.meta.id, (built.audio_transcript as string | null) ?? null);
+      extractedByWamid.set(
+        nm.meta.id,
+        (built.audio_transcript as string | null) ?? (built.media_ocr_text as string | null) ?? null,
+      );
     } catch (e) {
       errors.push(`${nm.meta.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -594,16 +598,17 @@ async function processUserBatch(
 
   // Self-WA routing: any LIVE note-to-self whose chat is the user's own
   // display_phone_number is queued as a pending router_decisions row. Text
-  // notes route on their body; voice notes route on their transcript. We
-  // skip history chunks (old notes — no retro-classify) and reactions.
+  // notes route on their body; voice/image/document notes route on their
+  // extracted text (transcript or OCR). We skip history chunks (old notes —
+  // no retro-classify) and reactions.
   for (const nm of messages) {
     if (nm.isHistory) continue;
     if (!nm.meta.id) continue;
     const myDisplay = String(nm.metadata.display_phone_number ?? "");
     if (!myDisplay || nm.chatId !== myDisplay) continue;
-    const transcript = transcriptByWamid.get(nm.meta.id)?.trim();
-    const voiceText = transcript && transcript !== "[לא ברור]" ? transcript : undefined;
-    const text = nm.meta.text?.body?.trim() || voiceText;
+    const extracted = extractedByWamid.get(nm.meta.id)?.trim();
+    const mediaText = extracted && extracted !== "[לא ברור]" ? extracted : undefined;
+    const text = nm.meta.text?.body?.trim() || mediaText;
     if (!text) continue;
 
     try {
@@ -919,16 +924,36 @@ async function buildMessageRow(
       } else if (nm.isHistory) {
         body = caption || `[מסמך מהיסטוריה: ${filename}]`;
       } else if (mediaId && accessToken) {
+        let blob: MetaMediaBlob | null = null;
         try {
-          const stored = await persistDocumentToStorage(userId, m.id!, mediaId, filename, mediaMime, accessToken);
-          mediaUrl = stored.path;
-          mediaFilename = stored.filename;
-          mediaSize = stored.size;
-          body = caption || `[מסמך: ${filename}]`;
+          blob = await downloadMetaMedia(mediaId, accessToken);
         } catch (e) {
-          body =
-            caption ||
-            `[מסמך: ${filename}] [שגיאת שמירה: ${e instanceof Error ? e.message : String(e)}]`;
+          console.error("[whatsapp-webhook] document download failed:", e);
+        }
+
+        if (blob) {
+          try {
+            const stored = await persistMediaBlobToStorage(userId, m.id!, blob, filename, mediaMime);
+            mediaUrl = stored.path;
+            mediaFilename = stored.filename;
+            mediaSize = stored.size;
+          } catch (e) {
+            console.error("[whatsapp-webhook] document storage upload failed:", e);
+          }
+
+          // Extract text from PDFs so the document's content (not just its
+          // filename) drives the chat view and self-note routing. Stored in
+          // media_ocr_text, same column images use.
+          if ((blob.mimeType || mediaMime || "").toLowerCase().includes("pdf")) {
+            try {
+              mediaOcrText = await extractDocumentText(blob.base64, blob.mimeType || mediaMime || "application/pdf");
+            } catch (e) {
+              console.warn("[whatsapp-webhook] document extraction failed:", e);
+            }
+          }
+          body = caption || `[מסמך: ${filename}]`;
+        } else {
+          body = caption || `[מסמך: ${filename}] [שגיאת הורדה]`;
         }
       } else {
         body = caption || `[מסמך: ${filename}]`;
@@ -1029,22 +1054,10 @@ interface PersistedDoc {
   size: number;
 }
 
-async function persistDocumentToStorage(
-  userId: string,
-  wamid: string,
-  mediaId: string,
-  filename: string,
-  declaredMime: string | null,
-  token: string,
-): Promise<PersistedDoc> {
-  const blob = await downloadMetaMedia(mediaId, token);
-  return persistMediaBlobToStorage(userId, wamid, blob, filename, declaredMime);
-}
-
 /**
  * Upload an already-downloaded blob to the `whatsapp-media` bucket. Used
- * for images (where we already have the bytes in memory after the OCR
- * call) and as the inner step of persistDocumentToStorage.
+ * for images and documents (where we already have the bytes in memory
+ * after the OCR/extraction call).
  */
 async function persistMediaBlobToStorage(
   userId: string,
