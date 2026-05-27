@@ -93,10 +93,12 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
           // #Intent; marker that ends the Intent URL.
           const intentPath = path + (frag ? `%23${frag}` : "");
           const fallback = encodeURIComponent(webUrl);
-          e.preventDefault();
-          // intent://mail.google.com/mail/u/0/%23all/{id}#Intent;scheme=https;package=...;end
-          window.location.href =
+          // Mutate href in-place rather than using window.location.href:
+          // Chrome blocks intent:// navigation via JS assignment but allows it
+          // when the anchor element's own href is the Intent URL at click time.
+          e.currentTarget.href =
             `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
+          e.currentTarget.target = "_self";
           return;
         }
       }
