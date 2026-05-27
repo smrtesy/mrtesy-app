@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
+import { api } from "@/lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -138,13 +139,15 @@ export default function AdminLogsPage() {
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
-    // Hits the super-admin route (service-role) so the admin sees platform-wide
-    // logs — the browser client only ever sees its own rows under RLS.
+    // Super-admin backend route (service-role) so the admin sees platform-wide
+    // logs — a user-scoped client only ever sees its own rows under RLS.
     const params = new URLSearchParams({ level, range: timeRange });
     try {
-      const res = await fetch(`/api/admin/logs?${params}`, { cache: "no-store" });
-      const json = await res.json();
-      setLogs(res.ok ? (json.logs ?? []) : []);
+      const { logs } = await api<{ logs: LogEntry[] }>(
+        `/api/admin/logs?${params}`,
+        { noOrg: true },
+      );
+      setLogs(logs ?? []);
     } catch {
       setLogs([]);
     } finally {
