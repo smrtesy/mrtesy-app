@@ -698,6 +698,8 @@
     "recentLogs": "לוגים אחרונים ({count})",
     "userNotFound": "משתמש לא נמצא",
     "failures": "כשלים: {count}",
+    "lastSynced": "סונכרן לאחרונה:",
+    "neverSynced": "מעולם לא סונכרן",
     "smrtTaskSection": "נתוני smrtTask"
   },
   "adminUserMemberships": {

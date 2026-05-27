@@ -4,6 +4,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserMembershipsClient } from "@/components/admin/UserMembershipsClient";
+import { LocalDateTime } from "@/components/admin/LocalDateTime";
 
 export default async function AdminUserDetailPage({
   params,
@@ -21,12 +22,13 @@ export default async function AdminUserDetailPage({
     return <p>{t("userNotFound")}</p>;
   }
 
-  const [settingsResult, syncResult, logsResult, tasksResult, authUserResult] = await Promise.all([
+  const [settingsResult, syncResult, logsResult, tasksResult, authUserResult, credsResult] = await Promise.all([
     admin.from("user_settings").select("*").eq("user_id", id).single(),
     admin.from("sync_state").select("*").eq("user_id", id),
     admin.from("log_entries").select("*").eq("user_id", id).order("created_at", { ascending: false }).limit(50),
     admin.from("tasks").select("id, status", { count: "exact" }).eq("user_id", id),
     admin.auth.admin.getUserById(id),
+    admin.from("user_credentials").select("service").eq("user_id", id),
   ]);
 
   const settings = settingsResult.data;
@@ -34,6 +36,19 @@ export default async function AdminUserDetailPage({
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
   const email = authUserResult.data?.user?.email || "";
+
+  // Source of truth for Google connections is the presence of a
+  // user_credentials row, NOT the user_settings.*_connected booleans —
+  // those are only ever flipped to `true` on connect and never reset, so a
+  // stale `false`/null shows a live connection as "disconnected". This
+  // mirrors how the settings page resolves connection state.
+  const credServices = new Set((credsResult.data || []).map((c) => c.service));
+  const connections: Record<string, boolean> = {
+    gmail: credServices.has("gmail"),
+    drive: credServices.has("google_drive"),
+    calendar: credServices.has("google_calendar"),
+    whatsapp: settings?.whatsapp_connected ?? false,
+  };
 
   // Check if the user's org has smrtTask enabled
   const { data: userOrg } = await admin
@@ -88,8 +103,8 @@ export default async function AdminUserDetailPage({
           {["gmail", "drive", "whatsapp", "calendar"].map((service) => (
             <div key={service} className="flex items-center justify-between">
               <span className="capitalize">{service}</span>
-              <Badge variant={settings[`${service}_connected` as keyof typeof settings] ? "default" : "destructive"}>
-                {settings[`${service}_connected` as keyof typeof settings] ? t("connected") : t("disconnected")}
+              <Badge variant={connections[service] ? "default" : "destructive"}>
+                {connections[service] ? t("connected") : t("disconnected")}
               </Badge>
             </div>
           ))}
@@ -101,10 +116,17 @@ export default async function AdminUserDetailPage({
         <CardContent className="space-y-2">
           {syncStates.map((s) => (
             <div key={s.id} className="rounded border p-2 text-sm">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="font-medium capitalize">{s.source}</span>
-                <span className="text-xs text-muted-foreground">
-                  {new Date(s.last_synced_at).toLocaleString()}
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                  {s.last_synced_at ? (
+                    <>
+                      {t("lastSynced")}{" "}
+                      <LocalDateTime value={s.last_synced_at} locale={locale} />
+                    </>
+                  ) : (
+                    t("neverSynced")
+                  )}
                 </span>
               </div>
               {s.consecutive_failures > 0 && (
@@ -139,7 +161,7 @@ export default async function AdminUserDetailPage({
               <span className="text-muted-foreground">{log.category}</span>
               <span className="flex-1 truncate">{log.error_message || log.subject || log.task_title || "-"}</span>
               <span className="text-muted-foreground whitespace-nowrap">
-                {new Date(log.created_at).toLocaleTimeString()}
+                <LocalDateTime value={log.created_at} locale={locale} mode="time" />
               </span>
             </div>
           ))}

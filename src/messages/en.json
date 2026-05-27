@@ -698,6 +698,8 @@
     "recentLogs": "Recent Logs ({count})",
     "userNotFound": "User not found",
     "failures": "Failures: {count}",
+    "lastSynced": "Last synced:",
+    "neverSynced": "Never synced",
     "smrtTaskSection": "smrtTask data"
   },
   "adminUserMemberships": {
