@@ -165,7 +165,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
               // round-trip. The rfc822msgid search URL is kept as fallback only
               // for cases where the Gmail internal ID is somehow unavailable.
               source_url: `https://mail.google.com/mail/u/0/#all/${id}`,
-              metadata: { threadId, to: toEmail },
+              metadata: { threadId, to: toEmail, rfc822MsgId },
             },
             // ignoreDuplicates: true → ON CONFLICT DO NOTHING.
             // Emails are immutable; if a source_message already exists

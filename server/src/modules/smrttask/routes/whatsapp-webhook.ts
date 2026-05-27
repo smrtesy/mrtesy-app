@@ -33,7 +33,7 @@ import crypto from "node:crypto";
 import { Router, Request, Response } from "express";
 import { db, createRunSession, closeRunSession, loadRules, getAppSecret } from "../../../db";
 import { transcribeAudio, performImageOcr } from "../../../gemini";
-import { fetchOpenTasksForUser, classifyRouterInput } from "./router";
+import { fetchOpenTasksForUser, classifyRouterInput, fetchProjectsForUser } from "./router";
 import { loadExperimentConfig, runDualTranscription } from "./transcription-experiment";
 
 const router = Router();
@@ -679,8 +679,11 @@ async function queueSelfWhatsappDecision(
     .maybeSingle();
   if (existing) return;
 
-  const openTasks = await fetchOpenTasksForUser(userId, orgId);
-  const { output, modelUsed, costUsd } = await classifyRouterInput(trimmed, openTasks);
+  const [openTasks, projects] = await Promise.all([
+    fetchOpenTasksForUser(userId, orgId),
+    fetchProjectsForUser(orgId),
+  ]);
+  const { output, modelUsed, costUsd } = await classifyRouterInput(trimmed, openTasks, projects);
 
   // Resolve referenced task by serial within the same org
   let targetTaskId: string | null = null;

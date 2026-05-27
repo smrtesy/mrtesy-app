@@ -52,6 +52,9 @@ interface DecisionPayload {
   update_text?: string;
   // common
   notes_for_user?: string;
+  // project assignment (create_task / update_task) — id of a project or
+  // sub-project the task belongs to, matched from the user's project list.
+  project_id?: string | null;
 }
 
 interface ClassifierOutput {
@@ -85,6 +88,27 @@ async function fetchOpenTasks(userId: string, orgId: string): Promise<OpenTaskRo
     .order("created_at", { ascending: false })
     .limit(80);
   return (data ?? []) as OpenTaskRow[];
+}
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  name_he: string | null;
+  parent_id: string | null;
+}
+
+async function fetchProjects(orgId: string): Promise<ProjectRow[]> {
+  const { data } = await db
+    .from("projects")
+    .select("id, name, name_he, parent_id")
+    .eq("organization_id", orgId)
+    .eq("is_active", true)
+    .order("created_at", { ascending: true });
+  return (data ?? []) as ProjectRow[];
+}
+
+export async function fetchProjectsForUser(orgId: string): Promise<ProjectRow[]> {
+  return fetchProjects(orgId);
 }
 
 function buildSystemPrompt(): string {
@@ -122,13 +146,14 @@ Output JSON shape (return ONLY valid JSON, no markdown fences):
     "checklist": ["item 1", "item 2"],
     "subtasks": ["new subtask 1"],
     "update_text": "free-text progress note",
-    "notes_for_user": "optional clarifying note shown in the preview"
+    "notes_for_user": "optional clarifying note shown in the preview",
+    "project_id": "uuid of the matched project/sub-project, or null"
   }
 }
 
 Only include payload fields that are relevant to the chosen intent:
-- create_task: title_he (required), description, due_date, priority, recurrence_rule, checklist
-- update_task: any of title_he/description/due_date/priority — only the fields the user explicitly changed
+- create_task: title_he (required), description, due_date, priority, recurrence_rule, checklist, project_id
+- update_task: any of title_he/description/due_date/priority/project_id — only the fields the user explicitly changed
 - add_subtask: subtasks (array of strings)
 - add_update: update_text
 - complete_task / dismiss_task: leave payload empty unless the user provided a reason in description
@@ -136,10 +161,37 @@ Only include payload fields that are relevant to the chosen intent:
 
 Date interpretation: relative dates ("מחר", "ביום ראשון", "in 3 days") should be resolved against the given "today" date.
 Priority defaults to "medium" unless the user signals urgency.
-Checklist: only populate when the user describes multiple discrete sub-items.`;
+Checklist: only populate when the user describes multiple discrete sub-items.
+
+Project assignment:
+- A "Projects" list is provided with each project's id, name, and whether it is a sub-project of another. If the input names or clearly refers to one of them, set payload.project_id to that project's exact id from the list.
+- A sub-project is a more specific match than its parent — when the user names the sub-project (or both), choose the SUB-PROJECT's id.
+- Only ever use an id that appears verbatim in the provided list. If no project is referenced, or you are unsure, set project_id to null. Never invent an id.`;
 }
 
-function buildUserMessage(input: string, openTasks: OpenTaskRow[], today: string): string {
+function buildProjectList(projects: ProjectRow[]): string {
+  if (projects.length === 0) return "(no projects)";
+  const nameOf = (p: ProjectRow) => p.name_he || p.name || "(no name)";
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const roots = projects.filter((p) => !p.parent_id || !byId.has(p.parent_id));
+  const childrenOf = (id: string) => projects.filter((p) => p.parent_id === id);
+
+  const lines: string[] = [];
+  for (const root of roots) {
+    lines.push(`- ${nameOf(root)} [id=${root.id}]`);
+    for (const child of childrenOf(root.id)) {
+      lines.push(`  - ${nameOf(child)} [id=${child.id}] (sub-project of ${nameOf(root)})`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function buildUserMessage(
+  input: string,
+  openTasks: OpenTaskRow[],
+  projects: ProjectRow[],
+  today: string,
+): string {
   const taskList = openTasks.length === 0
     ? "(no open tasks)"
     : openTasks.map((t) => {
@@ -154,6 +206,9 @@ function buildUserMessage(input: string, openTasks: OpenTaskRow[], today: string
 Open tasks:
 ${taskList}
 
+Projects:
+${buildProjectList(projects)}
+
 User input:
 """
 ${input}
@@ -166,16 +221,16 @@ export async function fetchOpenTasksForUser(userId: string, orgId: string): Prom
   return fetchOpenTasks(userId, orgId);
 }
 
-export async function classifyRouterInput(input: string, openTasks: OpenTaskRow[]):
+export async function classifyRouterInput(input: string, openTasks: OpenTaskRow[], projects: ProjectRow[] = []):
   Promise<{ output: ClassifierOutput; modelUsed: string; costUsd: number; raw: string }> {
-  return classify(input, openTasks);
+  return classify(input, openTasks, projects);
 }
 
-async function classify(input: string, openTasks: OpenTaskRow[]):
+async function classify(input: string, openTasks: OpenTaskRow[], projects: ProjectRow[] = []):
   Promise<{ output: ClassifierOutput; modelUsed: string; costUsd: number; raw: string }> {
   const today = new Date().toISOString().slice(0, 10);
   const systemPrompt = buildSystemPrompt();
-  const userMessage = buildUserMessage(input, openTasks, today);
+  const userMessage = buildUserMessage(input, openTasks, projects, today);
 
   const { content, costUsd } = await simpleCall("sonnet", systemPrompt, userMessage, 900);
   const parsed = parseJsonResponse<ClassifierOutput>(content);
@@ -212,6 +267,21 @@ async function resolveTargetTask(
   return (data ?? null) as OpenTaskRow | null;
 }
 
+/** Confirm a project id belongs to this org. Returns the id or null. */
+async function validateProjectId(
+  projectId: string | null | undefined,
+  orgId: string,
+): Promise<string | null> {
+  if (!projectId) return null;
+  const { data } = await db
+    .from("projects")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("id", projectId)
+    .maybeSingle();
+  return data ? projectId : null;
+}
+
 // ── POST /router/decide ─────────────────────────────────────────────────
 
 router.post("/router/decide", async (req: Request, res: Response) => {
@@ -224,8 +294,11 @@ router.post("/router/decide", async (req: Request, res: Response) => {
   if (!inputText) return res.status(400).json({ error: "input required" });
   if (inputText.length > 4000) return res.status(400).json({ error: "input too long" });
 
-  const openTasks = await fetchOpenTasks(userId, orgId);
-  const { output, modelUsed, costUsd } = await classify(inputText, openTasks);
+  const [openTasks, projects] = await Promise.all([
+    fetchOpenTasks(userId, orgId),
+    fetchProjects(orgId),
+  ]);
+  const { output, modelUsed, costUsd } = await classify(inputText, openTasks, projects);
 
   const targetTask = await resolveTargetTask(userId, orgId, output.target_task_serial ?? null);
 
@@ -366,6 +439,8 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
         recurrence_rule: payload.recurrence_rule ?? null,
       };
       if (checklist.length > 0) insertBody.checklist = checklist;
+      const projectId = await validateProjectId(payload.project_id, orgId);
+      if (projectId) insertBody.project_id = projectId;
 
       const { data: task, error } = await db
         .from("tasks")
@@ -394,6 +469,13 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       if (payload.description != null)    updates.description = payload.description;
       if (payload.due_date !== undefined)  updates.due_date = payload.due_date;
       if (payload.priority)               updates.priority = payload.priority;
+      // Only set a project when one is named — never let a null from the
+      // classifier (which doesn't know the task's current project) silently
+      // clear an existing assignment on an unrelated field edit.
+      if (payload.project_id) {
+        const pid = await validateProjectId(payload.project_id, orgId);
+        if (pid) updates.project_id = pid;
+      }
 
       const { error } = await db
         .from("tasks")

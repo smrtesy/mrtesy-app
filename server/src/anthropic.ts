@@ -167,9 +167,41 @@ export async function simpleCall(
 /** Parse JSON from Claude output, handling markdown code fences */
 export function parseJsonResponse<T>(raw: string): T | null {
   const cleaned = raw.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
+  const direct = tryParseJson<T>(cleaned);
+  if (direct !== null) return direct;
+  // The model sometimes wraps the JSON in prose ("Here's the action:") or
+  // stray fences. Fall back to the first balanced {...} / [...] value.
+  const extracted = extractBalancedJson(cleaned);
+  return extracted ? tryParseJson<T>(extracted) : null;
+}
+
+function tryParseJson<T>(s: string): T | null {
   try {
-    return JSON.parse(cleaned) as T;
+    return JSON.parse(s) as T;
   } catch {
     return null;
   }
+}
+
+function extractBalancedJson(s: string): string | null {
+  const start = s.search(/[{[]/);
+  if (start === -1) return null;
+  const open = s[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === open) depth++;
+    else if (ch === close && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null;
 }

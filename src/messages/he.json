@@ -164,7 +164,12 @@
       "aiChat": "צור שיחה ב-AI",
       "searchDocs": "חפש מסמכים",
       "gmailDraft": "טיוטת Gmail",
+      "openInWhatsapp": "פתח בוואטסאפ",
+      "noWhatsappContact": "אין מספר וואטסאפ למשימה זו",
       "saveDraft": "שמור טיוטא",
+      "saveToKnowledge": "שמור לזיכרון",
+      "savedToKnowledge": "נשמר לזיכרון — בפעם הבאה שתגיע שאלה דומה, התשובה תוכן אוטומטית",
+      "knowledgeUnavailable": "שמירה לזיכרון אינה זמינה כרגע (חסר מפתח Voyage)",
       "processing": "Claude מעבד...",
       "labels": {
         "draft_reply_he": "טיוטת מענה (עברית)",
@@ -241,6 +246,7 @@
   },
   "router": {
     "title": "עדכון",
+    "description": "כתוב בשפה חופשית ו-smrtTask יחליט אם ליצור משימה, לעדכן קיימת, או להוסיף עדכון.",
     "placeholder": "כתוב מה לעשות — להוסיף משימה, לעדכן משימה קיימת (\"T42 דחיתי למחר\"), לסמן הושלמה, או להוסיף תת-משימות.",
     "classify": "הבן",
     "apply": "אשר",
@@ -268,7 +274,9 @@
       "priority": "עדיפות",
       "checklist": "צ'קליסט",
       "subtasks": "תת-משימות להוספה",
-      "updateText": "טקסט ההערה"
+      "updateText": "טקסט ההערה",
+      "project": "פרויקט",
+      "noProject": "ללא פרויקט"
     }
   },
   "suggestions": {

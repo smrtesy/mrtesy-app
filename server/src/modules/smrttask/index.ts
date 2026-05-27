@@ -9,6 +9,7 @@ import tasksRouter from "./tasks/routes";
 import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
 import actionsRouter from "./routes/actions";
+import knowledgeRouter from "./routes/knowledge";
 import syncRouter from "./routes/sync";
 import whatsappWebhookRouter from "./routes/whatsapp-webhook";
 import whatsappViewRouter from "./routes/whatsapp-view";
@@ -33,6 +34,7 @@ router.use(transcriptionExperimentRouter);
 router.use(projectsRouter);
 router.use(remindersRouter);
 router.use("/actions", actionsRouter);
+router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);
 // Authenticated read API powering /[locale]/whatsapp.
 router.use(whatsappViewRouter);

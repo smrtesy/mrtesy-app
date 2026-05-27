@@ -104,12 +104,22 @@ export async function createDraft(
   subject: string,
   body: string,
   threadId?: string,
+  // RFC 2822 Message-ID of the message being replied to (angle brackets
+  // already stripped). When present, In-Reply-To/References make the draft a
+  // proper threaded reply that Gmail shows inside the original conversation.
+  inReplyTo?: string,
 ): Promise<{ id: string; link: string }> {
   const gmail = await getGmailClient(userId);
 
   const messageParts = [
     `To: ${to}`,
     `Subject: ${subject}`,
+    ...(inReplyTo
+      ? (() => {
+          const id = inReplyTo.replace(/[\r\n]/g, "");
+          return [`In-Reply-To: <${id}>`, `References: <${id}>`];
+        })()
+      : []),
     "Content-Type: text/plain; charset=UTF-8",
     "",
     body,

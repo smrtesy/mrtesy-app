@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useTranslations, useLocale } from "next-intl";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,6 +36,14 @@ interface DecisionPayload {
   subtasks?: string[];
   update_text?: string;
   notes_for_user?: string;
+  project_id?: string | null;
+}
+
+interface ProjectOption {
+  id: string;
+  name: string;
+  name_he: string | null;
+  parent_id: string | null;
 }
 
 interface Decision {
@@ -65,6 +73,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
   const t = useTranslations("router");
   const tTasks = useTranslations("tasks");
   const tCommon = useTranslations("common");
+  const locale = useLocale();
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -75,6 +84,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
   const [pickingTarget, setPickingTarget] = useState(false);
   const [taskOptions, setTaskOptions] = useState<OpenTaskOption[]>([]);
   const [taskSearch, setTaskSearch] = useState("");
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
 
   const intent: Intent = overrideIntent ?? decision?.intent ?? "unknown";
 
@@ -87,6 +97,16 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
     setPickingTarget(false);
     setTaskOptions([]);
     setTaskSearch("");
+  }
+
+  async function loadProjects() {
+    if (projects.length > 0) return;
+    try {
+      const { projects: rows } = await api<{ projects: ProjectOption[] }>("/api/projects");
+      setProjects(rows ?? []);
+    } catch {
+      // selector just stays empty
+    }
   }
 
   function handleClose() {
@@ -105,6 +125,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
       setDecision(d);
       setTargetTask(target_task);
       setEditPayload(d.payload || {});
+      loadProjects();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -168,6 +189,24 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
   const taskOptionLabel = (task: OpenTaskOption) =>
     task.title_he || task.title || "(untitled)";
 
+  // Flatten projects into a parent→child ordered list for the <select>, with
+  // sub-projects indented under their parent. Any project (parent or sub) is
+  // selectable, since a task can belong to either level.
+  const projectName = (p: ProjectOption) =>
+    locale === "he" && p.name_he ? p.name_he : p.name;
+  const orderedProjects = (() => {
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    const roots = projects.filter((p) => !p.parent_id || !byId.has(p.parent_id));
+    const out: { id: string; label: string }[] = [];
+    for (const root of roots) {
+      out.push({ id: root.id, label: projectName(root) });
+      for (const child of projects.filter((p) => p.parent_id === root.id)) {
+        out.push({ id: child.id, label: `  ↳ ${projectName(child)}` });
+      }
+    }
+    return out;
+  })();
+
   const filteredOptions = taskOptions.filter((task) => {
     const q = taskSearch.trim().toLowerCase();
     if (!q) return true;
@@ -183,6 +222,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
       <SheetContent side="bottom" className="h-auto max-h-[90vh] flex flex-col">
         <SheetHeader>
           <SheetTitle className="text-start">{t("title")}</SheetTitle>
+          <SheetDescription className="text-start">{t("description")}</SheetDescription>
         </SheetHeader>
 
         <div className="flex-1 space-y-4 py-4 overflow-y-auto">
@@ -346,6 +386,24 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
                         ))}
                       </select>
                     </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">{t("fields.project")}</label>
+                    <select
+                      value={editPayload.project_id ?? ""}
+                      onChange={(e) =>
+                        setEditPayload({ ...editPayload, project_id: e.target.value || null })
+                      }
+                      className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                      dir="auto"
+                    >
+                      <option value="">{t("fields.noProject")}</option>
+                      {orderedProjects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   {Array.isArray(editPayload.checklist) && editPayload.checklist.length > 0 && (
                     <div>
