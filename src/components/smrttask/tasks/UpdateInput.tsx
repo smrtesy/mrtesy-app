@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -222,6 +222,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
       <SheetContent side="bottom" className="h-auto max-h-[90vh] flex flex-col">
         <SheetHeader>
           <SheetTitle className="text-start">{t("title")}</SheetTitle>
+          <SheetDescription className="text-start">{t("description")}</SheetDescription>
         </SheetHeader>
 
         <div className="flex-1 space-y-4 py-4 overflow-y-auto">

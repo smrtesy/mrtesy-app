@@ -246,6 +246,7 @@
   },
   "router": {
     "title": "Update",
+    "description": "Write freely and smrtTask will decide whether to create a task, update an existing one, or add an update.",
     "placeholder": "Describe what to do — add a task, update an existing one (\"T42 pushed to tomorrow\"), mark done, or add subtasks.",
     "classify": "Parse",
     "apply": "Confirm",
