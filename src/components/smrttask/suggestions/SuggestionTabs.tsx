@@ -7,8 +7,26 @@ import { MessageSuggestions } from "./MessageSuggestions";
 import { ScheduledSuggestions } from "./ScheduledSuggestions";
 import { ProjectSuggestions } from "./ProjectSuggestions";
 import { Bell, Calendar, Lightbulb } from "lucide-react";
+import type { InboxCounts } from "@/components/platform/inbox/InboxTabs";
 
-export function SuggestionTabs({ locale }: { locale: string }) {
+function TabCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className="ms-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] font-semibold text-primary">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+export function SuggestionTabs({
+  locale,
+  counts,
+  onCountsChange,
+}: {
+  locale: string;
+  counts: InboxCounts;
+  onCountsChange: () => void;
+}) {
   const t = useTranslations("suggestions");
   const [activeTab, setActiveTab] = useState("messages");
 
@@ -18,19 +36,22 @@ export function SuggestionTabs({ locale }: { locale: string }) {
         <TabsTrigger value="messages" className="flex-1 gap-1">
           <Bell className="h-4 w-4" />
           <span className="text-xs sm:text-sm">{t("tabs.messages")}</span>
+          <TabCount count={counts.messages} />
         </TabsTrigger>
         <TabsTrigger value="scheduled" className="flex-1 gap-1">
           <Calendar className="h-4 w-4" />
           <span className="text-xs sm:text-sm">{t("tabs.scheduled")}</span>
+          <TabCount count={counts.scheduled} />
         </TabsTrigger>
         <TabsTrigger value="projects" className="flex-1 gap-1">
           <Lightbulb className="h-4 w-4" />
           <span className="text-xs sm:text-sm">{t("tabs.projects")}</span>
+          <TabCount count={counts.projects} />
         </TabsTrigger>
       </TabsList>
 
       <TabsContent value="messages" className="mt-4">
-        <MessageSuggestions locale={locale} />
+        <MessageSuggestions locale={locale} onUpdate={onCountsChange} />
       </TabsContent>
       <TabsContent value="scheduled" className="mt-4">
         <ScheduledSuggestions locale={locale} />
