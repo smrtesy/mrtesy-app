@@ -347,6 +347,17 @@ other party now wants something back), you still set completion=true for
 the ORIGINAL open question — a new task will be created downstream for the
 new matter. One task = one open question.
 
+CRITICAL — DO NOT confuse scheduling confirmation with task completion:
+If the task requires the USER to take a future action (transfer money,
+attend a meeting, submit a document, make a call, pay a bill, etc.),
+then confirming WHEN or HOW the action will happen is NOT completion.
+completion=true only when the action itself has been done, received, or
+confirmed as completed — not merely planned or scheduled.
+  WRONG: task="להעביר כסף ביום שישי" → message confirms the timing is Friday → completion=true
+  RIGHT: task="להעביר כסף ביום שישי" → message confirms timing → completion=false (money not sent yet)
+  WRONG: task="לשלוח דו״ח" → user says "אשלח מחר" → completion=true
+  RIGHT: task="לשלוח דו״ח" → user says "אשלח מחר" → completion=false (still future)
+
 Be conservative only when the answer is genuinely partial or ambiguous
 (e.g. "I'll check and get back to you" — that's still pending). When the
 requested answer is plainly in the message, set completion=true.
