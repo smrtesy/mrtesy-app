@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -132,7 +131,6 @@ function LogRow({ log }: { log: LogEntry }) {
 
 export default function AdminLogsPage() {
   const t = useTranslations("admin");
-  const supabase = createClient();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [level, setLevel] = useState<LogLevel>("all");
@@ -140,28 +138,19 @@ export default function AdminLogsPage() {
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
-    let query = supabase
-      .from("log_entries")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(200);
-
-    if (level !== "all") query = query.eq("level", level);
-
-    const now = new Date();
-    if (timeRange === "today") {
-      const start = new Date(now); start.setHours(0, 0, 0, 0);
-      query = query.gte("created_at", start.toISOString());
-    } else if (timeRange === "7d") {
-      query = query.gte("created_at", new Date(now.getTime() - 7 * 86400000).toISOString());
-    } else if (timeRange === "30d") {
-      query = query.gte("created_at", new Date(now.getTime() - 30 * 86400000).toISOString());
+    // Hits the super-admin route (service-role) so the admin sees platform-wide
+    // logs — the browser client only ever sees its own rows under RLS.
+    const params = new URLSearchParams({ level, range: timeRange });
+    try {
+      const res = await fetch(`/api/admin/logs?${params}`, { cache: "no-store" });
+      const json = await res.json();
+      setLogs(res.ok ? (json.logs ?? []) : []);
+    } catch {
+      setLogs([]);
+    } finally {
+      setLoading(false);
     }
-
-    const { data } = await query;
-    setLogs(data || []);
-    setLoading(false);
-  }, [level, timeRange, supabase]);
+  }, [level, timeRange]);
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 

@@ -1,103 +1,144 @@
 export const dynamic = "force-dynamic";
-import { createClient } from "@/lib/supabase/server";
+
+import { readdirSync } from "fs";
+import { join } from "path";
+import Link from "next/link";
 import { getTranslations } from "next-intl/server";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import {
+  Users, Building2, Layers, Crown, FileText, DollarSign, BookOpen,
+} from "lucide-react";
 
-export default async function AdminDashboard() {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+type AdminClient = NonNullable<ReturnType<typeof createAdminSupabaseClient>>;
+
+async function countRows(
+  admin: AdminClient,
+  table: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  build?: (q: any) => any,
+): Promise<number> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q: any = admin.from(table).select("*", { count: "exact", head: true });
+  if (build) q = build(q);
+  const { count } = await q;
+  return count ?? 0;
+}
+
+export default async function AdminDashboard({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}) {
+  const { locale } = await params;
   const t = await getTranslations("admin");
-  const supabase = await createClient();
+  const nav = await getTranslations("adminNav");
+  const admin = createAdminSupabaseClient();
 
-  const [usersResult, deadLetterResult, errorsResult, aiCostResult] = await Promise.all([
-    supabase.from("user_settings").select("user_id, onboarding_completed"),
-    supabase.from("source_messages").select("id", { count: "exact" }).eq("dead_letter", true),
-    supabase.from("log_entries").select("id, category, error_message, created_at").eq("level", "error").order("created_at", { ascending: false }).limit(10),
-    supabase.from("log_entries").select("ai_cost_usd").gte("created_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString()).not("ai_cost_usd", "is", null),
-  ]);
+  const since24h = new Date(Date.now() - DAY_MS).toISOString();
 
-  const users = usersResult.data || [];
-  const deadLetters = deadLetterResult.count || 0;
-  const recentErrors = errorsResult.data || [];
-  const todayCost = (aiCostResult.data || []).reduce((sum, r) => sum + (Number(r.ai_cost_usd) || 0), 0);
+  let totalUsers = 0, activeUsers = 0, orgs = 0, apps = 0, superAdmins = 0;
+  let errors24h = 0, deadLetters = 0, aiCost24h = 0;
 
-  const alerts: Array<{ level: string; message: string }> = [];
-  if (deadLetters > 10) {
-    alerts.push({ level: "critical", message: t("alertDeadLetters", { count: deadLetters }) });
+  if (admin) {
+    const [
+      uTotal, uActive, oCount, aCount, saCount, errCount, dlCount, costRows,
+    ] = await Promise.all([
+      countRows(admin, "user_settings"),
+      countRows(admin, "user_settings", (q) => q.eq("onboarding_completed", true)),
+      countRows(admin, "organizations"),
+      countRows(admin, "apps"),
+      countRows(admin, "super_admins"),
+      countRows(admin, "log_entries", (q) => q.eq("level", "error").gte("created_at", since24h)),
+      countRows(admin, "source_messages", (q) => q.eq("dead_letter", true)),
+      admin.from("ai_usage").select("cost_usd").gte("created_at", since24h).limit(100000),
+    ]);
+    totalUsers = uTotal;
+    activeUsers = uActive;
+    orgs = oCount;
+    apps = aCount;
+    superAdmins = saCount;
+    errors24h = errCount;
+    deadLetters = dlCount;
+    aiCost24h = (costRows.data ?? []).reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
   }
-  if (todayCost > 5) {
-    alerts.push({ level: "important", message: t("alertAiCost", { cost: todayCost.toFixed(2) }) });
-  }
+
+  let docs = 0;
+  try {
+    docs = readdirSync(join(process.cwd(), "docs")).filter((f) => f.endsWith(".md")).length;
+  } catch { /* docs dir may be absent in some builds */ }
+
+  // Ordered to match the admin tab strip (AdminNav).
+  const cards: Array<{
+    href: string;
+    label: string;
+    icon: React.ReactNode;
+    value: string;
+    problem?: boolean;
+    subtitle?: string;
+  }> = [
+    {
+      href: "users", label: nav("users"), icon: <Users className="h-4 w-4" />,
+      value: String(totalUsers), subtitle: `${activeUsers} ${t("active")}`,
+    },
+    {
+      href: "orgs", label: nav("orgs"), icon: <Building2 className="h-4 w-4" />,
+      value: String(orgs),
+    },
+    {
+      href: "apps", label: nav("apps"), icon: <Layers className="h-4 w-4" />,
+      value: String(apps),
+    },
+    {
+      href: "super-admins", label: nav("superAdmins"), icon: <Crown className="h-4 w-4" />,
+      value: String(superAdmins),
+    },
+    {
+      href: "logs", label: nav("logs"), icon: <FileText className="h-4 w-4" />,
+      value: String(errors24h), problem: errors24h > 0,
+      subtitle: deadLetters > 0 ? t("deadLettersShort", { count: deadLetters }) : undefined,
+    },
+    {
+      href: "usage", label: nav("usage"), icon: <DollarSign className="h-4 w-4" />,
+      value: `$${aiCost24h.toFixed(2)}`,
+    },
+    {
+      href: "docs", label: nav("docs"), icon: <BookOpen className="h-4 w-4" />,
+      value: String(docs),
+    },
+  ];
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">{t("title")}</h1>
+      <p className="text-sm text-muted-foreground -mt-4">{t("overviewSubtitle")}</p>
 
-      {alerts.length > 0 && (
-        <div className="space-y-2">
-          {alerts.map((alert, i) => (
-            <div key={i} className={`rounded-lg border p-3 text-sm ${alert.level === "critical" ? "border-red-500 bg-red-50 text-red-700" : "border-yellow-500 bg-yellow-50 text-yellow-700"}`}>
-              {alert.message}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("users")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{users.length}</div>
-            <p className="text-xs text-muted-foreground">
-              {users.filter((u) => u.onboarding_completed).length} {t("active")}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("aiCostToday")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${todayCost.toFixed(4)}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("deadLetters")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${deadLetters > 0 ? "text-red-500" : ""}`}>{deadLetters}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("errors24h")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${recentErrors.length > 0 ? "text-red-500" : ""}`}>{recentErrors.length}</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {recentErrors.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">{t("recentErrors")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {recentErrors.slice(0, 5).map((err) => (
-              <div key={err.id} className="rounded border p-2 text-sm">
-                <div className="flex justify-between">
-                  <Badge variant="destructive" className="text-xs">{err.category}</Badge>
-                  <span className="text-xs text-muted-foreground">{new Date(err.created_at).toLocaleString()}</span>
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+        {cards.map((c) => (
+          <Link key={c.href} href={`/${locale}/admin/${c.href}`} className="group">
+            <Card className="h-full transition-colors group-hover:border-primary/60 group-hover:bg-accent/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  {c.icon}
+                  {c.label}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${c.problem ? "text-red-500" : ""}`}>
+                  {c.value}
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground truncate">{err.error_message}</p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+                {c.subtitle && (
+                  <p className={`text-xs ${c.problem ? "text-red-500" : "text-muted-foreground"}`}>
+                    {c.subtitle}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
