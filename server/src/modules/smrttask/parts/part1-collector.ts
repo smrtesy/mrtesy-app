@@ -52,8 +52,9 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       .from("sync_state")
       .select("source, checkpoint, last_synced_at")
       .eq("user_id", userId)
-      .in("source", ["gmail", "drive", "calendar"]);
+      .in("source", ["gmail", "google_drive", "google_calendar"]);
 
+    // source keys match sync_state table: gmail, google_drive, google_calendar
     const checkpoint = (source: string) =>
       syncStates?.find((s) => s.source === source)?.last_synced_at ?? null;
 
@@ -188,7 +189,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
     // ── 2. Google Drive (ScanSnap) ────────────────────────────────────────────
     try {
       // Same explicit-overrides-checkpoint pattern as Gmail above.
-      const lastDriveSync = checkpoint("drive");
+      const lastDriveSync = checkpoint("google_drive");
       const since = driveHours != null
         ? new Date(Date.now() - driveHours * 60 * 60 * 1000)
         : lastDriveSync
@@ -230,7 +231,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
         }
       }
 
-      await updateSyncState(userId, "drive", new Date().toISOString());
+      await updateSyncState(userId, "google_drive", new Date().toISOString());
     } catch (e) {
       errors.push(`drive: ${e}`);
     }
@@ -268,7 +269,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       // events in the window so the initial seed is complete.
       // Subsequent runs: only events modified since the last sync are
       // returned; already-classified unchanged events stay untouched.
-      const lastCalSync = checkpoint("calendar");
+      const lastCalSync = checkpoint("google_calendar");
       const calUpdatedMin = lastCalSync ?? undefined;
 
       for (const calendarId of calendarIds) {
@@ -322,7 +323,7 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
         }
       }
 
-      await updateSyncState(userId, "calendar", new Date().toISOString());
+      await updateSyncState(userId, "google_calendar", new Date().toISOString());
     } catch (e) {
       errors.push(`calendar: ${e}`);
     }
