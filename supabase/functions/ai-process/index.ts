@@ -610,6 +610,150 @@ function msgLogFields(msg: any) {
   return { source_message_id: msg.id, source_type: msg.source_type, source_id: msg.source_id, source_url: resolveSourceUrl(msg), sender: msg.sender, sender_email: msg.sender_email, subject: msg.subject };
 }
 
+// ── Gmail review labels ─────────────────────────────────────────────────────
+// Tag each scanned Gmail message with its classification outcome as a nested
+// "smrtTask/<kind>" label, so the user sees the pipeline's verdict directly in
+// Gmail. This mirrors the labels the retired server-side classifier applied;
+// the work moved here when collection/classification consolidated onto the
+// edge pipeline (see fix(smrttask): single pipeline on edge).
+const GMAIL_REVIEW_LABELS = {
+  skip:          "smrtTask/דילוג",
+  informational: "smrtTask/אינפו",
+  actionable:    "smrtTask/הצעה",
+  update:        "smrtTask/עדכון",
+} as const;
+
+function reviewLabelFor(classification: string): keyof typeof GMAIL_REVIEW_LABELS | null {
+  switch (classification) {
+    case "skip":
+    case "spam":
+      return "skip";
+    case "informational":
+      return "informational";
+    case "actionable":
+      return "actionable";
+    case "actionable_followup":
+    case "informational_followup":
+      return "update";
+    default:
+      return null;
+  }
+}
+
+// Per-invocation caches (cleared at the top of each request) so we refresh the
+// token and list labels at most once per user even when a batch holds many of
+// their messages.
+const gmailTokenCache = new Map<string, Promise<string>>();
+const gmailLabelMapCache = new Map<string, Promise<Map<string, string>>>();
+
+async function refreshGmailToken(userId: string): Promise<string> {
+  const { data: cred } = await supabase
+    .from("user_credentials")
+    .select("access_token, refresh_token, expires_at")
+    .eq("user_id", userId)
+    .eq("service", "gmail")
+    .single();
+  if (!cred) throw new Error("No Gmail credentials found");
+
+  // Still valid (5-min buffer) → reuse.
+  if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
+    return cred.access_token;
+  }
+
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: Deno.env.get("GOOGLE_CLIENT_ID")!,
+      client_secret: Deno.env.get("GOOGLE_CLIENT_SECRET")!,
+      refresh_token: cred.refresh_token!,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!resp.ok) throw new Error(`Token refresh failed: ${resp.status}`);
+
+  const tokens = await resp.json();
+  await supabase
+    .from("user_credentials")
+    .update({
+      access_token: tokens.access_token,
+      expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("service", "gmail");
+  return tokens.access_token;
+}
+
+async function listGmailLabels(token: string): Promise<Map<string, string>> {
+  const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new Error(`labels.list ${resp.status}`);
+  const map = new Map<string, string>();
+  for (const l of (await resp.json()).labels ?? []) {
+    if (l.name && l.id) map.set(l.name, l.id);
+  }
+  return map;
+}
+
+// Ensure each name exists as a label, creating any that are missing. A
+// "Parent/Child" name renders as a nested label in Gmail.
+async function getOrCreateGmailLabels(token: string, names: string[]): Promise<Map<string, string>> {
+  const map = await listGmailLabels(token);
+  for (const name of names) {
+    if (map.has(name)) continue;
+    const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name, labelListVisibility: "labelShow", messageListVisibility: "show" }),
+    });
+    if (resp.ok) {
+      const created = await resp.json();
+      if (created.id) map.set(name, created.id);
+    } else if (resp.status === 409) {
+      // Concurrent run created it between our list and create — re-list.
+      const refreshed = await listGmailLabels(token);
+      const id = refreshed.get(name);
+      if (id) map.set(name, id);
+    }
+  }
+  return map;
+}
+
+// Best-effort: tag one Gmail message with the label for its final
+// classification. Never throws — a labeling failure is logged but must not
+// affect message processing.
+async function tagGmailReview(msg: any, classification: string): Promise<void> {
+  if (msg.source_type !== "gmail" || !msg.source_id) return;
+  const kind = reviewLabelFor(classification);
+  if (!kind) return;
+  const userId = msg.user_id;
+  try {
+    if (!gmailTokenCache.has(userId)) gmailTokenCache.set(userId, refreshGmailToken(userId));
+    const token = await gmailTokenCache.get(userId)!;
+
+    if (!gmailLabelMapCache.has(userId)) {
+      gmailLabelMapCache.set(
+        userId,
+        getOrCreateGmailLabels(token, ["smrtTask", ...Object.values(GMAIL_REVIEW_LABELS)]),
+      );
+    }
+    const labelId = (await gmailLabelMapCache.get(userId)!).get(GMAIL_REVIEW_LABELS[kind]);
+    if (!labelId) return;
+
+    await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.source_id}/modify`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ addLabelIds: [labelId] }),
+    });
+  } catch (e) {
+    await supabase.from("log_entries").insert({
+      user_id: userId, level: "warning", category: "ai_process_label", status: "failed",
+      ...msgLogFields(msg), error_message: `gmail label ${kind}: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+
 async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: string; updates: any[] } | null> {
   // WhatsApp: same source_message_id (one row per chat) → existing task
   if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
@@ -647,12 +791,14 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   if (preResult.result === "skip") {
     await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "skipped", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "skip", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
+    await tagGmailReview(msg, "skip");
     return;
   }
 
   if (preResult.result === "informational") {
     await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "informational", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
+    await tagGmailReview(msg, "informational");
     return;
   }
 
@@ -785,6 +931,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   }
 
   await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+  await tagGmailReview(msg, classification);
   const costType = modelTypeFromName(aiModel);
   await supabase.from("log_entries").insert({
     user_id: msg.user_id,
@@ -826,6 +973,10 @@ Deno.serve(async (req) => {
     }
 
     const sys = await loadSystemParams();
+
+    // Fresh per request — never reuse a token/label map across warm invocations.
+    gmailTokenCache.clear();
+    gmailLabelMapCache.clear();
 
     await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
 
