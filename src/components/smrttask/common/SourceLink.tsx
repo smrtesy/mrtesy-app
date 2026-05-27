@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,27 @@ interface SourceLinkProps {
 export function SourceLink({ source, stopPropagation, className }: SourceLinkProps) {
   const { locale } = useParams<{ locale: string }>();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
+
+  // Android Gmail: build the Intent URL and store it in state so the anchor
+  // renders with href="intent://..." BEFORE the user taps. Chrome reads href
+  // at tap time; mutations inside onClick fire too late for intent:// routing.
+  const sourceUrl = row?.source_url ?? null;
+  const sourceType = row?.source_type ?? null;
+  const [gmailIntentHref, setGmailIntentHref] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sourceUrl || (sourceType !== "gmail" && sourceType !== "gmail_sent")) return;
+    if (!/Android/i.test(navigator.userAgent)) return;
+    if (!window.matchMedia("(max-width: 767px)").matches) return;
+    const m = sourceUrl.match(/mail\.google\.com(\/[^#]*)(?:#(.*))?$/);
+    if (!m) return;
+    const path = m[1] ?? "/mail/u/0/";
+    const frag = m[2];
+    const intentPath = path + (frag ? `%23${frag}` : "");
+    setGmailIntentHref(
+      `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(sourceUrl)};end`
+    );
+  }, [sourceUrl, sourceType]);
+
   if (!row?.serial_display && !row?.source_url) return null;
 
   const Icon = SOURCE_ICONS[row.source_type ?? ""] ?? FileQuestion;
@@ -72,25 +94,19 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
   if (row.source_url) {
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       if (stopPropagation) e.stopPropagation();
-
       if (typeof window === "undefined") return;
       if (!window.matchMedia("(max-width: 767px)").matches) return;
-
-      // Universal Links (iOS) and App Links (Android) require same-tab navigation.
-      // target="_blank" creates a new browsing context which bypasses OS-level
-      // app interception; target="_self" lets the OS intercept the mail.google.com
-      // URL and open it in Gmail with the full fragment (#all/MSGID) intact.
-      // The Intent URL approach was removed because Chrome encodes # as %23 in
-      // the Intent data URI, causing Gmail to miss the thread fragment and fall
-      // back to opening the Gmail website in the browser.
-      e.currentTarget.target = "_self";
+      // Android Gmail: anchor already has the intent:// href from useEffect.
+      // All other mobile (iOS Universal Links, Drive, Calendar): switch to
+      // same-tab navigation so the OS can intercept the URL.
+      if (!gmailIntentHref) e.currentTarget.target = "_self";
     };
 
     return (
       <a
-        href={row.source_url}
-        target="_blank"
-        rel="noopener noreferrer"
+        href={gmailIntentHref ?? row.source_url}
+        target={gmailIntentHref ? "_self" : "_blank"}
+        rel={gmailIntentHref ? undefined : "noopener noreferrer"}
         onClick={handleClick}
         title={`${label} — open source`}
         className={cn(base, interactive, className)}
