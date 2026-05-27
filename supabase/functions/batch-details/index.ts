@@ -206,6 +206,7 @@ Deno.serve(async (req) => {
               .from("source_messages")
               .update({
                 source_type: isSent ? "gmail_sent" : "gmail",
+                source_url: `https://mail.google.com/mail/u/0/#all/${msg.source_id}`,
                 sender: h.from,
                 sender_email: senderEmail,
                 recipient: h.to,

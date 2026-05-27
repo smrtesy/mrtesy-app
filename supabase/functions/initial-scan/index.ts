@@ -123,6 +123,7 @@ Deno.serve(async (req) => {
             user_id: userId,
             source_type: "gmail",
             source_id: id,
+            source_url: `https://mail.google.com/mail/u/0/#all/${id}`,
             processing_status: "pending",
             ai_classification: "pending",
           }));
