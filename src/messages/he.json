@@ -265,6 +265,7 @@
       "add_update": "הוספת הערה",
       "complete_task": "סימון הושלמה",
       "dismiss_task": "ביטול משימה",
+      "save_info": "שמירת מידע",
       "unknown": "לא ברור"
     },
     "fields": {
@@ -276,7 +277,12 @@
       "subtasks": "תת-משימות להוספה",
       "updateText": "טקסט ההערה",
       "project": "פרויקט",
-      "noProject": "ללא פרויקט"
+      "noProject": "ללא פרויקט",
+      "infoTitle": "כותרת קצרה",
+      "infoBody": "תוכן",
+      "createNewProject": "+ צור פרויקט חדש...",
+      "newProjectName": "שם הפרויקט החדש",
+      "newSubprojectName": "שם תת-פרויקט (אופציונלי)"
     }
   },
   "suggestions": {
@@ -653,7 +659,12 @@
     "verifiedFacts": "עובדות מאומתות",
     "subProjects": "תת-פרויקטים",
     "addSubProject": "הוסף תת-פרויקט",
-    "noSubProjects": "אין תת-פרויקטים עדיין"
+    "noSubProjects": "אין תת-פרויקטים עדיין",
+    "infoCenter": "מרכז מידע",
+    "infoCenterEmpty": "אין פריטים עדיין — שמור מידע ומשימות לפרויקט זה ויופיעו כאן.",
+    "sectionSuggestions": "הצעות",
+    "sectionTasks": "משימות",
+    "sectionInfoItems": "מידע שמור"
   },
   "logPage": {
     "filterAll": "הכל",

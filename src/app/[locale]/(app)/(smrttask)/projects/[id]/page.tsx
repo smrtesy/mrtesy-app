@@ -10,7 +10,7 @@ import { BuildBriefButton } from "@/components/smrttask/tasks/BuildBriefButton";
 import { BriefFactVerifier } from "@/components/smrttask/projects/BriefFactVerifier";
 import { EditProjectSheet } from "@/components/smrttask/projects/EditProjectSheet";
 import { NewProjectButton } from "@/components/smrttask/projects/NewProjectButton";
-import { formatDateOnly } from "@/lib/date";
+import { ProjectInfoCenter, type InfoCenterItem } from "@/components/smrttask/projects/ProjectInfoCenter";
 
 export default async function ProjectDetailPage({
   params,
@@ -33,13 +33,14 @@ export default async function ProjectDetailPage({
 
   if (!project) notFound();
 
-  const [briefResult, tasksResult, subProjectsResult] = await Promise.all([
+  const [briefResult, tasksResult, subProjectsResult, suggestionsResult, infoItemsResult] = await Promise.all([
     supabase.from("project_briefs").select("*").eq("project_id", id).single(),
     supabase
       .from("tasks")
-      .select("id, title, title_he, priority, status, due_date")
+      .select("id, title, title_he, priority, status, due_date, description")
       .eq("project_id", id)
       .eq("user_id", user.id)
+      .neq("task_type", "project_suggestion")
       .neq("status", "archived")
       .order("created_at", { ascending: false })
       .limit(20),
@@ -50,12 +51,58 @@ export default async function ProjectDetailPage({
       .eq("user_id", user.id)
       .eq("is_active", true)
       .order("created_at", { ascending: true }),
+    supabase
+      .from("tasks")
+      .select("id, title, title_he, priority, status, due_date, description")
+      .eq("project_id", id)
+      .eq("user_id", user.id)
+      .eq("task_type", "project_suggestion")
+      .eq("manually_verified", false)
+      .neq("status", "archived")
+      .order("created_at", { ascending: false })
+      .limit(20),
+    supabase
+      .from("project_information_items")
+      .select("id, title, body, created_at")
+      .eq("project_id", id)
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50),
   ]);
 
   const brief = briefResult.data;
   const tasks = tasksResult.data || [];
   const subProjects = subProjectsResult.data || [];
+  const rawSuggestions = suggestionsResult.data || [];
+  const rawInfoItems = infoItemsResult.data || [];
   const name = locale === "he" && project.name_he ? project.name_he : project.name;
+
+  const infoCenterSuggestions: InfoCenterItem[] = rawSuggestions.map((t) => ({
+    id: t.id as string,
+    type: "suggestion" as const,
+    title: (locale === "he" && t.title_he ? t.title_he : t.title) as string || "(no title)",
+    body: (t.description as string | null) ?? null,
+    priority: t.priority as string | null,
+    status: t.status as string | null,
+    due_date: t.due_date as string | null,
+  }));
+
+  const infoCenterTasks: InfoCenterItem[] = tasks.map((t) => ({
+    id: t.id as string,
+    type: "task" as const,
+    title: (locale === "he" && t.title_he ? t.title_he : t.title) as string || "(no title)",
+    body: (t.description as string | null) ?? null,
+    priority: t.priority as string | null,
+    status: t.status as string | null,
+    due_date: t.due_date as string | null,
+  }));
+
+  const infoCenterInfoItems: InfoCenterItem[] = rawInfoItems.map((item) => ({
+    id: item.id as string,
+    type: "info" as const,
+    title: item.title as string,
+    body: (item.body as string | null) ?? null,
+  }));
 
   const pendingFacts = (brief?.pending_facts as Array<{
     id: string;
@@ -250,30 +297,16 @@ export default async function ProjectDetailPage({
         )}
       </div>
 
-      {/* Linked Tasks */}
+      {/* Information Center */}
       <div>
-        <h2 className="text-lg font-semibold mb-3">{t("title")} ({tasks.length})</h2>
-        {tasks.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("noProjects")}</p>
-        ) : (
-          <div className="space-y-1">
-            {tasks.map((task) => (
-              <div key={task.id} className="flex items-center justify-between rounded border p-3">
-                <span className="text-sm truncate flex-1">
-                  {locale === "he" && task.title_he ? task.title_he : task.title}
-                </span>
-                <div className="flex items-center gap-2">
-                  {task.due_date && (
-                    <span className="text-xs text-muted-foreground">
-                      {formatDateOnly(task.due_date as string, locale)}
-                    </span>
-                  )}
-                  <Badge variant="outline" className="text-[10px]">{task.priority}</Badge>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <h2 className="text-lg font-semibold mb-4 relative">
+          {tDetail("infoCenter")}
+        </h2>
+        <ProjectInfoCenter
+          suggestions={infoCenterSuggestions}
+          tasks={infoCenterTasks}
+          infoItems={infoCenterInfoItems}
+        />
       </div>
     </div>
   );

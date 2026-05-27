@@ -24,6 +24,7 @@ type Intent =
   | "add_update"
   | "complete_task"
   | "dismiss_task"
+  | "save_info"
   | "unknown";
 
 interface DecisionPayload {
@@ -35,6 +36,9 @@ interface DecisionPayload {
   checklist?: string[];
   subtasks?: string[];
   update_text?: string;
+  body?: string;
+  new_project_name?: string;
+  new_subproject_name?: string;
   notes_for_user?: string;
   project_id?: string | null;
 }
@@ -85,6 +89,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
   const [taskOptions, setTaskOptions] = useState<OpenTaskOption[]>([]);
   const [taskSearch, setTaskSearch] = useState("");
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [creatingProject, setCreatingProject] = useState(false);
 
   const intent: Intent = overrideIntent ?? decision?.intent ?? "unknown";
 
@@ -97,6 +102,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
     setPickingTarget(false);
     setTaskOptions([]);
     setTaskSearch("");
+    setCreatingProject(false);
   }
 
   async function loadProjects() {
@@ -185,6 +191,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
     intent === "add_update" ||
     intent === "complete_task" ||
     intent === "dismiss_task";
+
 
   const taskOptionLabel = (task: OpenTaskOption) =>
     task.title_he || task.title || "(untitled)";
@@ -444,6 +451,82 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
                     dir="auto"
                     className="min-h-[80px]"
                   />
+                </div>
+              )}
+
+              {intent === "save_info" && (
+                <div className="space-y-2 rounded-lg border p-3">
+                  <div>
+                    <label className="text-xs font-medium">{t("fields.infoTitle")}</label>
+                    <Input
+                      value={editPayload.title_he ?? ""}
+                      onChange={(e) => setEditPayload({ ...editPayload, title_he: e.target.value })}
+                      dir="auto"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">{t("fields.infoBody")}</label>
+                    <Textarea
+                      value={editPayload.body ?? ""}
+                      onChange={(e) => setEditPayload({ ...editPayload, body: e.target.value })}
+                      dir="auto"
+                      className="min-h-[80px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium">{t("fields.project")}</label>
+                    {!creatingProject ? (
+                      <select
+                        value={editPayload.project_id ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === "__new__") {
+                            setCreatingProject(true);
+                            setEditPayload({ ...editPayload, project_id: null, new_project_name: "", new_subproject_name: "" });
+                          } else {
+                            setEditPayload({ ...editPayload, project_id: val || null, new_project_name: undefined, new_subproject_name: undefined });
+                          }
+                        }}
+                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                        dir="auto"
+                      >
+                        <option value="">{t("fields.noProject")}</option>
+                        {orderedProjects.map((p) => (
+                          <option key={p.id} value={p.id}>{p.label}</option>
+                        ))}
+                        <option value="__new__">{t("fields.createNewProject")}</option>
+                      </select>
+                    ) : (
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={editPayload.new_project_name ?? ""}
+                            onChange={(e) => setEditPayload({ ...editPayload, new_project_name: e.target.value })}
+                            placeholder={t("fields.newProjectName")}
+                            dir="auto"
+                            className="flex-1"
+                          />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="shrink-0"
+                            onClick={() => {
+                              setCreatingProject(false);
+                              setEditPayload({ ...editPayload, new_project_name: undefined, new_subproject_name: undefined, project_id: null });
+                            }}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <Input
+                          value={editPayload.new_subproject_name ?? ""}
+                          onChange={(e) => setEditPayload({ ...editPayload, new_subproject_name: e.target.value })}
+                          placeholder={t("fields.newSubprojectName")}
+                          dir="auto"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

@@ -36,6 +36,7 @@ type Intent =
   | "add_update"
   | "complete_task"
   | "dismiss_task"
+  | "save_info"
   | "unknown";
 
 interface DecisionPayload {
@@ -50,9 +51,13 @@ interface DecisionPayload {
   subtasks?: string[];
   // add_update
   update_text?: string;
+  // save_info
+  body?: string;
+  new_project_name?: string;
+  new_subproject_name?: string;
   // common
   notes_for_user?: string;
-  // project assignment (create_task / update_task) — id of a project or
+  // project assignment (create_task / update_task / save_info) — id of a project or
   // sub-project the task belongs to, matched from the user's project list.
   project_id?: string | null;
 }
@@ -117,12 +122,13 @@ function buildSystemPrompt(): string {
 You receive ONE free-text input from the user (Hebrew or English) and a list of their currently open tasks. Decide the user's intent and produce a structured JSON action.
 
 Possible intents:
-- "create_task"   — user is describing a new task.
+- "create_task"   — user is describing a new action they need to do.
 - "update_task"   — user wants to modify fields on an existing task (title, due date, priority, description, status).
 - "add_subtask"   — user wants to append items to an existing task's checklist.
 - "add_update"    — user is adding a free-text note/progress update to an existing task.
 - "complete_task" — user is saying an existing task is done.
 - "dismiss_task"  — user wants to dismiss/cancel an existing task.
+- "save_info"     — user is sharing a piece of information (a fact, price, contact detail, note, reference) they want to save — NOT an action to do. Examples: "המחיר של X הוא 50 שקל", "מספר הטלפון של ספק Y הוא...", "שם המוצר שאנחנו עובדים איתו הוא...".
 - "unknown"       — input is ambiguous or off-topic.
 
 Rules for picking a target task:
@@ -133,13 +139,14 @@ Rules for picking a target task:
 
 Output JSON shape (return ONLY valid JSON, no markdown fences):
 {
-  "intent": "create_task" | "update_task" | "add_subtask" | "add_update" | "complete_task" | "dismiss_task" | "unknown",
+  "intent": "create_task" | "update_task" | "add_subtask" | "add_update" | "complete_task" | "dismiss_task" | "save_info" | "unknown",
   "target_task_serial": "T42" | null,
   "confidence": 0.0-1.0,
   "reasoning": "one short sentence in Hebrew explaining your choice",
   "payload": {
-    "title_he": "Hebrew title (create_task / update_task title change)",
-    "description": "optional details",
+    "title_he": "Hebrew title (create_task / update_task / save_info short heading)",
+    "body": "full content for save_info (may be same as title_he if brief)",
+    "description": "optional details for tasks",
     "due_date": "YYYY-MM-DD or null",
     "priority": "urgent|high|medium|low",
     "recurrence_rule": "RRULE string or null",
@@ -157,6 +164,7 @@ Only include payload fields that are relevant to the chosen intent:
 - add_subtask: subtasks (array of strings)
 - add_update: update_text
 - complete_task / dismiss_task: leave payload empty unless the user provided a reason in description
+- save_info: title_he (required, short heading ≤80 chars), body (full text, may equal title_he if brief), project_id (matched from list or null)
 - unknown: leave payload empty, set notes_for_user to a clarifying question in Hebrew
 
 Date interpretation: relative dates ("מחר", "ביום ראשון", "in 3 days") should be resolved against the given "today" date.
@@ -564,6 +572,55 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
         .eq("id", targetTaskId);
       if (error) throw new Error(error.message);
       appliedTaskId = targetTaskId;
+    } else if (intent === "save_info") {
+      const title = (payload.title_he || decision.input_text).trim().slice(0, 200);
+      const body = (payload.body || payload.title_he || decision.input_text).trim();
+      if (!title) throw new Error("title required for save_info");
+
+      let projectId: string | null = null;
+
+      if (payload.new_project_name?.trim().length) {
+        // Create a new parent project (and optional sub-project) on-the-fly.
+        const projName = payload.new_project_name.trim();
+        const { data: newProj, error: projErr } = await db
+          .from("projects")
+          .insert({ organization_id: orgId, name: projName, name_he: projName, is_active: true })
+          .select("id")
+          .single();
+        if (projErr) throw new Error(projErr.message);
+        const parentId = (newProj as { id: string }).id;
+
+        if (payload.new_subproject_name?.trim()) {
+          const subName = payload.new_subproject_name.trim();
+          const { data: newSub, error: subErr } = await db
+            .from("projects")
+            .insert({ organization_id: orgId, name: subName, name_he: subName, parent_id: parentId, is_active: true })
+            .select("id")
+            .single();
+          if (subErr) throw new Error(subErr.message);
+          projectId = (newSub as { id: string }).id;
+        } else {
+          projectId = parentId;
+        }
+      } else {
+        projectId = await validateProjectId(payload.project_id, orgId);
+      }
+
+      const { data: infoItem, error } = await db
+        .from("project_information_items")
+        .insert({
+          user_id: userId,
+          organization_id: orgId,
+          project_id: projectId,
+          title,
+          body,
+          source: "router",
+          source_router_decision_id: decision.id,
+        })
+        .select("id")
+        .single();
+      if (error) throw new Error(error.message);
+      appliedTaskId = (infoItem as { id: string }).id;
     } else {
       return res.status(400).json({ error: `cannot apply intent ${intent}` });
     }
