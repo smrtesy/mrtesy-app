@@ -217,10 +217,19 @@ async function runScheduledJobs() {
   }
 }
 
-// Check every 15 minutes whether any scheduled job is due
-cron.schedule("*/15 * * * *", () => {
-  runScheduledJobs().catch(console.error);
-});
+// Legacy server-side cron — DISABLED by default.
+// The smrtTask pipeline now runs exclusively through the Supabase `ai-process`
+// edge function (1-minute cadence: Haiku classify + cached Sonnet task-build).
+// Running this Railway cron in parallel duplicated processing and produced an
+// untracked Sonnet bill. Set SMRTTASK_SERVER_CRON=on to re-enable it.
+if (process.env.SMRTTASK_SERVER_CRON === "on") {
+  cron.schedule("*/15 * * * *", () => {
+    runScheduledJobs().catch(console.error);
+  });
+  console.log("[server] legacy smrtTask cron ENABLED (SMRTTASK_SERVER_CRON=on)");
+} else {
+  console.log("[server] legacy smrtTask cron disabled — ai-process edge function is the single pipeline");
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, HOST, () => {

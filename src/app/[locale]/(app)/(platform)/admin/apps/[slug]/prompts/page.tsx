@@ -17,88 +17,227 @@ import { toast } from "sonner";
 //   {{userName}}     → user's display name
 //   {{gmailAddress}} → user's primary Gmail address
 const DEFAULT_PROMPTS: Record<string, { label: string; description: string; default: string }> = {
-  deep_classifier: {
-    label: "Deep Classifier (Part 3)",
-    description: "Classifies all incoming content — emails, Drive files, Calendar events, and WhatsApp threads — into tasks. Changes take effect on the next Part 3 run. ⚠️ Do not change the JSON output structure.",
-    default: `You are the task classifier and builder for {{user}}.
-{{gmailLine}}They use Gmail, Google Drive, and Google Calendar.
+  edge_classifier: {
+    label: "Message Classifier — LIVE (Haiku)",
+    description: "The live classifier that runs on every incoming message (Gmail / Calendar / Drive / WhatsApp) via the ai-process edge function. Decides ACTIONABLE / INFORMATIONAL / SPAM and tracks thread state. Changes take effect within a minute. ⚠️ Do not change the JSON output structure.",
+    default: `You are a message classifier and thread-state tracker for a personal task management system.
 
-═══════════════════════════════════════════════════
-STEP 1 — IS THIS AN UPDATE TO AN EXISTING TASK?
-═══════════════════════════════════════════════════
-You will receive a list of OPEN TASKS (if any exist).
-If this message is clearly a follow-up, reply, progress update, or confirmation
-related to one of those open tasks — match by contact name, email, phone, or topic —
-return action "update_task". Do NOT create a new task for follow-ups.
+═══ HARDEST RULE — READ FIRST ═══
 
-═══════════════════════════════════════════════════
-STEP 2 — CLASSIFY NEW MESSAGES
-═══════════════════════════════════════════════════
-ACTIONABLE = requires a real action or decision from {{userName}}.
-INFORMATIONAL = useful to know but no action needed right now.
+If the message comes from a service provider (lawyer, accountant, doctor's
+office, bank, vendor, agent, school, government office, contractor) and
+contains ANY of these signals:
 
-Priority rules:
-- urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation
-- high: deadline within 7 days, payment failure, important meeting
-- medium: deadline within 30 days, follow-up needed
-- low: no clear deadline, informational with soft action
+  • "we are looking into it"
+  • "we are working on it"
+  • "I'll get back to you"
+  • "we will update you"
+  • "we received your request/question/inquiry"
+  • "we are currently <verb-ing>"
+  • Hebrew equivalents: "אנחנו בודקים", "נחזור אליך", "נעדכן", "אנחנו עובדים על"
 
-═══════════════════════════════════════════════════
-STEP 3 — MATCH TO A PROJECT (for ACTIONABLE tasks)
-═══════════════════════════════════════════════════
-You will receive a list of ACTIVE PROJECTS with keywords and contacts.
-If the message clearly belongs to one of those projects (match by keyword, contact,
-email domain, or topic), return its project_id with a confidence score.
-Only return project_id if confidence ≥ 0.7, otherwise return null.
+then the classification is ACTIONABLE. No exceptions. The reasoning is:
+the user asked them to do something, they promised to follow up, and the
+user now needs a tracker so the promise does not silently expire. The
+title of the task should be in the form "לעקוב אחרי <party> על <topic>".
 
-═══════════════════════════════════════════════════
-OUTPUT — ONLY valid JSON, no markdown fences
-═══════════════════════════════════════════════════
+NEVER classify such a message as INFORMATIONAL just because "no immediate
+step is required". The action IS the tracking.
 
-For UPDATE to existing task:
+═══ FULL CLASSIFICATION RULES ═══
+
+You will receive the NEW message. Classify it AND update the running thread state in a single JSON response.
+
+Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
 {
-  "action": "update_task",
-  "task_id": "<id from open tasks list>",
-  "update_he": "brief Hebrew summary of what is new in this message",
-  "confidence": 0.0-1.0
+  "classification": "ACTIONABLE" | "INFORMATIONAL" | "SPAM",
+  "reason_he": "short Hebrew explanation",
+  "new_summary": "Hebrew, ≤ 400 chars. Incorporates this new message into the running thread context. State the current open question and who owes the next step.",
+  "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
+  "completion": true | false,
+  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string"
 }
 
-For NEW ACTIONABLE task:
+- ACTIONABLE = either (a) the user must take a concrete step now, OR
+  (b) the message is a pending matter the user MUST keep tracking until it
+  resolves. The HARDEST RULE above is the most common case of (b).
+
+  Other ACTIONABLE pending matters (no immediate step, but must track):
+    • Legal case / collection / dispute in progress
+    • Medical test / lab work / specialist referral pending
+    • Loan / mortgage / refund application under review
+    • Insurance claim / appeal in progress
+    • Delivery in transit / order being prepared
+    • Vendor / contractor / agent quote pending
+    • Business deal / negotiation in progress
+
+- INFORMATIONAL = read-and-forget. No tracking needed. The user did not
+  initiate anything that requires a return response. Examples:
+    • Marketing / newsletter / sale / promotion
+    • Build, CI, server, monitoring notification ("deploy succeeded")
+    • Social-network ping
+    • Payment CONFIRMATION of an already-completed transaction the user initiated
+      and considers closed
+    • Closure acknowledgement: "thanks, all good", "סבבה", "תודה"
+    • System sender (Vercel, Railway, GitHub Actions) with no human follow-up
+
+- SPAM = clearly junk.
+
+Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
+to over-track than to lose visibility on a pending matter.
+
+completion=true means: the open matter the prior task was tracking has been
+ANSWERED or RESOLVED in this message. Specifically:
+  • Payment confirmed
+  • Document signed and accepted
+  • Decision made and communicated
+  • Pending information / answer / quote / ETA / date was provided
+  • The other party closed the loop on what the user was waiting for
+
+CRITICAL — TASKS THAT TRACK A PENDING RESPONSE:
+When the task title is "לחכות לתשובת X על Y" / "לעקוב אחרי X על Y" /
+"wait for X's response about Y" / "follow up with X about Y", and X has
+now PROVIDED that information / decision / commitment — set completion=true,
+even if the user hasn't yet written back. The system has a "pending_completion"
+state for exactly this case: it surfaces the resolved task for one-click
+confirmation so the user doesn't have to dig through the inbox to close it.
+Withholding completion=true just because the user hasn't acknowledged YET
+defeats this mechanism and leaves answered questions stuck in the inbox.
+
+Conversely, if NEW pending matters surface in the same thread (e.g. the
+other party now wants something back), you still set completion=true for
+the ORIGINAL open question — a new task will be created downstream for the
+new matter. One task = one open question.
+
+Be conservative only when the answer is genuinely partial or ambiguous
+(e.g. "I'll check and get back to you" — that's still pending). When the
+requested answer is plainly in the message, set completion=true.
+
+IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
+already captured in new_summary's prior version. Base decisions on the FRESHLY
+written portion of the message only.
+
+If the user's own address is the sender:
+- Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
+- Just acknowledging closure → INFORMATIONAL
+
+═══ WORKED EXAMPLE ═══
+Input: "Please be advised that we are currently looking into the
+collection action against your son. I will let you know as soon as we
+have an update." — from a law firm.
+Correct output: ACTIONABLE, state=pending_other_party. reason_he should
+reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
+INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`,
+  },
+  edge_task_builder: {
+    label: "Task Builder — LIVE (Sonnet)",
+    description: "The live task builder that runs after the classifier decides a message is ACTIONABLE. Turns the message into a concrete task (title, priority, due date, description, actions). Changes take effect within a minute. ⚠️ Do not change the JSON output structure.",
+    default: `You are a task builder for a personal task system.
+Extract concrete actionable tasks from this message.
+Return ONLY a JSON Array, no markdown, no commentary.
+
+═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══
+If the message is a response from a service provider (lawyer, accountant,
+doctor, vendor, agent, school, government office, contractor) saying:
+  • "we are looking into it"
+  • "we are working on it"
+  • "I'll get back to you"
+  • "we will update you"
+  • "we received your request"
+  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"
+then BUILD ONE tracking task. Do NOT return []. The user asked them to
+do something, they promised to follow up, and the user needs visibility
+on that promise. Task shape:
+  title_he: "לעקוב אחרי <party> על <topic>"
+  priority: medium (low if matter trivial, high if deadline-driven)
+  description: state what the user is waiting for and from whom
+  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions
+
+═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══
+The array MUST contain at MOST ONE task per email, even when the email
+describes several actions. Collapse multiple actions on the same topic
+into a single task — list the sub-actions inside the description
+("• בחר כרטיס
+• ודא חיוב ביולי
+• אשר ל-X"). Return TWO tasks ONLY
+if:
+  - they involve different recipients, OR
+  - they have distinct deadlines, AND
+  - neither can be done as part of the other.
+When in doubt, return ONE task.
+
+═══ QUOTED-TEXT RULE (mandatory) ═══
+The body may include reply history. IGNORE everything after a line that
+matches "On <date>, <name> wrote:" or starts with ">". Treat those
+quoted blocks as ALREADY-PROCESSED context — never derive a new task
+from a question or commitment that appears only in the quoted history.
+Decide actionability based ONLY on the freshly-written portion of the
+latest message.
+
+═══ EMPTY-ARRAY RULE ═══
+Return [] (empty array) when the message is purely informational AND the
+TRACKING-TASK RULE above does NOT apply:
+  • Marketing / newsletter / sale / promotion
+  • Bank/payment confirmation of an already-completed transaction
+  • System receipts already handled by the recipient
+  • Build/CI/server notifications with no human follow-up
+  • The fresh portion of the message only ACKNOWLEDGES a prior
+    commitment ("Sure, thank you", "אוקיי") with nothing pending
+NEVER return [] for a "we are looking into it / will get back to you"
+message — see TRACKING-TASK RULE above.
+
+═══ TASK SHAPE ═══
 {
-  "action": "new_task",
-  "classification": "ACTIONABLE",
-  "confidence": 0.0-1.0,
-  "reason_he": "short reason in Hebrew",
-  "project_id": "uuid or null",
-  "project_confidence": 0.0-1.0,
-  "suggested_rule": null or { "trigger": "...", "rule_type": "skip|skip_spam", "reason": "..." },
-  "task": {
-    "title_he": "clear specific action title in Hebrew — NOT 'Email from X'",
-    "priority": "urgent|high|medium|low",
-    "due_date": "YYYY-MM-DD or null",
-    "description_he": "Full context: numbers, dates, contacts, stakes, consequences",
-    "contact_person": "name + phone + email if mentioned",
-    "category": "work|personal",
-    "tags": ["payments","legal","family","tech","mortgage","calendar","drive"],
-    "suggested_actions": ["action1","action2","action3"]
-  }
+  "title_he":     "Hebrew, starts with action verb",
+  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",
+  "priority":     "urgent|high|medium|low",
+  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",
+  "due_date":     "YYYY-MM-DD or null",
+  "ai_actions": [
+    { "label":  "3-7 Hebrew words naming recipient or next step",
+      "prompt": "Full instruction for the AI to run, in English or Hebrew" }
+  ],
+  "owner_contact": "name + phone + email or null"
 }
 
-For INFORMATIONAL:
-{
-  "action": "new_task",
-  "classification": "INFORMATIONAL",
-  "confidence": 0.0-1.0,
-  "reason_he": "short reason in Hebrew",
-  "project_id": null,
-  "project_confidence": 0,
-  "suggested_rule": null or { "trigger": "...", "rule_type": "skip|skip_spam", "reason": "..." }
-}
+═══ TITLE RULES (mandatory) ═══
+Verb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /
+לפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.
 
-Available suggested_actions — pick 2-3 most relevant. Use ONLY these exact strings:
-draft_reply_he, draft_reply_en, draft_whatsapp_he, draft_whatsapp_en,
-summarize_history, find_in_emails, check_past_handling,
-set_reminder, call_preparation, financial_advisor, draft_settlement_request`,
+BAD:  "תיאום פגישה"     (noun, not a command)
+BAD:  "מייל מ-X"         (passive)
+GOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"
+GOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"
+
+═══ PRIORITY RULES (mandatory) ═══
+urgent : deadline today/tomorrow AND a concrete fact (amount, named
+         person, blocked system).
+high   : deadline within 7 days AND impacts people other than the user.
+medium : deadline within 30 days OR routine follow-up.
+low    : no clear deadline OR soft/optional action OR upcoming auto-renewal.
+
+Never default to urgent. If you can't cite a concrete urgency fact, drop
+to medium.
+
+Auto-system notifications (Vercel, Railway, GitHub, monitoring services)
+→ max medium, unless production is currently down.
+
+═══ CONTENT-SPECIFIC RULES ═══
+1. Subscription renewal notice ("your X plan renews on Y for $Z"):
+   priority: "low". description MUST list, in this order:
+     • מה מתחדש (service + plan)
+     • כמה ייחויב (amount + currency)
+     • מתי (date)
+     • איך לבטל / לשנות (link or step from the message)
+   ai_actions should include "draft cancel" or "review subscription".
+
+2. Bank / payment confirmation of a completed transaction → return [].
+
+═══ AI_ACTIONS RULES ═══
+2-3 actions per task. The label is the button text the user sees — it
+MUST name the recipient or the concrete next step, not the generic
+action name. The prompt is what the AI will run on click; include enough
+context that the AI doesn't need to re-read this message.`,
   },
   style_learning: {
     label: "Style Learning (Part 0)",

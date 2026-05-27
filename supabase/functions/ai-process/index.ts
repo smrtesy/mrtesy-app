@@ -121,17 +121,34 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   return { result: "needs_claude" };
 }
 
-async function callClaude(model: string, systemPrompt: string, userMessage: string, maxTokens: number = 1024) {
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+
+// Mark a large, message-invariant instruction block for prompt caching.
+// The cached prefix must be byte-identical across calls to hit (5-min TTL),
+// so ALL per-message context (identity, memory, project, body) must live in
+// the user message, never here. The ai-process cron runs every minute — well
+// inside the 5-minute TTL — so the cached prefix stays warm and reads dominate.
+function cachedSystem(staticPrompt: string): SystemBlock[] {
+  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
+}
+
+async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: systemPrompt, messages: [{ role: "user", content: userMessage }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userMessage }] }),
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
-  return { text: data.content?.[0]?.text || "", inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 };
+  return {
+    text: data.content?.[0]?.text || "",
+    inputTokens: data.usage?.input_tokens || 0,
+    outputTokens: data.usage?.output_tokens || 0,
+    cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
+    cacheWriteTokens: data.usage?.cache_creation_input_tokens || 0,
+  };
 }
 
 function isWhatsApp(msg: any): boolean {
@@ -191,6 +208,8 @@ interface ThreadAnalysis {
   completionReason: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   model: string;
 }
 
@@ -218,7 +237,10 @@ async function analyzeWithMemory(
     ? `\n\nWhatsApp note: the body is a chat transcript with [INCOMING <ts>]/[OUTGOING <ts>] markers. Reason about the LAST line in the transcript.`
     : "";
 
-  const systemPrompt = `You are a message classifier and thread-state tracker for a personal task management system.${identityBlock}${memoryBlock}${whatsappNote}
+  // Static, message-invariant instructions → cached prefix (admin-editable via
+  // ai_prompts key "edge_classifier"). Per-message context (identity, memory,
+  // WhatsApp note) is appended to the user message below so the cache stays warm.
+  const staticPrompt = settings.__prompts?.classifier ?? `You are a message classifier and thread-state tracker for a personal task management system.
 
 ═══ HARDEST RULE — READ FIRST ═══
 
@@ -327,9 +349,11 @@ Correct output: ACTIONABLE, state=pending_other_party. reason_he should
 reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
 INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
 
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
+  // Per-message context goes in the user message (NOT the cached system prefix).
+  const contextBlock = `${identityBlock}${memoryBlock}${whatsappNote}`;
+  const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
 
-  const result = await callClaude(model, systemPrompt, userMessage, 800);
+  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 800);
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -353,6 +377,8 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
       completionReason: "",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
       model,
     };
   }
@@ -372,6 +398,8 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
     completionReason: String(parsed.completion_reason_he ?? ""),
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
+    cacheReadTokens: result.cacheReadTokens,
+    cacheWriteTokens: result.cacheWriteTokens,
     model,
   };
 }
@@ -503,16 +531,20 @@ async function loadContactMemory(userId: string, msg: any): Promise<string> {
 
 const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] with a commitment (אחזור / אבדוק / אשלח / אעדכן\n    / time pledge) → the user owes a follow-through. Title starts with\n    "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
 
-async function createTasksFromMessage(msg: any, sys: SystemParams, userId: string, projectContext?: { projectId: string; brief: string }) {
+async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }) {
   const model = sys.summary_model;
   const truncate = sys.body_truncate_task;
-  let systemPrompt = `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "Hebrew, starts with action verb",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
-  if (isWhatsApp(msg)) systemPrompt += WHATSAPP_TASK_RULES;
-  if (projectContext?.brief) systemPrompt += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
+  // Static instructions → cached prefix (admin-editable via ai_prompts key
+  // "edge_task_builder"). Dynamic context (WhatsApp rules, project brief,
+  // contact memory, body) goes in the user message to keep the cache warm.
+  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "Hebrew, starts with action verb",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם Amalgamated Bank עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  let context = "";
+  if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
+  if (projectContext?.brief) context += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   const contactMemory = await loadContactMemory(userId, msg);
-  if (contactMemory) systemPrompt += contactMemory;
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, truncate)}`;
-  const result = await callClaude(model, systemPrompt, userMessage, 2048);
+  if (contactMemory) context += contactMemory;
+  const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, truncate)}`;
+  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 2048);
   let tasks: any[] = [];
   let parsed = true;
   try {
@@ -523,7 +555,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, userId: strin
   if (!parsed) {
     tasks = [{ title_he: msg.subject || "משימה חדשה", description: result.text, priority: "medium", reason_he: "Sonnet output failed to parse — raw text preserved", due_date: null, ai_actions: [], owner_contact: null }];
   }
-  return { tasks, inputTokens: result.inputTokens, outputTokens: result.outputTokens, model, projectId: projectContext?.projectId || null };
+  return { tasks, inputTokens: result.inputTokens, outputTokens: result.outputTokens, cacheReadTokens: result.cacheReadTokens, cacheWriteTokens: result.cacheWriteTokens, model, projectId: projectContext?.projectId || null };
 }
 
 async function checkFollowup(msg: any, sys: SystemParams) {
@@ -573,7 +605,7 @@ async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: st
 
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
-  let totalInputTokens = 0, totalOutputTokens = 0, aiModel = "", classification = "", classificationReason = "";
+  let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
   let linkedTaskId: string | null = null;
   const preResult = preClassify(msg, settings, sys);
 
@@ -607,6 +639,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     classificationReason = analysis.reason;
     totalInputTokens += analysis.inputTokens;
     totalOutputTokens += analysis.outputTokens;
+    totalCacheReadTokens += analysis.cacheReadTokens;
+    totalCacheWriteTokens += analysis.cacheWriteTokens;
     aiModel = analysis.model;
   } catch (e) {
     const retryCount = (msg.retry_count || 0) + 1;
@@ -662,9 +696,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         if (brief) projectContext = { projectId: projectMatch.projectId, brief };
       }
 
-      const taskResult = await createTasksFromMessage(msg, sys, msg.user_id, projectContext);
+      const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext);
       totalInputTokens += taskResult.inputTokens;
       totalOutputTokens += taskResult.outputTokens;
+      totalCacheReadTokens += taskResult.cacheReadTokens;
+      totalCacheWriteTokens += taskResult.cacheWriteTokens;
 
       if (taskResult.tasks.length === 0) {
         classification = "informational";
@@ -728,15 +764,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     ai_model_used: aiModel,
     ai_input_tokens: totalInputTokens,
     ai_output_tokens: totalOutputTokens,
-    ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, costType),
+    ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, costType),
     processing_duration_ms: Date.now() - startTime,
   });
 }
 
-function estimateCost(input: number, output: number, type: string): number {
-  if (type === "haiku") return (input * 0.80 + output * 4)  / 1_000_000;
-  if (type === "opus")  return (input * 15   + output * 75) / 1_000_000;
-  return (input * 3 + output * 15) / 1_000_000;
+function estimateCost(input: number, output: number, cacheRead: number, cacheWrite: number, type: string): number {
+  const rate = type === "haiku" ? { in: 0.80, out: 4 } : type === "opus" ? { in: 15, out: 75 } : { in: 3, out: 15 };
+  // cache read ≈ 0.1× input rate; cache write (5-min TTL) ≈ 1.25× input rate.
+  return (input * rate.in + output * rate.out + cacheRead * rate.in * 0.1 + cacheWrite * rate.in * 1.25) / 1_000_000;
 }
 
 function modelTypeFromName(model: string): "haiku" | "sonnet" | "opus" {
@@ -765,13 +801,21 @@ Deno.serve(async (req) => {
     let totalDeferred = 0;
 
     for (const userId of uniqueUserIds) {
-      const [settingsRes, categoryRulesRes] = await Promise.all([
+      const [settingsRes, categoryRulesRes, promptsRes] = await Promise.all([
         supabase.from("user_settings").select("*").eq("user_id", userId).single(),
         supabase.from("rules_memory").select("trigger, is_active").eq("user_id", userId).ilike("trigger", "category=%"),
+        supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
       settings.__category_filter = buildCategoryFilter(categoryRulesRes.data ?? []);
+      // Admin-editable prompt overrides (fallback to the inline defaults). Loaded
+      // once per user per run so the cached system prefix stays stable.
+      const promptMap = new Map((promptsRes.data ?? []).map((p: any) => [p.prompt_key, p.content as string]));
+      settings.__prompts = {
+        classifier: promptMap.get("edge_classifier") || undefined,
+        taskBuilder: promptMap.get("edge_task_builder") || undefined,
+      };
 
       const withinBudget = await checkDailyBudget(userId, settings.daily_ai_budget_usd || 10.0);
       if (!withinBudget) continue;
