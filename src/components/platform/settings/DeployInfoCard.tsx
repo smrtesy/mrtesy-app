@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useSuperAdmin } from "@/lib/api/use-super-admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { GitCommit, Server, Globe, Loader2 } from "lucide-react";
@@ -12,6 +13,7 @@ interface DeployInfo {
   branch:         string | null;
   commit_message: string | null;
   deployment_id:  string | null;
+  deployed_at?:   string | null;
   boot_at:        string;
   env?:           string | null;
   uptime_seconds?: number | null;
@@ -30,11 +32,14 @@ interface DeployInfo {
  */
 export function DeployInfoCard() {
   const t = useTranslations("settings");
+  const { isSuperAdmin, loading: adminLoading } = useSuperAdmin();
   const [frontend, setFrontend] = useState<DeployInfo | null>(null);
   const [backend,  setBackend]  = useState<DeployInfo | null>(null);
   const [loading,  setLoading]  = useState(true);
 
   useEffect(() => {
+    // Diagnostic card is super-admin only — don't even fetch otherwise.
+    if (!isSuperAdmin) return;
     let cancelled = false;
     async function load() {
       try {
@@ -54,7 +59,9 @@ export function DeployInfoCard() {
     }
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [isSuperAdmin]);
+
+  if (adminLoading || !isSuperAdmin) return null;
 
   return (
     <Card>
@@ -112,7 +119,9 @@ function DeployRow({
   const commitLink = info.commit
     ? `https://github.com/smrtesy/mrtesy-app/commit/${info.commit}`
     : null;
-  const bootedAgo = formatTimeAgo(info.boot_at);
+  // Prefer the build/deploy time (stable across cold starts); fall back to the
+  // process boot time when the platform doesn't expose a build timestamp.
+  const updatedAt = formatLocalDateTime(info.deployed_at ?? info.boot_at);
   const fullMsg = (info.commit_message ?? "").split("\n")[0];
 
   return (
@@ -154,7 +163,7 @@ function DeployRow({
           </p>
         )}
         <p>
-          {t("deployBootedAgo", { when: bootedAgo })}
+          {t("deployUpdatedAt", { when: updatedAt })}
           {info.branch && info.branch !== "main" ? ` · ${info.branch}` : ""}
         </p>
       </div>
@@ -162,14 +171,10 @@ function DeployRow({
   );
 }
 
-function formatTimeAgo(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const s = Math.max(0, Math.floor(diffMs / 1000));
-  if (s < 60)   return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60)   return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24)   return `${h}h`;
-  const d = Math.floor(h / 24);
-  return `${d}d`;
+function formatLocalDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  // Absolute date + time in the viewer's local timezone — stable, unlike the
+  // previous "X ago" which depended on render time and reset on every visit.
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }

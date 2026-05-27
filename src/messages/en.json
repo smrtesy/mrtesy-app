@@ -445,6 +445,7 @@
     "deployFrontend": "Frontend",
     "deployBackend": "Backend",
     "deployBootedAgo": "running for {when}",
+    "deployUpdatedAt": "Updated: {when}",
     "deployUnreachable": "unreachable"
   },
   "settingsParameters": {
