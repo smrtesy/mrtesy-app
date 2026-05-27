@@ -551,6 +551,9 @@ async function processUserBatch(
   );
 
   const touchedChats = new Set<string>();
+  // wamid → voice transcript, captured during persistence so the self-note
+  // router loop below can classify voice notes (which carry no text body).
+  const transcriptByWamid = new Map<string, string | null>();
   let inserted = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -573,6 +576,7 @@ async function processUserBatch(
       if (error) throw new Error(error.message);
       inserted++;
       touchedChats.add(nm.chatId);
+      transcriptByWamid.set(nm.meta.id, (built.audio_transcript as string | null) ?? null);
     } catch (e) {
       errors.push(`${nm.meta.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -588,16 +592,18 @@ async function processUserBatch(
     }
   }
 
-  // Self-WA routing: any LIVE text message whose chat is the user's own
-  // display_phone_number is treated as a "note to self" — queue it as a
-  // pending router_decisions row. We skip history chunks (those are old
-  // notes, we don't want to retro-classify) and reaction-only messages.
+  // Self-WA routing: any LIVE note-to-self whose chat is the user's own
+  // display_phone_number is queued as a pending router_decisions row. Text
+  // notes route on their body; voice notes route on their transcript. We
+  // skip history chunks (old notes — no retro-classify) and reactions.
   for (const nm of messages) {
     if (nm.isHistory) continue;
     if (!nm.meta.id) continue;
     const myDisplay = String(nm.metadata.display_phone_number ?? "");
     if (!myDisplay || nm.chatId !== myDisplay) continue;
-    const text = nm.meta.text?.body?.trim();
+    const transcript = transcriptByWamid.get(nm.meta.id)?.trim();
+    const voiceText = transcript && transcript !== "[לא ברור]" ? transcript : undefined;
+    const text = nm.meta.text?.body?.trim() || voiceText;
     if (!text) continue;
 
     try {
