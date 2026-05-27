@@ -167,6 +167,9 @@
       "openInWhatsapp": "Open in WhatsApp",
       "noWhatsappContact": "No WhatsApp number for this task",
       "saveDraft": "Save Draft",
+      "saveToKnowledge": "Save to memory",
+      "savedToKnowledge": "Saved to memory — next time a similar question arrives, this answer will be drafted automatically",
+      "knowledgeUnavailable": "Saving to memory is unavailable right now (missing Voyage key)",
       "processing": "Claude is processing...",
       "labels": {
         "draft_reply_he": "Draft reply (Hebrew)",

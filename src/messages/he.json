@@ -167,6 +167,9 @@
       "openInWhatsapp": "פתח בוואטסאפ",
       "noWhatsappContact": "אין מספר וואטסאפ למשימה זו",
       "saveDraft": "שמור טיוטא",
+      "saveToKnowledge": "שמור לזיכרון",
+      "savedToKnowledge": "נשמר לזיכרון — בפעם הבאה שתגיע שאלה דומה, התשובה תוכן אוטומטית",
+      "knowledgeUnavailable": "שמירה לזיכרון אינה זמינה כרגע (חסר מפתח Voyage)",
       "processing": "Claude מעבד...",
       "labels": {
         "draft_reply_he": "טיוטת מענה (עברית)",

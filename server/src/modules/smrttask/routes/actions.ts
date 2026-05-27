@@ -12,6 +12,7 @@ import { simpleCall } from "../../../anthropic";
 import { createDraft, searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
 import { createCalendarEvent } from "../../../services/calendar";
 import { getUserPromptContext } from "../../../lib/user-context";
+import { lookupKnowledge } from "../../../lib/knowledge";
 
 const router = Router();
 
@@ -87,7 +88,7 @@ router.post("/execute", async (req: Request, res: Response) => {
     ? await db
         .from("source_messages")
         .select("raw_content, body_text, sender, sender_email, subject, source_type, metadata")
-        .eq("source_id", task.source_message_id)
+        .eq("id", task.source_message_id)
         .eq("user_id", userId)
         .maybeSingle()
     : { data: null };
@@ -113,6 +114,23 @@ router.post("/execute", async (req: Request, res: Response) => {
 
   const originalContent = sourceMsg?.raw_content ?? sourceMsg?.body_text ?? "";
 
+  // Knowledge-base reuse: for draft actions, look up a previously-approved
+  // answer to a semantically-similar question and feed it to the model as
+  // reference material. No-ops (null) when Voyage is unconfigured or nothing
+  // matches, so drafting is unaffected. We embed the incoming question text.
+  let kbReference = "";
+  if (typeof action_type === "string" && action_type.startsWith("draft_")) {
+    const question = `${task.title_he ?? task.title}\n${originalContent}`.trim();
+    const match = await lookupKnowledge(userId, question, task_id);
+    if (match) {
+      kbReference =
+        `\n\nA previously-approved answer to a very similar question is below. ` +
+        `Reuse it as the basis for this reply, adapting names, dates and details to the current message. ` +
+        `Keep its facts and figures unless the current message contradicts them.\n` +
+        `Previously-approved answer:\n${match.answer}`;
+    }
+  }
+
   // Mark task as running
   await db.from("tasks").update({ action_status: "running" }).eq("id", task_id);
 
@@ -136,7 +154,7 @@ router.post("/execute", async (req: Request, res: Response) => {
         // matches the one for whichever language it writes in.
         const { content, costUsd } = await simpleCall(
           "sonnet",
-          `Draft an email reply for ${userName}. CRITICAL: write the reply in the SAME language as the original message below — if the original is in English reply in English, if in Hebrew reply in Hebrew. Match the writing style for that language.${styleHe ? `\n\nHebrew style:\n${styleHe}` : ""}${styleEn ? `\n\nEnglish style:\n${styleEn}` : ""}`,
+          `Draft an email reply for ${userName}. CRITICAL: write the reply in the SAME language as the original message below — if the original is in English reply in English, if in Hebrew reply in Hebrew. Match the writing style for that language.${styleHe ? `\n\nHebrew style:\n${styleHe}` : ""}${styleEn ? `\n\nEnglish style:\n${styleEn}` : ""}${kbReference}`,
           `Original message:\n${originalContent}\n\nTask context:\n${taskContext}`,
           1024,
         );
@@ -171,7 +189,7 @@ router.post("/execute", async (req: Request, res: Response) => {
         const style = action_type.endsWith("_he") ? styleHe : styleEn;
         const { content, costUsd } = await simpleCall(
           "sonnet",
-          `Draft a WhatsApp message in ${lang} for ${userName}. Keep it concise and conversational.\n${style ? `Style:\n${style}` : ""}`,
+          `Draft a WhatsApp message in ${lang} for ${userName}. Keep it concise and conversational.\n${style ? `Style:\n${style}` : ""}${kbReference}`,
           `Context:\n${taskContext}\n\nOriginal:\n${originalContent}`,
           512,
         );
@@ -315,7 +333,7 @@ Output in Hebrew:
           "opus",
           `Draft a formal settlement request email in Hebrew for ${userName}.
 ${styleHe ? `Writing style:\n${styleHe}` : ""}
-Be professional, factual, and constructive.`,
+Be professional, factual, and constructive.${kbReference}`,
           `Task context:\n${taskContext}\n\nOriginal:\n${originalContent}`,
           1500,
         );

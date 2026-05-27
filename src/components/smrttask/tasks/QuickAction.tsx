@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Save, Mail, MessageCircle, X } from "lucide-react";
+import { Loader2, Save, Mail, MessageCircle, Brain, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { toast } from "sonner";
@@ -40,9 +40,11 @@ export function QuickAction({
   // the built-in WhatsApp chat for editing & sending, instead of a Gmail draft.
   const isWhatsapp =
     sourceType === "whatsapp" || actionLabel.startsWith("draft_whatsapp");
+  const isDraft = actionLabel.startsWith("draft_");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingKb, setSavingKb] = useState(false);
   const hasRun = useRef(false);
 
   // Auto-run when sheet opens — properly in useEffect
@@ -103,6 +105,22 @@ export function QuickAction({
       toast.error((e as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveToKnowledge() {
+    setSavingKb(true);
+    try {
+      await api("/api/knowledge/save", {
+        method: "POST",
+        body: { task_id: taskId, answer: result },
+      });
+      toast.success(t("savedToKnowledge"));
+    } catch (e) {
+      const msg = (e as Error).message;
+      toast.error(msg.includes("embedding_unavailable") ? t("knowledgeUnavailable") : msg);
+    } finally {
+      setSavingKb(false);
     }
   }
 
@@ -185,6 +203,19 @@ export function QuickAction({
               <Button onClick={handleGmailDraft} disabled={saving} variant="outline" className="flex-1 min-h-[48px] gap-1">
                 <Mail className="h-4 w-4" />
                 {t("gmailDraft")}
+              </Button>
+            )}
+            {isDraft && (
+              <Button
+                onClick={handleSaveToKnowledge}
+                disabled={savingKb}
+                variant="outline"
+                size="icon"
+                title={t("saveToKnowledge")}
+                aria-label={t("saveToKnowledge")}
+                className="min-h-[48px] min-w-[48px]"
+              >
+                {savingKb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
               </Button>
             )}
             <Button onClick={onClose} variant="ghost" size="icon" className="min-h-[48px] min-w-[48px]">
