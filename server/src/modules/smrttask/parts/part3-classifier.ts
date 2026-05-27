@@ -15,6 +15,15 @@ import { buildDeepClassifierSystem } from "../../../prompts/classifier";
 import { getUserPromptContext } from "../../../lib/user-context";
 import { parseSkipRules } from "../lib/rule-filters";
 import { loadPrompt } from "../../../lib/prompt-loader";
+import { getOrCreateLabels, addLabelToMessage } from "../../../services/gmail";
+
+// Gmail review labels, nested under a "smrtTask" parent. Each scanned email is
+// tagged by classification so the user can triage in Gmail at a glance.
+const GMAIL_REVIEW_LABELS = {
+  skipped: "smrtTask/דילוג",
+  INFORMATIONAL: "smrtTask/אינפו",
+  ACTIONABLE: "smrtTask/הצעה",
+} as const;
 
 const DEFAULT_BATCH_SIZE = 5;
 const DEFAULT_RULE_THRESHOLD = 0.7;
@@ -91,6 +100,33 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
   let informationalCount = 0;
   let rulesAdded = 0;
   let itemsProcessed = 0;
+
+  // Lazily ensure the Gmail review labels exist (only when the first Gmail
+  // message is actually classified — calendar-only runs never touch Gmail).
+  // Best-effort: a labeling failure is recorded but never blocks the pipeline.
+  let labelMapPromise: Promise<Map<string, string>> | null = null;
+  async function labelGmailMessage(
+    sourceId: string | null | undefined,
+    sourceType: string | null | undefined,
+    kind: keyof typeof GMAIL_REVIEW_LABELS,
+  ): Promise<void> {
+    if (sourceType !== "gmail" || !sourceId) return;
+    try {
+      if (!labelMapPromise) {
+        labelMapPromise = getOrCreateLabels(userId, [
+          "smrtTask",
+          ...Object.values(GMAIL_REVIEW_LABELS),
+        ]).catch((e) => {
+          errors.push(`gmail labels init: ${e instanceof Error ? e.message : String(e)}`);
+          return new Map<string, string>();
+        });
+      }
+      const labelId = (await labelMapPromise).get(GMAIL_REVIEW_LABELS[kind]);
+      if (labelId) await addLabelToMessage(userId, sourceId, labelId);
+    } catch (e) {
+      errors.push(`gmail label ${kind} for ${sourceId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   try {
     // ── 0. Per-tenant identity used in the system prompt ─────────────────────
@@ -246,6 +282,12 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
         .from("source_messages")
         .update({ processing_status: "classified", ai_classification: "skipped" })
         .in("id", skipIds);
+      const skipSet = new Set(skipIds);
+      for (const msg of eligible) {
+        if (skipSet.has(msg.id)) {
+          await labelGmailMessage((msg as any).source_id, msg.source_type, "skipped");
+        }
+      }
     }
 
     // ── 8. Process in batches of BATCH_SIZE ───────────────────────────────────
@@ -458,6 +500,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           .from("source_messages")
           .update({ processing_status: "classified", ai_classification: "INFORMATIONAL" })
           .eq("id", msg.id);
+        await labelGmailMessage((msg as any).source_id, msg.source_type, "INFORMATIONAL");
         continue;
       }
 
@@ -563,6 +606,7 @@ export async function runPart3(opts: Part3Options): Promise<{ sessionId: string 
           .from("source_messages")
           .update({ processing_status: "classified", ai_classification: result.classification })
           .eq("id", msg.id);
+        await labelGmailMessage((msg as any).source_id, msg.source_type, "ACTIONABLE");
       } else {
         await db
           .from("source_messages")
