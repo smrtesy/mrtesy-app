@@ -76,6 +76,7 @@ export default async function AdminDashboard({
     value: string;
     problem?: boolean;
     subtitle?: string;
+    window?: string;
   }> = [
     {
       href: "users", label: nav("users"), icon: <Users className="h-4 w-4" />,
@@ -95,11 +96,11 @@ export default async function AdminDashboard({
     },
     {
       href: "logs", label: nav("logs"), icon: <FileText className="h-4 w-4" />,
-      value: String(errors24h), problem: errors24h > 0,
+      value: String(errors24h), problem: errors24h > 0, window: t("window24h"),
     },
     {
       href: "usage", label: nav("usage"), icon: <DollarSign className="h-4 w-4" />,
-      value: `$${aiCost24h.toFixed(2)}`,
+      value: `$${aiCost24h.toFixed(2)}`, window: t("window24h"),
     },
     {
       href: "docs", label: nav("docs"), icon: <BookOpen className="h-4 w-4" />,
@@ -130,6 +131,9 @@ export default async function AdminDashboard({
                   <p className={`text-xs ${c.problem ? "text-red-500" : "text-muted-foreground"}`}>
                     {c.subtitle}
                   </p>
+                )}
+                {c.window && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{c.window}</p>
                 )}
               </CardContent>
             </Card>

@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { api, getActiveOrgId } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle } from "lucide-react";
+import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle, Copy } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 interface Notification {
@@ -72,6 +72,29 @@ export function NotificationsList() {
     } catch (e) {
       toast.error((e as Error).message);
     }
+  }
+
+  async function copyForAi(n: Notification) {
+    const block = [
+      `Notification: ${n.title}`,
+      `App: ${n.app_slug}`,
+      `Type: ${n.type}`,
+      `Time: ${new Date(n.created_at).toLocaleString()}`,
+      n.link ? `Link: ${n.link}` : null,
+      "",
+      n.body ?? "",
+    ].filter((l) => l !== null).join("\n");
+    try {
+      await navigator.clipboard.writeText(block);
+    } catch {
+      const el = document.createElement("textarea");
+      el.value = block;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    }
+    toast.success(t("copiedForAi"));
   }
 
   async function markAllRead() {
@@ -145,6 +168,15 @@ export function NotificationsList() {
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title={t("copyForAi")}
+                    onClick={() => copyForAi(n)}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
                   {n.link && (
                     <Link href={n.link}>
                       <Button variant="ghost" size="icon" className="h-7 w-7">
