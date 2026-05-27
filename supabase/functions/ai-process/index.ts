@@ -85,15 +85,28 @@ function bodyForAI(msg: any): string {
 
 function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
   const sender = (msg.sender_email || msg.sender || "").toLowerCase();
-  const recipient = (msg.recipient || "").toLowerCase();
+  // source_messages has no dedicated recipient column — Part1 stores the TO
+  // address in reply_to_context and metadata.to. Fall back through all three.
+  const recipient = (msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "").toLowerCase();
   const sourceType = msg.source_type || "";
   const myEmails = (settings.my_emails || []).map((e: string) => e.toLowerCase());
   const officeAddresses = (settings.office_addresses || []).map((e: string) => e.toLowerCase());
   const skipSenders = (settings.skip_senders || []).map((e: string) => e.toLowerCase());
   const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
+  const toSkip: Set<string> = settings.__toSkip instanceof Set ? settings.__toSkip : new Set();
+  const fromSkip: Set<string> = settings.__fromSkip instanceof Set ? settings.__fromSkip : new Set();
   const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
   const categoryFilter: Set<string> = settings.__category_filter instanceof Set ? settings.__category_filter : new Set();
 
+  // rules_memory to=/from= skip rules (UI-configured)
+  for (const addr of toSkip) {
+    if (recipient.includes(addr)) return { result: "skip", skipReason: `to_rule: ${addr}` };
+  }
+  for (const addr of fromSkip) {
+    if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
+  }
+
+  // Legacy user_settings skip lists
   for (const sr of skipRecipients) {
     if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
   }
@@ -839,15 +852,28 @@ Deno.serve(async (req) => {
     let totalDeferred = 0;
 
     for (const userId of uniqueUserIds) {
-      const [settingsRes, categoryRulesRes, promptsRes, userAuthRes] = await Promise.all([
+      const [settingsRes, categoryRulesRes, skipRulesRes, promptsRes, userAuthRes] = await Promise.all([
         supabase.from("user_settings").select("*").eq("user_id", userId).single(),
         supabase.from("rules_memory").select("trigger, is_active").eq("user_id", userId).ilike("trigger", "category=%"),
+        supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%"),
         supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
         supabase.auth.admin.getUserById(userId),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
       settings.__category_filter = buildCategoryFilter(categoryRulesRes.data ?? []);
+      // Build to=/from= skip sets from rules_memory (the UI stores them here,
+      // not in user_settings.skip_recipients/skip_senders).
+      const toSkip = new Set<string>();
+      const fromSkip = new Set<string>();
+      for (const r of (skipRulesRes.data ?? [])) {
+        const m = String(r.trigger).match(/^(to|from)=(.+)$/i);
+        if (!m) continue;
+        if (m[1].toLowerCase() === "to") toSkip.add(m[2].toLowerCase());
+        else fromSkip.add(m[2].toLowerCase());
+      }
+      settings.__toSkip = toSkip;
+      settings.__fromSkip = fromSkip;
       // Admin-editable prompt overrides (fallback to the inline defaults). Loaded
       // once per user per run so the cached system prefix stays stable.
       const promptMap = new Map((promptsRes.data ?? []).map((p: any) => [p.prompt_key, p.content as string]));
