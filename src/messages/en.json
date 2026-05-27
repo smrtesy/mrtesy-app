@@ -41,7 +41,8 @@
     "voiceCharacters": "Voice characters",
     "voiceSettings": "Voice settings",
     "voiceGuide": "smrtVoice guide",
-    "sectionVoice": "smrtVoice"
+    "sectionVoice": "smrtVoice",
+    "more": "More"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",
