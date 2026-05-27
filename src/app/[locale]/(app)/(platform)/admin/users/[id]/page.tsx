@@ -1,6 +1,5 @@
 export const dynamic = "force-dynamic";
 import { getTranslations } from "next-intl/server";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,22 +12,31 @@ export default async function AdminUserDetailPage({
 }) {
   const { locale, id } = await params;
   const t = await getTranslations("adminUserDetail");
-  const supabase = await createClient();
 
-  const [settingsResult, syncResult, logsResult, tasksResult] = await Promise.all([
-    supabase.from("user_settings").select("*").eq("user_id", id).single(),
-    supabase.from("sync_state").select("*").eq("user_id", id),
-    supabase.from("log_entries").select("*").eq("user_id", id).order("created_at", { ascending: false }).limit(50),
-    supabase.from("tasks").select("id, status", { count: "exact" }).eq("user_id", id),
+  // /admin is super-admin-gated by the layout — read with the service-role
+  // client so we can see any user's data, not just the admin's own. The
+  // RLS-scoped client returns nothing for a user_id other than auth.uid().
+  const admin = createAdminSupabaseClient();
+  if (!admin) {
+    return <p>{t("userNotFound")}</p>;
+  }
+
+  const [settingsResult, syncResult, logsResult, tasksResult, authUserResult] = await Promise.all([
+    admin.from("user_settings").select("*").eq("user_id", id).single(),
+    admin.from("sync_state").select("*").eq("user_id", id),
+    admin.from("log_entries").select("*").eq("user_id", id).order("created_at", { ascending: false }).limit(50),
+    admin.from("tasks").select("id, status", { count: "exact" }).eq("user_id", id),
+    admin.auth.admin.getUserById(id),
   ]);
 
   const settings = settingsResult.data;
   const syncStates = syncResult.data || [];
   const logs = logsResult.data || [];
   const taskCount = tasksResult.count || 0;
+  const email = authUserResult.data?.user?.email || "";
 
   // Check if the user's org has smrtTask enabled
-  const { data: userOrg } = await supabase
+  const { data: userOrg } = await admin
     .from("org_members")
     .select("org_id")
     .eq("user_id", id)
@@ -36,7 +44,7 @@ export default async function AdminUserDetailPage({
     .maybeSingle();
   let hasSmrtTask = false;
   if (userOrg) {
-    const { data: appRows } = await supabase
+    const { data: appRows } = await admin
       .from("app_memberships")
       .select("apps!inner(slug)")
       .eq("org_id", userOrg.org_id)
@@ -45,13 +53,6 @@ export default async function AdminUserDetailPage({
       const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
       return (app as { slug?: string } | null)?.slug === "smrttask";
     });
-  }
-
-  let email = "";
-  const admin = createAdminSupabaseClient();
-  if (admin) {
-    const { data: authUser } = await admin.auth.admin.getUserById(id);
-    email = authUser?.user?.email || "";
   }
 
   if (!settings) {

@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -42,12 +42,22 @@ export default async function AdminUsagePage({
     : "7d";
   const since = new Date(Date.now() - RANGES.find((r) => r.key === range)!.ms).toISOString();
 
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("ai_usage")
-    .select("provider, component, cost_usd, input_tokens, output_tokens, ref_id")
-    .gte("created_at", since)
-    .limit(100000);
+  // ai_usage RLS only lets a super_admins-table row read it; service-role keeps
+  // this consistent with the rest of /admin (e.g. an ADMIN_EMAIL-only admin).
+  const admin = createAdminSupabaseClient();
+  let data: Row[] | null = null;
+  let error: { message: string } | null = null;
+  if (admin) {
+    const r = await admin
+      .from("ai_usage")
+      .select("provider, component, cost_usd, input_tokens, output_tokens, ref_id")
+      .gte("created_at", since)
+      .limit(100000);
+    data = (r.data ?? null) as Row[] | null;
+    error = r.error;
+  } else {
+    error = { message: "Service-role key not configured" };
+  }
 
   const rows = (data || []) as Row[];
 

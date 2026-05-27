@@ -40,11 +40,11 @@ export default async function AdminDashboard({
   const since24h = new Date(Date.now() - DAY_MS).toISOString();
 
   let totalUsers = 0, activeUsers = 0, orgs = 0, apps = 0, superAdmins = 0;
-  let errors24h = 0, deadLetters = 0, aiCost24h = 0;
+  let errors24h = 0, aiCost24h = 0;
 
   if (admin) {
     const [
-      uTotal, uActive, oCount, aCount, saCount, errCount, dlCount, costRows,
+      uTotal, uActive, oCount, aCount, saCount, errCount, costRows,
     ] = await Promise.all([
       countRows(admin, "user_settings"),
       countRows(admin, "user_settings", (q) => q.eq("onboarding_completed", true)),
@@ -52,7 +52,6 @@ export default async function AdminDashboard({
       countRows(admin, "apps"),
       countRows(admin, "super_admins"),
       countRows(admin, "log_entries", (q) => q.eq("level", "error").gte("created_at", since24h)),
-      countRows(admin, "source_messages", (q) => q.eq("dead_letter", true)),
       admin.from("ai_usage").select("cost_usd").gte("created_at", since24h).limit(100000),
     ]);
     totalUsers = uTotal;
@@ -61,7 +60,6 @@ export default async function AdminDashboard({
     apps = aCount;
     superAdmins = saCount;
     errors24h = errCount;
-    deadLetters = dlCount;
     aiCost24h = (costRows.data ?? []).reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
   }
 
@@ -98,7 +96,6 @@ export default async function AdminDashboard({
     {
       href: "logs", label: nav("logs"), icon: <FileText className="h-4 w-4" />,
       value: String(errors24h), problem: errors24h > 0,
-      subtitle: deadLetters > 0 ? t("deadLettersShort", { count: deadLetters }) : undefined,
     },
     {
       href: "usage", label: nav("usage"), icon: <DollarSign className="h-4 w-4" />,
