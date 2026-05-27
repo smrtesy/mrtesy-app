@@ -662,7 +662,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     aiModel = analysis.model;
   } catch (e) {
     const retryCount = (msg.retry_count || 0) + 1;
-    await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: retryCount >= 3, processing_lock_at: null }).eq("id", msg.id);
+    // After 3 failed AI attempts we give up gracefully — mark the message
+    // processed/informational (it won't be re-selected) and log the error.
+    // Do NOT set dead_letter: the message is handled, not stuck, and the
+    // failure is already recorded in log_entries. (A true dead_letter flag on
+    // an otherwise-"processed" row is what made the admin counts misleading.)
+    await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
     return;
   }
