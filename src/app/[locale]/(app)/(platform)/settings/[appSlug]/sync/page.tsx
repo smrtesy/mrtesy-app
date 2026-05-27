@@ -60,14 +60,8 @@ const PARTS = [
   },
   // Part 2 (WhatsApp) is now event-driven via /api/webhooks/whatsapp,
   // not cron-pulled, so it's intentionally absent from this sync UI.
-  {
-    key: "part3",
-    label: "PART 3 — Classifier",
-    description: "Classify pending source messages into tasks with Claude AI",
-    icon: FileSearch,
-    color: "text-blue-500",
-    manualOnly: false,
-  },
+  // Part 3 (classifier) is now the ai-process edge function via pg_cron,
+  // not cron-pulled from server, so it's intentionally absent from this sync UI.
 ] as const;
 
 function statusBadge(status: string) {
@@ -134,7 +128,7 @@ export default function SettingsSyncPage() {
     return () => { supabase.removeChannel(channel); };
   }, [loadData, supabase]);
 
-  async function triggerPart(part: "part0" | "part1" | "part3") {
+  async function triggerPart(part: "part0" | "part1") {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { toast.error("Not authenticated"); return; }
 
@@ -147,8 +141,7 @@ export default function SettingsSyncPage() {
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify(
-          part === "part0" ? { language: "he" } :
-          part === "part3" ? { limit: 50 } : {}
+          part === "part0" ? { language: "he" } : {}
         ),
       });
       const json = await res.json();
@@ -271,7 +264,7 @@ export default function SettingsSyncPage() {
                     size="sm"
                     className="flex-1"
                     disabled={isRunning}
-                    onClick={() => triggerPart(part.key as "part0" | "part1" | "part3")}
+                    onClick={() => triggerPart(part.key as "part0" | "part1")}
                   >
                     {isRunning ? (
                       <RefreshCw className="h-4 w-4 me-2 animate-spin" />

@@ -10,7 +10,6 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
-import { runPart3 } from "../parts/part3-classifier";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
 import { notifyError } from "../../../lib/platform";
@@ -62,20 +61,8 @@ router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
 // event-driven via /api/webhooks/whatsapp (see whatsapp-webhook.ts). The
 // previous /part2 route pulled from a Google Sheet on a 15-min cron.
 
-// ── Part 3: classifier ────────────────────────────────────────────────────
-router.post("/part3", ...smrttaskGate, async (req: Request, res: Response) => {
-  const { limit } = req.body ?? {};
-  try {
-    const result = await runPart3({
-      userId: req.user!.id,
-      orgId: req.org!.id,
-      limit: limit ?? 50,
-    });
-    return res.json({ ok: true, session_id: result.sessionId });
-  } catch (e) {
-    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
-  }
-});
+// Part 3 (classifier) intentionally removed: classification is now handled
+// by the ai-process edge function running every minute via pg_cron.
 
 // ── Part 4: project suggester + brief builder ─────────────────────────────
 router.post("/part4/suggest", ...smrttaskGate, async (req: Request, res: Response) => {
@@ -109,7 +96,7 @@ router.post("/part4/build_brief", ...smrttaskGate, async (req: Request, res: Res
 
 // ── Cancel a stuck/running sync session ───────────────────────────────────
 // Marks one or all currently-running sessions as failed for the caller. The
-// backend pipelines (runPart1/runPart3) are best-effort interruptible by
+// backend pipelines (runPart1) are best-effort interruptible by
 // flipping the row to 'failed' — the workers won't notice mid-run, but the UI
 // stops blocking on the stale "running" indicator and future runs are allowed.
 //   POST /api/sync/cancel  body: { session_id?: string }
@@ -186,9 +173,6 @@ router.post("/run-scheduled", async (req: Request, res: Response) => {
   try {
     if (part === "part1") {
       await runPart1({ userId: user_id });
-    } else if (part === "part3") {
-      // Part 3 is org-aware: cron uses the user's primary org membership.
-      await runPart3({ userId: user_id, orgId: membership.org_id as string });
     } else {
       return res.status(400).json({ error: `Unknown part: ${part}` });
     }

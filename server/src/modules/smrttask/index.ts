@@ -44,5 +44,6 @@ export default router;
 // Re-export AI pipeline parts so the cron scheduler can call them.
 // PART 2 (WhatsApp) is intentionally absent: WhatsApp ingestion is now
 // event-driven via the webhook above, not cron-pulled from a Sheet.
+// PART 3 (classifier) is intentionally absent: classification is handled
+// by the ai-process edge function running every minute via pg_cron.
 export { runPart1 } from "./parts/part1-collector";
-export { runPart3 } from "./parts/part3-classifier";
