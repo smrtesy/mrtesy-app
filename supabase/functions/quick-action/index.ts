@@ -16,6 +16,13 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // Hoisted so the catch can log a failure row (which fans out to super-admin
+  // notifications via the log_entries error trigger).
+  let logUserId: string | null = null;
+  let logTaskId: string | null = null;
+  let logTaskTitle: string | null = null;
+  let logActionLabel: string | null = null;
+
   try {
     if (req.method !== "POST") {
       return new Response("Method not allowed", { status: 405, headers: corsHeaders });
@@ -29,8 +36,11 @@ Deno.serve(async (req) => {
     );
     const { data: { user } } = await supabaseAuth.auth.getUser(authHeader);
     if (!user) return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+    logUserId = user.id;
 
     const { task_id, action_label, prompt } = await req.json();
+    logTaskId = task_id && task_id !== "new-task" ? task_id : null;
+    logActionLabel = action_label ?? null;
     if (!task_id || !prompt) {
       return new Response(JSON.stringify({ error: "task_id and prompt required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
@@ -72,6 +82,7 @@ From: ${sourceMsg?.sender || ""} (${sourceMsg?.sender_email || ""})
 Subject: ${sourceMsg?.subject || ""}
 Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
     }
+    logTaskTitle = taskTitle;
 
     // Call Claude
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
@@ -161,6 +172,22 @@ Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    // Persist the failure so it surfaces in Logs and fans out to super-admin
+    // notifications (via the log_entries error trigger). Best-effort.
+    if (logUserId) {
+      try {
+        await supabase.from("log_entries").insert({
+          user_id: logUserId,
+          level: "error",
+          category: "quick_action",
+          status: "failed",
+          task_id: logTaskId,
+          task_title: logTaskTitle,
+          task_action: logActionLabel,
+          error_message: (e as Error).message,
+        });
+      } catch (_e) { /* logging must not mask the original error */ }
+    }
     return new Response(JSON.stringify({ error: (e as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
