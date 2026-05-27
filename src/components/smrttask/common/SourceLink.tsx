@@ -76,36 +76,13 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
       if (typeof window === "undefined") return;
       if (!window.matchMedia("(max-width: 767px)").matches) return;
 
-      const ua = navigator.userAgent;
-      const isAndroid = /Android/i.test(ua);
-
-      // Android Gmail: Intent URL opens Gmail app directly, bypassing the
-      // "Open supported links" App Links setting. Falls back to the web URL
-      // in Chrome if Gmail is not installed.
-      if (isAndroid && (row.source_type === "gmail" || row.source_type === "gmail_sent")) {
-        const webUrl = row.source_url!;
-        // Capture path and fragment separately (fragment without its leading #).
-        const m = webUrl.match(/mail\.google\.com(\/[^#]*)(?:#(.*))?$/);
-        if (m) {
-          const path = m[1] ?? "/mail/u/0/";
-          const frag = m[2]; // e.g. "all/18abc123" — no leading #
-          // Encode # as %23 so the Gmail fragment doesn't collide with the
-          // #Intent; marker that ends the Intent URL.
-          const intentPath = path + (frag ? `%23${frag}` : "");
-          const fallback = encodeURIComponent(webUrl);
-          // Mutate href in-place rather than using window.location.href:
-          // Chrome blocks intent:// navigation via JS assignment but allows it
-          // when the anchor element's own href is the Intent URL at click time.
-          e.currentTarget.href =
-            `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`;
-          e.currentTarget.target = "_self";
-          return;
-        }
-      }
-
-      // iOS and other platforms: App / Universal Links fire ONLY on native
-      // anchor-clicks, never on window.location.href. Switching to _self lets
-      // the browser follow the href natively so the OS can intercept it.
+      // Universal Links (iOS) and App Links (Android) require same-tab navigation.
+      // target="_blank" creates a new browsing context which bypasses OS-level
+      // app interception; target="_self" lets the OS intercept the mail.google.com
+      // URL and open it in Gmail with the full fragment (#all/MSGID) intact.
+      // The Intent URL approach was removed because Chrome encodes # as %23 in
+      // the Intent data URI, causing Gmail to miss the thread fragment and fall
+      // back to opening the Gmail website in the browser.
       e.currentTarget.target = "_self";
     };
 
