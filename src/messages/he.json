@@ -453,6 +453,7 @@
     "deployFrontend": "Frontend",
     "deployBackend": "Backend",
     "deployBootedAgo": "התחיל לרוץ לפני {when}",
+    "deployUpdatedAt": "עודכן: {when}",
     "deployUnreachable": "לא זמין"
   },
   "settingsParameters": {
@@ -851,6 +852,8 @@
     "aiCostToday": "עלות AI היום",
     "deadLetters": "הודעות תקועות",
     "errors24h": "שגיאות (24 שע')",
+    "overviewSubtitle": "סיכום מצב לכל מסך — לחיצה תעבור לטאב המתאים",
+    "deadLettersShort": "{count} הודעות תקועות",
     "serviceStatus": "סטטוס שירותים",
     "recentErrors": "שגיאות אחרונות",
     "noUsers": "אין משתמשים עדיין",

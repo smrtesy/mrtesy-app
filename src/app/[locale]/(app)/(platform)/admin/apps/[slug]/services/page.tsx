@@ -1,8 +1,7 @@
 export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
-import { listAllUserEmails } from "@/lib/supabase/admin";
+import { listAllUserEmails, createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,10 +14,15 @@ export default async function AdminAppServicesPage({
 }) {
   const { locale, slug } = await params;
   const t = await getTranslations("admin");
-  const supabase = await createClient();
+
+  // /admin is super-admin-gated by the layout; read with the service-role
+  // client so sync_state/user_settings cover every user, not just the admin's
+  // own row (RLS user_isolation).
+  const admin = createAdminSupabaseClient();
+  if (!admin) notFound();
 
   // Verify the slug exists in the apps registry so unregistered apps 404.
-  const { data: app } = await supabase
+  const { data: app } = await admin
     .from("apps")
     .select("id, name")
     .eq("slug", slug)
@@ -26,8 +30,8 @@ export default async function AdminAppServicesPage({
   if (!app) notFound();
 
   const [syncResult, usersResult, emailLookup] = await Promise.all([
-    supabase.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
-    supabase.from("user_settings").select("user_id, display_name"),
+    admin.from("sync_state").select("*").order("last_synced_at", { ascending: false }),
+    admin.from("user_settings").select("user_id, display_name"),
     listAllUserEmails(),
   ]);
 

@@ -453,6 +453,7 @@
     "deployFrontend": "Frontend",
     "deployBackend": "Backend",
     "deployBootedAgo": "running for {when}",
+    "deployUpdatedAt": "Updated: {when}",
     "deployUnreachable": "unreachable"
   },
   "settingsParameters": {
@@ -756,6 +757,8 @@
     "aiCostToday": "AI Cost Today",
     "deadLetters": "Dead Letters",
     "errors24h": "Errors (24h)",
+    "overviewSubtitle": "At-a-glance status per screen — tap a card to open that tab",
+    "deadLettersShort": "{count} dead letters",
     "serviceStatus": "Service Status",
     "recentErrors": "Recent Errors",
     "noUsers": "No users yet",

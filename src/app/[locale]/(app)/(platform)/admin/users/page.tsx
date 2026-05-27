@@ -1,6 +1,5 @@
 export const dynamic = "force-dynamic";
-import { createClient } from "@/lib/supabase/server";
-import { listAllUserEmails } from "@/lib/supabase/admin";
+import { listAllUserEmails, createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -13,15 +12,31 @@ export default async function AdminUsersPage({
   const { locale } = await params;
   const t = await getTranslations("admin");
   const tWarn = await getTranslations("adminUsers");
-  const supabase = await createClient();
 
-  const [{ data: users }, emailLookup, { data: memberships }] = await Promise.all([
-    supabase
+  // The /admin section is already super-admin-gated by the layout, so we read
+  // platform-wide data with the service-role client. The RLS-scoped client
+  // would only ever return the admin's own user_settings/org_members row,
+  // which is why the list previously showed just one user.
+  const admin = createAdminSupabaseClient();
+  const emailLookup = await listAllUserEmails();
+
+  if (!admin) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">{t("users")}</h1>
+        <div className="rounded-md border border-amber-400 bg-amber-50 p-3 text-xs text-amber-900">
+          {tWarn("serviceRoleMissing")}
+        </div>
+      </div>
+    );
+  }
+
+  const [{ data: users }, { data: memberships }] = await Promise.all([
+    admin
       .from("user_settings")
       .select("user_id, display_name, onboarding_completed, created_at")
       .order("created_at", { ascending: false }),
-    listAllUserEmails(),
-    supabase
+    admin
       .from("org_members")
       .select("user_id, organizations(id, name, name_he)"),
   ]);
@@ -39,14 +54,14 @@ export default async function AdminUsersPage({
   }
 
   // user_id → enabled app names via org memberships
-  const { data: appMemberships } = await supabase
+  const { data: appMemberships } = await admin
     .from("org_members")
     .select("user_id, org_id");
 
   const orgIds = [...new Set((appMemberships ?? []).map((m) => m.org_id))];
   const appsByOrg: Record<string, string[]> = {};
   if (orgIds.length > 0) {
-    const { data: enabledApps } = await supabase
+    const { data: enabledApps } = await admin
       .from("app_memberships")
       .select("org_id, apps(name, slug)")
       .in("org_id", orgIds);

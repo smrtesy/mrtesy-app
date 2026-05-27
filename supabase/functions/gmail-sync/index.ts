@@ -247,6 +247,7 @@ async function syncUserGmail(userId: string) {
         user_id: userId,
         source_type: isSent ? "gmail_sent" : "gmail",
         source_id: msgId,
+        source_url: `https://mail.google.com/mail/u/0/#all/${msgId}`,
         sender: h.from,
         sender_email: senderEmail,
         recipient: h.to,

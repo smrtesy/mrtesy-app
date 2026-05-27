@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,9 +24,12 @@ export default async function AdminAppDetailPage({
 }) {
   const { locale, slug } = await params;
   const t = await getTranslations("admin");
-  const supabase = await createClient();
+  // /admin is super-admin-gated by the layout; read with the service-role
+  // client so the org count isn't scoped to the admin's own memberships (RLS).
+  const admin = createAdminSupabaseClient();
+  if (!admin) notFound();
 
-  const { data: app } = await supabase
+  const { data: app } = await admin
     .from("apps")
     .select("id, slug, name, description, guide_url")
     .eq("slug", slug)
@@ -34,7 +37,7 @@ export default async function AdminAppDetailPage({
 
   if (!app) notFound();
 
-  const { count: orgCount } = await supabase
+  const { count: orgCount } = await admin
     .from("app_memberships")
     .select("id", { count: "exact", head: true })
     .eq("app_id", app.id);

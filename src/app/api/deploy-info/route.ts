@@ -14,6 +14,9 @@
 export const dynamic = "force-dynamic";
 
 const FRONTEND_BOOT_AT = new Date().toISOString();
+// Inlined at build time via next.config.mjs `env`. Stable across cold starts —
+// unlike boot_at, this is the real deploy time and only changes on a new build.
+const BUILD_AT = process.env.APP_BUILD_TIME || null;
 
 export async function GET() {
   const commit = process.env.VERCEL_GIT_COMMIT_SHA ?? "";
@@ -24,6 +27,7 @@ export async function GET() {
     commit_message: process.env.VERCEL_GIT_COMMIT_MESSAGE ?? null,
     deployment_id:  process.env.VERCEL_DEPLOYMENT_ID ?? null,
     env:            process.env.VERCEL_ENV ?? null,
+    deployed_at:    BUILD_AT,
     boot_at:        FRONTEND_BOOT_AT,
   });
 }
