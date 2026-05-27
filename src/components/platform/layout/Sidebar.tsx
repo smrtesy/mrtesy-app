@@ -69,15 +69,20 @@ const managementItemsWithInbox = [
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
-// Mobile shows a flat list of the most-used items. Calendar dropped here too —
-// it's reachable from the Tasks page header.
-const mobileItems = [
+// Mobile bottom-tab items differ by which apps are active:
+//   smrtTask only  → tasks, projects, whatsapp, inbox, settings
+//   smrtVoice only → voiceProjects, voiceCharacters, voiceSettings, inbox, settings
+//   both           → tasks, projects, voiceProjects, inbox, settings
+//   neither        → inbox, settings
+const mobileTaskItems = [
   { key: "tasks",    href: "/tasks",    icon: CheckSquare   },
   { key: "projects", href: "/projects", icon: FolderOpen    },
   { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
   { key: "inbox",    href: "/inbox",    icon: Bell          },
   { key: "settings", href: "/settings", icon: Settings      },
 ] as const;
+
+type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -96,6 +101,31 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const [pendingCount, setPendingCount] = useState(0);
   const [openTasksCount, setOpenTasksCount] = useState(0);
   const supabase = createClient();
+
+  // Compute the mobile bottom-tab set based on which apps are active.
+  const activeMobileItems: MobileNavItem[] =
+    hasSmrtTask && hasSmrtVoice
+      ? [
+          { key: "tasks",         href: "/tasks",    icon: CheckSquare },
+          { key: "projects",      href: "/projects", icon: FolderOpen  },
+          { key: "voiceProjects", href: "/voice",    icon: Mic         },
+          { key: "inbox",         href: "/inbox",    icon: Bell        },
+          { key: "settings",      href: "/settings", icon: Settings    },
+        ]
+      : hasSmrtTask
+      ? [...mobileTaskItems]
+      : hasSmrtVoice
+      ? [
+          { key: "voiceProjects",   href: "/voice",            icon: Mic      },
+          { key: "voiceCharacters", href: "/voice/characters", icon: Users    },
+          { key: "voiceSettings",   href: "/voice/settings",   icon: Settings },
+          { key: "inbox",           href: "/inbox",            icon: Bell     },
+          { key: "settings",        href: "/settings",         icon: Settings },
+        ]
+      : [
+          { key: "inbox",    href: "/inbox",    icon: Bell     },
+          { key: "settings", href: "/settings", icon: Settings },
+        ];
 
   // Restore + sync the desktop sidebar collapse state via a body attribute that
   // globals.css uses to hide the aside, drop the main margin and unhide the
@@ -203,6 +233,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   function isActive(href: string) {
     const fullPath = `${basePath}${href}`;
     if (href === "/tasks") return pathname === basePath || pathname === `${basePath}/` || pathname.startsWith(`${basePath}/tasks`);
+    // /voice should only be active for the projects list and individual project pages,
+    // not for the named sub-sections (/voice/characters, /voice/settings, /voice/guide).
+    if (href === "/voice") {
+      if (pathname === `${basePath}/voice`) return true;
+      const voiceNamedSections = [`${basePath}/voice/characters`, `${basePath}/voice/settings`, `${basePath}/voice/guide`];
+      if (voiceNamedSections.some((p) => pathname.startsWith(p))) return false;
+      return pathname.startsWith(`${basePath}/voice/`);
+    }
     return pathname.startsWith(fullPath);
   }
 
@@ -358,26 +396,34 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       {/* Mobile Bottom Tab Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
-          {(hasSmrtTask ? mobileItems : mobileItems.filter((i) => i.key === "inbox" || i.key === "settings")).map((item) => (
-            <Link
-              key={item.key}
-              href={`${basePath}${item.href}`}
-              className={cn(
-                "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
-                isActive(item.href) ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              <div className="relative">
-                <item.icon className="h-5 w-5 shrink-0" />
-                {item.key === "inbox" && pendingCount > 0 && (
-                  <span className="absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white leading-none">
-                    {pendingCount > 99 ? "99+" : pendingCount}
-                  </span>
+          {activeMobileItems.map((item) => {
+            const badge = badgeFor(item.key);
+            return (
+              <Link
+                key={item.key}
+                href={`${basePath}${item.href}`}
+                className={cn(
+                  "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
+                  isActive(item.href) ? "text-primary" : "text-muted-foreground",
                 )}
-              </div>
-              <span className="truncate max-w-full">{t(item.key as Parameters<typeof t>[0])}</span>
-            </Link>
-          ))}
+              >
+                <div className="relative">
+                  <item.icon className="h-5 w-5 shrink-0" />
+                  {badge && (
+                    <span
+                      className={cn(
+                        "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
+                        badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+                      )}
+                    >
+                      {badge.count > 99 ? "99+" : badge.count}
+                    </span>
+                  )}
+                </div>
+                <span className="truncate max-w-full">{t(item.key as Parameters<typeof t>[0])}</span>
+              </Link>
+            );
+          })}
         </div>
       </nav>
 
