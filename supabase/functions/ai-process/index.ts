@@ -110,10 +110,7 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
-  // Office address as SENDER = outgoing company mail → treat like user's own outgoing mail
-  if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "check_followup" };
-  // Office address as RECIPIENT = customer writing in → always actionable
-  if (officeAddresses.some((e: string) => recipient.includes(e))) return { result: "customer_inquiry" };
+  if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
   if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
 
   if (categoryFilter.size > 0) {
