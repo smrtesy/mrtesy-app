@@ -1,0 +1,47 @@
+# Supabase project config — source of truth for edge-function deploy settings.
+#
+# WHY THIS EXISTS: `supabase functions deploy` defaults verify_jwt = true. The
+# cron-invoked functions authenticate with CRON_SECRET (not a Supabase JWT), so
+# the platform JWT gate must be OFF for them — otherwise pg_cron's POST is
+# rejected with 401 before the function runs. gmail-sync silently broke this way
+# (collection died until the checkpoint/auth were fixed). Pin every function's
+# verify_jwt here so a future deploy can't regress it.
+project_id = "exjnlghuzuvqedlltztz"
+
+# ── Cron-invoked (CRON_SECRET) + service-to-service: JWT gate OFF ──────────────
+[functions.gmail-sync]
+verify_jwt = false
+
+[functions.gmail-reconcile]
+verify_jwt = false
+
+[functions.batch-details]
+verify_jwt = false
+
+[functions.drive-sync]
+verify_jwt = false
+
+[functions.calendar-renew-watch]
+verify_jwt = false
+
+[functions.calendar-webhook]
+verify_jwt = false
+
+[functions.reminders-check]
+verify_jwt = false
+
+[functions.project-detection]
+verify_jwt = false
+
+[functions.ai-process]
+verify_jwt = false
+
+[functions.quick-action]
+verify_jwt = false
+
+[functions.create-gmail-draft]
+verify_jwt = false
+
+# ── User-invoked from the app (real Supabase JWT): JWT gate ON ─────────────────
+[functions.initial-scan]
+verify_jwt = true

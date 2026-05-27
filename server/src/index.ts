@@ -18,14 +18,13 @@ if (missing.length > 0) {
 
 import express from "express";
 import cors from "cors";
-import cron from "node-cron";
 import { db } from "./db";
 import quickActionRouter from "./routes/quick-action";
 import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { runPart1, runPart3 } from "./modules/smrttask";
+import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 
@@ -149,87 +148,11 @@ app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
 
-// ── Cron Scheduler ────────────────────────────────────────────────────────────
-// Reads sync_schedules table to decide which users/parts to run automatically.
-// Default: 3x/day (7:00, 14:00, 21:00 local)
-
-async function runScheduledJobs() {
-  const now = new Date().toISOString();
-
-  const { data: schedules } = await db
-    .from("sync_schedules")
-    .select("user_id, part")
-    .eq("is_auto", true)
-    .eq("is_enabled", true)
-    .lt("next_run_at", now);
-
-  if (!schedules || schedules.length === 0) return;
-
-  for (const schedule of schedules) {
-    try {
-      if (schedule.part === "part1") {
-        await runPart1({ userId: schedule.user_id });
-      } else if (schedule.part === "part2") {
-        // Part 2 (WhatsApp) is now event-driven via webhook, not cron-pulled.
-        // Legacy sync_schedules rows with part='part2' are silently skipped;
-        // they'll be cleaned up in a follow-up migration.
-        continue;
-      } else if (schedule.part === "part3") {
-        // Part 3 is org-aware: use the user's primary org (oldest membership).
-        // Skip the schedule entry if the user has no org or smrttask isn't enabled there.
-        const { data: membership } = await db
-          .from("org_members")
-          .select("org_id")
-          .eq("user_id", schedule.user_id)
-          .order("joined_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        if (!membership) {
-          console.warn(`[cron] part3 skipped — user ${schedule.user_id} has no org`);
-          continue;
-        }
-
-        const { data: app } = await db.from("apps").select("id").eq("slug", "smrttask").maybeSingle();
-        const { data: entitled } = await db
-          .from("app_memberships")
-          .select("org_id")
-          .eq("org_id", membership.org_id)
-          .eq("app_id", app?.id ?? "")
-          .maybeSingle();
-        if (!entitled) {
-          console.warn(`[cron] part3 skipped — smrttask not enabled for org ${membership.org_id}`);
-          continue;
-        }
-
-        await runPart3({ userId: schedule.user_id, orgId: membership.org_id as string });
-      }
-
-      // Advance next_run_at by 15 minutes
-      const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-      await db
-        .from("sync_schedules")
-        .update({ last_run_at: now, next_run_at: next })
-        .eq("user_id", schedule.user_id)
-        .eq("part", schedule.part);
-    } catch (e) {
-      console.error(`[cron] ${schedule.part} for ${schedule.user_id}:`, e);
-    }
-  }
-}
-
-// Legacy server-side cron — DISABLED by default.
-// The smrtTask pipeline now runs exclusively through the Supabase `ai-process`
-// edge function (1-minute cadence: Haiku classify + cached Sonnet task-build).
-// Running this Railway cron in parallel duplicated processing and produced an
-// untracked Sonnet bill. Set SMRTTASK_SERVER_CRON=on to re-enable it.
-if (process.env.SMRTTASK_SERVER_CRON === "on") {
-  cron.schedule("*/15 * * * *", () => {
-    runScheduledJobs().catch(console.error);
-  });
-  console.log("[server] legacy smrtTask cron ENABLED (SMRTTASK_SERVER_CRON=on)");
-} else {
-  console.log("[server] legacy smrtTask cron disabled — ai-process edge function is the single pipeline");
-}
+// ── smrtTask pipeline ─────────────────────────────────────────────────────────
+// Collection + classification run exclusively through Supabase pg_cron edge
+// functions (gmail-sync / batch-details / ai-process). The legacy server-side
+// scheduler was removed — it duplicated that work and produced an untracked
+// Sonnet bill. Manual/on-demand runs still go through routes/sync.ts.
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, HOST, () => {

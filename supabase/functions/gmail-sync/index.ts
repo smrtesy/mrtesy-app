@@ -83,8 +83,10 @@ async function gmailHistorySync(userId: string, token: string, historyId: string
   );
 
   if (!resp.ok) {
-    if (resp.status === 404) {
-      // historyId expired — trigger reconcile
+    // 404 = historyId too old; 400 = historyId invalid/malformed. Both mean the
+    // stored checkpoint is unusable — self-heal by resetting it (next run does a
+    // fresh fetch) instead of throwing a 500 that wedges the whole cron.
+    if (resp.status === 404 || resp.status === 400) {
       return { newMessages: [], newHistoryId: null, needsReconcile: true };
     }
     throw new Error(`Gmail history API: ${resp.status}`);
@@ -176,15 +178,22 @@ async function syncUserGmail(userId: string) {
     // Incremental sync via history
     const result = await gmailHistorySync(userId, token, checkpoint);
     if (result.needsReconcile) {
-      // Trigger gmail-reconcile via pg_net (if available)
+      // Checkpoint unusable (Gmail returned 404/400). Clear it so the NEXT run
+      // takes the no-checkpoint path: fresh fetch of unread + a new valid
+      // historyId. Without this reset the bad checkpoint would 404/400 forever.
+      await supabase
+        .from("sync_state")
+        .update({ checkpoint: null })
+        .eq("user_id", userId)
+        .eq("source", "gmail");
       await supabase.from("log_entries").insert({
         user_id: userId,
         level: "warning",
         category: "gmail_sync",
         status: "failed",
-        error_message: "historyId expired — needs reconcile",
+        error_message: "historyId invalid — checkpoint reset for fresh fetch",
       });
-      return { error: "historyId expired" };
+      return { error: "historyId reset" };
     }
     messageIds = result.newMessages;
     newCheckpoint = result.newHistoryId;
