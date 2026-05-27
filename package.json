@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/check-rls-policies.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "lint:rls": "node scripts/check-rls-policies.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
