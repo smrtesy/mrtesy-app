@@ -45,20 +45,25 @@ async function refreshGoogleToken(userId: string): Promise<string> {
 
   if (!resp.ok) {
     const err = await resp.text();
-    // Token revoked or expired — soft disconnect
-    if (resp.status === 401 || resp.status === 400) {
+    // Only `invalid_grant` means the USER's refresh token is actually dead
+    // (revoked / expired) — that needs a re-connect, so soft-disconnect them.
+    // Anything else (invalid_client = OUR app-credential misconfig, 5xx,
+    // network blips) is not the user's fault: record the error for visibility
+    // but DON'T flip gmail_connected off and DON'T poison the failure counter.
+    // Doing so would drop the user from the cron permanently with no path back
+    // except a manual reconnect — a transient hiccup should self-heal once the
+    // refresh succeeds again.
+    const revoked = err.includes("invalid_grant");
+    await supabase
+      .from("sync_state")
+      .update({ last_error: `Token refresh failed: ${err}` })
+      .eq("user_id", userId)
+      .eq("source", "gmail");
+    if (revoked) {
       await supabase
         .from("user_settings")
         .update({ gmail_connected: false })
         .eq("user_id", userId);
-      await supabase
-        .from("sync_state")
-        .update({
-          last_error: `Token refresh failed: ${err}`,
-          consecutive_failures: 999,
-        })
-        .eq("user_id", userId)
-        .eq("source", "gmail");
     }
     throw new Error(`Token refresh failed: ${resp.status}`);
   }
@@ -155,11 +160,6 @@ async function syncUserGmail(userId: string) {
     .eq("user_id", userId)
     .eq("source", "gmail")
     .single();
-
-  // Check consecutive failures
-  if (syncState && syncState.consecutive_failures >= 5) {
-    return { skipped: true, reason: "Too many failures — reconnect Gmail" };
-  }
 
   let token: string;
   try {
