@@ -137,7 +137,7 @@ export function SmartSearch({ onResults, selectClause, refineQuery, hideArchiveT
             checked={includeArchive}
             onChange={(e) => setIncludeArchive(e.target.checked)}
           />
-          {t("includeArchive")}
+          {t("includeCompleted")}
         </label>
       )}
     </div>

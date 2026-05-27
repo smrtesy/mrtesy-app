@@ -236,7 +236,7 @@
     },
     "search": {
       "placeholder": "Search tasks, T<#>, or source G/S/W/E/D/C<#>...",
-      "includeArchive": "Include archive",
+      "includeCompleted": "Include completed",
       "results": "Search results",
       "noResults": "No matching tasks found",
       "naturalLanguage": "What about the bank?"
