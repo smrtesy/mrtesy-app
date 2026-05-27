@@ -3,15 +3,24 @@ export const dynamic = "force-dynamic";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { DocsBrowser } from "@/components/admin/DocsBrowser";
+import docsMeta from "@/generated/docs-meta.json";
+
+type DocMeta = { created: string | null; updated: string | null };
 
 export default function AdminDocsPage() {
   const dir = join(process.cwd(), "docs");
-  let docs: { filename: string; content: string }[] = [];
+  const meta = docsMeta as Record<string, DocMeta>;
+  let docs: { filename: string; content: string; created: string | null; updated: string | null }[] = [];
   try {
     docs = readdirSync(dir)
       .filter((f) => f.endsWith(".md"))
       .sort()
-      .map((filename) => ({ filename, content: readFileSync(join(dir, filename), "utf-8") }));
+      .map((filename) => ({
+        filename,
+        content: readFileSync(join(dir, filename), "utf-8"),
+        created: meta[filename]?.created ?? null,
+        updated: meta[filename]?.updated ?? null,
+      }));
   } catch { /* docs dir may be absent in some build environments */ }
 
   return (

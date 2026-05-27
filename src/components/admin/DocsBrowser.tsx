@@ -8,6 +8,15 @@ import { cn } from "@/lib/utils";
 interface Doc {
   filename: string;
   content: string;
+  created: string | null;
+  updated: string | null;
+}
+
+function fmt(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 export function DocsBrowser({ docs }: { docs: Doc[] }) {
@@ -39,20 +48,33 @@ export function DocsBrowser({ docs }: { docs: Doc[] }) {
             onClick={() => setIdx(i)}
             title={d.filename}
             className={cn(
-              "text-start rounded-md px-3 py-2 text-xs font-mono truncate transition-colors",
+              "text-start rounded-md px-3 py-2 text-xs font-mono transition-colors",
               i === idx
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent",
             )}
           >
-            {d.filename}
+            <span className="block truncate">{d.filename}</span>
+            {fmt(d.created) && (
+              <span className={cn("block text-[10px] mt-0.5", i === idx ? "opacity-80" : "opacity-60")}>
+                נוצר: {fmt(d.created)}
+              </span>
+            )}
           </button>
         ))}
       </nav>
 
       <div className="min-w-0 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <code className="text-xs text-muted-foreground truncate">docs/{active.filename}</code>
+          <div className="min-w-0">
+            <code className="block text-xs text-muted-foreground truncate">docs/{active.filename}</code>
+            {fmt(active.created) && (
+              <span className="block text-[11px] text-muted-foreground mt-0.5">
+                נוצר: {fmt(active.created)}
+                {fmt(active.updated) && active.updated !== active.created ? ` · עודכן: ${fmt(active.updated)}` : ""}
+              </span>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5 shrink-0">
             <Download className="h-3.5 w-3.5" />
             הורד .md
