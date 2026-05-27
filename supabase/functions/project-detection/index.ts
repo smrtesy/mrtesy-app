@@ -107,6 +107,21 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
       if (resp.ok) {
         const data = await resp.json();
         const text = data.content?.[0]?.text || "[]";
+        // Unified cost ledger (best-effort).
+        try {
+          const inTok = data.usage?.input_tokens || 0;
+          const outTok = data.usage?.output_tokens || 0;
+          const r = model.includes("opus") ? { i: 15, o: 75 } : model.includes("sonnet") ? { i: 3, o: 15 } : { i: 0.8, o: 4 };
+          await supabase.from("ai_usage").insert({
+            user_id: userId,
+            provider: "anthropic",
+            component: "project_detection",
+            model,
+            input_tokens: inTok,
+            output_tokens: outTok,
+            cost_usd: (inTok * r.i + outTok * r.o) / 1_000_000,
+          });
+        } catch (_e) { /* ledger insert must not break processing */ }
         try {
           const jsonMatch = text.match(/\[[\s\S]*\]/);
           if (jsonMatch) suggestions = JSON.parse(jsonMatch[0]);

@@ -143,6 +143,20 @@ Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
       ai_cost_usd: cost,
     });
 
+    // Unified cost ledger (best-effort).
+    try {
+      await supabase.from("ai_usage").insert({
+        user_id: user.id,
+        provider: "anthropic",
+        component: "quick_action",
+        model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: cost,
+        ref_id: task_id === "new-task" ? null : task_id,
+      });
+    } catch (_e) { /* ledger insert must not break the response */ }
+
     return new Response(JSON.stringify({ result, cost_usd: cost }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

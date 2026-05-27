@@ -13,7 +13,7 @@
  * during the transition window.
  */
 
-import { getAppSecret } from "./db";
+import { getAppSecret, db } from "./db";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -235,6 +235,18 @@ export async function callGeminiDetailed(opts: GeminiCallOptions): Promise<CallG
       .join("\n");
     text = joined ?? "[Gemini החזיר תגובה ריקה]";
   }
+
+  // Unified cost ledger (best-effort; never blocks the caller).
+  try {
+    await db.from("ai_usage").insert({
+      provider: "google",
+      component: "gemini.pdf",
+      model,
+      input_tokens: usage?.promptTokenCount ?? 0,
+      output_tokens: usage?.candidatesTokenCount ?? 0,
+      cost_usd: costUsd,
+    });
+  } catch { /* ledger insert must not break the caller */ }
 
   return { text, costUsd, latencyMs, model, thinkingLevel, usage };
 }

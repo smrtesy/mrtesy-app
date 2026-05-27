@@ -670,6 +670,7 @@
     "apps": "Apps",
     "superAdmins": "Super Admins",
     "logs": "Logs",
+    "usage": "AI Usage",
     "docs": "Docs"
   },
   "adminUsers": {

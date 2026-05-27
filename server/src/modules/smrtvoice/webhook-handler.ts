@@ -109,6 +109,19 @@ async function handleLineCompleted(
       .eq("id", lineId);
   }
 
+  // Unified cost ledger — Resemble TTS generation (best-effort).
+  if (cost > 0) {
+    try {
+      await db.from("ai_usage").insert({
+        provider: "resemble",
+        component: "resemble.tts",
+        model: "resemble",
+        cost_usd: cost,
+        ref_id: lineId ?? null,
+      });
+    } catch { /* ledger insert must not break webhook handling */ }
+  }
+
   // Increment per-project totals via RPC.
   await db.rpc("increment_project_progress", {
     p_project_id: projectId,

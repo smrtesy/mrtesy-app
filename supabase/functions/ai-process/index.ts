@@ -132,7 +132,7 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
-async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024) {
+async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -142,13 +142,31 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
-  return {
+  const usage = {
     text: data.content?.[0]?.text || "",
     inputTokens: data.usage?.input_tokens || 0,
     outputTokens: data.usage?.output_tokens || 0,
     cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
     cacheWriteTokens: data.usage?.cache_creation_input_tokens || 0,
   };
+  // Unified cost ledger — one row per paid call (best-effort; never blocks processing).
+  if (meta) {
+    try {
+      await supabase.from("ai_usage").insert({
+        user_id: meta.userId ?? null,
+        provider: "anthropic",
+        component: meta.component,
+        model,
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        cache_read_tokens: usage.cacheReadTokens,
+        cache_write_tokens: usage.cacheWriteTokens,
+        cost_usd: estimateCost(usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, modelTypeFromName(model)),
+        ref_id: meta.refId ?? null,
+      });
+    } catch (_e) { /* ledger insert must not break the pipeline */ }
+  }
+  return usage;
 }
 
 function isWhatsApp(msg: any): boolean {
@@ -353,7 +371,7 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
   const contextBlock = `${identityBlock}${memoryBlock}${whatsappNote}`;
   const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
 
-  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 800);
+  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -480,7 +498,7 @@ async function detectProject(msg: any, sys: SystemParams, userId: string) {
   if (!projects || projects.length === 0) return null;
   const model = sys.classification_model;
   const projectList = projects.map((p: any) => `${p.id}: ${p.name_he || p.name}`).join("\n");
-  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${bodyForAI(msg).substring(0, sys.body_truncate_project)}`, 50);
+  const result = await callClaude(model, `Given these projects:\n${projectList}\n\nDoes this message belong to one of them? Respond with ONLY the project ID or 'none'.`, `From: ${msg.sender_email}\nSubject: ${msg.subject}\n${bodyForAI(msg).substring(0, sys.body_truncate_project)}`, 50, { component: "ai_process.project", userId, refId: msg.id });
   const projectId = result.text.trim();
   const matched = projects.find((p: any) => p.id === projectId);
   return matched ? { projectId: matched.id, inputTokens: result.inputTokens, outputTokens: result.outputTokens } : null;
@@ -544,7 +562,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   const contactMemory = await loadContactMemory(userId, msg);
   if (contactMemory) context += contactMemory;
   const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, truncate)}`;
-  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 2048);
+  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 2048, { component: "ai_process.task", userId, refId: msg.id });
   let tasks: any[] = [];
   let parsed = true;
   try {

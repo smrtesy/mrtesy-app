@@ -1,6 +1,39 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { db } from "./db";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+export interface AiUsageMeta {
+  /** Coarse component label, e.g. "server.action", "server.router". */
+  component: string;
+  userId?: string;
+  refId?: string;
+}
+
+/** Write one row to the unified ai_usage ledger. Best-effort: never throws. */
+async function logAiUsage(
+  modelId: string,
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number },
+  costUsd: number,
+  meta?: AiUsageMeta,
+): Promise<void> {
+  try {
+    await db.from("ai_usage").insert({
+      user_id: meta?.userId ?? null,
+      provider: "anthropic",
+      component: meta?.component ?? "server.other",
+      model: modelId,
+      input_tokens: usage.input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+      cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+      cache_write_tokens: usage.cache_creation_input_tokens ?? 0,
+      cost_usd: costUsd,
+      ref_id: meta?.refId ?? null,
+    });
+  } catch {
+    /* ledger insert must never break a request */
+  }
+}
 
 export const MODELS = {
   haiku: "claude-haiku-4-5-20251001",
@@ -55,7 +88,7 @@ function estimateCost(model: string, usage: {
  * The system prompt and optional rulesContext are marked cache_control=ephemeral,
  * so repeated calls within 5 minutes re-use the cached blocks (~90% cost saving).
  */
-export async function cachedCall(opts: CachedCallOptions): Promise<CachedCallResult> {
+export async function cachedCall(opts: CachedCallOptions, meta?: AiUsageMeta): Promise<CachedCallResult> {
   const modelId = MODELS[opts.model];
 
   const systemBlocks: Anthropic.TextBlockParam[] = [
@@ -93,13 +126,15 @@ export async function cachedCall(opts: CachedCallOptions): Promise<CachedCallRes
     .map((b) => (b as Anthropic.TextBlock).text)
     .join("");
 
+  const costUsd = estimateCost(modelId, usage);
+  await logAiUsage(modelId, usage, costUsd, meta);
   return {
     content,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
     cacheReadTokens: usage.cache_read_input_tokens ?? 0,
     cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
-    costUsd: estimateCost(modelId, usage),
+    costUsd,
   };
 }
 
@@ -109,6 +144,7 @@ export async function simpleCall(
   systemPrompt: string,
   userMessage: string,
   maxTokens = 2048,
+  meta?: AiUsageMeta,
 ): Promise<{ content: string; costUsd: number }> {
   const modelId = MODELS[model];
   const response = await client.messages.create({
@@ -123,7 +159,9 @@ export async function simpleCall(
     .map((b) => (b as Anthropic.TextBlock).text)
     .join("");
 
-  return { content, costUsd: estimateCost(modelId, response.usage) };
+  const costUsd = estimateCost(modelId, response.usage);
+  await logAiUsage(modelId, response.usage, costUsd, meta);
+  return { content, costUsd };
 }
 
 /** Parse JSON from Claude output, handling markdown code fences */
