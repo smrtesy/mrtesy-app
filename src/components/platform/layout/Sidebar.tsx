@@ -19,9 +19,11 @@ import {
   PanelRightOpen,
   Mic,
   Users,
+  MoreHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import { createClient } from "@/lib/supabase/client";
@@ -38,16 +40,16 @@ import { api, ApiError } from "@/lib/api/client";
 //   "views"  — read-only data feeds. WhatsApp messages and the system run log
 //              are pure inspection surfaces — they don't drive any action.
 const smrtTaskItems = [
-  { key: "inboxIncoming", href: "/inbox",      icon: Bell        },
-  { key: "tasks",         href: "/tasks",      icon: CheckSquare },
-  { key: "projects",      href: "/projects",   icon: FolderOpen  },
-  { key: "guide",         href: "/tasks/guide", icon: BookOpen   },
+  { key: "inboxIncoming", href: "/inbox",       icon: Bell        },
+  { key: "tasks",         href: "/tasks",       icon: CheckSquare },
+  { key: "projects",      href: "/projects",    icon: FolderOpen  },
+  { key: "guide",         href: "/tasks/guide", icon: BookOpen    },
 ] as const;
 
 const smrtTaskViewItems = [
-  { key: "whatsapp",                href: "/whatsapp",                icon: MessageCircle },
-  { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical },
-  { key: "log",                     href: "/log",                     icon: FileText      },
+  { key: "whatsapp",                href: "/whatsapp",                 icon: MessageCircle },
+  { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical  },
+  { key: "log",                     href: "/log",                      icon: FileText      },
 ] as const;
 
 // smrtVoice section — shown when the active org has smrtvoice enabled.
@@ -69,19 +71,6 @@ const managementItemsWithInbox = [
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
-// Mobile bottom-tab items differ by which apps are active:
-//   smrtTask only  → tasks, projects, whatsapp, inbox, settings
-//   smrtVoice only → voiceProjects, voiceCharacters, voiceSettings, inbox, settings
-//   both           → tasks, projects, voiceProjects, inbox, settings
-//   neither        → inbox, settings
-const mobileTaskItems = [
-  { key: "tasks",    href: "/tasks",    icon: CheckSquare   },
-  { key: "projects", href: "/projects", icon: FolderOpen    },
-  { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
-  { key: "inbox",    href: "/inbox",    icon: Bell          },
-  { key: "settings", href: "/settings", icon: Settings      },
-] as const;
-
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -98,33 +87,42 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [openTasksCount, setOpenTasksCount] = useState(0);
   const supabase = createClient();
 
-  // Compute the mobile bottom-tab set based on which apps are active.
+  // Mobile bottom-tab primary items — 5 slots, last one is "More" (opens sheet)
+  // except when neither app is active (only inbox + settings, no overflow).
   const activeMobileItems: MobileNavItem[] =
-    hasSmrtTask && hasSmrtVoice
+    !hasSmrtTask && !hasSmrtVoice
       ? [
-          { key: "tasks",         href: "/tasks",    icon: CheckSquare },
-          { key: "projects",      href: "/projects", icon: FolderOpen  },
-          { key: "voiceProjects", href: "/voice",    icon: Mic         },
-          { key: "inbox",         href: "/inbox",    icon: Bell        },
-          { key: "settings",      href: "/settings", icon: Settings    },
-        ]
-      : hasSmrtTask
-      ? [...mobileTaskItems]
-      : hasSmrtVoice
-      ? [
-          { key: "voiceProjects",   href: "/voice",            icon: Mic      },
-          { key: "voiceCharacters", href: "/voice/characters", icon: Users    },
-          { key: "voiceSettings",   href: "/voice/settings",   icon: Settings },
-          { key: "inbox",           href: "/inbox",            icon: Bell     },
-          { key: "settings",        href: "/settings",         icon: Settings },
-        ]
-      : [
           { key: "inbox",    href: "/inbox",    icon: Bell     },
           { key: "settings", href: "/settings", icon: Settings },
+        ]
+      : hasSmrtTask && hasSmrtVoice
+      ? [
+          { key: "tasks",         href: "/tasks",    icon: CheckSquare    },
+          { key: "projects",      href: "/projects", icon: FolderOpen     },
+          { key: "voiceProjects", href: "/voice",    icon: Mic            },
+          { key: "inbox",         href: "/inbox",    icon: Bell           },
+          { key: "more",          href: "",          icon: MoreHorizontal },
+        ]
+      : hasSmrtTask
+      ? [
+          { key: "tasks",    href: "/tasks",    icon: CheckSquare    },
+          { key: "projects", href: "/projects", icon: FolderOpen     },
+          { key: "whatsapp", href: "/whatsapp", icon: MessageCircle  },
+          { key: "inbox",    href: "/inbox",    icon: Bell           },
+          { key: "more",     href: "",          icon: MoreHorizontal },
+        ]
+      : /* smrtVoice only */
+        [
+          { key: "voiceProjects",   href: "/voice",            icon: Mic            },
+          { key: "voiceCharacters", href: "/voice/characters", icon: Users          },
+          { key: "voiceSettings",   href: "/voice/settings",   icon: Settings       },
+          { key: "inbox",           href: "/inbox",            icon: Bell           },
+          { key: "more",            href: "",                  icon: MoreHorizontal },
         ];
 
   // Restore + sync the desktop sidebar collapse state via a body attribute that
@@ -257,6 +255,30 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     }
     return null;
   }
+
+  // Items shown in the "More" bottom sheet — everything not in the primary tab bar.
+  const moreSheetItems: MobileNavItem[] = [
+    { key: "settings", href: "/settings", icon: Settings },
+    ...(hasSmrtTask ? [
+      { key: "guide",                   href: "/tasks/guide",              icon: BookOpen     },
+      { key: "log",                     href: "/log",                      icon: FileText     },
+      { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical },
+    ] : []),
+    ...(hasSmrtTask && hasSmrtVoice ? [
+      { key: "whatsapp",        href: "/whatsapp",         icon: MessageCircle },
+      { key: "voiceCharacters", href: "/voice/characters", icon: Users         },
+      { key: "voiceSettings",   href: "/voice/settings",   icon: Settings      },
+      { key: "voiceGuide",      href: "/voice/guide",      icon: BookOpen      },
+    ] : []),
+    ...(!hasSmrtTask && hasSmrtVoice ? [
+      { key: "voiceGuide", href: "/voice/guide", icon: BookOpen },
+    ] : []),
+    ...(isAdmin ? [
+      { key: "admin", href: "/admin", icon: Shield },
+    ] : []),
+  ];
+
+  const isMoreActive = moreSheetItems.some((item) => item.href && isActive(item.href));
 
   function NavItem({
     itemKey,
@@ -397,6 +419,22 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
           {activeMobileItems.map((item) => {
+            if (item.key === "more") {
+              return (
+                <button
+                  key="more"
+                  type="button"
+                  onClick={() => setMoreOpen(true)}
+                  className={cn(
+                    "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
+                    isMoreActive ? "text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  <MoreHorizontal className="h-5 w-5 shrink-0" />
+                  <span className="truncate max-w-full">{t("more")}</span>
+                </button>
+              );
+            }
             const badge = badgeFor(item.key);
             return (
               <Link
@@ -437,6 +475,48 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           <Plus className="h-6 w-6" />
         </Button>
       )}
+
+      {/* More sheet — all overflow items */}
+      <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+        <SheetContent side="bottom" className="max-h-[70vh] rounded-t-xl pb-[env(safe-area-inset-bottom)]">
+          <SheetHeader>
+            <SheetTitle className="text-start">{t("more")}</SheetTitle>
+          </SheetHeader>
+          <nav className="mt-4 grid grid-cols-4 gap-1 pb-2">
+            {moreSheetItems.map((item) => {
+              const badge = badgeFor(item.key);
+              return (
+                <Link
+                  key={item.key}
+                  href={`${basePath}${item.href}`}
+                  onClick={() => setMoreOpen(false)}
+                  className={cn(
+                    "flex flex-col items-center gap-1.5 rounded-xl p-3 text-center text-[11px]",
+                    isActive(item.href)
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  <div className="relative">
+                    <item.icon className="h-6 w-6" />
+                    {badge && (
+                      <span
+                        className={cn(
+                          "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
+                          badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+                        )}
+                      >
+                        {badge.count > 99 ? "99+" : badge.count}
+                      </span>
+                    )}
+                  </div>
+                  <span className="leading-tight">{t(item.key as Parameters<typeof t>[0])}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </SheetContent>
+      </Sheet>
 
       <UpdateInput
         open={taskInputOpen}
