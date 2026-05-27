@@ -265,6 +265,7 @@
       "add_update": "Add note",
       "complete_task": "Mark complete",
       "dismiss_task": "Dismiss task",
+      "save_info": "Save info",
       "unknown": "Unclear"
     },
     "fields": {
@@ -276,7 +277,12 @@
       "subtasks": "Subtasks to add",
       "updateText": "Note text",
       "project": "Project",
-      "noProject": "No project"
+      "noProject": "No project",
+      "infoTitle": "Short title",
+      "infoBody": "Content",
+      "createNewProject": "+ Create new project...",
+      "newProjectName": "New project name",
+      "newSubprojectName": "Sub-project name (optional)"
     }
   },
   "suggestions": {
