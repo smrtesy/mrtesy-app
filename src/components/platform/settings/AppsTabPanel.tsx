@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2 } from "lucide-react";
+import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -113,6 +113,7 @@ function SmrtTaskSettings({ locale, pathname }: {
   pathname: string;
 }) {
   const t = useTranslations("settings");
+  const tNav = useTranslations("nav");
   const supabase = createClient();
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resyncLoading, setResyncLoading] = useState(false);
@@ -207,6 +208,12 @@ function SmrtTaskSettings({ locale, pathname }: {
             >
               <SlidersHorizontal className="h-4 w-4" />
               {t("classifierParameters")}
+            </Button>
+          </Link>
+          <Link href={`/${locale}/log`}>
+            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
+              <FileText className="h-4 w-4" />
+              {tNav("log")}
             </Button>
           </Link>
         </CardContent>
