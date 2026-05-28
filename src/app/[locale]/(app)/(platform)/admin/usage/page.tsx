@@ -20,7 +20,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 const PROVIDER_URL: Record<string, string> = {
-  anthropic: "https://console.anthropic.com/settings/billing",
+  anthropic: "https://platform.claude.com/workspaces/default/cost",
   google:    "https://aistudio.google.com/app/apikey",
   resemble:  "https://app.resemble.ai/billing",
   voyage:    "https://dash.voyageai.com/",
