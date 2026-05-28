@@ -83,6 +83,14 @@ function bodyForAI(msg: any): string {
   return String(msg.body_text ?? "");
 }
 
+// Returns the most recent business day (Mon–Fri) strictly before `date`.
+function prevBusinessDay(date: Date): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() - 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d;
+}
+
 function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
   const sender = (msg.sender_email || msg.sender || "").toLowerCase();
   // source_messages has no dedicated recipient column — Part1 stores the TO
@@ -114,10 +122,13 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (sourceType === "google_calendar" && msg.received_at) {
     const eventDate = new Date(msg.received_at);
     const now = new Date();
-    const pastCutoff   = new Date(now.getTime() - sys.calendar_past_days   * 86_400_000);
-    const futureCutoff = new Date(now.getTime() + sys.calendar_future_days * 86_400_000);
+    const pastCutoff = new Date(now.getTime() - sys.calendar_past_days * 86_400_000);
     if (eventDate < pastCutoff) return { result: "skip", skipReason: "past_calendar_event" };
-    if (eventDate > futureCutoff) return { result: "defer", skipReason: "future_calendar_event" };
+    // All calendar events are actionable. Process starting 1 business day before the event.
+    const processFrom = prevBusinessDay(eventDate);
+    processFrom.setHours(0, 0, 0, 0);
+    if (now < processFrom) return { result: "defer", skipReason: "future_calendar_event" };
+    return { result: "calendar_actionable" };
   }
 
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
@@ -828,27 +839,50 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const tkey = threadKey(msg);
   const memory = tkey ? await loadThreadMemory(msg.user_id, tkey) : null;
 
-  // ── Single AI call: classify + update summary + flag completion ───────────
+  // Calendar events within 1 business day are always actionable — skip Claude
+  // classification and go straight to task creation. Claude is still called for
+  // the task content itself.
+  const calendarForceActionable = !userForceActionable && preResult.result === "calendar_actionable";
+
   let analysis: ThreadAnalysis;
-  try {
-    analysis = await analyzeWithMemory(msg, memory, settings, sys);
-    classification = analysis.classification;
-    classificationReason = analysis.reason;
-    totalInputTokens += analysis.inputTokens;
-    totalOutputTokens += analysis.outputTokens;
-    totalCacheReadTokens += analysis.cacheReadTokens;
-    totalCacheWriteTokens += analysis.cacheWriteTokens;
-    aiModel = analysis.model;
-  } catch (e) {
-    const retryCount = (msg.retry_count || 0) + 1;
-    // After 3 failed AI attempts we give up gracefully — mark the message
-    // processed/informational (it won't be re-selected) and log the error.
-    // Do NOT set dead_letter: the message is handled, not stuck, and the
-    // failure is already recorded in log_entries. (A true dead_letter flag on
-    // an otherwise-"processed" row is what made the admin counts misleading.)
-    await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
-    await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
-    return;
+  if (calendarForceActionable) {
+    analysis = {
+      classification: "actionable",
+      reason: "אירוע יומן מתקרב — משימה נוצרה אוטומטית",
+      newSummary: "",
+      state: "open",
+      completionSignal: false,
+      completionReason: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      model: "",
+    };
+    classification = "actionable";
+    classificationReason = "calendar: 1 business day before event";
+  } else {
+    // ── Single AI call: classify + update summary + flag completion ───────────
+    try {
+      analysis = await analyzeWithMemory(msg, memory, settings, sys);
+      classification = analysis.classification;
+      classificationReason = analysis.reason;
+      totalInputTokens += analysis.inputTokens;
+      totalOutputTokens += analysis.outputTokens;
+      totalCacheReadTokens += analysis.cacheReadTokens;
+      totalCacheWriteTokens += analysis.cacheWriteTokens;
+      aiModel = analysis.model;
+    } catch (e) {
+      const retryCount = (msg.retry_count || 0) + 1;
+      // After 3 failed AI attempts we give up gracefully — mark the message
+      // processed/informational (it won't be re-selected) and log the error.
+      // Do NOT set dead_letter: the message is handled, not stuck, and the
+      // failure is already recorded in log_entries. (A true dead_letter flag on
+      // an otherwise-"processed" row is what made the admin counts misleading.)
+      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
+      return;
+    }
   }
 
   // customer_inquiry pre-classification forces actionable regardless of AI
@@ -897,49 +931,79 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
   if (!linkedTaskId && classification === "actionable") {
     try {
-      let projectContext: { projectId: string; brief: string } | undefined;
-      const projectMatch = await detectProject(msg, sys, msg.user_id);
-      if (projectMatch) {
-        totalInputTokens += projectMatch.inputTokens;
-        totalOutputTokens += projectMatch.outputTokens;
-        const brief = await getProjectBrief(projectMatch.projectId);
-        if (brief) projectContext = { projectId: projectMatch.projectId, brief };
-      }
-
-      const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext);
-      totalInputTokens += taskResult.inputTokens;
-      totalOutputTokens += taskResult.outputTokens;
-      totalCacheReadTokens += taskResult.cacheReadTokens;
-      totalCacheWriteTokens += taskResult.cacheWriteTokens;
-
-      if (taskResult.tasks.length === 0) {
-        classification = "informational";
-        classificationReason = "Sonnet returned no actionable tasks.";
-        aiModel = taskResult.model;
-      } else {
-        const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
-        if (firstReason) classificationReason = firstReason;
-        aiModel = taskResult.model;
-        let firstTaskId: string | null = null;
-        for (const task of taskResult.tasks) {
-          const { data: newTask } = await supabase.from("tasks").insert({
-            user_id: msg.user_id, source_message_id: msg.id,
-            title: task.title_he || msg.subject || "New task", title_he: task.title_he,
-            description: task.description, task_type: "action", priority: task.priority || "medium",
-            status: "inbox", manually_verified: false,
-            due_date: task.due_date,
-            project_id: taskResult.projectId,
-            ai_actions: task.ai_actions || [], related_contact: task.owner_contact,
-            related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
-            updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
-          }).select("id").single();
-          if (newTask) {
-            if (!firstTaskId) firstTaskId = newTask.id as string;
-            await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
-          }
+      // Calendar events: build the task directly from the event's own data.
+      // Calling Claude here would generate "לתאם" (to schedule) tasks even
+      // though the appointment already exists in the calendar.
+      if (calendarForceActionable) {
+        const eventDate = new Date(msg.received_at);
+        const dueDateStr = eventDate.toISOString().split("T")[0];
+        const eventTitle = msg.subject || "ארוע ביומן";
+        // Use raw ISO date — toLocaleString with IANA timezones is unreliable in Deno V8.
+        const description = `ארוע ביומן: ${eventTitle}`;
+        const { data: newTask } = await supabase.from("tasks").insert({
+          user_id: msg.user_id, source_message_id: msg.id,
+          title: eventTitle, title_he: eventTitle,
+          description, task_type: "action", priority: "medium",
+          status: "inbox", manually_verified: false,
+          due_date: dueDateStr,
+          ai_actions: [], ai_confidence: 1.0, ai_model_used: "calendar",
+          updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
+        }).select("id").single();
+        if (newTask) {
+          linkedTaskId = newTask.id as string;
+          classificationReason = "calendar event → direct task (no AI)";
+          await supabase.from("task_activities").insert({
+            user_id: msg.user_id, task_id: newTask.id,
+            activity_type: "created", new_value: "inbox",
+            note: `Created from google_calendar: ${eventTitle}`,
+            actor: "system",
+          });
         }
-        if (firstTaskId) linkedTaskId = firstTaskId;
-        if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+      } else {
+        let projectContext: { projectId: string; brief: string } | undefined;
+        const projectMatch = await detectProject(msg, sys, msg.user_id);
+        if (projectMatch) {
+          totalInputTokens += projectMatch.inputTokens;
+          totalOutputTokens += projectMatch.outputTokens;
+          const brief = await getProjectBrief(projectMatch.projectId);
+          if (brief) projectContext = { projectId: projectMatch.projectId, brief };
+        }
+
+        const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext);
+        totalInputTokens += taskResult.inputTokens;
+        totalOutputTokens += taskResult.outputTokens;
+        totalCacheReadTokens += taskResult.cacheReadTokens;
+        totalCacheWriteTokens += taskResult.cacheWriteTokens;
+
+        if (taskResult.tasks.length === 0) {
+          classification = "informational";
+          classificationReason = "Sonnet returned no actionable tasks.";
+          aiModel = taskResult.model;
+        } else {
+          const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
+          if (firstReason) classificationReason = firstReason;
+          aiModel = taskResult.model;
+          let firstTaskId: string | null = null;
+          for (const task of taskResult.tasks) {
+            const { data: newTask } = await supabase.from("tasks").insert({
+              user_id: msg.user_id, source_message_id: msg.id,
+              title: task.title_he || msg.subject || "New task", title_he: task.title_he,
+              description: task.description, task_type: "action", priority: task.priority || "medium",
+              status: "inbox", manually_verified: false,
+              due_date: task.due_date,
+              project_id: taskResult.projectId,
+              ai_actions: task.ai_actions || [], related_contact: task.owner_contact,
+              related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
+              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
+            }).select("id").single();
+            if (newTask) {
+              if (!firstTaskId) firstTaskId = newTask.id as string;
+              await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+            }
+          }
+          if (firstTaskId) linkedTaskId = firstTaskId;
+          if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+        }
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
