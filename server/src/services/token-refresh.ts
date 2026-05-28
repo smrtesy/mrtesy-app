@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { db } from "../db";
+import { notify } from "../lib/platform/notify";
 
 interface Credentials {
   id: string;
@@ -77,6 +78,13 @@ export async function getOAuthClient(userId: string, service: string) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/invalid_grant/i.test(msg)) {
         await db.from("user_credentials").delete().eq("id", c.id);
+        // Tell the user immediately. Without a notification, the only
+        // signal is the silent red "disconnected" badge buried in the
+        // Account page — easy to miss, and meanwhile every cron job
+        // depending on this credential keeps failing.
+        await notifyServiceDisconnected(userId, dbService).catch(() => {
+          /* notification is best-effort; never block the throw */
+        });
       }
       throw err;
     }
@@ -94,4 +102,32 @@ export async function getOAuthClient(userId: string, service: string) {
   }
 
   return oauth2Client;
+}
+
+const SERVICE_LABEL_HE: Record<string, string> = {
+  gmail:           "Gmail",
+  google_calendar: "Google Calendar",
+  google_drive:    "Google Drive",
+};
+
+async function notifyServiceDisconnected(userId: string, dbService: string) {
+  // Resolve the user's primary org. Mirrors the lookup used by the cron
+  // webhook in smrttask/routes/sync.ts.
+  const { data: membership } = await db
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!membership) return;
+
+  const label = SERVICE_LABEL_HE[dbService] ?? dbService;
+  await notify(membership.org_id as string, userId, {
+    app_slug: "smrttask",
+    type:     "action_required",
+    title:    `${label} התנתק`,
+    body:     `החיבור ל-${label} פג תוקף. לחץ כדי להתחבר מחדש — סנכרון לא ירוץ עד שתעשה את זה.`,
+    link:     "/account",
+  });
 }
