@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, X, Search, XCircle } from "lucide-react";
+import { CheckCircle2, X, Search, XCircle, Combine } from "lucide-react";
 
 interface SuggestionToolbarProps {
   total: number;
@@ -16,6 +16,10 @@ interface SuggestionToolbarProps {
   onBulkApprove?: () => void;
   onBulkDismissFast?: () => void;
   onBulkDismissWithReason?: () => void;
+  /** Open the MergeModal for the current selection. Same callback for both
+   *  use cases — the modal decides between new/existing target based on its
+   *  own tab. */
+  onBulkMerge?: () => void;
   /** When true, skip rendering the built-in search input — the caller is
    *  rendering its own search (e.g. the shared SmartSearch component). */
   hideSearch?: boolean;
@@ -32,6 +36,7 @@ export function SuggestionToolbar({
   onBulkApprove,
   onBulkDismissFast,
   onBulkDismissWithReason,
+  onBulkMerge,
   hideSearch,
 }: SuggestionToolbarProps) {
   const t = useTranslations("suggestions");
@@ -96,6 +101,17 @@ export function SuggestionToolbar({
             >
               <CheckCircle2 className="h-4 w-4" />
               {t("bulkApprove")}
+            </Button>
+          )}
+          {onBulkMerge && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-9 gap-1"
+              onClick={onBulkMerge}
+            >
+              <Combine className="h-4 w-4" />
+              {selectedCount === 1 ? t("mergeIntoExisting") : t("mergeIntoNew")}
             </Button>
           )}
           {onBulkDismissFast && (
