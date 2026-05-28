@@ -62,7 +62,8 @@ function clauseToGmailQuery(c: Clause): string {
     case "sender":
       return `from:${c.value}`;
     case "to":
-      return `to:${c.value}`;
+      // `deliveredto:` matches TO, CC, and BCC — `to:` misses BCC recipients.
+      return `deliveredto:${c.value}`;
     case "domain":
       // Domain excludes mail to OR from. For composite (AND) rules with a
       // domain clause we still use from: because the AND semantics make

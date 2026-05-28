@@ -136,6 +136,17 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     return { result: "drive_actionable" };
   }
 
+  // Google Workspace storage warnings (workspace-noreply@google.com).
+  // Google sends these at ~81%, ~90%, and 100%. Only surface a task at ≥ 95%.
+  if (sender === "workspace-noreply@google.com" && (msg.subject || "").toLowerCase().includes("storage")) {
+    const bodyText = (msg.body_text || "").toLowerCase();
+    const pctMatch = bodyText.match(/currently using (\d+)%/);
+    const pct = pctMatch ? parseInt(pctMatch[1], 10) : 0;
+    if (pct < 95) {
+      return { result: "skip", skipReason: `google_workspace_storage_${pct}pct_below_threshold` };
+    }
+  }
+
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
