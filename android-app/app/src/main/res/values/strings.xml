@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">smrtesy</string>
+    <string name="error_no_connection">אין חיבור לאינטרנט</string>
+    <string name="error_open_link">לא ניתן לפתוח קישור זה</string>
+    <string name="channel_main_name">התראות כלליות</string>
+    <string name="channel_main_desc">התראות מהמערכת</string>
+    <string name="channel_tasks_name">משימות</string>
+    <string name="channel_tasks_desc">התראות על משימות ועדכונים</string>
+</resources>
