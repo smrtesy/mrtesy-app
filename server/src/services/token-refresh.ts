@@ -75,22 +75,30 @@ export async function getOAuthClient(userId: string, service: string) {
       // blips, Google 5xx, scope mismatches) leave the row intact and
       // the UI silently shows "disconnected" with no breadcrumb.
       const msg = err instanceof Error ? err.message : String(err);
-      const isInvalidGrant = /invalid_grant/i.test(msg);
+      // Treat any "the token is permanently dead" signal from Google
+      // the same way: nuke the credential row + tell the user.
+      //   • invalid_grant  — refresh_token was revoked / expired / unused too long
+      //   • invalid_client — refresh_token is bound to a different
+      //                      GOOGLE_CLIENT_ID/SECRET than we have now (typical
+      //                      after rotating OAuth credentials in Google Cloud —
+      //                      the token was issued by the old client and Google
+      //                      refuses to refresh it under the new one).
+      // Both states are permanent: only a fresh OAuth grant fixes them.
+      const isDeadToken = /invalid_grant/i.test(msg) || /invalid_client/i.test(msg);
       try {
         await db.from("log_entries").insert({
           user_id: userId,
-          level: isInvalidGrant ? "error" : "warning",
+          level: isDeadToken ? "error" : "warning",
           category: "token_refresh",
           status: "failed",
           error_message: `${dbService}: ${msg}`.slice(0, 1000),
         });
       } catch { /* logging is best-effort */ }
 
-      if (isInvalidGrant) {
-        // `invalid_grant` is Google's permanent error — refresh_token was
-        // revoked. Wipe the credential row so the connection indicator
-        // flips to "disconnected" instead of staying green forever, and
-        // notify the user so they actually know to reconnect.
+      if (isDeadToken) {
+        // Wipe the credential row so the connection indicator flips to
+        // "disconnected" instead of staying green forever, and notify
+        // the user so they actually know to reconnect.
         await db.from("user_credentials").delete().eq("id", c.id);
         await notifyServiceDisconnected(userId, dbService).catch(() => {
           /* notification is best-effort; never block the throw */
