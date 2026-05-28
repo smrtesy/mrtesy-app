@@ -309,9 +309,9 @@
   "suggestions": {
     "title": "Task Suggestions",
     "tabs": {
-      "messages": "From Messages",
+      "messages": "New",
       "scheduled": "Scheduled",
-      "projects": "Projects",
+      "projects": "Project",
       "dismissed": "Dismissed"
     },
     "approve": "Approve",
