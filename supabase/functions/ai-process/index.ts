@@ -131,6 +131,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     return { result: "calendar_actionable" };
   }
 
+  // Drive documents are never spam — always actionable regardless of content.
+  if (sourceType === "google_drive") {
+    return { result: "drive_actionable" };
+  }
+
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
@@ -843,6 +848,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // classification and go straight to task creation. Claude is still called for
   // the task content itself.
   const calendarForceActionable = !userForceActionable && preResult.result === "calendar_actionable";
+  // Drive documents are never spam — skip Claude classification, but still
+  // call createTasksFromMessage so Claude reads the document and builds a task.
+  const driveForceActionable = !userForceActionable && preResult.result === "drive_actionable";
 
   let analysis: ThreadAnalysis;
   if (calendarForceActionable) {
@@ -861,6 +869,22 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     };
     classification = "actionable";
     classificationReason = "calendar: 1 business day before event";
+  } else if (driveForceActionable) {
+    analysis = {
+      classification: "actionable",
+      reason: "מסמך Drive — הצעה תיבנה מתוכן המסמך",
+      newSummary: "",
+      state: "open",
+      completionSignal: false,
+      completionReason: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      model: "",
+    };
+    classification = "actionable";
+    classificationReason = "drive: forced actionable";
   } else {
     // ── Single AI call: classify + update summary + flag completion ───────────
     try {
@@ -976,9 +1000,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         totalCacheWriteTokens += taskResult.cacheWriteTokens;
 
         if (taskResult.tasks.length === 0) {
-          classification = "informational";
-          classificationReason = "Sonnet returned no actionable tasks.";
-          aiModel = taskResult.model;
+          if (driveForceActionable) {
+            // Drive documents must always produce a task — fall back to a generic
+            // "review this document" task rather than downgrading to informational.
+            const docTitle = msg.subject || "מסמך Drive";
+            const fallbackDesc = `לעיין במסמך: ${docTitle}`;
+            const { data: newTask } = await supabase.from("tasks").insert({
+              user_id: msg.user_id, source_message_id: msg.id,
+              title: docTitle, title_he: docTitle,
+              description: fallbackDesc, task_type: "action", priority: "medium",
+              status: "inbox", manually_verified: false,
+              ai_actions: [], ai_confidence: 0.6, ai_model_used: taskResult.model || "drive_fallback",
+              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: fallbackDesc }],
+            }).select("id").single();
+            if (newTask) linkedTaskId = newTask.id as string;
+            classificationReason = "drive: fallback task (Sonnet returned no tasks)";
+            aiModel = taskResult.model;
+          } else {
+            classification = "informational";
+            classificationReason = "Sonnet returned no actionable tasks.";
+            aiModel = taskResult.model;
+          }
         } else {
           const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
           if (firstReason) classificationReason = firstReason;
