@@ -46,6 +46,8 @@ export default function SettingsPage() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resyncLoading, setResyncLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const [driveSyncDays, setDriveSyncDays] = useState(30);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -85,6 +87,8 @@ export default function SettingsPage() {
         calendar: serviceTypes.includes("google_calendar"),
         whatsapp: data?.whatsapp_connected ?? false,
       });
+      setDriveSyncDays(data?.drive_sync_days ?? 30);
+      setCurrentUserId(user.id);
 
       // Check admin
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
@@ -238,48 +242,73 @@ export default function SettingsPage() {
               {connections.map((conn) => {
                 const connected = connStatus[conn.key];
                 return (
-                  <div key={conn.key} className="flex items-center justify-between gap-2 min-w-0">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <conn.icon className={`h-5 w-5 shrink-0 ${conn.color}`} />
-                      <span className="text-sm font-medium truncate">{conn.label}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {connected ? (
-                        <Badge variant="default" className="gap-1 bg-green-500">
-                          <CheckCircle2 className="h-3 w-3" />
-                          {t("connected")}
-                        </Badge>
-                      ) : (
-                        <>
-                          <Badge variant="secondary" className="gap-1">
-                            <XCircle className="h-3 w-3" />
-                            {t("disconnected")}
+                  <div key={conn.key}>
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <conn.icon className={`h-5 w-5 shrink-0 ${conn.color}`} />
+                        <span className="text-sm font-medium truncate">{conn.label}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {connected ? (
+                          <Badge variant="default" className="gap-1 bg-green-500">
+                            <CheckCircle2 className="h-3 w-3" />
+                            {t("connected")}
                           </Badge>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1"
-                            onClick={() => {
-                              const serviceMap: Record<string, string> = {
-                                gmail: "gmail_calendar",
-                                drive: "drive",
-                                calendar: "gmail_calendar",
-                                whatsapp: "",
-                              };
-                              const svc = serviceMap[conn.key];
-                              if (conn.key === "whatsapp") {
-                                window.location.href = `/${locale}/onboarding/whatsapp?redirect=settings`;
-                              } else if (svc) {
-                                window.location.href = `/api/auth/google?service=${svc}&redirect=settings`;
-                              }
-                            }}
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            {t("reconnect")}
-                          </Button>
-                        </>
-                      )}
+                        ) : (
+                          <>
+                            <Badge variant="secondary" className="gap-1">
+                              <XCircle className="h-3 w-3" />
+                              {t("disconnected")}
+                            </Badge>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1"
+                              onClick={() => {
+                                const serviceMap: Record<string, string> = {
+                                  gmail: "gmail_calendar",
+                                  drive: "drive",
+                                  calendar: "gmail_calendar",
+                                  whatsapp: "",
+                                };
+                                const svc = serviceMap[conn.key];
+                                if (conn.key === "whatsapp") {
+                                  window.location.href = `/${locale}/onboarding/whatsapp?redirect=settings`;
+                                } else if (svc) {
+                                  window.location.href = `/api/auth/google?service=${svc}&redirect=settings`;
+                                }
+                              }}
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              {t("reconnect")}
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </div>
+                    {conn.key === "drive" && connected && (
+                      <div className="flex items-center justify-between mt-2 ps-8">
+                        <span className="text-xs text-muted-foreground">{t("driveScanDepth")}</span>
+                        <select
+                          value={driveSyncDays}
+                          onChange={async (e) => {
+                            const days = Number(e.target.value);
+                            setDriveSyncDays(days);
+                            if (currentUserId) {
+                              await supabase
+                                .from("user_settings")
+                                .update({ drive_sync_days: days })
+                                .eq("user_id", currentUserId);
+                            }
+                          }}
+                          className="text-xs border rounded px-2 py-1 bg-background"
+                        >
+                          {[7, 14, 30, 60, 90, 180].map((d) => (
+                            <option key={d} value={d}>{t("driveScanDays", { days: d })}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 );
               })}

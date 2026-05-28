@@ -461,7 +461,9 @@
     "deployBackend": "Backend",
     "deployBootedAgo": "running for {when}",
     "deployUpdatedAt": "Updated: {when}",
-    "deployUnreachable": "unreachable"
+    "deployUnreachable": "unreachable",
+    "driveScanDepth": "Scan depth",
+    "driveScanDays": "{days} days"
   },
   "settingsParameters": {
     "title": "smrtTask Parameters",
