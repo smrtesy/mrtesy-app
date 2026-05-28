@@ -183,6 +183,19 @@ All product names follow the pattern **`smrt` + English word**:
 
 ## Project conventions worth remembering
 
+- **Edge function imports — NEVER use `https://esm.sh/...`**. The
+  `Deploy to Supabase` GitHub Action (`.github/workflows/*.yml`) bundles
+  every function on each push to `main` by hitting esm.sh, which
+  intermittently returns HTTP 522 (Cloudflare Tunnel down) and breaks the
+  whole deploy with `Error: failed to create the graph` /
+  `Import 'https://esm.sh/...' failed: 522`. Use the Deno-native
+  specifiers Supabase Edge Runtime supports directly instead:
+  - Supabase client → `import { createClient } from "npm:@supabase/supabase-js@2";`
+  - Type-only edge runtime decl → `import "jsr:@supabase/functions-js/edge-runtime.d.ts";`
+  - Anthropic SDK / Google APIs → `npm:@anthropic-ai/sdk`, `npm:googleapis`, etc.
+  This bug has now bitten us twice; if you ever see `Error: failed to create
+  the graph ... Import 'https://esm.sh/... failed: 522`, the fix is a
+  one-line `sed` across `supabase/functions/*/index.ts`.
 - **i18n**: every user-visible string goes through `useTranslations()` /
   `getTranslations()` and resolves to a key in `src/messages/{he,en}.json`.
   Never write `locale === "he" ? "..." : "..."` ternaries. If a key is

@@ -161,9 +161,13 @@ export async function GET(request: Request) {
       })
       .eq("user_id", user.id);
 
-    // If reconnecting from Settings, go back to Settings
+    // If reconnecting from Settings/Account, return there instead of
+    // restarting the onboarding flow.
     if (redirectTo === "settings") {
       return NextResponse.redirect(`${origin}/${locale}/settings`);
+    }
+    if (redirectTo === "account") {
+      return NextResponse.redirect(`${origin}/${locale}/account`);
     }
     return NextResponse.redirect(`${origin}/${locale}/onboarding/drive`);
   }
@@ -193,6 +197,9 @@ export async function GET(request: Request) {
 
     if (redirectTo === "settings") {
       return NextResponse.redirect(`${origin}/${locale}/settings`);
+    }
+    if (redirectTo === "account") {
+      return NextResponse.redirect(`${origin}/${locale}/account`);
     }
     return NextResponse.redirect(
       `${origin}/${locale}/onboarding/whatsapp`

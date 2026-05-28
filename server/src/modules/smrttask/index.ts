@@ -6,6 +6,7 @@
 
 import { Router } from "express";
 import tasksRouter from "./tasks/routes";
+import tasksMergeRouter from "./tasks/merge";
 import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
 import actionsRouter from "./routes/actions";
@@ -29,6 +30,7 @@ const router = Router();
 router.use(whatsappWebhookRouter);
 
 router.use(tasksRouter);
+router.use(tasksMergeRouter);
 router.use(routerRouter);
 router.use(transcriptionExperimentRouter);
 router.use(projectsRouter);

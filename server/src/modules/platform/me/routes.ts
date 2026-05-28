@@ -269,17 +269,29 @@ router.get("/me/credentials/health", requireAuth, async (req: Request, res: Resp
 
   if (!creds || creds.length === 0) return res.json({ services: [] });
 
-  const results = await Promise.allSettled(
-    creds.map(async (c) => {
-      await getOAuthClient(userId, c.service as string);
-      return c.service as string;
-    }),
+  // gmail + google_calendar share a single OAuth grant (issued together in
+  // the gmail_calendar callback). Probing the calendar row separately
+  // doubled the parallel refresh work for the same grant and made the
+  // calendar status drift (its row's access_token was never refreshed by
+  // any other code path, so the periodic singleton-race made it flip to
+  // "disconnected" for no real reason). Probe the gmail row only; if it
+  // succeeds, mark BOTH gmail AND google_calendar as connected. Other
+  // services (google_drive, etc.) are probed independently.
+  const services = new Set<string>();
+  await Promise.all(
+    creds
+      .filter((c) => c.service !== "google_calendar")
+      .map(async (c) => {
+        const svc = c.service as string;
+        try {
+          await getOAuthClient(userId, svc);
+          services.add(svc);
+          if (svc === "gmail") services.add("google_calendar");
+        } catch { /* getOAuthClient already logged + (maybe) notified */ }
+      }),
   );
-  const services = results
-    .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
-    .map((r) => r.value);
 
-  return res.json({ services });
+  return res.json({ services: Array.from(services) });
 });
 
 export default router;

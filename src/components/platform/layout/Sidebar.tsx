@@ -228,14 +228,12 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
         <PanelRightOpen className="h-4 w-4" />
       </button>
 
-      {/* Mobile top bar — avatar on top-right. The sidebar above is hidden on
-          mobile, so we expose the account entry point here. */}
-      <header className="md:hidden sticky top-0 z-40 flex items-center justify-between h-14 px-3 border-b bg-background/95 backdrop-blur">
-        <Link href={basePath} className="text-lg font-bold text-[#1E4D8C]">
-          smrtesy
-        </Link>
+      {/* Floating account avatar on mobile — sits in the top-end corner of
+          the viewport and overlays the page area without consuming a
+          dedicated header row. */}
+      <div className="md:hidden fixed top-2 end-2 z-40">
         <UserAvatarLink size="sm" />
-      </header>
+      </div>
 
       {/* Desktop Sidebar */}
       <aside data-sidebar className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
