@@ -309,10 +309,10 @@
   "suggestions": {
     "title": "הצעות משימות",
     "tabs": {
-      "messages": "מהודעות",
-      "scheduled": "מתוזמנות",
-      "projects": "פרויקטים",
-      "dismissed": "נדחו"
+      "messages": "חדש",
+      "scheduled": "מתוזמן",
+      "projects": "פרויקט",
+      "dismissed": "נדחה"
     },
     "approve": "אשר",
     "dismiss": "דחה",
