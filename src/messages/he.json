@@ -476,7 +476,9 @@
     "deployBackend": "Backend",
     "deployBootedAgo": "התחיל לרוץ לפני {when}",
     "deployUpdatedAt": "עודכן: {when}",
-    "deployUnreachable": "לא זמין"
+    "deployUnreachable": "לא זמין",
+    "driveScanDepth": "סריקה אחורה",
+    "driveScanDays": "{days} ימים"
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",
