@@ -44,6 +44,21 @@
     "sectionVoice": "smrtVoice",
     "more": "עוד"
   },
+  "account": {
+    "title": "ניהול חשבון",
+    "identity": "פרטים אישיים",
+    "name": "שם",
+    "email": "אימייל",
+    "organization": "ארגון"
+  },
+  "settingsTabs": {
+    "apps": "אפליקציות",
+    "org": "ארגון",
+    "platform": "פלטפורמה",
+    "noAppsEnabled": "אין אפליקציות מאופשרות בארגון הזה",
+    "openPlatformAdmin": "פתח פאנל ניהול-על",
+    "platformDescription": "ניהול ברמת המערכת — משתמשים, ארגונים, אפליקציות, לוגים ושימוש."
+  },
   "whatsappPage": {
     "title": "הודעות WhatsApp",
     "threadCount": "{count, plural, one {שיחה אחת} other {# שיחות}}",
@@ -461,7 +476,9 @@
     "deployBackend": "Backend",
     "deployBootedAgo": "התחיל לרוץ לפני {when}",
     "deployUpdatedAt": "עודכן: {when}",
-    "deployUnreachable": "לא זמין"
+    "deployUnreachable": "לא זמין",
+    "driveScanDepth": "סריקה אחורה",
+    "driveScanDays": "{days} ימים"
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",

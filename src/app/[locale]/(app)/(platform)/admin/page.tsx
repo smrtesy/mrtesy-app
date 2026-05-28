@@ -6,6 +6,7 @@ import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DeployInfoCard } from "@/components/platform/settings/DeployInfoCard";
 import {
   Users, Building2, Layers, Crown, FileText, DollarSign, BookOpen,
 } from "lucide-react";
@@ -140,6 +141,8 @@ export default async function AdminDashboard({
           </Link>
         ))}
       </div>
+
+      <DeployInfoCard />
     </div>
   );
 }

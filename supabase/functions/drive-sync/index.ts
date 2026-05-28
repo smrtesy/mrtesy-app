@@ -124,7 +124,7 @@ async function fetchFileContent(token: string, fileId: string, mimeType: string)
 async function syncUserDrive(userId: string) {
   const { data: settings } = await supabase
     .from("user_settings")
-    .select("drive_folder_id")
+    .select("drive_folder_id, drive_sync_days")
     .eq("user_id", userId)
     .single();
 
@@ -143,23 +143,32 @@ async function syncUserDrive(userId: string) {
   try {
     token = await refreshGoogleToken(userId, "google_drive");
   } catch (e) {
-    return { error: (e as Error).message };
+    const errMsg = (e as Error).message;
+    await supabase.from("sync_state").upsert(
+      {
+        user_id: userId,
+        source: "google_drive",
+        last_error: errMsg,
+        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+      },
+      { onConflict: "user_id,source" }
+    );
+    return { error: errMsg };
   }
 
   const folderId = settings?.drive_folder_id;
   const pageToken = syncState?.checkpoint;
+  const syncDays: number = settings?.drive_sync_days ?? 30;
+  const cutoff = new Date(Date.now() - syncDays * 86_400_000).toISOString();
 
   // List changes or files in folder
   let url: string;
   if (pageToken) {
     url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink)),newStartPageToken,nextPageToken`;
   } else if (folderId) {
-    url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=100`;
+    url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=100`;
   } else {
-    // Default: recent files modified in the last 3 months
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    url = `https://www.googleapis.com/drive/v3/files?q=trashed=false+and+modifiedTime>'${threeMonthsAgo.toISOString()}'&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=50`;
+    url = `https://www.googleapis.com/drive/v3/files?q=trashed=false+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=50`;
   }
 
   const resp = await fetch(url, {
@@ -168,6 +177,18 @@ async function syncUserDrive(userId: string) {
 
   if (!resp.ok) {
     const errText = await resp.text();
+    // 400 on pageToken = stale token after re-auth. Self-heal: clear checkpoint
+    // so the next run fetches fresh instead of looping on the same 400 forever.
+    if (resp.status === 400 && pageToken) {
+      await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "google_drive",
+        checkpoint: null,
+        last_error: null,
+        consecutive_failures: 0,
+      }, { onConflict: "user_id,source" });
+      return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+    }
     await supabase.from("sync_state").upsert({
       user_id: userId,
       source: "google_drive",
