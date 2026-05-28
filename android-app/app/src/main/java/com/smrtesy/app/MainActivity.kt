@@ -231,7 +231,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onReceivedHttpError(
-            view: WebView, request: WebResourceRequest, response: HttpErrorResponse
+            view: WebView, request: WebResourceRequest, response: WebResourceResponse
         ) {
             if (request.isForMainFrame) {
                 logDebug("[HTTP ERROR] ${response.statusCode} url=${request.url}")
