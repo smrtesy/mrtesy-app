@@ -143,7 +143,17 @@ async function syncUserDrive(userId: string) {
   try {
     token = await refreshGoogleToken(userId, "google_drive");
   } catch (e) {
-    return { error: (e as Error).message };
+    const errMsg = (e as Error).message;
+    await supabase.from("sync_state").upsert(
+      {
+        user_id: userId,
+        source: "google_drive",
+        last_error: errMsg,
+        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+      },
+      { onConflict: "user_id,source" }
+    );
+    return { error: errMsg };
   }
 
   const folderId = settings?.drive_folder_id;

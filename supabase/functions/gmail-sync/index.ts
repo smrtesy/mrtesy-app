@@ -202,7 +202,17 @@ async function syncUserGmail(userId: string) {
   try {
     token = await refreshGoogleToken(userId);
   } catch (e) {
-    return { error: (e as Error).message };
+    const errMsg = (e as Error).message;
+    await supabase.from("sync_state").upsert(
+      {
+        user_id: userId,
+        source: "gmail",
+        last_error: errMsg,
+        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+      },
+      { onConflict: "user_id,source" }
+    );
+    return { error: errMsg };
   }
 
   const skipFilter = await loadSkipRules(userId);
