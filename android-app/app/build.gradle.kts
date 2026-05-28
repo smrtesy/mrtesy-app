@@ -18,8 +18,7 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // no suffix — keeps package name com.smrtesy.app so google-services.json matches
         }
         release {
             isMinifyEnabled = true
