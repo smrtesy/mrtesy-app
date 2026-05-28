@@ -1,11 +1,6 @@
 import { google } from "googleapis";
 import { db } from "../db";
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-);
-
 interface Credentials {
   id: string;
   user_id: string;
@@ -46,6 +41,19 @@ export async function getOAuthClient(userId: string, service: string) {
   }
 
   const c = cred as Credentials;
+
+  // A fresh OAuth2 client per call. A module-level singleton would be
+  // shared across concurrent requests (different users AND different
+  // services for the same user), and `setCredentials` would race —
+  // service B's tokens could overwrite service A's mid-refresh, Google
+  // would reject the inconsistent request with `invalid_grant`, and the
+  // catch below would DELETE a perfectly valid credential row. That race
+  // is exactly how calendar/drive/gmail mysteriously "disconnect" while
+  // their refresh_tokens are still good.
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+  );
 
   oauth2Client.setCredentials({
     access_token: c.access_token,
