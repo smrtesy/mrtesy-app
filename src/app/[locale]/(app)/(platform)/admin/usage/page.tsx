@@ -16,6 +16,14 @@ const PROVIDER_LABEL: Record<string, string> = {
   anthropic: "Anthropic (Claude)",
   google: "Google (Gemini)",
   resemble: "Resemble (TTS)",
+  voyage: "Voyage AI (Embeddings)",
+};
+
+const PROVIDER_URL: Record<string, string> = {
+  anthropic: "https://console.anthropic.com/settings/billing",
+  google:    "https://aistudio.google.com/app/apikey",
+  resemble:  "https://app.resemble.ai/billing",
+  voyage:    "https://dash.voyageai.com/",
 };
 
 function usd(n: number): string {
@@ -143,19 +151,34 @@ export default async function AdminUsagePage({
             <p className="text-xs text-muted-foreground">{rows.length} calls</p>
           </CardContent>
         </Card>
-        {providerRows.map(([provider, agg]) => (
-          <Card key={provider}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {PROVIDER_LABEL[provider] ?? provider}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{usd(agg.cost)}</div>
-              <p className="text-xs text-muted-foreground">{agg.calls} calls</p>
-            </CardContent>
-          </Card>
-        ))}
+        {providerRows.map(([provider, agg]) => {
+          const providerUrl = PROVIDER_URL[provider];
+          const label = PROVIDER_LABEL[provider] ?? provider;
+          return (
+            <Card key={provider}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  {providerUrl ? (
+                    <a
+                      href={providerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline hover:text-foreground transition-colors"
+                    >
+                      {label}
+                    </a>
+                  ) : (
+                    label
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{usd(agg.cost)}</div>
+                <p className="text-xs text-muted-foreground">{agg.calls} calls</p>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
 
       {/* Per-component breakdown */}

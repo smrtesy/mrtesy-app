@@ -1110,8 +1110,45 @@ interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
   finishReason?: string;
 }
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+}
 interface GeminiResponse {
   candidates?: GeminiCandidate[];
+  usageMetadata?: GeminiUsageMetadata;
+}
+
+const GEMINI_PRICING: Record<string, { audioInput: number; imageInput: number; textInput: number; output: number }> = {
+  "gemini-2.5-flash":       { textInput: 0.30, audioInput: 1.00, imageInput: 0.30, output: 2.50 },
+  "gemini-2.5-pro":         { textInput: 1.25, audioInput: 1.25, imageInput: 1.25, output: 10.0 },
+  "gemini-3-flash-preview": { textInput: 0.50, audioInput: 1.00, imageInput: 0.50, output: 3.00 },
+  "gemini-3-pro-preview":   { textInput: 1.50, audioInput: 2.50, imageInput: 1.50, output: 12.0 },
+};
+
+function estimateGeminiCostLocal(model: string, usage: GeminiUsageMetadata | undefined): number {
+  if (!usage) return 0;
+  const p = GEMINI_PRICING[model];
+  if (!p) return 0;
+  let audioTok = 0, imageTok = 0, textTok = 0;
+  if (Array.isArray(usage.promptTokensDetails)) {
+    for (const d of usage.promptTokensDetails) {
+      const n = d.tokenCount ?? 0;
+      const m = (d.modality ?? "").toUpperCase();
+      if (m === "AUDIO") audioTok += n;
+      else if (m === "IMAGE" || m === "VIDEO") imageTok += n;
+      else textTok += n;
+    }
+  } else {
+    textTok = usage.promptTokenCount ?? 0;
+  }
+  const outTok = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
+  return (audioTok / 1_000_000) * p.audioInput +
+    (imageTok / 1_000_000) * p.imageInput +
+    (textTok  / 1_000_000) * p.textInput +
+    (outTok   / 1_000_000) * p.output;
 }
 
 async function callGemini(
@@ -1166,6 +1203,20 @@ async function callGemini(
   }
 
   const data = (await res.json()) as GeminiResponse;
+
+  // Log usage to ai_usage ledger (best-effort).
+  try {
+    const usage = data.usageMetadata;
+    await db.from("ai_usage").insert({
+      provider: "google",
+      component: "gemini.whatsapp",
+      model,
+      input_tokens: usage?.promptTokenCount ?? 0,
+      output_tokens: usage?.candidatesTokenCount ?? 0,
+      cost_usd: estimateGeminiCostLocal(model, usage),
+    });
+  } catch { /* never block the caller */ }
+
   const candidate = data.candidates?.[0];
   if (!candidate) return "[Gemini: אין תגובה]";
   if (candidate.finishReason === "SAFETY") return '[Gemini: תוכן נחסם ע"י מסנני בטיחות]';
