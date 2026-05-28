@@ -111,6 +111,22 @@ available — and propose:
      keep its title as the spine.
   2. A coherent description that synthesizes the content (NOT a concatenation
      with separators — write fresh prose).
+
+     CRITICAL URL RULE — applies everywhere in the description AND in
+     every checklist item:
+     - When a source contains a SPECIFIC URL (a deep link to a particular
+       product page, document, mail thread, listing, dashboard, etc.),
+       PRESERVE THE EXACT URL VERBATIM. Never shorten it, paraphrase it,
+       or replace it with the bare domain.
+     - Wrong: "בדוק ב-everythingbranded.com"  (domain only — useless)
+     - Right: "בדוק ב-https://everythingbranded.com/products/crayons?ref=foo"
+     - The whole point of the system is to save the user clicks — if the
+       original message linked directly to a specific page, the merged
+       task must link to that same page so the user lands where they
+       need to be in one click. If multiple links exist for a single
+       checklist item, list them all on the item.
+     - Same applies to PDF anchors, Drive document IDs, Gmail message
+       URLs, calendar event links — preserve the original deep link.
   3. A checklist (suggested_checklist) that breaks the merged work into
      ATOMIC next-actions — the smaller and more concrete, the better.
 

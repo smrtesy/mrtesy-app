@@ -181,6 +181,28 @@ All product names follow the pattern **`smrt` + English word**:
 - The platform itself is **smrtesy** (the name, not subject to this rule)
 - App slugs in the DB follow the same pattern (lowercase): `smrttask`, `smrtcrm`
 
+## Product principles — apply across the whole system
+
+- **Preserve deep links — never strip a URL down to its domain**.
+  The user's instruction (May 2026): "the whole point of this system is
+  to be as efficient as possible — instead of giving me a general link
+  to the main domain of the site, give me the original link I sent that
+  leads directly to where I want to go." This is system-wide, not a
+  merge-only rule. Whenever any AI-generated content (task descriptions,
+  checklist items, summaries, suggestion bodies, reminders, etc.)
+  references something the user linked to, **emit the exact deep URL
+  verbatim** — including query params, fragments, message IDs, doc IDs.
+  Never paraphrase `https://site.com/products/foo?ref=bar` down to
+  `site.com`. If a checklist item maps to multiple links, list them
+  all on the item. Same applies to Gmail message URLs, Drive doc IDs,
+  Calendar event links, WhatsApp message links. **One click should
+  always land the user on the right page**, not the homepage.
+
+  Where to enforce: every Sonnet/Haiku system prompt that produces
+  user-facing text. When you write a new AI prompt, add an explicit
+  "preserve URLs verbatim" clause. When you review an existing one
+  that doesn't have it, add it.
+
 ## Project conventions worth remembering
 
 - **Edge function imports — NEVER use `https://esm.sh/...`**. The
