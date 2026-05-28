@@ -186,11 +186,11 @@ async function syncUserDrive(userId: string) {
   // List changes or files in folder
   let url: string;
   if (pageToken) {
-    url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink)),newStartPageToken,nextPageToken`;
+    url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink,parents)),newStartPageToken,nextPageToken`;
   } else if (folderId) {
-    url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=100`;
+    url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken&orderBy=modifiedTime+desc&pageSize=100`;
   } else {
-    url = `https://www.googleapis.com/drive/v3/files?q=trashed=false+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken&orderBy=modifiedTime+desc&pageSize=50`;
+    url = `https://www.googleapis.com/drive/v3/files?q=trashed=false+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken&orderBy=modifiedTime+desc&pageSize=50`;
   }
 
   const resp = await fetch(url, {
@@ -221,9 +221,20 @@ async function syncUserDrive(userId: string) {
   }
 
   const data = await resp.json();
-  const files = pageToken
+  let files: any[] = pageToken
     ? (data.changes || []).map((c: any) => c.file).filter(Boolean)
     : data.files || [];
+
+  // Drive's /changes API is account-wide and can't be scoped server-side to
+  // a folder. Enforce the user-picked folder client-side so incremental
+  // syncs don't ingest files outside it. Matches the semantics of the
+  // initial /files query (`<folderId>' in parents`) — direct children only,
+  // no recursive descent through sub-folders.
+  if (folderId) {
+    files = files.filter(
+      (f) => Array.isArray(f.parents) && f.parents.includes(folderId),
+    );
+  }
 
   let synced = 0;
   for (const file of files) {

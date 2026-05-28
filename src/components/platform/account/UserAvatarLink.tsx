@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { User } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -12,14 +13,14 @@ interface Props {
 }
 
 /**
- * Round avatar derived from the user's Google profile. Falls back to the
- * first letter of the email when no picture is available (or while the
- * image is loading and might fail). Click target is /account.
+ * Round avatar derived from the user's Google profile. Falls back through
+ *  picture URL → first letter of name/email → generic user icon.
+ * Click target is /account.
  */
 export function UserAvatarLink({ className, size = "md" }: Props) {
   const { locale } = useParams() as { locale: string };
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [initial, setInitial] = useState<string>("?");
+  const [initial, setInitial] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
   const supabase = createClient();
 
@@ -38,13 +39,17 @@ export function UserAvatarLink({ className, size = "md" }: Props) {
         (typeof md.full_name === "string" && md.full_name) ||
         (typeof md.name === "string" && md.name) ||
         user.email ||
-        "?";
-      setInitial(source.trim().charAt(0).toUpperCase() || "?");
+        "";
+      const firstChar = source.trim().charAt(0).toUpperCase();
+      setInitial(firstChar || null);
     })();
     return () => { cancelled = true; };
   }, [supabase]);
 
   const dim = size === "sm" ? "h-7 w-7 text-[11px]" : "h-9 w-9 text-sm";
+
+  const showImage = avatarUrl && !imgFailed;
+  const showInitial = !showImage && initial;
 
   return (
     <Link
@@ -56,19 +61,21 @@ export function UserAvatarLink({ className, size = "md" }: Props) {
         className,
       )}
     >
-      {avatarUrl && !imgFailed ? (
-        // Use a plain img to skip next/image domain config and keep the
-        // header lightweight; the avatar is small and rarely changes.
+      {showImage ? (
+        // Plain img to skip next/image domain config; the avatar is small
+        // and rarely changes.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={avatarUrl}
+          src={avatarUrl!}
           alt=""
           referrerPolicy="no-referrer"
           className="h-full w-full object-cover"
           onError={() => setImgFailed(true)}
         />
-      ) : (
+      ) : showInitial ? (
         <span>{initial}</span>
+      ) : (
+        <User className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} />
       )}
     </Link>
   );

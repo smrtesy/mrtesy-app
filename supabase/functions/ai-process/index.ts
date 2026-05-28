@@ -136,6 +136,17 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     return { result: "drive_actionable" };
   }
 
+  // Google Workspace storage warnings (workspace-noreply@google.com).
+  // Google sends these at ~81%, ~90%, and 100%. Only surface a task at ≥ 95%.
+  if (sender === "workspace-noreply@google.com" && (msg.subject || "").toLowerCase().includes("storage")) {
+    const bodyText = (msg.body_text || "").toLowerCase();
+    const pctMatch = bodyText.match(/currently using (\d+)%/);
+    const pct = pctMatch ? parseInt(pctMatch[1], 10) : 0;
+    if (pct < 95) {
+      return { result: "skip", skipReason: `google_workspace_storage_${pct}pct_below_threshold` };
+    }
+  }
+
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
@@ -589,6 +600,32 @@ async function loadContactMemory(userId: string, msg: any): Promise<string> {
   return `\n\nRecent tasks involving this contact (last 30 days):\n${lines.join("\n")}\nIf the current message continues one of these threads, prefer extending it (use the same verb / context).`;
 }
 
+const DRIVE_TASK_RULES = `\n\n═══ Drive document handling ═══\nThe body below is the EXTRACTED CONTENT of a document the user keeps in
+their Drive folder — a spreadsheet, doc, sheet, presentation, or notes
+file. There is no sender, no "reply", no thread. Treat it as a working
+document, not a message.
+
+Build the task by READING the content:
+  • title_he must name what the document is FOR + the next concrete step
+    the user should take with it. Examples:
+      - "לעדכן את גיליון Crypto Tracker עם מחיר ETH עדכני"
+      - "להמשיך לערוך את 'תקציב מאי' — חסר טור הוצאות"
+      - "להכין מצגת על Vivante לפי הנקודות במסמך"
+    NEVER use a generic title like "לעיין במסמך X" — that is exactly the
+    failure mode this rule exists to prevent.
+  • description must reference 1-2 SPECIFIC facts from the content
+    (names, amounts, dates, headings, table columns). If you cannot cite
+    a specific fact, the content is too thin — return [].
+  • If the document is clearly a finished reference (read-only data, a
+    completed report, a template, contact list, archived notes) and the
+    user has no obvious next step → return [].
+  • If the body is empty or unintelligible (audio/image without OCR, PDF
+    that didn't extract) → return []. Do NOT invent a "review this"
+    task — the file already lives in Drive and the user sees it there.
+
+The TRACKING-TASK / QUOTED-TEXT / ONE-TASK-PER-EMAIL rules above are for
+inbound messages and DO NOT apply to Drive documents.`;
+
 const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] with a commitment (אחזור / אבדוק / אשלח / אעדכן\n    / time pledge) → the user owes a follow-through. Title starts with\n    "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
 
 async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }) {
@@ -600,6 +637,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   let context = "";
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
+  if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
   if (projectContext?.brief) context += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   const contactMemory = await loadContactMemory(userId, msg);
   if (contactMemory) context += contactMemory;
@@ -1121,27 +1159,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         totalCacheWriteTokens += taskResult.cacheWriteTokens;
 
         if (taskResult.tasks.length === 0) {
-          if (driveForceActionable) {
-            // Drive documents must always produce a task — fall back to a generic
-            // "review this document" task rather than downgrading to informational.
-            const docTitle = msg.subject || "מסמך Drive";
-            const fallbackDesc = `לעיין במסמך: ${docTitle}`;
-            const { data: newTask } = await supabase.from("tasks").insert({
-              user_id: msg.user_id, source_message_id: msg.id,
-              title: docTitle, title_he: docTitle,
-              description: fallbackDesc, task_type: "action", priority: "medium",
-              status: "inbox", manually_verified: false,
-              ai_actions: [], ai_confidence: 0.6, ai_model_used: taskResult.model || "drive_fallback",
-              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: fallbackDesc }],
-            }).select("id").single();
-            if (newTask) linkedTaskId = newTask.id as string;
-            classificationReason = "drive: fallback task (Sonnet returned no tasks)";
-            aiModel = taskResult.model;
-          } else {
-            classification = "informational";
-            classificationReason = "Sonnet returned no actionable tasks.";
-            aiModel = taskResult.model;
-          }
+          // No fallback for Drive: if Sonnet, given the document content,
+          // can't articulate a concrete next step, a generic "review this
+          // document" task is just noise — the file already lives in Drive
+          // and the user can open it from there. Downgrade to informational
+          // exactly like every other source.
+          classification = "informational";
+          classificationReason = driveForceActionable
+            ? "drive: Sonnet returned no actionable task — no fallback noise"
+            : "Sonnet returned no actionable tasks.";
+          aiModel = taskResult.model;
         } else {
           const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
           if (firstReason) classificationReason = firstReason;

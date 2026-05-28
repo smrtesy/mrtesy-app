@@ -1,0 +1,2 @@
+-keep class com.smrtesy.app.** { *; }
+-keepattributes *Annotation*
