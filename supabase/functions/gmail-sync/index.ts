@@ -7,6 +7,34 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+async function notifyDisconnect(userId: string, reason: string) {
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+
+  await supabase.from("log_entries").insert({
+    user_id: userId,
+    category: "gmail_sync",
+    status: "failed",
+    error_message: `Gmail disconnected — ${reason}. User must reconnect in Settings.`,
+  }).catch(() => {});
+
+  if (membership?.org_id) {
+    await supabase.from("notifications").insert({
+      user_id: userId,
+      org_id: membership.org_id,
+      app_slug: "smrttask",
+      type: "sync_disconnected",
+      title: "Gmail disconnected",
+      body: `Gmail connection was lost (${reason}). Please reconnect in Settings → Connections.`,
+      link: "/settings",
+    }).catch(() => {});
+  }
+}
+
 async function loadSkipRules(userId: string) {
   const { data } = await supabase
     .from("rules_memory")
@@ -59,6 +87,7 @@ async function refreshGoogleToken(userId: string): Promise<string> {
         })
         .eq("user_id", userId)
         .eq("source", "gmail");
+      await notifyDisconnect(userId, `token refresh failed (${resp.status})`);
     }
     throw new Error(`Token refresh failed: ${resp.status}`);
   }
@@ -72,6 +101,14 @@ async function refreshGoogleToken(userId: string): Promise<string> {
     })
     .eq("user_id", userId)
     .eq("service", "gmail");
+
+  // Clear any stale last_error now that the token is healthy again.
+  await supabase
+    .from("sync_state")
+    .update({ last_error: null })
+    .eq("user_id", userId)
+    .eq("source", "gmail")
+    .not("last_error", "is", null);
 
   return tokens.access_token;
 }

@@ -6,6 +6,34 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+async function notifyDisconnect(userId: string, reason: string) {
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+
+  await supabase.from("log_entries").insert({
+    user_id: userId,
+    category: "drive_sync",
+    status: "failed",
+    error_message: `Drive disconnected — ${reason}. User must reconnect in Settings.`,
+  }).catch(() => {});
+
+  if (membership?.org_id) {
+    await supabase.from("notifications").insert({
+      user_id: userId,
+      org_id: membership.org_id,
+      app_slug: "smrttask",
+      type: "sync_disconnected",
+      title: "Google Drive disconnected",
+      body: `Drive connection was lost (${reason}). Please reconnect in Settings → Connections.`,
+      link: "/settings",
+    }).catch(() => {});
+  }
+}
+
 async function refreshGoogleToken(userId: string, service: string): Promise<string> {
   const { data: cred } = await supabase
     .from("user_credentials")
@@ -32,8 +60,23 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   });
 
   if (!resp.ok) {
+    const err = await resp.text();
     if (resp.status === 401 || resp.status === 400) {
       await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
+      // Record the error in sync_state so it's visible in admin logs
+      const { data: syncState } = await supabase
+        .from("sync_state")
+        .select("consecutive_failures")
+        .eq("user_id", userId)
+        .eq("source", "google_drive")
+        .maybeSingle();
+      await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "google_drive",
+        last_error: `Token refresh failed: ${err}`,
+        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+      }, { onConflict: "user_id,source" });
+      await notifyDisconnect(userId, `token refresh failed (${resp.status})`);
     }
     throw new Error(`Token refresh failed: ${resp.status}`);
   }
