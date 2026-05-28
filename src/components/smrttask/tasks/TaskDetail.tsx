@@ -509,9 +509,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                         return (
                           <li
                             key={update.id}
-                            className="px-3 py-1.5 text-sm hover:bg-background/60 transition-colors"
+                            className="px-3 py-1.5 text-sm md:text-xs hover:bg-background/60 transition-colors"
                           >
-                            <div className="flex items-baseline gap-2 text-[11px] text-muted-foreground mb-0.5">
+                            <div className="flex items-baseline gap-2 text-[11px] md:text-[10px] text-muted-foreground mb-0.5">
                               <span className="font-medium" title={new Date(update.created_at).toLocaleString()}>
                                 {formatUpdateTime(update.created_at, locale)}
                               </span>

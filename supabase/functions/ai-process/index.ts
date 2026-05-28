@@ -412,6 +412,34 @@ If the user's own address is the sender:
 - Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
 - Just acknowledging closure → INFORMATIONAL
 
+═══ COMMITMENT vs POSSIBILITY — wording rule (mandatory) ═══
+When reason_he / new_summary describe what the user (or another party)
+said, DO NOT collapse a soft possibility into a hard commitment.
+
+Soft possibility (modal / conditional / tentative):
+  EN: "I can try", "I might", "I'll see", "I could", "let me try",
+      "if I have time", "perhaps", "maybe I'll",
+      "I could give it a shot", "I might be able to"
+  HE: "אנסה", "אולי אעשה", "אם יהיה לי זמן", "אני יכול לנסות",
+      "אבדוק אם אפשר", "אולי", "ייתכן ש", "אני אשתדל"
+  → say "אמר שיכול לנסות" / "הציע לנסות" / "ציין שאולי יבדוק".
+  NEVER write "התחייב" for these.
+
+Firm commitment (definite future, no hedging):
+  EN: "I will call", "I'll send by tomorrow", "I'm going to pay",
+      "I promise", "you'll have it by Friday"
+  HE: "אתקשר", "אשלח", "אעדכן", "אבדוק" (in unhedged future), "אסיים",
+      "אעביר עד מחר", "מבטיח ש"
+  → "התחייב להתקשר" / "הבטיח לעדכן" is appropriate.
+
+In English: "I can try" is POSSIBILITY (not commitment) — render as
+"אמר שיכול לנסות", never as "התחייב". Same for "I might", "I'll see",
+"if I get to it", etc.
+
+This applies equally to the OTHER party's wording (don't write "Wagner
+הבטיח" if Wagner only said "I'll look into it" — that's "אמר שיבדוק").
+Reserve "הבטיח" / "התחייב" for explicit promises.
+
 ═══ WORKED EXAMPLE ═══
 Input: "Please be advised that we are currently looking into the
 collection action against your son. I will let you know as soon as we
@@ -488,6 +516,16 @@ async function appendUpdateToTask(
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
 
+  // Dedup guard: if we already appended an update for this exact
+  // source_message_id, skip. The same message can re-enter ai-process
+  // through multiple paths (sibling-link, cross-source link, retry from
+  // the worker) and each call would otherwise produce a near-duplicate
+  // entry — the user sees the same content twice or three times,
+  // sometimes hours apart, with nothing new in any of them.
+  if (msg?.id && existingUpdates.some((u) => u?.source_message_id === msg.id)) {
+    return;
+  }
+
   const updateFields: Record<string, unknown> = {
     last_interaction_at: new Date().toISOString(),
     has_unread_update: true,
@@ -505,6 +543,13 @@ async function appendUpdateToTask(
       },
     ],
   };
+
+  // Refresh task.description to the analyzer's current-state summary so
+  // the user sees "where everything stands" without scrolling the timeline.
+  // newSummary is already 400-char-capped and incorporates the latest msg.
+  if (analysis.newSummary && analysis.newSummary.trim().length > 0) {
+    updateFields.description = analysis.newSummary;
+  }
 
   if (analysis.completionSignal) {
     updateFields.status = "pending_completion";
