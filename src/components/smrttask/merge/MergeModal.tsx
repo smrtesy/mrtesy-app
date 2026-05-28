@@ -86,6 +86,20 @@ interface TargetCandidate {
   status: string | null;
 }
 
+/** Optional snapshot passed in when the parent has a completed AI proposal
+ *  ready (e.g. after the user minimized the modal during AI loading and a
+ *  background job finished). When provided, the modal opens at step 2 with
+ *  these values applied — no fresh AI call is made. */
+export interface MergeInitialState {
+  proposal: AIProposal;
+  targetMode: "new" | "existing";
+  existingTargetId: string | null;
+  /** Sources at the time the proposal was generated. Used so background
+   *  resume matches the originally proposed merge even if the parent's
+   *  current selection has changed. */
+  sources: MergeSourceLite[];
+}
+
 export interface MergeModalProps {
   open: boolean;
   onClose: () => void;
@@ -97,6 +111,22 @@ export interface MergeModalProps {
   locale: string;
   /** Called after a successful merge so the caller can refresh + show toast. */
   onMerged: (result: MergeResult) => void;
+  /** When provided, the modal opens at step 2 using this snapshot instead
+   *  of running step 1 + a fresh propose() call. Used by the background
+   *  resume flow. */
+  initialState?: MergeInitialState | null;
+  /** Called when the user chooses "continue in background" while the AI is
+   *  still loading. The modal hands the in-flight promise to the parent so
+   *  the parent can await it after the dialog is dismissed and offer a
+   *  "reopen" toast when ready. */
+  onMinimize?: (job: MergeMinimizeJob) => void;
+}
+
+export interface MergeMinimizeJob {
+  promise: Promise<AIProposal>;
+  sources: MergeSourceLite[];
+  targetMode: "new" | "existing";
+  existingTargetId: string | null;
 }
 
 type Step = 1 | 2;
@@ -120,9 +150,13 @@ function pickDefaultTitle(src: MergeSourceLite): { title: string; title_he: stri
 
 // ── component ──────────────────────────────────────────────────────────────
 
-export function MergeModal({ open, onClose, sources, fromTasksList, locale, onMerged }: MergeModalProps) {
+export function MergeModal({ open, onClose, sources, fromTasksList, locale, onMerged, initialState, onMinimize }: MergeModalProps) {
   const t = useTranslations("merge");
   const supabase = useMemo(() => createClient(), []);
+
+  /** Holds the in-flight propose() promise so "continue in background" can
+   *  transfer ownership to the parent without re-running the request. */
+  const inflightProposeRef = useRef<Promise<AIProposal> | null>(null);
 
   // Step + target
   const [step, setStep] = useState<Step>(1);
@@ -158,22 +192,64 @@ export function MergeModal({ open, onClose, sources, fromTasksList, locale, onMe
     [sources, excludedSources],
   );
 
-  // Reset state every time we open with new sources.
-  const lastSourcesKey = useRef<string>("");
+  // Reset state every time we open with new sources, OR populate from
+  // initialState when the parent resumed a background job.
+  const lastInitKey = useRef<string>("");
   useEffect(() => {
-    const key = sources.map((s) => s.id).sort().join(",");
-    if (!open || key === lastSourcesKey.current) return;
-    lastSourcesKey.current = key;
-    setStep(1);
-    setTargetMode(fromTasksList ? "new" : (sources.length === 1 ? "existing" : "new"));
-    setExistingTargetId(null);
-    setCandidateQuery("");
-    setCandidates([]);
-    setProposal(null);
-    setAiError(null);
+    if (!open) return;
+    // Distinct key: when initialState is present its proposal identity is
+    // the key (each background resume gets a unique key), otherwise the
+    // source-set key is used as before.
+    const key = initialState
+      ? `resume:${initialState.sources.map((s) => s.id).sort().join(",")}:${initialState.proposal.merged_title ?? ""}`
+      : `fresh:${sources.map((s) => s.id).sort().join(",")}`;
+    if (key === lastInitKey.current) return;
+    lastInitKey.current = key;
+
+    if (initialState) {
+      // Resume an already-proposed merge — skip step 1 and the AI call.
+      setStep(2);
+      setTargetMode(initialState.targetMode);
+      setExistingTargetId(initialState.existingTargetId);
+      setProposal(initialState.proposal);
+      setAiError(null);
+      setAiLoading(false);
+      applyProposalToFields(initialState.proposal, initialState.sources.map((s) => s.id));
+    } else {
+      setStep(1);
+      setTargetMode(fromTasksList ? "new" : (sources.length === 1 ? "existing" : "new"));
+      setExistingTargetId(null);
+      setCandidateQuery("");
+      setCandidates([]);
+      setProposal(null);
+      setAiError(null);
+    }
     setExcludedSources(new Set());
     setSourcesCompleted(new Set());
-  }, [open, sources, fromTasksList]);
+    inflightProposeRef.current = null;
+  }, [open, sources, fromTasksList, initialState]);
+
+  /** Apply a proposal to the editable form fields. Extracted so both the
+   *  AI-completion path and the background-resume path share the same logic. */
+  function applyProposalToFields(p: AIProposal, activeIds: string[]) {
+    setTitle(p.merged_title ?? "");
+    setTitleHe(p.merged_title_he ?? "");
+    setDescription(p.merged_description ?? "");
+    setPriority((p.recommended_priority as typeof priority) ?? "medium");
+    setDueDate(p.recommended_due_date ?? "");
+    const activeIdSet = new Set(activeIds);
+    const ck: ChecklistItem[] = (p.suggested_checklist ?? []).map((it) => ({
+      id: uuid(),
+      title: it.title,
+      done: false,
+      created_by: "ai" as const,
+      source_task_id: it.source_task_id && activeIdSet.has(it.source_task_id)
+        ? it.source_task_id
+        : undefined,
+    }));
+    setChecklist(ck);
+    setIncludeChecklist(ck.length > 0);
+  }
 
   // ── Step 1: candidate lookup (existing target search) ───────────────────
   useEffect(() => {
@@ -223,37 +299,26 @@ export function MergeModal({ open, onClose, sources, fromTasksList, locale, onMe
     setAiError(null);
     setProposal(null);
 
-    try {
-      const { proposal } = await api<{ proposal: AIProposal }>("/api/tasks/merge/propose", {
-        method: "POST",
-        body: {
-          source_task_ids: activeSourceIds,
-          target_task_id: targetMode === "existing" ? existingTargetId : undefined,
-        },
-      });
+    // Wrap the fetch so we can store the promise in a ref. That way
+    // "continue in background" can hand it to the parent without
+    // re-triggering the request.
+    const proposePromise = api<{ proposal: AIProposal }>("/api/tasks/merge/propose", {
+      method: "POST",
+      body: {
+        source_task_ids: activeSourceIds,
+        target_task_id: targetMode === "existing" ? existingTargetId : undefined,
+      },
+    }).then((r) => r.proposal);
+    inflightProposeRef.current = proposePromise;
 
-      // Apply proposal to editable form state.
-      const p = proposal ?? {};
+    try {
+      const proposal = await proposePromise;
+      // If the user minimized in the meantime, the parent now owns the
+      // promise — don't fight it for state ownership.
+      if (inflightProposeRef.current !== proposePromise) return;
+      const p = proposal ?? ({} as AIProposal);
       setProposal(p);
-      setTitle(p.merged_title ?? "");
-      setTitleHe(p.merged_title_he ?? "");
-      setDescription(p.merged_description ?? "");
-      setPriority((p.recommended_priority as typeof priority) ?? "medium");
-      setDueDate(p.recommended_due_date ?? "");
-      // Drop any source_task_id reference the AI invented for a row we
-      // haven't actually included — the badge would point at nothing.
-      const activeIdSet = new Set(activeSourceIds);
-      const ck: ChecklistItem[] = (p.suggested_checklist ?? []).map((it) => ({
-        id: uuid(),
-        title: it.title,
-        done: false,
-        created_by: "ai" as const,
-        source_task_id: it.source_task_id && activeIdSet.has(it.source_task_id)
-          ? it.source_task_id
-          : undefined,
-      }));
-      setChecklist(ck);
-      setIncludeChecklist(ck.length > 0);
+      applyProposalToFields(p, activeSourceIds);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
       setAiError(msg);
@@ -422,10 +487,32 @@ export function MergeModal({ open, onClose, sources, fromTasksList, locale, onMe
             </>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => setStep(1)} disabled={submitting}>
+              <Button variant="ghost" onClick={() => setStep(1)} disabled={submitting || aiLoading}>
                 {t("back")}
               </Button>
               <div className="flex gap-2">
+                {aiLoading && onMinimize && inflightProposeRef.current && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const promise = inflightProposeRef.current;
+                      if (!promise) return;
+                      // Hand the promise to the parent so the request keeps
+                      // running after we close. Mark the ref null so the
+                      // modal's own await won't try to apply the result.
+                      onMinimize({
+                        promise,
+                        sources: visibleSources,
+                        targetMode,
+                        existingTargetId,
+                      });
+                      inflightProposeRef.current = null;
+                      onClose();
+                    }}
+                  >
+                    {t("minimize")}
+                  </Button>
+                )}
                 <Button variant="ghost" onClick={onClose} disabled={submitting}>
                   {t("cancel")}
                 </Button>

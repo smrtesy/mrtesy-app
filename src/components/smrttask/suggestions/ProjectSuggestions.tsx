@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
-import { MergeModal } from "@/components/smrttask/merge/MergeModal";
+import { MergeModal, type MergeInitialState, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 
 interface SuggestionTask {
   id: string;
@@ -26,6 +26,26 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
   const tMerge = useTranslations("merge");
   const [suggestions, setSuggestions] = useState<SuggestionTask[]>([]);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [resumedMerge, setResumedMerge] = useState<MergeInitialState | null>(null);
+
+  const handleMinimize = useCallback((job: MergeMinimizeJob) => {
+    toast.info(tMerge("bgRunningToast"));
+    job.promise.then((proposal) => {
+      setResumedMerge({
+        proposal,
+        targetMode: job.targetMode,
+        existingTargetId: job.existingTargetId,
+        sources: job.sources,
+      });
+      toast.success(tMerge("bgReadyToast"), {
+        action: { label: tMerge("openMerge"), onClick: () => setMergeOpen(true) },
+        duration: 30_000,
+      });
+    }).catch(() => {
+      toast.error(tMerge("bgFailedToast"));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -214,8 +234,8 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
 
       <MergeModal
         open={mergeOpen}
-        onClose={() => setMergeOpen(false)}
-        sources={suggestions
+        onClose={() => { setMergeOpen(false); setResumedMerge(null); }}
+        sources={resumedMerge?.sources ?? suggestions
           .filter((s) => selected.has(s.id))
           .map((s) => ({
             id: s.id,
@@ -225,8 +245,11 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
             status: "inbox",
           }))}
         locale={locale}
+        initialState={resumedMerge}
+        onMinimize={handleMinimize}
         onMerged={() => {
           toast.success(tMerge("successToast"));
+          setResumedMerge(null);
           fetchSuggestions();
         }}
       />
