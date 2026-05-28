@@ -112,7 +112,11 @@
     "newChatInvalidPhone": "Invalid phone number",
     "newChatNeedText": "Message is empty",
     "newChatWindowClosed": "Meta blocks new conversations with contacts who haven't messaged you. An approved Template Message is required (not yet supported here).",
-    "newChatTemplateWarning": "⚠️ Meta only allows free-form messages within 24h of the contact's last message. Starting a brand-new conversation with someone who hasn't messaged you requires an approved Template Message."
+    "newChatTemplateWarning": "⚠️ Meta only allows free-form messages within 24h of the contact's last message. Starting a brand-new conversation with someone who hasn't messaged you requires an approved Template Message.",
+    "renameContact": "Rename contact",
+    "renameContactPlaceholder": "Enter a display name",
+    "renameContactSave": "Save",
+    "renameContactCancel": "Cancel"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",

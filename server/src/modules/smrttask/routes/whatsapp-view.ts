@@ -60,14 +60,22 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
     tasksByChat.set(chatId, (tasksByChat.get(chatId) ?? 0) + 1);
   }
 
-  // Per-chat last_read_at for unread badges.
-  const { data: reads } = await db
+  // Per-chat state: last_read_at (unread badges) and custom_name (user-set
+  // display name that overrides the WhatsApp profile name everywhere we
+  // surface the contact — thread list, header, and the `sender` field on
+  // source_messages, which is what the smrtTask classifier and
+  // recommendations read).
+  const { data: chatStates } = await db
     .from("whatsapp_chat_state")
-    .select("chat_id, last_read_at")
+    .select("chat_id, last_read_at, custom_name")
     .eq("user_id", req.user!.id);
   const lastReadByChat = new Map<string, string>();
-  for (const r of reads ?? []) {
-    if (r.chat_id) lastReadByChat.set(r.chat_id as string, r.last_read_at as string);
+  const customNameByChat = new Map<string, string>();
+  for (const r of chatStates ?? []) {
+    if (!r.chat_id) continue;
+    if (r.last_read_at) lastReadByChat.set(r.chat_id as string, r.last_read_at as string);
+    const cn = (r.custom_name as string | null)?.trim();
+    if (cn) customNameByChat.set(r.chat_id as string, cn);
   }
 
   // Two passes over the recent-messages window:
@@ -129,6 +137,8 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
       // Identity always comes from the contact side — never from "us".
       from_phone: inc?.from_phone ?? chatId,
       from_name: inc?.from_name ?? null,
+      // User-defined override. UI prefers this; null = use from_name.
+      custom_name: customNameByChat.get(chatId) ?? null,
       is_history: m.is_history,
       unread_count: unreadCount,
       task_count: tasksByChat.get(chatId) ?? 0,
@@ -155,6 +165,106 @@ router.post("/whatsapp/threads/:chat_id/read", ...gate, async (req: Request, res
   );
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ ok: true });
+});
+
+// ── Set or clear the user-defined display name for a chat ────────────────
+// Body: { custom_name: string | null }
+//   • non-empty string → set the override (trimmed, capped at 120 chars)
+//   • null / empty string → clear the override (fall back to from_name)
+//
+// We re-emit the thread row in source_messages with the new sender so any
+// downstream consumer (smrtTask classifier, recommendation prompts) picks
+// up the name immediately on the next pass instead of waiting for the
+// next inbound message to refresh the row.
+router.patch("/whatsapp/threads/:chat_id/name", ...gate, async (req: Request, res: Response) => {
+  const { chat_id } = req.params;
+  if (!chat_id) return res.status(400).json({ error: "chat_id is required" });
+
+  const raw = (req.body ?? {}) as { custom_name?: string | null };
+  const next = typeof raw.custom_name === "string"
+    ? raw.custom_name.trim().slice(0, 120) || null
+    : null;
+
+  const nowIso = new Date().toISOString();
+  // last_read_at is NOT NULL on whatsapp_chat_state. An upsert would
+  // clobber the existing read marker → unread badge breakage. So we
+  // UPDATE first, INSERT only when no row exists.
+  const { data: existingRow, error: existErr } = await db
+    .from("whatsapp_chat_state")
+    .select("id")
+    .eq("user_id", req.user!.id)
+    .eq("chat_id", chat_id)
+    .maybeSingle();
+  if (existErr) return res.status(500).json({ error: existErr.message });
+
+  if (existingRow) {
+    const { error } = await db
+      .from("whatsapp_chat_state")
+      .update({ custom_name: next, updated_at: nowIso })
+      .eq("id", existingRow.id);
+    if (error) return res.status(500).json({ error: error.message });
+  } else {
+    const { error } = await db.from("whatsapp_chat_state").insert({
+      user_id: req.user!.id,
+      chat_id,
+      custom_name: next,
+      last_read_at: nowIso,
+      updated_at: nowIso,
+    });
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  // If a thread-level source_messages row already exists for this chat,
+  // refresh sender/subject/metadata.chatName so the classifier sees the
+  // new name on the next reprocess. Runs in BOTH the set and clear paths:
+  // when the user clears the rename, we need to revert sender to the
+  // contact's WhatsApp profile name, otherwise the classifier keeps using
+  // the stale override forever. Best-effort: a stale name is cosmetic,
+  // not a correctness issue, so we log + continue on error.
+  try {
+    const { data: existing } = await db
+      .from("source_messages")
+      .select("id, metadata")
+      .eq("user_id", req.user!.id)
+      .eq("source_type", "whatsapp")
+      .eq("source_id", `wa:${chat_id}`)
+      .maybeSingle();
+    if (existing) {
+      let display = next;
+      if (!display) {
+        // Fall back to from_name on the latest incoming message — same
+        // priority order refreshSourceMessageThread() uses on a new
+        // inbound webhook.
+        const { data: fallbackRow } = await db
+          .from("whatsapp_messages")
+          .select("from_name, from_phone")
+          .eq("user_id", req.user!.id)
+          .eq("chat_id", chat_id)
+          .eq("direction", "incoming")
+          .order("received_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        display =
+          (fallbackRow?.from_name as string | null)?.trim() ||
+          (fallbackRow?.from_phone as string | null) ||
+          chat_id;
+      }
+      const prevMeta = (existing.metadata as Record<string, unknown> | null) ?? {};
+      const { error: updateErr } = await db
+        .from("source_messages")
+        .update({
+          sender: display,
+          subject: display,
+          metadata: { ...prevMeta, chatName: display, customName: next },
+        })
+        .eq("id", existing.id);
+      if (updateErr) console.warn("[whatsapp] rename: source_messages update:", updateErr.message);
+    }
+  } catch (e) {
+    console.warn("[whatsapp] rename: source_messages refresh failed:", e);
+  }
+
+  return res.json({ ok: true, custom_name: next });
 });
 
 // ── Messages within a chat ────────────────────────────────────────────────
@@ -429,7 +539,16 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
       const latestIncoming = [...ordered]
         .reverse()
         .find((m) => m.direction === "incoming");
+      // User-defined name overrides everything else if set.
+      const { data: stateRow } = await db
+        .from("whatsapp_chat_state")
+        .select("custom_name")
+        .eq("user_id", req.user!.id)
+        .eq("chat_id", chatId)
+        .maybeSingle();
+      const customName = (stateRow?.custom_name as string | null)?.trim() || null;
       const chatName =
+        customName ||
         (latestIncoming?.from_name as string | null) ||
         (last.from_name as string | null) ||
         (last.from_phone as string | null) ||
