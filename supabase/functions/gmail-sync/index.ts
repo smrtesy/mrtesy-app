@@ -234,6 +234,20 @@ async function syncUserGmail(userId: string) {
     }
     messageIds = result.newMessages;
     newCheckpoint = result.newHistoryId;
+
+    // Gmail sometimes omits historyId from the history response when there are
+    // no new messages. Fall back to the profile endpoint so we always get a
+    // valid checkpoint and last_synced_at is updated on every run.
+    if (!newCheckpoint) {
+      const profileResp = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (profileResp.ok) {
+        const profile = await profileResp.json();
+        newCheckpoint = profile.historyId;
+      }
+    }
   } else {
     // No checkpoint — initial fetch of unread (with skip rules applied to query)
     const queryParts = ["is:unread", ...skipFilter.gmailQueryFilters];
