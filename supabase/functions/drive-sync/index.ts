@@ -135,10 +135,59 @@ async function fetchFileContent(token: string, fileId: string, mimeType: string)
   }
 }
 
+/**
+ * Expand a list of Drive folder IDs into a Set that includes every
+ * descendant folder under them (BFS, paginated, sub-folder only). The
+ * resulting set is what we filter file `parents` against on every sync,
+ * so a file is ingested iff its direct parent appears in the set —
+ * which means a file anywhere in the chosen subtree is included, but
+ * nothing outside leaks in.
+ *
+ * Drive caps recursion depth implicitly through the page-size loop; in
+ * practice folder counts are small (tens, not thousands). We re-walk
+ * on every sync rather than cache: cheap, always fresh, no schema
+ * change needed for the cache.
+ */
+async function expandFolderTree(token: string, rootIds: string[]): Promise<Set<string>> {
+  const all = new Set<string>(rootIds);
+  if (rootIds.length === 0) return all;
+
+  const queue = [...rootIds];
+  while (queue.length > 0) {
+    // Drive's `q` parameter has a length cap (~2KB practical limit) — chunk
+    // parent IDs into batches that comfortably fit.
+    const batch = queue.splice(0, 25);
+    const orClause = batch.map((id) => `'${id}' in parents`).join(" or ");
+    const q = encodeURIComponent(
+      `(${orClause}) and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    );
+
+    let pageToken: string | undefined;
+    do {
+      const url =
+        `https://www.googleapis.com/drive/v3/files?q=${q}` +
+        `&fields=files(id,parents),nextPageToken&pageSize=1000` +
+        (pageToken ? `&pageToken=${pageToken}` : "");
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) break; // best-effort; missing sub-folders just means narrower scope
+      const data = await resp.json();
+      for (const f of data.files || []) {
+        if (!all.has(f.id)) {
+          all.add(f.id);
+          queue.push(f.id);
+        }
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+  }
+
+  return all;
+}
+
 async function syncUserDrive(userId: string) {
   const { data: settings } = await supabase
     .from("user_settings")
-    .select("drive_folder_id, drive_sync_days")
+    .select("drive_folder_id, drive_folder_ids, drive_sync_days")
     .eq("user_id", userId)
     .single();
 
@@ -178,63 +227,107 @@ async function syncUserDrive(userId: string) {
     googleEmail = authUser?.user?.email || "";
   } catch { /* best-effort */ }
 
-  const folderId = settings?.drive_folder_id;
+  // drive_folder_ids (array) is the source of truth. drive_folder_id is a
+  // legacy fallback for users who haven't migrated through the new UI.
+  // Empty array AND null legacy column → no scanning. This matches the
+  // CLAUDE.md "Drive scanning is opt-in" rule — never fall back to the
+  // user's entire Drive.
+  const rootIds: string[] = (settings?.drive_folder_ids && settings.drive_folder_ids.length > 0)
+    ? settings.drive_folder_ids
+    : (settings?.drive_folder_id ? [settings.drive_folder_id] : []);
+
+  if (rootIds.length === 0) {
+    await supabase.from("sync_state").upsert({
+      user_id: userId,
+      source: "google_drive",
+      last_synced_at: new Date().toISOString(),
+      last_error: null,
+      consecutive_failures: 0,
+    }, { onConflict: "user_id,source" });
+    return { synced: 0, skipped: true, reason: "no folders selected" };
+  }
+
+  // Recursive descent: a file is in scope if its parent is the chosen
+  // folder OR any of its descendants. Computed fresh on every run.
+  const folderSet = await expandFolderTree(token, rootIds);
+
   const pageToken = syncState?.checkpoint;
   const syncDays: number = settings?.drive_sync_days ?? 30;
   const cutoff = new Date(Date.now() - syncDays * 86_400_000).toISOString();
 
-  // List changes or files in folder
-  let url: string;
+  // Collected file list across all batched queries / change pages.
+  let files: any[] = [];
+  let newChangesToken: string | undefined;
+
   if (pageToken) {
-    url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink,parents)),newStartPageToken,nextPageToken`;
-  } else if (folderId) {
-    url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken&orderBy=modifiedTime+desc&pageSize=100`;
-  } else {
-    url = `https://www.googleapis.com/drive/v3/files?q=trashed=false+and+modifiedTime>'${cutoff}'&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken&orderBy=modifiedTime+desc&pageSize=50`;
-  }
-
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    // 400 on pageToken = stale token after re-auth. Self-heal: clear checkpoint
-    // so the next run fetches fresh instead of looping on the same 400 forever.
-    if (resp.status === 400 && pageToken) {
+    // Incremental — single /changes fetch (paginated by next cron run).
+    const url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink,parents)),newStartPageToken,nextPageToken`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      if (resp.status === 400) {
+        // Stale checkpoint after re-auth. Self-heal: clear it so the next
+        // run does a fresh initial scan instead of looping on 400 forever.
+        await supabase.from("sync_state").upsert({
+          user_id: userId, source: "google_drive",
+          checkpoint: null, last_error: null, consecutive_failures: 0,
+        }, { onConflict: "user_id,source" });
+        return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+      }
       await supabase.from("sync_state").upsert({
-        user_id: userId,
-        source: "google_drive",
-        checkpoint: null,
-        last_error: null,
-        consecutive_failures: 0,
+        user_id: userId, source: "google_drive",
+        last_error: `Drive API: ${resp.status} ${errText}`,
+        consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
       }, { onConflict: "user_id,source" });
-      return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+      throw new Error(`Drive API: ${resp.status}`);
     }
-    await supabase.from("sync_state").upsert({
-      user_id: userId,
-      source: "google_drive",
-      last_error: `Drive API: ${resp.status} ${errText}`,
-      consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
-    }, { onConflict: "user_id,source" });
-    throw new Error(`Drive API: ${resp.status}`);
+    const data = await resp.json();
+    files = (data.changes || []).map((c: any) => c.file).filter(Boolean);
+    newChangesToken = data.newStartPageToken;
+  } else {
+    // Initial scan: batch the folder set into chunks that fit under
+    // Drive's `q` length cap (~2KB) and fan out across all of them.
+    // Each batch is paginated independently. The client-side filter
+    // below still applies, so we always honour the recursive subtree.
+    const parents = Array.from(folderSet);
+    const BATCH = 25;
+    for (let i = 0; i < parents.length; i += BATCH) {
+      const orClause = parents.slice(i, i + BATCH).map((id) => `'${id}' in parents`).join(" or ");
+      const baseQ = encodeURIComponent(
+        `(${orClause}) and modifiedTime>'${cutoff}' and trashed=false`,
+      );
+      let batchPage: string | undefined;
+      do {
+        const url =
+          `https://www.googleapis.com/drive/v3/files?q=${baseQ}` +
+          `&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken` +
+          `&orderBy=modifiedTime+desc&pageSize=100` +
+          (batchPage ? `&pageToken=${batchPage}` : "");
+        const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!resp.ok) {
+          await supabase.from("sync_state").upsert({
+            user_id: userId, source: "google_drive",
+            last_error: `Drive API: ${resp.status} ${await resp.text()}`,
+            consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
+          }, { onConflict: "user_id,source" });
+          throw new Error(`Drive API: ${resp.status}`);
+        }
+        const data = await resp.json();
+        files.push(...(data.files || []));
+        batchPage = data.nextPageToken;
+      } while (batchPage);
+    }
   }
 
-  const data = await resp.json();
-  let files: any[] = pageToken
-    ? (data.changes || []).map((c: any) => c.file).filter(Boolean)
-    : data.files || [];
-
-  // Drive's /changes API is account-wide and can't be scoped server-side to
-  // a folder. Enforce the user-picked folder client-side so incremental
-  // syncs don't ingest files outside it. Matches the semantics of the
-  // initial /files query (`<folderId>' in parents`) — direct children only,
-  // no recursive descent through sub-folders.
-  if (folderId) {
-    files = files.filter(
-      (f) => Array.isArray(f.parents) && f.parents.includes(folderId),
-    );
-  }
+  // Drive's /changes API is account-wide and can't be scoped server-side
+  // to specific folders. Enforce the user-picked subtrees client-side
+  // (recursive): a file is in scope iff at least one of its `parents`
+  // appears in the expanded folder set we built above. Initial scans
+  // already used the same set in the `q` clause, so applying it here
+  // too keeps both code paths honest to the same source of truth.
+  files = files.filter(
+    (f) => Array.isArray(f.parents) && f.parents.some((p: string) => folderSet.has(p)),
+  );
 
   let synced = 0;
   for (const file of files) {
@@ -257,8 +350,7 @@ async function syncUserDrive(userId: string) {
     synced++;
   }
 
-  // Save new page token
-  const newToken = pageToken ? data.newStartPageToken : null;
+  // Persist the next pageToken so subsequent runs use /changes incrementally.
   if (!pageToken) {
     const tokenResp = await fetch(
       "https://www.googleapis.com/drive/v3/changes/startPageToken",
@@ -267,24 +359,20 @@ async function syncUserDrive(userId: string) {
     if (tokenResp.ok) {
       const tokenData = await tokenResp.json();
       await supabase.from("sync_state").upsert({
-        user_id: userId,
-        source: "google_drive",
+        user_id: userId, source: "google_drive",
         checkpoint: tokenData.startPageToken,
         last_synced_at: new Date().toISOString(),
         messages_synced_total: synced,
-        last_error: null,
-        consecutive_failures: 0,
+        last_error: null, consecutive_failures: 0,
       }, { onConflict: "user_id,source" });
     }
-  } else if (newToken) {
+  } else if (newChangesToken) {
     await supabase.from("sync_state").upsert({
-      user_id: userId,
-      source: "google_drive",
-      checkpoint: newToken,
+      user_id: userId, source: "google_drive",
+      checkpoint: newChangesToken,
       last_synced_at: new Date().toISOString(),
       messages_synced_total: (syncState?.messages_synced_total || 0) + synced,
-      last_error: null,
-      consecutive_failures: 0,
+      last_error: null, consecutive_failures: 0,
     }, { onConflict: "user_id,source" });
   }
 

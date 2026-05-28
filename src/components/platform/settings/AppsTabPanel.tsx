@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText } from "lucide-react";
+import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -208,6 +208,15 @@ function SmrtTaskSettings({ locale, pathname }: {
             >
               <SlidersHorizontal className="h-4 w-4" />
               {t("classifierParameters")}
+            </Button>
+          </Link>
+          <Link href={`${base}/drive-folders`}>
+            <Button
+              variant={isLink("drive-folders") ? "default" : "outline"}
+              className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2"
+            >
+              <FolderOpen className="h-4 w-4" />
+              {t("driveFolders")}
             </Button>
           </Link>
           <Link href={`/${locale}/log`}>

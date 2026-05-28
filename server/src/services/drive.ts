@@ -8,25 +8,33 @@ export async function getDriveClient(userId: string) {
   return google.drive({ version: "v3", auth });
 }
 
-async function resolveFolderId(
+async function resolveFolderIds(
   userId: string,
   explicit?: string | null,
-): Promise<string | null> {
-  if (explicit) return explicit;
+): Promise<string[]> {
+  if (explicit) return [explicit];
   const { data } = await db
     .from("user_settings")
-    .select("drive_folder_id")
+    .select("drive_folder_id, drive_folder_ids")
     .eq("user_id", userId)
     .maybeSingle();
-  const fromSettings = (data?.drive_folder_id as string | null | undefined) ?? null;
-  return fromSettings || null;
+  // Prefer the new array; fall back to the legacy singular column so
+  // unmigrated users still work until they pick folders via the new UI.
+  const arr = (data?.drive_folder_ids as string[] | null | undefined) ?? [];
+  if (arr.length > 0) return arr;
+  const single = (data?.drive_folder_id as string | null | undefined) ?? null;
+  return single ? [single] : [];
 }
 
 /**
- * Lists files modified since `since` inside the user's configured Drive
- * folder. Returns an empty array if the user has no folder configured —
- * Drive scanning is opt-in (the onboarding picker is intentionally
+ * Lists files modified since `since` inside any of the user's configured
+ * Drive folders. Returns an empty array if the user has no folder
+ * configured — Drive scanning is opt-in (the picker is intentionally
  * optional). There is no global default folder.
+ *
+ * Currently scans direct children of the selected folders. Recursive
+ * descent into sub-folders is handled by the drive-sync edge function;
+ * this server-side path is only used for ad-hoc manual sync triggers.
  */
 export async function listNewFiles(
   userId: string,
@@ -34,12 +42,17 @@ export async function listNewFiles(
   folderId?: string | null,
   pageSize = 50,
 ) {
-  const folder = await resolveFolderId(userId, folderId);
-  if (!folder) return [];
+  const folders = await resolveFolderIds(userId, folderId);
+  if (folders.length === 0) return [];
 
   const drive = await getDriveClient(userId);
+  // Drive's `q` supports `or` between `<id>' in parents` clauses up to
+  // a couple of dozen IDs before the URL gets unwieldy. We expect <25
+  // selected folders in practice; if more, the first batch will cover
+  // the majority and the edge function picks up the rest.
+  const orClause = folders.slice(0, 25).map((id) => `'${id}' in parents`).join(" or ");
   const res = await drive.files.list({
-    q: `'${folder}' in parents and modifiedTime >= '${since}' and trashed = false`,
+    q: `(${orClause}) and modifiedTime >= '${since}' and trashed = false`,
     pageSize,
     fields: "files(id, name, mimeType, modifiedTime, size, webViewLink)",
     orderBy: "modifiedTime desc",

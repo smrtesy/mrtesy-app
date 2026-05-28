@@ -535,6 +535,7 @@
     "skipRulesAndStyle": "כללי דילוג וסגנון",
     "syncSchedules": "תזמון סנכרון",
     "classifierParameters": "פרמטרים של המסווג",
+    "driveFolders": "תקיות Drive לסריקה",
     "smrtTaskSection": "smrtTask",
     "deployInfoTitle": "פרטי גרסה",
     "deployInfoLoading": "טוען מידע על הדפלוי...",
@@ -1235,5 +1236,20 @@
     "topLevel": "פרויקט עצמאי",
     "create": "צור",
     "created": "הפרויקט נוצר"
+  },
+  "driveFolders": {
+    "title": "תקיות Drive לסריקה",
+    "description": "smrtTask יסרוק רק תקיות שמסומנות כאן. סריקה כוללת גם את כל תת-התקיות. תקייה שלא ברשימה — לא תיכלל, גם אם פתחת אותה לאחרונה.",
+    "empty": "עדיין לא בחרת תקיות. אף קובץ מ-Drive לא יסרק עד שתוסיף לפחות תקייה אחת.",
+    "addFolder": "הוסף תקייה",
+    "remove": "הסר",
+    "saved": "הרשימה עודכנה",
+    "recursiveNote": "כל קובץ בתת-תקייה של תקייה ברשימה כן יסרק. שינוי בהגדרה ייכנס לתוקף בסנכרון הבא.",
+    "driveNotConnected": "Google Drive לא מחובר. חבר את Drive בדף החשבון לפני בחירת תקיות.",
+    "pickerTitle": "בחירת תקיות מ-Drive",
+    "searchPlaceholder": "חפש תקייה לפי שם...",
+    "noResults": "אין תוצאות",
+    "cancel": "ביטול",
+    "addSelected": "{count, plural, =0 {הוסף} one {הוסף תקייה אחת} other {הוסף # תקיות}}"
   }
 }
