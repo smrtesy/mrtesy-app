@@ -44,6 +44,21 @@
     "sectionVoice": "smrtVoice",
     "more": "More"
   },
+  "account": {
+    "title": "Account",
+    "identity": "Identity",
+    "name": "Name",
+    "email": "Email",
+    "organization": "Organization"
+  },
+  "settingsTabs": {
+    "apps": "Apps",
+    "org": "Organization",
+    "platform": "Platform",
+    "noAppsEnabled": "No apps enabled for this organization",
+    "openPlatformAdmin": "Open platform admin",
+    "platformDescription": "System-level management — users, orgs, apps, logs and usage."
+  },
   "whatsappPage": {
     "title": "WhatsApp Messages",
     "threadCount": "{count, plural, one {1 chat} other {# chats}}",

@@ -2,7 +2,7 @@ import { getTranslations } from "next-intl/server";
 import { SettingsTabs } from "@/components/platform/settings/SettingsTabs";
 import { getEnabledAppsForActiveOrg } from "@/lib/apps/server";
 
-export default async function OrgSettingsPage() {
+export default async function PlatformSettingsPage() {
   const t = await getTranslations("settings");
   const enabledApps = await getEnabledAppsForActiveOrg();
   return (
