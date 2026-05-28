@@ -28,6 +28,7 @@ interface SnoozedTaskRow {
   title_he: string | null;
   snoozed_until: string | null;
   priority: string | null;
+  manually_verified: boolean | null;
 }
 
 export function ScheduledSuggestions({ locale }: { locale: string }) {
@@ -43,13 +44,12 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     setLoading(true);
     try {
       // Reminders come from the existing /api/reminders endpoint. Snoozed
-      // suggestions come straight from supabase: a snoozed task IS just a
-      // hidden inbox suggestion that will re-surface at snoozed_until. The
-      // worker (reminders-check edge function) flips status back to "inbox"
-      // when the time arrives. We restrict to source_message-backed,
-      // unverified tasks so this tab only shows snoozed *suggestions*, not
-      // snoozed approved tasks (those have their own home in the active
-      // tasks list).
+      // tasks/suggestions come straight from supabase: a snoozed row is a
+      // hidden inbox item that will re-surface at snoozed_until. The worker
+      // (reminders-check edge function) flips status back to "inbox" when
+      // the time arrives. We show ALL snoozed rows here — both unverified
+      // suggestions and verified approved tasks — since this is the only
+      // tab where the user can see them.
       const [remindersResp, { data: { user } }] = await Promise.all([
         api<{ reminders: ReminderRow[] }>("/api/reminders?active=true&limit=30").catch((e) => {
           if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
@@ -63,11 +63,9 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
       if (user) {
         const { data: snoozedRows } = await supabase
           .from("tasks")
-          .select("id, title, title_he, snoozed_until, priority")
+          .select("id, title, title_he, snoozed_until, priority, manually_verified")
           .eq("user_id", user.id)
           .eq("status", "snoozed")
-          .eq("manually_verified", false)
-          .not("source_message_id", "is", null)
           .not("snoozed_until", "is", null)
           .order("snoozed_until", { ascending: true })
           .limit(200);
@@ -181,6 +179,9 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <Badge variant="outline" className="text-[10px]">
                               {t("snoozedUntil", { when: whenLabel })}
+                            </Badge>
+                            <Badge variant="secondary" className="text-[10px]">
+                              {task.manually_verified ? t("kindTask") : t("kindSuggestion")}
                             </Badge>
                             {task.priority && (
                               <Badge variant="secondary" className="text-[10px]">

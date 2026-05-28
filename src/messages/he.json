@@ -307,7 +307,8 @@
     "tabs": {
       "messages": "מהודעות",
       "scheduled": "מתוזמנות",
-      "projects": "פרויקטים"
+      "projects": "פרויקטים",
+      "dismissed": "נדחו"
     },
     "approve": "אשר",
     "dismiss": "דחה",
@@ -353,7 +354,14 @@
     "paused": "הושהה",
     "removed": "הוסר",
     "recurring": "חוזר",
-    "createProject": "צור פרויקט"
+    "createProject": "צור פרויקט",
+    "kindTask": "משימה",
+    "kindSuggestion": "הצעה",
+    "noDismissed": "אין פריטים שנדחו",
+    "dismissedAt": "נדחה ב-{when}",
+    "dismissedReasonLabel": "סיבה",
+    "restoreToInbox": "החזר לתיבת הנכנסות",
+    "restored": "הפריט הוחזר לתיבת הנכנסות"
   },
   "aiTrail": {
     "title": "למה ה-AI יצר את זה?",

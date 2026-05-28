@@ -307,7 +307,8 @@
     "tabs": {
       "messages": "From Messages",
       "scheduled": "Scheduled",
-      "projects": "Projects"
+      "projects": "Projects",
+      "dismissed": "Dismissed"
     },
     "approve": "Approve",
     "dismiss": "Dismiss",
@@ -353,7 +354,14 @@
     "paused": "Paused",
     "removed": "Removed",
     "recurring": "Recurring",
-    "createProject": "Create Project"
+    "createProject": "Create Project",
+    "kindTask": "Task",
+    "kindSuggestion": "Suggestion",
+    "noDismissed": "No dismissed items",
+    "dismissedAt": "Dismissed {when}",
+    "dismissedReasonLabel": "Reason",
+    "restoreToInbox": "Restore to inbox",
+    "restored": "Item restored to inbox"
   },
   "aiTrail": {
     "title": "Why did the AI create this?",
