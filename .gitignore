@@ -42,3 +42,7 @@ server/.env
 
 # supabase cli temp files
 supabase/.temp/
+
+# android — google-services.json contains API keys, keep out of git
+# add the real file manually or via CI secret
+android-app/app/google-services.json
