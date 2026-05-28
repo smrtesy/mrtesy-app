@@ -7,7 +7,6 @@ import { useTranslations } from "next-intl";
 import {
   CheckSquare,
   Bell,
-  FileText,
   Settings,
   FolderOpen,
   Plus,
@@ -33,29 +32,20 @@ import { api, ApiError } from "@/lib/api/client";
 // Per-app items shown below each app section header. Guides moved out —
 // they're reached by clicking the app NAME in AppSectionHeader. Settings
 // moved out too — clicking the app ICON in AppSectionHeader opens them.
+//
+// Log went into smrtTask's settings panel (it's an app-internal view, not
+// a top-level nav target). WhatsApp lives under smrtTask itself — the only
+// app that consumes it today.
 const smrtTaskItems = [
-  { key: "inboxIncoming", href: "/inbox",    icon: Bell        },
-  { key: "tasks",         href: "/tasks",    icon: CheckSquare },
-  { key: "projects",      href: "/projects", icon: FolderOpen  },
-] as const;
-
-const smrtTaskViewItems = [
-  { key: "whatsapp",                href: "/whatsapp",                 icon: MessageCircle },
-  { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical  },
-  { key: "log",                     href: "/log",                      icon: FileText      },
+  { key: "inboxIncoming", href: "/inbox",    icon: Bell          },
+  { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
+  { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
+  { key: "projects",      href: "/projects", icon: FolderOpen    },
 ] as const;
 
 const smrtVoiceItems = [
   { key: "voiceProjects",   href: "/voice",            icon: Mic    },
   { key: "voiceCharacters", href: "/voice/characters", icon: Users  },
-] as const;
-
-const managementItemsWithoutInbox = [
-  { key: "settings", href: "/settings", icon: Settings },
-] as const;
-const managementItemsWithInbox = [
-  { key: "inbox",    href: "/inbox",    icon: Bell     },
-  { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
@@ -212,17 +202,19 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
   // Items shown in the "More" bottom sheet, grouped by app.
   // Each group is rendered with an AppSectionHeader (name → guide, icon → settings).
-  // smrtTask "guide" / smrtVoice "voiceGuide" no longer appear as separate items
-  // — they're reached via the section header's name click.
+  // Log moved into smrtTask settings; transcription experiment moved to
+  // management; both are no longer per-app sidebar items.
   const smrtTaskMoreItems: MobileNavItem[] = hasSmrtTask ? [
-    { key: "projects",                href: "/projects",                 icon: FolderOpen    },
-    { key: "whatsapp",                href: "/whatsapp",                 icon: MessageCircle },
-    { key: "log",                     href: "/log",                      icon: FileText      },
-    { key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical  },
+    { key: "projects", href: "/projects", icon: FolderOpen    },
+    { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
   ] : [];
   const smrtVoiceMoreItems: MobileNavItem[] = hasSmrtVoice ? [
     { key: "voiceCharacters", href: "/voice/characters", icon: Users },
   ] : [];
+  const managementMoreItems: MobileNavItem[] = [
+    ...(hasSmrtTask ? [{ key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical }] : []),
+    ...(isAdmin ? [{ key: "platformAdmin", href: "/admin", icon: Shield }] : []),
+  ];
 
   return (
     <>
@@ -273,14 +265,6 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-
-              <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                {t("sectionViews")}
-              </p>
-              {smrtTaskViewItems.map((item) => (
-                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
-                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
-              ))}
             </>
           )}
 
@@ -297,29 +281,29 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
             {t("sectionManagement")}
           </p>
-          {(hasSmrtTask ? managementItemsWithoutInbox : managementItemsWithInbox).map((item) => (
-            <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+          {!hasSmrtTask && (
+            <NavItem itemKey="inbox" href="/inbox" icon={Bell}
               basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
-          ))}
-
+          )}
+          <NavItem itemKey="settings" href="/settings" icon={Settings}
+            basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+          {hasSmrtTask && (
+            <NavItem itemKey="transcriptionExperiment" href="/transcription-experiment" icon={FlaskConical}
+              basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+          )}
           {isAdmin && (
-            <>
-              <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                {t("sectionPlatform")}
-              </p>
-              <Link
-                href={`${basePath}/admin`}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  pathname.startsWith(`${basePath}/admin`)
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )}
-              >
-                <Shield className="h-5 w-5" />
-                {t("admin")}
-              </Link>
-            </>
+            <Link
+              href={`${basePath}/admin`}
+              className={cn(
+                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                pathname.startsWith(`${basePath}/admin`)
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+            >
+              <Shield className="h-5 w-5" />
+              {t("platformAdmin")}
+            </Link>
           )}
         </nav>
 
@@ -410,13 +394,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
                 <MoreGrid items={smrtVoiceMoreItems} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} />
               </section>
             )}
-            {isAdmin && (
+            {managementMoreItems.length > 0 && (
               <section>
                 <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                  {t("sectionPlatform")}
+                  {t("sectionManagement")}
                 </p>
                 <MoreGrid
-                  items={[{ key: "admin", href: "/admin", icon: Shield }]}
+                  items={managementMoreItems}
                   basePath={basePath}
                   t={t}
                   isActive={isActive}

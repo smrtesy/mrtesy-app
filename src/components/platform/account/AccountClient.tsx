@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
-  CheckCircle2, XCircle, RefreshCw, Shield,
+  CheckCircle2, XCircle, RefreshCw,
 } from "lucide-react";
 
 interface ConnectionStatus {
@@ -41,9 +41,6 @@ export function AccountClient() {
   });
   const [userEmail, setUserEmail] = useState<string>("");
   const [userName, setUserName] = useState<string>("");
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [driveSyncDays, setDriveSyncDays] = useState(30);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -59,11 +56,9 @@ export function AccountClient() {
 
       const { data } = await supabase
         .from("user_settings")
-        .select("whatsapp_connected, drive_sync_days")
+        .select("whatsapp_connected")
         .eq("user_id", user.id)
         .single();
-      setDriveSyncDays(data?.drive_sync_days ?? 30);
-      setCurrentUserId(user.id);
 
       // Mirror the health probe behaviour from the old /settings page:
       // refresh credentials and drop revoked rows so the indicators reflect
@@ -91,9 +86,6 @@ export function AccountClient() {
         calendar: serviceTypes.includes("google_calendar"),
         whatsapp: data?.whatsapp_connected ?? false,
       });
-
-      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
-      setIsAdmin(adminEmails.includes(user.email?.toLowerCase() || ""));
     }
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -201,29 +193,6 @@ export function AccountClient() {
                     )}
                   </div>
                 </div>
-                {conn.key === "drive" && connected && (
-                  <div className="flex items-center justify-between mt-2 ps-8">
-                    <span className="text-xs text-muted-foreground">{tSettings("driveScanDepth")}</span>
-                    <select
-                      value={driveSyncDays}
-                      onChange={async (e) => {
-                        const days = Number(e.target.value);
-                        setDriveSyncDays(days);
-                        if (currentUserId) {
-                          await supabase
-                            .from("user_settings")
-                            .update({ drive_sync_days: days })
-                            .eq("user_id", currentUserId);
-                        }
-                      }}
-                      className="text-xs border rounded px-2 py-1 bg-background"
-                    >
-                      {[7, 14, 30, 60, 90, 180].map((d) => (
-                        <option key={d} value={d}>{tSettings("driveScanDays", { days: d })}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -241,21 +210,6 @@ export function AccountClient() {
           </Button>
         </CardContent>
       </Card>
-
-      {/* Admin shortcut */}
-      {isAdmin && (
-        <Card>
-          <CardContent className="p-4">
-            <a
-              href={`/${locale}/admin`}
-              className="flex items-center gap-3 text-sm font-medium text-primary hover:underline"
-            >
-              <Shield className="h-5 w-5" />
-              {tSettings("adminPanel")}
-            </a>
-          </CardContent>
-        </Card>
-      )}
 
       <Separator />
 
