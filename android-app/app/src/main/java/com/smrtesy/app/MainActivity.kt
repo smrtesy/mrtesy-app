@@ -100,6 +100,8 @@ class MainActivity : AppCompatActivity() {
                 cacheMode = WebSettings.LOAD_DEFAULT
                 setSupportMultipleWindows(true)
                 javaScriptCanOpenWindowsAutomatically = true
+                // Remove "wv" WebView marker so the site treats us like Chrome Mobile
+                userAgentString = "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
             }
 
             webViewClient = SmrtesyWebViewClient()
