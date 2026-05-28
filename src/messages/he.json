@@ -112,7 +112,11 @@
     "newChatInvalidPhone": "מספר הטלפון לא תקין",
     "newChatNeedText": "ההודעה ריקה",
     "newChatWindowClosed": "Meta חוסם פתיחת שיחה חדשה לאיש קשר שלא יזם שיחה. דרוש Template Message מאושר (לא נתמך עדיין במערכת).",
-    "newChatTemplateWarning": "⚠️ Meta מאפשר שליחה חופשית רק תוך 24 שעות מהודעה אחרונה מהצד השני. ליצירת שיחה חדשה אצל איש קשר שלא שלח לך — נדרש Template Message מאושר."
+    "newChatTemplateWarning": "⚠️ Meta מאפשר שליחה חופשית רק תוך 24 שעות מהודעה אחרונה מהצד השני. ליצירת שיחה חדשה אצל איש קשר שלא שלח לך — נדרש Template Message מאושר.",
+    "renameContact": "שינוי שם איש הקשר",
+    "renameContactPlaceholder": "הכנס שם להצגה",
+    "renameContactSave": "שמור",
+    "renameContactCancel": "ביטול"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

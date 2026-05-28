@@ -12,6 +12,10 @@ export interface Thread {
   last_body_text: string | null;
   from_phone: string;
   from_name: string | null;
+  /** User-defined override for the contact's display name. When non-null,
+   *  takes priority over `from_name` everywhere (list, header, and the
+   *  `sender` field on source_messages used by the smrtTask classifier). */
+  custom_name?: string | null;
   is_history: boolean;
   unread_count?: number;
   task_count?: number;
@@ -54,7 +58,8 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
     <ul className="h-full overflow-y-auto rounded-lg border bg-card divide-y">
       {threads.map((th) => {
         const isSelected = th.chat_id === selectedChatId;
-        const displayName = th.from_name?.trim() || th.from_phone || th.chat_id;
+        const displayName =
+          th.custom_name?.trim() || th.from_name?.trim() || th.from_phone || th.chat_id;
         const preview = th.last_body_text?.trim() || `[${th.last_message_type}]`;
         const previewDir = detectMessageDir(preview);
         const nameDir = detectMessageDir(displayName);

@@ -167,6 +167,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
               chatId={selectedChatId}
               thread={threads.find((t) => t.chat_id === selectedChatId)}
               locale={locale as string}
+              onContactRenamed={loadThreads}
               onMessageSent={() => {
                 // Re-fetch immediately rather than waiting for the next
                 // poll tick — the optimistic insert on the backend already

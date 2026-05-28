@@ -1290,8 +1290,19 @@ async function refreshSourceMessageThread(
   const ordered = [...msgs].reverse();
   const last = ordered[ordered.length - 1];
 
+  // User-set name from whatsapp_chat_state.custom_name wins — that's the
+  // name surfaced in the WhatsApp UI and the one we want the classifier
+  // / recommendations to see as `sender`.
+  const { data: stateRow } = await db
+    .from("whatsapp_chat_state")
+    .select("custom_name")
+    .eq("user_id", userId)
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  const customName = (stateRow?.custom_name as string | null)?.trim() || null;
   const latestIncoming = [...ordered].reverse().find((m) => m.direction === "incoming");
   const chatName =
+    customName ||
     (latestIncoming?.from_name as string | null) ||
     (last.from_name as string | null) ||
     (last.from_phone as string | null) ||

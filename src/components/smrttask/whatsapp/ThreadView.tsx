@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
@@ -78,11 +78,14 @@ interface Props {
   onBack: () => void;
   /** Called after a successful send so the parent can refetch immediately. */
   onMessageSent?: () => void;
+  /** Called after the user renames the contact so the parent can refresh
+   *  the thread list (so the new name appears in the left pane too). */
+  onContactRenamed?: () => void;
 }
 
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent }: Props) {
+export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -109,7 +112,40 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
 
   const visibleMessages = messages.filter((m) => !m.is_reaction);
 
-  const displayName = thread?.from_name?.trim() || thread?.from_phone || chatId;
+  const displayName =
+    thread?.custom_name?.trim() ||
+    thread?.from_name?.trim() ||
+    thread?.from_phone ||
+    chatId;
+
+  // Inline rename state. Click the pencil → input replaces the name.
+  // Saving issues a PATCH, then nudges the parent to refresh the thread
+  // list so the rename propagates to the left pane.
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+
+  const startRename = () => {
+    setRenameValue(thread?.custom_name?.trim() || thread?.from_name?.trim() || "");
+    setRenaming(true);
+  };
+
+  const submitRename = async () => {
+    const next = renameValue.trim();
+    setRenameSaving(true);
+    try {
+      await api(`/api/whatsapp/threads/${encodeURIComponent(chatId)}/name`, {
+        method: "PATCH",
+        body: { custom_name: next || null },
+      });
+      setRenaming(false);
+      onContactRenamed?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRenameSaving(false);
+    }
+  };
 
   // Quick-lookup map for reply quotes — when a message has reply_to_wamid,
   // we want to surface the original message's preview above the bubble.
@@ -211,7 +247,59 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
-          <p className="font-medium text-sm truncate">{displayName}</p>
+          {renaming ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void submitRename(); }
+                  if (e.key === "Escape") { e.preventDefault(); setRenaming(false); }
+                }}
+                placeholder={t("renameContactPlaceholder")}
+                className="flex-1 min-w-0 rounded border bg-background px-2 py-0.5 text-sm"
+                maxLength={120}
+                disabled={renameSaving}
+              />
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                onClick={() => void submitRename()}
+                disabled={renameSaving}
+                aria-label={t("renameContactSave")}
+                title={t("renameContactSave")}
+              >
+                {renameSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                onClick={() => setRenaming(false)}
+                disabled={renameSaving}
+                aria-label={t("renameContactCancel")}
+                title={t("renameContactCancel")}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <p className="font-medium text-sm truncate">{displayName}</p>
+              <button
+                type="button"
+                onClick={startRename}
+                className="text-muted-foreground hover:text-foreground p-0.5 shrink-0"
+                aria-label={t("renameContact")}
+                title={t("renameContact")}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          )}
           {/* Sub-line: "active a few minutes ago" approximation from
               incoming + read receipts (real WhatsApp last-seen isn't
               exposed by the Cloud API). Fall back to phone if no activity. */}
