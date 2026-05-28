@@ -2,6 +2,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import { RTLProvider } from "@/components/RTLProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { MergeJobShell } from "@/components/MergeJobShell";
 import { Toaster } from "sonner";
 
 export default async function LocaleLayout({
@@ -22,7 +23,9 @@ export default async function LocaleLayout({
           back to LTR and inner flex rows render left-to-right on /he. */}
       <RTLProvider dir={dir}>
         <TooltipProvider>
-          {children}
+          <MergeJobShell locale={locale}>
+            {children}
+          </MergeJobShell>
           <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
         </TooltipProvider>
       </RTLProvider>

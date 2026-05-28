@@ -17,7 +17,8 @@ import { formatDateOnly } from "@/lib/date";
 import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
-import { MergeModal, type MergeInitialState, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
+import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
+import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
@@ -50,30 +51,29 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
-  /** When set, the modal will open at step 2 with this proposal already
-   *  applied. Populated by a background job that finished while the modal
-   *  was closed. Cleared when the user opens-and-discards the modal. */
-  const [resumedMerge, setResumedMerge] = useState<MergeInitialState | null>(null);
+  const mergeJob = useMergeJob();
+
+  // When a background merge completes elsewhere (e.g. user reopened from
+  // the global chip on /tasks), refresh our suggestion list so the
+  // archived sources disappear.
+  useMergeCompletedListener(useCallback(() => {
+    fetchSuggestions();
+    onUpdate?.();
+  // fetchSuggestions/onUpdate change identity per render — we want the
+  // listener installed once, not re-installed on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []));
 
   const handleMinimize = useCallback((job: MergeMinimizeJob) => {
     toast.info(tMerge("bgRunningToast"));
-    job.promise.then((proposal) => {
-      setResumedMerge({
-        proposal,
-        targetMode: job.targetMode,
-        existingTargetId: job.existingTargetId,
-        sources: job.sources,
-      });
-      toast.success(tMerge("bgReadyToast"), {
-        action: { label: tMerge("openMerge"), onClick: () => setMergeOpen(true) },
-        duration: 30_000,
-      });
-    }).catch(() => {
-      toast.error(tMerge("bgFailedToast"));
+    mergeJob.startJob(job.promise, {
+      sources: job.sources,
+      targetMode: job.targetMode,
+      existingTargetId: job.existingTargetId,
+      startedAtPath: typeof window !== "undefined" ? window.location.pathname : undefined,
     });
-  // tMerge is stable per-render; explicitly excluded
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mergeJob.startJob]);
 
   // ?focus=<id> from a /whatsapp deep-link → scroll the matching
   // suggestion card into view and briefly highlight it. The ref lets us
@@ -425,8 +425,8 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
       <MergeModal
         open={mergeOpen}
-        onClose={() => { setMergeOpen(false); setResumedMerge(null); }}
-        sources={resumedMerge?.sources ?? suggestions
+        onClose={() => setMergeOpen(false)}
+        sources={suggestions
           .filter((s) => selected.has(s.id))
           .map((s) => ({
             id: s.id,
@@ -437,7 +437,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             ai_confidence: s.ai_confidence,
           }))}
         locale={locale}
-        initialState={resumedMerge}
         onMinimize={handleMinimize}
         onMerged={(result) => {
           const itemCount = (result.task?.checklist as unknown[] | undefined)?.length ?? 0;
@@ -445,7 +444,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             ? tMerge("successToastWithChecklist", { count: itemCount })
             : tMerge("successToast"));
           setSelected(new Set());
-          setResumedMerge(null);
           fetchSuggestions();
           onUpdate?.();
         }}
