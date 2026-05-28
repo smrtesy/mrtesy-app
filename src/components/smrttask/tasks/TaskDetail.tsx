@@ -75,9 +75,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [selectorMembers, setSelectorMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
 
   const [saving, setSaving] = useState(false);
-  const [showUpdates, setShowUpdates] = useState(false);
   const [newUpdate, setNewUpdate] = useState("");
   const [addingUpdate, setAddingUpdate] = useState(false);
+  /** IDs of update entries the user clicked to expand. Long content is
+   *  truncated by default; click to see the full body. */
+  const [expandedUpdateIds, setExpandedUpdateIds] = useState<Set<string>>(new Set());
   const [showGenerated, setShowGenerated] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
@@ -370,41 +372,136 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 </div>
               )}
 
-              {/* Description */}
-              <div>
-                <h4 className="text-sm font-medium mb-2">{t("detail.description")}</h4>
-                {editingDesc ? (
-                  <div className="space-y-2">
-                    <Textarea
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      className="min-h-[120px]"
-                      dir="auto"
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={handleDescSave} disabled={saving} className="gap-1">
-                        <Save className="h-3 w-3" />
-                        {saving ? "..." : tDetail("saveButton")}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditingDesc(false)}>
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className="cursor-pointer rounded border p-3 text-sm hover:bg-accent/50 min-h-[60px]"
-                    dir="auto"
-                    onClick={() => {
-                      setDescription(task.description || "");
-                      setEditingDesc(true);
-                    }}
-                  >
-                    {task.description || (
-                      <span className="text-muted-foreground">{t("detail.editDescription")}</span>
+              {/* Description + Updates — unified block. The description
+                  is the user's editable canonical text; updates are the
+                  evolving timeline of what's changed/happened. Both
+                  always visible so the user gets the full task story on
+                  open, with no extra clicks. */}
+              <div className="rounded border overflow-hidden">
+                {/* Description (canonical) */}
+                <div className="p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      {t("detail.description")}
+                    </h4>
+                    {!editingDesc && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDescription(task.description || "");
+                          setEditingDesc(true);
+                        }}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        {tDetail("saveButton") === "Save" ? "Edit" : "ערוך"}
+                      </button>
                     )}
                   </div>
-                )}
+                  {editingDesc ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        className="min-h-[120px]"
+                        dir="auto"
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={handleDescSave} disabled={saving} className="gap-1">
+                          <Save className="h-3 w-3" />
+                          {saving ? "..." : tDetail("saveButton")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingDesc(false)}>
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-sm" dir="auto">
+                      {task.description || (
+                        <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Updates timeline — always visible. Compact. */}
+                <div className="border-t bg-muted/30">
+                  {/* Quick-add input — always-visible so the user can drop
+                      a note without expanding anything. */}
+                  <div className="flex gap-2 p-2 border-b bg-background">
+                    <Textarea
+                      value={newUpdate}
+                      onChange={(e) => setNewUpdate(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Cmd/Ctrl+Enter submits — common pattern in chat UIs.
+                        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && newUpdate.trim()) {
+                          e.preventDefault();
+                          handleAddUpdate();
+                        }
+                      }}
+                      placeholder={tDetail("addUpdatePlaceholder")}
+                      className="min-h-[40px] text-sm resize-none flex-1"
+                      dir="auto"
+                      rows={1}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleAddUpdate}
+                      disabled={addingUpdate || !newUpdate.trim()}
+                      className="shrink-0 self-start"
+                      title="Cmd/Ctrl+Enter"
+                    >
+                      <Save className="h-3 w-3" />
+                    </Button>
+                  </div>
+
+                  {/* Timeline */}
+                  {updates.length === 0 ? (
+                    <p className="text-xs text-muted-foreground italic px-3 py-2">
+                      {t("detail.noUpdates")}
+                    </p>
+                  ) : (
+                    <ul className="divide-y">
+                      {updates.map((update) => {
+                        const isLong = (update.content?.length ?? 0) > 140;
+                        const expanded = expandedUpdateIds.has(update.id);
+                        const display = !isLong || expanded
+                          ? update.content
+                          : (update.content ?? "").slice(0, 140) + "…";
+                        return (
+                          <li
+                            key={update.id}
+                            className="px-3 py-1.5 text-sm hover:bg-background/60 transition-colors"
+                          >
+                            <div className="flex items-baseline gap-2 text-[11px] text-muted-foreground mb-0.5">
+                              <span className="font-medium" title={new Date(update.created_at).toLocaleString()}>
+                                {formatUpdateTime(update.created_at, locale)}
+                              </span>
+                              <span>·</span>
+                              <span>{formatActor(update.actor, update.type, locale)}</span>
+                            </div>
+                            <div
+                              className="whitespace-pre-wrap leading-snug"
+                              dir="auto"
+                              onClick={() => {
+                                if (!isLong) return;
+                                setExpandedUpdateIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(update.id)) next.delete(update.id);
+                                  else next.add(update.id);
+                                  return next;
+                                });
+                              }}
+                              style={{ cursor: isLong ? "pointer" : "default" }}
+                            >
+                              {display}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
               </div>
 
               <Separator />
@@ -436,56 +533,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 </div>
               )}
 
-              {/* Updates History */}
-              <div>
-                <button
-                  onClick={() => setShowUpdates(!showUpdates)}
-                  className="flex w-full items-center justify-between py-2 text-sm font-medium"
-                >
-                  {t("detail.updates")} ({updates.length})
-                  {showUpdates ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </button>
-                {showUpdates && (
-                  <div className="space-y-2 mt-1">
-                    {/* Add new update */}
-                    <div className="flex gap-2">
-                      <Textarea
-                        value={newUpdate}
-                        onChange={(e) => setNewUpdate(e.target.value)}
-                        placeholder={tDetail("addUpdatePlaceholder")}
-                        className="min-h-[60px] text-xs"
-                        dir="auto"
-                      />
-                      <Button
-                        size="sm"
-                        onClick={handleAddUpdate}
-                        disabled={addingUpdate || !newUpdate.trim()}
-                        className="shrink-0 h-auto"
-                      >
-                        <Save className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    {updates.map((update, i) => (
-                      <div
-                        key={update.id}
-                        className={cn(
-                          "rounded border p-2 text-xs",
-                          i === 0 && "border-blue-200 bg-blue-50"
-                        )}
-                      >
-                        <div className="flex justify-between text-muted-foreground mb-1">
-                          <Badge variant="outline" className="text-[10px]">{update.type}</Badge>
-                          <span>{new Date(update.created_at).toLocaleString()}</span>
-                        </div>
-                        <p dir="auto">{update.content}</p>
-                      </div>
-                    ))}
-                    {updates.length === 0 && (
-                      <p className="text-xs text-muted-foreground">{t("detail.noUpdates")}</p>
-                    )}
-                  </div>
-                )}
-              </div>
+              {/* Updates moved inline into the description block above. */}
 
               {/* Generated Content */}
               {generated.length > 0 && (
@@ -624,4 +672,53 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
       />
     </Dialog>
   );
+}
+
+// ── update timeline helpers ──────────────────────────────────────────────
+
+/** Compact, RTL-aware relative timestamp.
+ *  <1m → "עכשיו" / "now"
+ *  <60m → "5 דק׳" / "5m"
+ *  <24h → "3 שע׳" / "3h"
+ *  <7d  → "2 ימים" / "2d"
+ *  else → absolute date (locale-formatted) */
+function formatUpdateTime(iso: string, locale: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60_000);
+  if (locale === "he") {
+    if (min < 1) return "עכשיו";
+    if (min < 60) return `לפני ${min} דק׳`;
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return `לפני ${hrs} שע׳`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `לפני ${days} ימים`;
+    return new Date(iso).toLocaleDateString("he-IL");
+  }
+  if (min < 1) return "now";
+  if (min < 60) return `${min}m ago`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/** Friendly actor label. Falls back to the entry's `type` for unknown
+ *  actors so a "completion_signal" / "initial" / etc. entry still shows
+ *  something meaningful. */
+function formatActor(actor: unknown, type: unknown, locale: string): string {
+  const a = typeof actor === "string" ? actor : "";
+  const tp = typeof type === "string" ? type : "";
+  if (locale === "he") {
+    if (a === "user")   return "אתה";
+    if (a === "ai")     return "🤖 AI";
+    if (a === "system") return tp === "initial" ? "📩 מקור" : "מערכת";
+    return tp || "מערכת";
+  }
+  if (a === "user")   return "You";
+  if (a === "ai")     return "🤖 AI";
+  if (a === "system") return tp === "initial" ? "📩 source" : "system";
+  return tp || "system";
 }
