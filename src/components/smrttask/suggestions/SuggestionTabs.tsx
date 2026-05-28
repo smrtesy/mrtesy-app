@@ -13,7 +13,7 @@ import type { InboxCounts } from "@/components/platform/inbox/InboxTabs";
 function TabCount({ count }: { count: number }) {
   if (count === 0) return null;
   return (
-    <span className="ms-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] font-semibold text-primary">
+    <span className="ms-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] font-semibold text-primary">
       {count > 99 ? "99+" : count}
     </span>
   );
@@ -34,24 +34,24 @@ export function SuggestionTabs({
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} dir={locale === "he" ? "rtl" : "ltr"}>
       <TabsList className="w-full">
-        <TabsTrigger value="messages" className="flex-1 gap-1">
-          <Bell className="h-4 w-4" />
-          <span className="text-xs sm:text-sm">{t("tabs.messages")}</span>
+        <TabsTrigger value="messages" className="flex-1 min-w-0 gap-0.5 sm:gap-1 px-1 sm:px-3">
+          <Bell className="h-4 w-4 shrink-0" />
+          <span className="text-[11px] sm:text-sm truncate">{t("tabs.messages")}</span>
           <TabCount count={counts.messages} />
         </TabsTrigger>
-        <TabsTrigger value="scheduled" className="flex-1 gap-1">
-          <Calendar className="h-4 w-4" />
-          <span className="text-xs sm:text-sm">{t("tabs.scheduled")}</span>
+        <TabsTrigger value="scheduled" className="flex-1 min-w-0 gap-0.5 sm:gap-1 px-1 sm:px-3">
+          <Calendar className="h-4 w-4 shrink-0" />
+          <span className="text-[11px] sm:text-sm truncate">{t("tabs.scheduled")}</span>
           <TabCount count={counts.scheduled} />
         </TabsTrigger>
-        <TabsTrigger value="projects" className="flex-1 gap-1">
-          <Lightbulb className="h-4 w-4" />
-          <span className="text-xs sm:text-sm">{t("tabs.projects")}</span>
+        <TabsTrigger value="projects" className="flex-1 min-w-0 gap-0.5 sm:gap-1 px-1 sm:px-3">
+          <Lightbulb className="h-4 w-4 shrink-0" />
+          <span className="text-[11px] sm:text-sm truncate">{t("tabs.projects")}</span>
           <TabCount count={counts.projects} />
         </TabsTrigger>
-        <TabsTrigger value="dismissed" className="flex-1 gap-1">
-          <Trash2 className="h-4 w-4" />
-          <span className="text-xs sm:text-sm">{t("tabs.dismissed")}</span>
+        <TabsTrigger value="dismissed" className="flex-1 min-w-0 gap-0.5 sm:gap-1 px-1 sm:px-3">
+          <Trash2 className="h-4 w-4 shrink-0" />
+          <span className="text-[11px] sm:text-sm truncate">{t("tabs.dismissed")}</span>
           <TabCount count={counts.dismissed} />
         </TabsTrigger>
       </TabsList>
