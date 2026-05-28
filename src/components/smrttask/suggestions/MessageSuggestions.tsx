@@ -351,7 +351,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="font-medium text-sm" dir="auto">{title}</h4>
+                    <h4 className="font-medium text-sm" dir={locale === "he" ? "rtl" : "ltr"}>{title}</h4>
                     <SerialBadge serial={task.serial_display as string | null} />
                     <SourceLink source={source} />
                     {dueDate && (
@@ -361,7 +361,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     )}
                   </div>
                   {task.description ? (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir="auto">
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
                       {task.description}
                     </p>
                   ) : null}

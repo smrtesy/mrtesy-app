@@ -9,7 +9,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Zap,
   MessageCircle,
@@ -280,7 +279,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
           {/* Sticky header */}
           <div className="sticky top-0 z-10 bg-background border-b px-4 py-3">
             <div className="flex items-center justify-between gap-2">
-              <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir="auto">{title}</DialogTitle>
+              <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
               <div className="flex items-center gap-1 shrink-0">
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={startFieldEdit} title={tCommon("edit")}>
                   <Pencil className="h-4 w-4" />
@@ -316,7 +315,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             </div>
           </div>
 
-          <ScrollArea className="flex-1 px-4 py-4">
+          {/* Plain overflow-y-auto instead of <ScrollArea> here. The Radix
+              viewport occasionally fails to size correctly inside this
+              dialog when the inner content has its own border/overflow
+              wrappers (the unified description+updates block does), which
+              leaves the body un-scrollable — the user can see content
+              below the fold but can't reach it. Native scrolling is the
+              robust fallback and gives touch devices momentum out of the
+              box. */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 overscroll-contain">
             <div className="space-y-4">
               {/* AI trail — collapsed by default; lazy-fetched on first open.
                   Only shown for AI-sourced tasks (manual tasks have no trail). */}
@@ -329,7 +336,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 <div className="space-y-3 rounded-lg border p-3 bg-muted/50">
                   <div>
                     <label className="text-xs font-medium">{tDetail("titleLabel")}</label>
-                    <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} dir="auto" />
+                    <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} dir={dir} />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -434,7 +441,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         className="min-h-[120px]"
-                        dir="auto"
+                        dir={dir}
                       />
                       <div className="flex gap-2">
                         <Button size="sm" onClick={handleDescSave} disabled={saving} className="gap-1">
@@ -447,7 +454,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       </div>
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap text-sm" dir="auto">
+                    <div className="whitespace-pre-wrap text-sm" dir={dir}>
                       {task.description || (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
@@ -472,7 +479,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       }}
                       placeholder={tDetail("addUpdatePlaceholder")}
                       className="min-h-[40px] text-sm resize-none flex-1"
-                      dir="auto"
+                      dir={dir}
                       rows={1}
                     />
                     <Button
@@ -513,7 +520,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                             </div>
                             <div
                               className="whitespace-pre-wrap leading-snug"
-                              dir="auto"
+                              dir={dir}
                               onClick={() => {
                                 if (!isLong) return;
                                 setExpandedUpdateIds((prev) => {
@@ -586,7 +593,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                               {new Date(item.created_at).toLocaleString()}
                             </span>
                           </div>
-                          {item.result && <p className="whitespace-pre-wrap" dir="auto">{item.result}</p>}
+                          {item.result && <p className="whitespace-pre-wrap" dir={dir}>{item.result}</p>}
                           {item.draft_url && (
                             <a
                               href={item.draft_url}
@@ -625,7 +632,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                           className="flex items-center gap-2 rounded border p-2 text-xs hover:bg-accent"
                         >
                           <FolderSearch className="h-4 w-4 text-blue-500" />
-                          <span className="flex-1 truncate" dir="auto">{doc.name}</span>
+                          <span className="flex-1 truncate" dir={dir}>{doc.name}</span>
                           <ExternalLink className="h-3 w-3 text-muted-foreground" />
                         </a>
                       ))}
@@ -641,7 +648,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 onChange={onUpdate}
               />
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Sticky bottom actions */}
           <div className="border-t bg-background px-4 py-3 flex items-center justify-between pb-[max(12px,env(safe-area-inset-bottom))]">

@@ -98,7 +98,7 @@ export function TaskCard({
           )}
         >
           <Bell className="h-3 w-3 mt-0.5 shrink-0" />
-          <span dir="auto" className="flex-1">
+          <span dir={locale === "he" ? "rtl" : "ltr"} className="flex-1">
             {isPendingCompletion
               ? task.completion_signal_reason || t("completionBanner")
               : t("hasUnreadUpdate")}
@@ -118,7 +118,7 @@ export function TaskCard({
             aria-label="select"
           />
         )}
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir="auto">
+        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir={locale === "he" ? "rtl" : "ltr"}>
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
@@ -131,7 +131,7 @@ export function TaskCard({
 
       {/* Description preview */}
       {task.description && (
-        <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir="auto">
+        <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
           {task.description}
         </p>
       )}
@@ -146,7 +146,7 @@ export function TaskCard({
           </span>
         )}
         {task.related_contact && (
-          <span className="truncate" dir="auto">{task.related_contact}</span>
+          <span className="truncate" dir={locale === "he" ? "rtl" : "ltr"}>{task.related_contact}</span>
         )}
         {project && (
           <span
