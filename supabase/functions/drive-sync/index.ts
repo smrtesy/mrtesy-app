@@ -178,6 +178,18 @@ async function syncUserDrive(userId: string) {
 
   if (!resp.ok) {
     const errText = await resp.text();
+    // 400 on pageToken = stale token after re-auth. Self-heal: clear checkpoint
+    // so the next run fetches fresh instead of looping on the same 400 forever.
+    if (resp.status === 400 && pageToken) {
+      await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "google_drive",
+        checkpoint: null,
+        last_error: null,
+        consecutive_failures: 0,
+      }, { onConflict: "user_id,source" });
+      return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+    }
     await supabase.from("sync_state").upsert({
       user_id: userId,
       source: "google_drive",
