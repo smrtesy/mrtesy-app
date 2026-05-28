@@ -112,9 +112,25 @@ available — and propose:
   2. A coherent description that synthesizes the content (NOT a concatenation
      with separators — write fresh prose).
   3. A checklist (suggested_checklist) that breaks the merged work into
-     concrete next-actions. Each item should be a discrete sub-action a person
-     could check off. Prefer 2-6 items. Cite which source it came from via
-     source_task_id (use the IDs the user gave you).
+     ATOMIC next-actions — the smaller and more concrete, the better.
+
+     CRITICAL RULES for checklist granularity:
+     - If the work mentions checking/comparing/visiting MULTIPLE entities
+       (websites, vendors, products, candidates, suppliers, options, etc.),
+       create ONE separate checklist item PER entity. Never collapse "check
+       prices on N sites" into a single item — that defeats the purpose of
+       a checklist. The user wants to tick off each site individually.
+     - Same rule for multi-step processes: each step is its own item.
+       Example: "research → quote → order → confirm shipping" = 4 items.
+     - Read the description AND the source emails carefully — entities are
+       usually listed there (often comma-separated or in bullet form).
+     - Each item should be a discrete next-action a person could check off
+       in under 30 minutes. If an item still feels broad, split it further.
+     - Aim for 3-12 items typically; do not artificially cap at 6.
+     - Use imperative voice ("בדוק את X", "הזמן Y", not "צריך לבדוק").
+
+     Cite which source it came from via source_task_id (use the IDs the
+     user gave you).
   4. A recommended priority (urgent/high/medium/low) with a short reason.
   5. A recommended due_date (ISO YYYY-MM-DD) with a short reason — typically
      the earliest among the sources, but use judgment.
@@ -148,7 +164,19 @@ Return STRICT JSON, no markdown fences, with this shape:
 }
 
 Write Hebrew text in Hebrew (titles, descriptions, checklist items). Keep
-checklist titles short (3-8 words each).`;
+checklist titles short (3-8 words each).
+
+WORKED EXAMPLE — atomic checklist:
+  Input description: "צריך לבדוק ולהשוות מחירים בין ארבעה אתרים: everythingbranded.com,
+                      everythingpromo.com, qualitylogoproducts.com ו-brandedpromo.com"
+  WRONG checklist (too broad):  ["בדוק מחירים בכל האתרים"]
+  RIGHT checklist (atomic):     ["בדוק ב-everythingbranded.com",
+                                 "בדוק ב-everythingpromo.com",
+                                 "בדוק ב-qualitylogoproducts.com",
+                                 "בדוק ב-brandedpromo.com",
+                                 "השווה הצעות ובחר ספק",
+                                 "בצע הזמנה"]
+  Six items, each tickable independently.`;
 
 router.post("/tasks/merge/propose", async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as ProposeBody;

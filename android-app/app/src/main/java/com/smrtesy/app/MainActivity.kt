@@ -204,9 +204,9 @@ class MainActivity : AppCompatActivity() {
             binding.progressBar.visibility = View.GONE
             binding.swipeRefresh.isRefreshing = false
 
-            // Inject console capture so JS errors appear in overlay
             view.evaluateJavascript("""
                 (function() {
+                    // Console capture
                     var orig = { log: console.log, error: console.error, warn: console.warn };
                     console.log   = function(m) { AndroidDebug.log(String(m));   orig.log.apply(console, arguments); };
                     console.error = function(m) { AndroidDebug.error(String(m)); orig.error.apply(console, arguments); };
@@ -217,6 +217,15 @@ class MainActivity : AppCompatActivity() {
                     window.onunhandledrejection = function(e) {
                         AndroidDebug.error('PROMISE: ' + (e.reason || e));
                     };
+
+                    // DOM snapshot
+                    AndroidDebug.log('TITLE: ' + document.title);
+                    AndroidDebug.log('BODY_CHILDREN: ' + document.body.children.length);
+                    AndroidDebug.log('BODY_TEXT: ' + (document.body.innerText || '').substring(0, 200));
+                    AndroidDebug.log('COOKIES: ' + (document.cookie ? document.cookie.substring(0, 100) : 'none'));
+                    AndroidDebug.log('SCRIPTS: ' + document.scripts.length);
+                    var meta = document.querySelector('meta[name="viewport"]');
+                    AndroidDebug.log('VIEWPORT: ' + (meta ? meta.content : 'missing'));
                 })();
             """.trimIndent(), null)
         }
@@ -224,18 +233,15 @@ class MainActivity : AppCompatActivity() {
         override fun onReceivedError(
             view: WebView, request: WebResourceRequest, error: WebResourceError
         ) {
-            if (request.isForMainFrame) {
-                val msg = "[ERROR] code=${error.errorCode} desc=${error.description} url=${request.url}"
-                logDebug(msg)
-            }
+            val tag = if (request.isForMainFrame) "[NET ERROR:MAIN]" else "[NET ERROR:sub]"
+            logDebug("$tag code=${error.errorCode} ${error.description}\n  url=${request.url}")
         }
 
         override fun onReceivedHttpError(
-            view: WebView, request: WebResourceRequest, response: HttpErrorResponse
+            view: WebView, request: WebResourceRequest, response: WebResourceResponse
         ) {
-            if (request.isForMainFrame) {
-                logDebug("[HTTP ERROR] ${response.statusCode} url=${request.url}")
-            }
+            val tag = if (request.isForMainFrame) "[HTTP ERROR:MAIN]" else "[HTTP ERROR:sub]"
+            logDebug("$tag ${response.statusCode}\n  url=${request.url}")
         }
     }
 

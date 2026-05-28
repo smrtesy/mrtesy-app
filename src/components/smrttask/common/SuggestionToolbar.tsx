@@ -100,7 +100,7 @@ export function SuggestionToolbar({
               onClick={onBulkApprove}
             >
               <CheckCircle2 className="h-4 w-4" />
-              {t("bulkApprove")}
+              {t("bulkApprove", { count: selectedCount })}
             </Button>
           )}
           {onBulkMerge && (
