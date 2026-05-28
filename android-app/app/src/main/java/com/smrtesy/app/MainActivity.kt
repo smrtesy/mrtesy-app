@@ -233,18 +233,15 @@ class MainActivity : AppCompatActivity() {
         override fun onReceivedError(
             view: WebView, request: WebResourceRequest, error: WebResourceError
         ) {
-            if (request.isForMainFrame) {
-                val msg = "[ERROR] code=${error.errorCode} desc=${error.description} url=${request.url}"
-                logDebug(msg)
-            }
+            val tag = if (request.isForMainFrame) "[NET ERROR:MAIN]" else "[NET ERROR:sub]"
+            logDebug("$tag code=${error.errorCode} ${error.description}\n  url=${request.url}")
         }
 
         override fun onReceivedHttpError(
             view: WebView, request: WebResourceRequest, response: WebResourceResponse
         ) {
-            if (request.isForMainFrame) {
-                logDebug("[HTTP ERROR] ${response.statusCode} url=${request.url}")
-            }
+            val tag = if (request.isForMainFrame) "[HTTP ERROR:MAIN]" else "[HTTP ERROR:sub]"
+            logDebug("$tag ${response.statusCode}\n  url=${request.url}")
         }
     }
 
