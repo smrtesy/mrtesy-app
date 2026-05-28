@@ -797,22 +797,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
   let linkedTaskId: string | null = null;
+
+  // User reclassified this message as actionable via the log UI — bypass
+  // preClassify skip/defer/informational logic and force actionable after AI.
+  const userForceActionable = msg.ai_classification === "user_actionable";
+
   const preResult = preClassify(msg, settings, sys);
 
   // ── Early exits that don't need AI ─────────────────────────────────────────
-  if (preResult.result === "defer") {
+  if (!userForceActionable && preResult.result === "defer") {
     await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
     return "deferred";
   }
 
-  if (preResult.result === "skip") {
+  if (!userForceActionable && preResult.result === "skip") {
     await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "skipped", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "skip", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "skip");
     return;
   }
 
-  if (preResult.result === "informational") {
+  if (!userForceActionable && preResult.result === "informational") {
     await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "informational", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "informational");
@@ -851,6 +856,14 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     classification = "actionable";
     classificationReason = `${classificationReason} | pre:customer_inquiry`;
     await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+  }
+
+  // User override: user reclassified as actionable via the log UI
+  if (userForceActionable) {
+    classification = "actionable";
+    classificationReason = classificationReason
+      ? `${classificationReason} | [user_override]`
+      : "user manually reclassified as actionable";
   }
 
   // ── Path 1: known existing task in this thread → always append ────────────
