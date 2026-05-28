@@ -8,6 +8,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { google } from "googleapis";
 import { db } from "../../../db";
 import { requireAuth, isSuperAdmin } from "../../../middleware";
 import { getOAuthClient } from "../../../services/token-refresh";
@@ -16,7 +17,7 @@ const router = Router();
 
 const UPDATABLE_SETTINGS = new Set([
   "display_name", "timezone", "office_addresses", "skip_senders",
-  "skip_recipients", "my_emails", "drive_folder_id",
+  "skip_recipients", "my_emails", "drive_folder_id", "drive_folder_ids",
   "calendar_event_filter", "calendar_allday_tasks", "calendar_holidays_tasks",
   "classification_model", "summary_model", "daily_ai_budget_usd",
   "show_ai_costs", "reminder_channels", "default_reminder_timing",
@@ -292,6 +293,103 @@ router.get("/me/credentials/health", requireAuth, async (req: Request, res: Resp
   );
 
   return res.json({ services: Array.from(services) });
+});
+
+/**
+ * GET /me/drive/folders
+ *
+ * Lists folders in the caller's Google Drive for the multi-folder
+ * picker UI. Returns up to `limit` results.
+ *
+ * Query params:
+ *   q       optional substring search on folder name (Drive `name contains`)
+ *   parent  optional folder ID — list only direct children of this folder
+ *   limit   default 100, max 200
+ *
+ * Returns: { folders: Array<{ id, name, parents?: string[] }> }
+ */
+router.get("/me/drive/folders", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const auth = await getOAuthClient(req.user!.id, "google_drive");
+    const drive = google.drive({ version: "v3", auth });
+
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const parent = typeof req.query.parent === "string" ? req.query.parent.trim() : "";
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
+
+    const clauses: string[] = [
+      "mimeType = 'application/vnd.google-apps.folder'",
+      "trashed = false",
+    ];
+    if (q) clauses.push(`name contains '${q.replace(/'/g, "\\'")}'`);
+    if (parent) clauses.push(`'${parent.replace(/'/g, "\\'")}' in parents`);
+
+    const result = await drive.files.list({
+      q: clauses.join(" and "),
+      pageSize: limit,
+      fields: "files(id, name, parents)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    res.json({ folders: result.data.files ?? [] });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Surface "Drive not connected" cleanly to the UI so it can prompt
+    // the user to reconnect rather than showing an opaque 500.
+    if (/No credentials found/i.test(msg) || /invalid_grant/i.test(msg) || /invalid_client/i.test(msg)) {
+      return res.status(409).json({ error: "drive_not_connected", message: msg });
+    }
+    return res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * GET /me/drive/folders/by-id
+ *
+ * Resolves a list of folder IDs to their metadata (id + name + parents).
+ * Used by the settings UI to display the names of folders the user has
+ * already picked. IDs that no longer exist (deleted folders, lost
+ * access) are silently dropped from the response.
+ *
+ * Query params:
+ *   ids   comma-separated list of folder IDs
+ */
+router.get("/me/drive/folders/by-id", requireAuth, async (req: Request, res: Response) => {
+  const raw = typeof req.query.ids === "string" ? req.query.ids : "";
+  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 100);
+  if (ids.length === 0) return res.json({ folders: [] });
+
+  try {
+    const auth = await getOAuthClient(req.user!.id, "google_drive");
+    const drive = google.drive({ version: "v3", auth });
+
+    // Fetch in parallel — each .get is one round-trip. For typical N<25
+    // this beats a search query and is more reliable (search can miss
+    // folders the user has shared but doesn't own).
+    const results = await Promise.allSettled(
+      ids.map((id) =>
+        drive.files.get({
+          fileId: id,
+          fields: "id, name, parents, trashed",
+          supportsAllDrives: true,
+        }),
+      ),
+    );
+
+    const folders = results
+      .flatMap((r) => (r.status === "fulfilled" ? [r.value.data] : []))
+      .filter((f) => f && f.id && !f.trashed);
+
+    res.json({ folders });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No credentials found/i.test(msg) || /invalid_grant/i.test(msg) || /invalid_client/i.test(msg)) {
+      return res.status(409).json({ error: "drive_not_connected", message: msg });
+    }
+    return res.status(500).json({ error: msg });
+  }
 });
 
 export default router;

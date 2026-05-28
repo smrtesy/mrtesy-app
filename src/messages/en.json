@@ -535,6 +535,7 @@
     "skipRulesAndStyle": "Skip Rules & Style",
     "syncSchedules": "Sync Schedules",
     "classifierParameters": "Classifier Parameters",
+    "driveFolders": "Drive folders to scan",
     "smrtTaskSection": "smrtTask",
     "deployInfoTitle": "Build info",
     "deployInfoLoading": "Loading deploy info...",
@@ -1235,5 +1236,20 @@
     "topLevel": "Top-level project",
     "create": "Create",
     "created": "Project created"
+  },
+  "driveFolders": {
+    "title": "Drive folders to scan",
+    "description": "smrtTask only scans folders listed here, including all their sub-folders. A folder that isn't on the list won't be ingested — even if you opened it recently.",
+    "empty": "You haven't picked any folders yet. No Drive files will be scanned until you add at least one.",
+    "addFolder": "Add folder",
+    "remove": "Remove",
+    "saved": "List updated",
+    "recursiveNote": "Files anywhere inside a listed folder are scanned recursively. Changes take effect on the next sync.",
+    "driveNotConnected": "Google Drive isn't connected. Connect Drive on the Account page before picking folders.",
+    "pickerTitle": "Pick Drive folders",
+    "searchPlaceholder": "Search folders by name...",
+    "noResults": "No results",
+    "cancel": "Cancel",
+    "addSelected": "{count, plural, =0 {Add} one {Add 1 folder} other {Add # folders}}"
   }
 }
