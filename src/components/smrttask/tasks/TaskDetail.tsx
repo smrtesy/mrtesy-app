@@ -85,6 +85,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
 
+  /** Locally-refreshed snapshot of the task, kept in sync after operations
+   *  that the parent's onUpdate() callback only refreshes at list-level
+   *  (e.g. adding an update doesn't push a new `task` prop down). When
+   *  set, takes precedence over the prop so the user sees their note
+   *  appear immediately. Cleared when the prop's task.id changes. */
+  const [liveTask, setLiveTask] = useState<Task | null>(null);
+
   // Auto-expand the field editor when the dialog opens with initialEditingFields=true.
   // The ref is reset when the dialog closes so the next open always re-triggers edit mode.
   const autoEditedTaskIdRef = useRef<string | null>(null);
@@ -100,12 +107,26 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, task?.id, initialEditingFields]);
 
+  // Reset the local override whenever the parent opens us with a
+  // different task so we don't bleed state across selections.
+  const lastTaskIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastTaskIdRef.current !== (task?.id ?? null)) {
+      lastTaskIdRef.current = task?.id ?? null;
+      setLiveTask(null);
+    }
+  }, [task?.id]);
+
   if (!task) return null;
 
-  const title = locale === "he" && task.title_he ? task.title_he : task.title;
-  const updates = (task.updates || []).slice(-20).reverse();
-  const generated = task.ai_generated_content || [];
-  const docs = task.linked_drive_docs || [];
+  // Resolve which view of the task we're rendering. liveTask wins when
+  // it's for the currently-open task; otherwise we trust the parent prop.
+  const effectiveTask: Task = liveTask && liveTask.id === task.id ? liveTask : task;
+
+  const title = locale === "he" && effectiveTask.title_he ? effectiveTask.title_he : effectiveTask.title;
+  const updates = (effectiveTask.updates || []).slice(-20).reverse();
+  const generated = effectiveTask.ai_generated_content || [];
+  const docs = effectiveTask.linked_drive_docs || [];
 
   async function startFieldEdit() {
     if (!task) return;
@@ -210,12 +231,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     if (!task || !newUpdate.trim()) return;
     setAddingUpdate(true);
     try {
-      await api(`/api/tasks/${task.id}/updates`, {
-        method: "POST",
-        body: { content: newUpdate.trim(), type: "note" },
-      });
+      const { update } = await api<{ update: NonNullable<Task["updates"]>[number] }>(
+        `/api/tasks/${task.id}/updates`,
+        { method: "POST", body: { content: newUpdate.trim(), type: "note" } },
+      );
       toast.success(tDetail("toastUpdateAdded"));
       setNewUpdate("");
+      // Optimistic local update so the new entry appears in the timeline
+      // immediately, without waiting for the parent to refetch + re-pass
+      // the task prop (which most callers don't do for the open detail).
+      setLiveTask((prev) => {
+        const base = prev && prev.id === task.id ? prev : task;
+        return {
+          ...base,
+          updates: [...(base.updates ?? []), update],
+        };
+      });
       onUpdate();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
