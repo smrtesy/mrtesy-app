@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
+import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 
 interface SuggestionTask {
   id: string;
@@ -22,7 +23,9 @@ interface SuggestionTask {
 
 export function ProjectSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
+  const tMerge = useTranslations("merge");
   const [suggestions, setSuggestions] = useState<SuggestionTask[]>([]);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -129,6 +132,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
         onSelectAll={selectAllFiltered}
         onClearSelection={clearSelection}
         onBulkDismissFast={handleBulkDismissFast}
+        onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
       />
 
       {filtered.length === 0 && (
@@ -206,6 +210,25 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
         onDismissed={fetchSuggestions}
+      />
+
+      <MergeModal
+        open={mergeOpen}
+        onClose={() => setMergeOpen(false)}
+        sources={suggestions
+          .filter((s) => selected.has(s.id))
+          .map((s) => ({
+            id: s.id,
+            title: s.title,
+            title_he: s.title_he,
+            task_type: "project_suggestion",
+            status: "inbox",
+          }))}
+        locale={locale}
+        onMerged={() => {
+          toast.success(tMerge("successToast"));
+          fetchSuggestions();
+        }}
       />
     </div>
   );
