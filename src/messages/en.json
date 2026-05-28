@@ -311,7 +311,8 @@
     "tabs": {
       "messages": "From Messages",
       "scheduled": "Scheduled",
-      "projects": "Projects"
+      "projects": "Projects",
+      "dismissed": "Dismissed"
     },
     "approve": "Approve",
     "dismiss": "Dismiss",
@@ -359,7 +360,14 @@
     "recurring": "Recurring",
     "createProject": "Create Project",
     "mergeIntoNew": "Merge into new task",
-    "mergeIntoExisting": "Merge into existing task"
+    "mergeIntoExisting": "Merge into existing task",
+    "kindTask": "Task",
+    "kindSuggestion": "Suggestion",
+    "noDismissed": "No dismissed items",
+    "dismissedAt": "Dismissed {when}",
+    "dismissedReasonLabel": "Reason",
+    "restoreToInbox": "Restore to inbox",
+    "restored": "Item restored to inbox"
   },
   "merge": {
     "step1Title": "Choose merge target",

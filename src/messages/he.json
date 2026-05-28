@@ -311,7 +311,8 @@
     "tabs": {
       "messages": "מהודעות",
       "scheduled": "מתוזמנות",
-      "projects": "פרויקטים"
+      "projects": "פרויקטים",
+      "dismissed": "נדחו"
     },
     "approve": "אשר",
     "dismiss": "דחה",
@@ -359,7 +360,14 @@
     "recurring": "חוזר",
     "createProject": "צור פרויקט",
     "mergeIntoNew": "מזג למשימה חדשה",
-    "mergeIntoExisting": "מזג למשימה קיימת"
+    "mergeIntoExisting": "מזג למשימה קיימת",
+    "kindTask": "משימה",
+    "kindSuggestion": "הצעה",
+    "noDismissed": "אין פריטים שנדחו",
+    "dismissedAt": "נדחה ב-{when}",
+    "dismissedReasonLabel": "סיבה",
+    "restoreToInbox": "החזר לתיבת הנכנסות",
+    "restored": "הפריט הוחזר לתיבת הנכנסות"
   },
   "merge": {
     "step1Title": "בחירת יעד למיזוג",
