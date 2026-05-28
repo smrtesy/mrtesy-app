@@ -70,18 +70,28 @@ export async function getOAuthClient(userId: string, service: string) {
       const refreshed = await oauth2Client.refreshAccessToken();
       credentials = refreshed.credentials;
     } catch (err) {
-      // `invalid_grant` is Google's permanent error — refresh_token was
-      // revoked (user removed app access, inactivity timeout, scope change,
-      // etc.). Wipe the credential row so connection indicators flip to
-      // "disconnected" instead of staying green forever. Transient errors
-      // (network, 5xx) just bubble up; we leave the row alone.
+      // Log every refresh failure so we can see WHY a service appears
+      // disconnected. Without this, non-invalid_grant errors (network
+      // blips, Google 5xx, scope mismatches) leave the row intact and
+      // the UI silently shows "disconnected" with no breadcrumb.
       const msg = err instanceof Error ? err.message : String(err);
-      if (/invalid_grant/i.test(msg)) {
+      const isInvalidGrant = /invalid_grant/i.test(msg);
+      try {
+        await db.from("log_entries").insert({
+          user_id: userId,
+          level: isInvalidGrant ? "error" : "warning",
+          category: "token_refresh",
+          status: "failed",
+          error_message: `${dbService}: ${msg}`.slice(0, 1000),
+        });
+      } catch { /* logging is best-effort */ }
+
+      if (isInvalidGrant) {
+        // `invalid_grant` is Google's permanent error — refresh_token was
+        // revoked. Wipe the credential row so the connection indicator
+        // flips to "disconnected" instead of staying green forever, and
+        // notify the user so they actually know to reconnect.
         await db.from("user_credentials").delete().eq("id", c.id);
-        // Tell the user immediately. Without a notification, the only
-        // signal is the silent red "disconnected" badge buried in the
-        // Account page — easy to miss, and meanwhile every cron job
-        // depending on this credential keeps failing.
         await notifyServiceDisconnected(userId, dbService).catch(() => {
           /* notification is best-effort; never block the throw */
         });
@@ -99,6 +109,28 @@ export async function getOAuthClient(userId: string, service: string) {
           : null,
       })
       .eq("id", c.id);
+
+    // gmail + google_calendar share the same OAuth grant (issued together
+    // in the gmail_calendar callback). When we refresh one, propagate the
+    // new access_token to the other so the google_calendar row doesn't
+    // drift stale — only the health endpoint refreshes it directly, and
+    // historically that path lost the singleton race and never updated
+    // the row. Best-effort: a sibling-update failure must not block the
+    // primary refresh's success.
+    if (dbService === "gmail") {
+      try {
+        await db
+          .from("user_credentials")
+          .update({
+            access_token: credentials.access_token!,
+            expires_at: credentials.expiry_date
+              ? new Date(credentials.expiry_date).toISOString()
+              : null,
+          })
+          .eq("user_id", userId)
+          .eq("service", "google_calendar");
+      } catch { /* sibling sync is best-effort */ }
+    }
   }
 
   return oauth2Client;
