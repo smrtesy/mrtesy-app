@@ -260,11 +260,15 @@ Return ONLY valid JSON array:
   { "type": "keyword",  "value": "term that appears in messages about this project" },
   { "type": "timeline", "value": "date or deadline (e.g. annual event April–June)" },
   { "type": "topic",    "value": "recurring theme or subtopic" },
-  { "type": "link",     "value": "URL or document name if mentioned" },
+  { "type": "link",     "value": "FULL URL exactly as it appears in the source — never just the domain. Include query params, fragments, message IDs. e.g. https://drive.google.com/file/d/ABC123/view, not drive.google.com" },
   { "type": "note",     "value": "any other useful context" }
 ]
 
-Be specific. Use Hebrew where appropriate. Do not repeat facts.`;
+Be specific. Use Hebrew where appropriate. Do not repeat facts.
+
+DEEP-LINK PRESERVATION (system-wide): any URL appearing in a source must
+be emitted verbatim. The whole point of the system is to land the user on
+the right page in one click — bare domains defeat that.`;
 
   const briefSystem = ((await loadPrompt(userId, "brief_builder")) ?? defaultBriefSystem)
     .replace("{{user}}", identity);
