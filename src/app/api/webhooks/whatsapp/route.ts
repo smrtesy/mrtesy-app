@@ -845,7 +845,7 @@ async function buildMessageRow(
           }
 
           const transcript = await transcribeAudio(db, blob.base64, blob.mimeType);
-          body = "[תמלול אודיו]\n" + transcript;
+          body = transcript;
         } catch (e) {
           console.warn("[whatsapp-webhook] audio transcription failed:", e);
           body = "[אודיו - לא ניתן לתמלל כרגע]";
@@ -1110,8 +1110,45 @@ interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
   finishReason?: string;
 }
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+}
 interface GeminiResponse {
   candidates?: GeminiCandidate[];
+  usageMetadata?: GeminiUsageMetadata;
+}
+
+const GEMINI_PRICING: Record<string, { audioInput: number; imageInput: number; textInput: number; output: number }> = {
+  "gemini-2.5-flash":       { textInput: 0.30, audioInput: 1.00, imageInput: 0.30, output: 2.50 },
+  "gemini-2.5-pro":         { textInput: 1.25, audioInput: 1.25, imageInput: 1.25, output: 10.0 },
+  "gemini-3-flash-preview": { textInput: 0.50, audioInput: 1.00, imageInput: 0.50, output: 3.00 },
+  "gemini-3-pro-preview":   { textInput: 1.50, audioInput: 2.50, imageInput: 1.50, output: 12.0 },
+};
+
+function estimateGeminiCostLocal(model: string, usage: GeminiUsageMetadata | undefined): number {
+  if (!usage) return 0;
+  const p = GEMINI_PRICING[model];
+  if (!p) return 0;
+  let audioTok = 0, imageTok = 0, textTok = 0;
+  if (Array.isArray(usage.promptTokensDetails)) {
+    for (const d of usage.promptTokensDetails) {
+      const n = d.tokenCount ?? 0;
+      const m = (d.modality ?? "").toUpperCase();
+      if (m === "AUDIO") audioTok += n;
+      else if (m === "IMAGE" || m === "VIDEO") imageTok += n;
+      else textTok += n;
+    }
+  } else {
+    textTok = usage.promptTokenCount ?? 0;
+  }
+  const outTok = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
+  return (audioTok / 1_000_000) * p.audioInput +
+    (imageTok / 1_000_000) * p.imageInput +
+    (textTok  / 1_000_000) * p.textInput +
+    (outTok   / 1_000_000) * p.output;
 }
 
 async function callGemini(
@@ -1166,6 +1203,20 @@ async function callGemini(
   }
 
   const data = (await res.json()) as GeminiResponse;
+
+  // Log usage to ai_usage ledger (best-effort).
+  try {
+    const usage = data.usageMetadata;
+    await db.from("ai_usage").insert({
+      provider: "google",
+      component: "gemini.whatsapp",
+      model,
+      input_tokens: usage?.promptTokenCount ?? 0,
+      output_tokens: usage?.candidatesTokenCount ?? 0,
+      cost_usd: estimateGeminiCostLocal(model, usage),
+    });
+  } catch { /* never block the caller */ }
+
   const candidate = data.candidates?.[0];
   if (!candidate) return "[Gemini: אין תגובה]";
   if (candidate.finishReason === "SAFETY") return '[Gemini: תוכן נחסם ע"י מסנני בטיחות]';
@@ -1178,19 +1229,62 @@ async function callGemini(
   return text ?? "[Gemini החזיר תגובה ריקה]";
 }
 
+const TRANSCRIPTION_PROMPT =
+  "החזר אך ורק את תוכן הדיבור עצמו, מילה במילה. אסור להוסיף ולו מילה אחת משלך.\n" +
+  "• המילה הראשונה והמילה האחרונה בפלט חייבות להיות מתוך הדיבור עצמו.\n" +
+  "• בלי שום משפט פתיחה (\"הנה התמלול\", \"בטח, הנה...\", \"להלן התמלול:\") ובלי שום משפט סיום (\"מקווה שעזרתי\", \"זהו\", \"בהצלחה\").\n" +
+  "• בלי כותרות, בלי סוגריים מטא (כגון [תמלול אודיו]), ובלי markdown fences (```).\n" +
+  "• בלי תוויות דובר כמו \"דובר 1:\", \"דובר 2:\" אלא אם יש באמת כמה דוברים שונים בקובץ.\n" +
+  "\n" +
+  "חוקי תמלול:\n" +
+  "• זהה את שפת הדיבור (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה — אל תתרגם.\n" +
+  "• שמור על סימני פיסוק ופסקאות טבעיות.\n" +
+  "• אם יש קטע לא ברור — כתוב [לא ברור]. אסור להמציא.\n" +
+  "\n" +
+  "הפלט שלך נכנס ישירות לצ'אט של המשתמש כאילו הוא הקליד אותו בעצמו.";
+
+function sanitizeTranscript(text: string): string {
+  let out = text.trim();
+
+  if (/^```/.test(out)) {
+    out = out.replace(/^```[a-zA-Z0-9]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+  }
+
+  out = out.replace(/^\[\s*תמלול(?:\s+אודיו)?\s*\]\s*\n*/u, "");
+
+  const HE_META = "תמלול|תרגום|טקסט|פלט|תוצאה|תיאור|פיענוח|קובץ\\s+קולי|הקלטה";
+  const EN_META = "transcript(?:ion)?|ocr|text|output|result|translation|description|audio|recording";
+  const preamblePatterns: RegExp[] = [
+    new RegExp(`^(?:הנה|להלן|בטח[,!:]?\\s*הנה)[^\\n]{0,80}(?:${HE_META})[^\\n]{0,40}:\\s*\\n+`, "iu"),
+    new RegExp(`^(?:here(?:'s| is| are|\\s+you\\s+go)|sure[,!:]?\\s*here|below(?:\\s+is)?)[^\\n]{0,80}(?:${EN_META})[^\\n]{0,40}:\\s*\\n+`, "i"),
+    new RegExp(`^the\\s+(?:${EN_META})\\s+(?:is|reads|follows)[^\\n]{0,40}:?\\s*\\n+`, "i"),
+    /^\*\*[^\n*]{1,80}\*\*\s*\n+/,
+    new RegExp(`^(?:${HE_META}|${EN_META})\\s*[:：]\\s*\\n+`, "i"),
+  ];
+  for (const re of preamblePatterns) {
+    const next = out.replace(re, "");
+    if (next.length < out.length) { out = next; break; }
+  }
+
+  out = out.replace(
+    /\n+(hope this helps[^\n]*|let me know if[^\n]*|מקווה שזה עוזר[^\n]*|מקווה שעזרתי[^\n]*|אם יש לך עוד שאלות[^\n]*|אני כאן[^\n]*|בהצלחה[!.]?)\s*$/i,
+    "",
+  );
+
+  if (/^דובר\s*1\s*[:：]/u.test(out) && !/דובר\s*2\s*[:：]/u.test(out)) {
+    out = out.replace(/^דובר\s*1\s*[:：]\s*/u, "");
+  }
+
+  return out.trim();
+}
+
 async function transcribeAudio(
   db: SupabaseAdmin,
   base64Data: string,
   mimeType: string,
 ): Promise<string> {
-  const prompt =
-    "תמלל במדויק את הקובץ הקולי. כללים:\n" +
-    "1. זהה את השפה המקורית (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה\n" +
-    "2. שמור על סימני פיסוק ופסקאות טבעיות\n" +
-    '3. אם יש כמה דוברים - סמן אותם כ"דובר 1", "דובר 2" וכו\'\n' +
-    "4. אם יש רקע לא ברור - ציין [לא ברור] ולא תמציא\n" +
-    "5. החזר רק את התמלול עצמו, ללא הקדמות או הערות מטא";
-  return callGemini(db, prompt, base64Data, mimeType || "audio/ogg");
+  const raw = await callGemini(db, TRANSCRIPTION_PROMPT, base64Data, mimeType || "audio/ogg");
+  return sanitizeTranscript(raw);
 }
 
 async function performImageOcr(
@@ -1247,8 +1341,19 @@ async function refreshSourceMessageThread(
   const ordered = [...msgs].reverse();
   const last = ordered[ordered.length - 1];
 
+  // User-set name from whatsapp_chat_state.custom_name wins — that's the
+  // name surfaced in the WhatsApp UI and the one we want the classifier
+  // / recommendations to see as `sender`.
+  const { data: stateRow } = await db
+    .from("whatsapp_chat_state")
+    .select("custom_name")
+    .eq("user_id", userId)
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  const customName = (stateRow?.custom_name as string | null)?.trim() || null;
   const latestIncoming = [...ordered].reverse().find((m) => m.direction === "incoming");
   const chatName =
+    customName ||
     (latestIncoming?.from_name as string | null) ||
     (last.from_name as string | null) ||
     (last.from_phone as string | null) ||

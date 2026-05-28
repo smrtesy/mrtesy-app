@@ -16,6 +16,7 @@ export interface InboxCounts {
   messages: number;
   scheduled: number;
   projects: number;
+  dismissed: number;
   notifications: number;
 }
 
@@ -34,19 +35,21 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
   const [tab, setTab] = useState<"suggestions" | "notifications">(
     hasSmrtTask ? "suggestions" : "notifications",
   );
-  const [counts, setCounts] = useState<InboxCounts>({ messages: 0, scheduled: 0, projects: 0, notifications: 0 });
+  const [counts, setCounts] = useState<InboxCounts>({ messages: 0, scheduled: 0, projects: 0, dismissed: 0, notifications: 0 });
 
   const fetchCounts = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const [messagesRes, scheduledRes, projectsRes, notifRes] = await Promise.all([
+    const [messagesRes, scheduledRes, projectsRes, dismissedRes, notifRes] = await Promise.all([
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "inbox").eq("manually_verified", false).not("source_message_id", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
-        .eq("user_id", user.id).eq("status", "snoozed").eq("manually_verified", false).not("source_message_id", "is", null).not("snoozed_until", "is", null),
+        .eq("user_id", user.id).eq("status", "snoozed").not("snoozed_until", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("task_type", "project_suggestion").eq("status", "inbox"),
+      supabase.from("tasks").select("*", { count: "exact", head: true })
+        .eq("user_id", user.id).eq("status", "dismissed"),
       supabase.from("notifications").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("is_read", false),
     ]);
@@ -55,6 +58,7 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
       messages:      messagesRes.count  ?? 0,
       scheduled:     scheduledRes.count ?? 0,
       projects:      projectsRes.count  ?? 0,
+      dismissed:     dismissedRes.count ?? 0,
       notifications: notifRes.count     ?? 0,
     });
   }, [supabase]);

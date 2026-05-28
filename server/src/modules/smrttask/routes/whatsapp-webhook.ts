@@ -1169,10 +1169,25 @@ async function refreshSourceMessageThread(userId: string, chatId: string): Promi
   const ordered = [...msgs].reverse();
   const last = ordered[ordered.length - 1];
 
-  // Figure out the chat metadata. fromName on the LATEST incoming message
-  // is the best display name we have; fall back to phone otherwise.
+  // Figure out the chat metadata. User-defined `custom_name` on
+  // whatsapp_chat_state takes priority — that's the name the user has
+  // explicitly chosen for this contact, and it should propagate into the
+  // classifier's `sender` field. Otherwise: fromName on the latest
+  // incoming message → from_name on the last message → phone → chat_id.
+  const { data: stateRow } = await db
+    .from("whatsapp_chat_state")
+    .select("custom_name")
+    .eq("user_id", userId)
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  const customName = (stateRow?.custom_name as string | null)?.trim() || null;
   const latestIncoming = [...ordered].reverse().find((m) => m.direction === "incoming");
-  const chatName = (latestIncoming?.from_name as string | null) || (last.from_name as string | null) || (last.from_phone as string | null) || chatId;
+  const chatName =
+    customName ||
+    (latestIncoming?.from_name as string | null) ||
+    (last.from_name as string | null) ||
+    (last.from_phone as string | null) ||
+    chatId;
   const fromPhone = (latestIncoming?.from_phone as string | null) || (last.from_phone as string | null) || chatId;
   const isGroup = !/^\d+$/.test(chatId) || chatId.length > 15;
 

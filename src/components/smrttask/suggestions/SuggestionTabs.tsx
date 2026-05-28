@@ -6,7 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageSuggestions } from "./MessageSuggestions";
 import { ScheduledSuggestions } from "./ScheduledSuggestions";
 import { ProjectSuggestions } from "./ProjectSuggestions";
-import { Bell, Calendar, Lightbulb } from "lucide-react";
+import { DismissedSuggestions } from "./DismissedSuggestions";
+import { Bell, Calendar, Lightbulb, Trash2 } from "lucide-react";
 import type { InboxCounts } from "@/components/platform/inbox/InboxTabs";
 
 function TabCount({ count }: { count: number }) {
@@ -48,6 +49,11 @@ export function SuggestionTabs({
           <span className="text-xs sm:text-sm">{t("tabs.projects")}</span>
           <TabCount count={counts.projects} />
         </TabsTrigger>
+        <TabsTrigger value="dismissed" className="flex-1 gap-1">
+          <Trash2 className="h-4 w-4" />
+          <span className="text-xs sm:text-sm">{t("tabs.dismissed")}</span>
+          <TabCount count={counts.dismissed} />
+        </TabsTrigger>
       </TabsList>
 
       <TabsContent value="messages" className="mt-4">
@@ -58,6 +64,9 @@ export function SuggestionTabs({
       </TabsContent>
       <TabsContent value="projects" className="mt-4">
         <ProjectSuggestions locale={locale} />
+      </TabsContent>
+      <TabsContent value="dismissed" className="mt-4">
+        <DismissedSuggestions locale={locale} onChange={onCountsChange} />
       </TabsContent>
     </Tabs>
   );

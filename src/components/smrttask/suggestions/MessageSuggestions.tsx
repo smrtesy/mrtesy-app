@@ -17,6 +17,7 @@ import { formatDateOnly } from "@/lib/date";
 import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { DismissDialog } from "./DismissDialog";
+import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
@@ -31,6 +32,7 @@ interface SourceJoin {
 export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpdate?: () => void }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
+  const tMerge = useTranslations("merge");
   const supabase = createClient();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -47,6 +49,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   // ?focus=<id> from a /whatsapp deep-link → scroll the matching
   // suggestion card into view and briefly highlight it. The ref lets us
@@ -277,6 +280,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         onClearSelection={clearSelection}
         onBulkApprove={handleBulkApprove}
         onBulkDismissFast={handleBulkDismissFast}
+        onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
         hideSearch
       />
 
@@ -393,6 +397,31 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         open={!!snoozeTaskId}
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
+      />
+
+      <MergeModal
+        open={mergeOpen}
+        onClose={() => setMergeOpen(false)}
+        sources={suggestions
+          .filter((s) => selected.has(s.id))
+          .map((s) => ({
+            id: s.id,
+            title: s.title,
+            title_he: s.title_he,
+            task_type: s.task_type,
+            status: s.status,
+            ai_confidence: s.ai_confidence,
+          }))}
+        locale={locale}
+        onMerged={(result) => {
+          const itemCount = (result.task?.checklist as unknown[] | undefined)?.length ?? 0;
+          toast.success(itemCount > 0
+            ? tMerge("successToastWithChecklist", { count: itemCount })
+            : tMerge("successToast"));
+          setSelected(new Set());
+          fetchSuggestions();
+          onUpdate?.();
+        }}
       />
     </div>
   );

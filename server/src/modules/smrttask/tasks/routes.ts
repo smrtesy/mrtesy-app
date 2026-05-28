@@ -37,6 +37,8 @@ const UPDATABLE_FIELDS = new Set([
   "related_contact_email", "related_contact_phone",
   "project_id", "project_confidence", "assigned_to_user_id",
   "manually_verified", "source_link",
+  // Restore-from-dismissed clears these alongside status=inbox
+  "dismissal_reason_code", "dismissal_reason_text",
   // JSON content fields — client sends the whole array after read-modify-write
   "ai_generated_content", "linked_drive_docs", "checklist", "task_materials",
   // Follow-up signals from ai-process (clearing when user reads the task)

@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -90,6 +90,20 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   return tokens.access_token;
 }
 
+// Append authuser=EMAIL to a Google Drive/Docs URL so the browser opens it
+// in the correct Google account instead of whichever is currently active.
+function withAuthUser(url: string | null | undefined, email: string): string | null {
+  if (!url) return null;
+  if (!email) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set("authuser", email);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 // Export Google Docs/Sheets/Slides as plain text
 const EXPORTABLE_TYPES: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
@@ -156,6 +170,14 @@ async function syncUserDrive(userId: string) {
     return { error: errMsg };
   }
 
+  // Fetch the user's Google account email so we can append authuser= to Drive
+  // URLs — prevents the browser opening the document in the wrong Google account.
+  let googleEmail = "";
+  try {
+    const { data: authUser } = await supabase.auth.admin.getUserById(userId);
+    googleEmail = authUser?.user?.email || "";
+  } catch { /* best-effort */ }
+
   const folderId = settings?.drive_folder_id;
   const pageToken = syncState?.checkpoint;
   const syncDays: number = settings?.drive_sync_days ?? 30;
@@ -215,7 +237,7 @@ async function syncUserDrive(userId: string) {
       source_type: "google_drive",
       source_id: file.id,
       subject: file.name,
-      source_url: file.webViewLink,
+      source_url: withAuthUser(file.webViewLink, googleEmail),
       body_text: bodyText || null,
       received_at: file.modifiedTime || new Date().toISOString(),
       processing_status: "pending",

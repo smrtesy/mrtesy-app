@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -129,6 +129,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     processFrom.setHours(0, 0, 0, 0);
     if (now < processFrom) return { result: "defer", skipReason: "future_calendar_event" };
     return { result: "calendar_actionable" };
+  }
+
+  // Drive documents are never spam — always actionable regardless of content.
+  if (sourceType === "google_drive") {
+    return { result: "drive_actionable" };
   }
 
   if (sourceType === "whatsapp_echo") return { result: "check_followup" };
@@ -804,6 +809,127 @@ async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: st
   return { id: openTask.id as string, updates };
 }
 
+// ── Cross-source link: Drive document ↔ email payment/confirmation ───────────
+
+const COMPLETION_KEYWORDS = [
+  "אישור תשלום", "שולם", "קבלה", "חיוב", "ביצוע", "הושלם", "אושר", "אישור",
+  "payment confirmed", "payment received", "receipt", "paid", "completed",
+  "confirmed", "authorization", "approved", "charge", "transaction",
+];
+
+function hasCompletionKeywords(text: string): boolean {
+  const lower = text.toLowerCase();
+  return COMPLETION_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
+const CROSS_SOURCE_PROMPT = `You are matching two documents to decide if a payment or action confirmation email closes an open task.
+
+MATCH RULE — require at least 2 of the following to match EXACTLY:
+• Same monetary amount (exact number, e.g. ₪417.50 — not "a few hundred")
+• Same reference / ticket / invoice / case number
+• Same organization, authority, or person name as payer/payee
+
+DATE RULE (mandatory):
+• Find the EVENT date in the document — the date of the violation / event / service.
+  This is NOT the document issuance date; documents are often issued days or weeks after the event.
+• Find the payment / confirmation date in the email.
+• Payment date MUST be >= event date. A payment that predates the event is impossible → not a match.
+• There is no maximum gap — payments can arrive months after the event.
+
+STRICT UNCERTAINTY RULE:
+If you cannot confirm 2+ matching specifics, return {"match": false}.
+A false positive (linking the wrong documents) is far worse than a missed link.
+
+Return ONLY valid JSON, no markdown:
+{"match": true, "matched_id": "<id>", "reason": "<Hebrew: cite the 2+ specific matching details>"}
+OR
+{"match": false}`;
+
+async function checkCrossSourceLink(
+  msg: any,
+  userId: string,
+  direction: "email_to_open_tasks" | "drive_task_to_past_emails",
+  newTaskId: string | null,
+  sys: SystemParams,
+): Promise<{ taskId: string; sourceMessageId?: string; reason: string } | null> {
+  const model = sys.classification_model;
+  const since90 = new Date(Date.now() - 90 * 86_400_000).toISOString();
+
+  if (direction === "email_to_open_tasks") {
+    const { data: tasks } = await supabase
+      .from("tasks")
+      .select("id, title_he, title, description")
+      .eq("user_id", userId)
+      .in("status", ["inbox", "in_progress"])
+      .gte("created_at", since90)
+      .not("description", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (!tasks || tasks.length === 0) return null;
+
+    const taskList = (tasks as any[]).map((t) =>
+      `TASK_ID: ${t.id}\nTitle: ${t.title_he || t.title}\nDescription:\n${String(t.description).substring(0, 800)}`,
+    ).join("\n\n---\n\n");
+
+    const userMessage = `EMAIL:\nSubject: ${msg.subject || ""}\nBody:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ OPEN TASKS (last 90 days) ═══\n${taskList}`;
+
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+      { component: "ai_process.cross_link", userId, refId: msg.id });
+
+    try {
+      const m = result.text.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const parsed = JSON.parse(m[0]);
+      if (parsed.match && parsed.matched_id) {
+        return { taskId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  if (direction === "drive_task_to_past_emails") {
+    const { data: emails } = await supabase
+      .from("source_messages")
+      .select("id, subject, body_text, received_at")
+      .eq("user_id", userId)
+      .in("source_type", ["gmail", "gmail_sent"])
+      .eq("ai_classification", "informational")
+      .gte("received_at", since90)
+      .not("body_text", "is", null)
+      .order("received_at", { ascending: false })
+      .limit(30);
+
+    if (!emails || emails.length === 0) return null;
+
+    const candidates = (emails as any[]).filter((e) =>
+      hasCompletionKeywords(`${e.subject || ""} ${String(e.body_text || "").substring(0, 200)}`),
+    );
+    if (candidates.length === 0) return null;
+
+    const emailList = candidates.map((e: any) =>
+      `EMAIL_ID: ${e.id}\nSubject: ${e.subject || ""}\nDate: ${e.received_at || ""}\nBody:\n${String(e.body_text || "").substring(0, 800)}`,
+    ).join("\n\n---\n\n");
+
+    const userMessage = `DRIVE DOCUMENT:\nTitle: ${msg.subject || ""}\nContent:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ PAST CONFIRMATION EMAILS (last 90 days) ═══\n${emailList}`;
+
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+      { component: "ai_process.cross_link", userId, refId: msg.id });
+
+    try {
+      const m = result.text.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const parsed = JSON.parse(m[0]);
+      if (parsed.match && parsed.matched_id) {
+        return { taskId: newTaskId!, sourceMessageId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  return null;
+}
+
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
@@ -843,6 +969,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // classification and go straight to task creation. Claude is still called for
   // the task content itself.
   const calendarForceActionable = !userForceActionable && preResult.result === "calendar_actionable";
+  // Drive documents are never spam — skip Claude classification, but still
+  // call createTasksFromMessage so Claude reads the document and builds a task.
+  const driveForceActionable = !userForceActionable && preResult.result === "drive_actionable";
 
   let analysis: ThreadAnalysis;
   if (calendarForceActionable) {
@@ -861,6 +990,22 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     };
     classification = "actionable";
     classificationReason = "calendar: 1 business day before event";
+  } else if (driveForceActionable) {
+    analysis = {
+      classification: "actionable",
+      reason: "מסמך Drive — הצעה תיבנה מתוכן המסמך",
+      newSummary: "",
+      state: "open",
+      completionSignal: false,
+      completionReason: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      model: "",
+    };
+    classification = "actionable";
+    classificationReason = "drive: forced actionable";
   } else {
     // ── Single AI call: classify + update summary + flag completion ───────────
     try {
@@ -976,9 +1121,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         totalCacheWriteTokens += taskResult.cacheWriteTokens;
 
         if (taskResult.tasks.length === 0) {
-          classification = "informational";
-          classificationReason = "Sonnet returned no actionable tasks.";
-          aiModel = taskResult.model;
+          if (driveForceActionable) {
+            // Drive documents must always produce a task — fall back to a generic
+            // "review this document" task rather than downgrading to informational.
+            const docTitle = msg.subject || "מסמך Drive";
+            const fallbackDesc = `לעיין במסמך: ${docTitle}`;
+            const { data: newTask } = await supabase.from("tasks").insert({
+              user_id: msg.user_id, source_message_id: msg.id,
+              title: docTitle, title_he: docTitle,
+              description: fallbackDesc, task_type: "action", priority: "medium",
+              status: "inbox", manually_verified: false,
+              ai_actions: [], ai_confidence: 0.6, ai_model_used: taskResult.model || "drive_fallback",
+              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: fallbackDesc }],
+            }).select("id").single();
+            if (newTask) linkedTaskId = newTask.id as string;
+            classificationReason = "drive: fallback task (Sonnet returned no tasks)";
+            aiModel = taskResult.model;
+          } else {
+            classification = "informational";
+            classificationReason = "Sonnet returned no actionable tasks.";
+            aiModel = taskResult.model;
+          }
         } else {
           const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
           if (firstReason) classificationReason = firstReason;
@@ -1007,6 +1170,70 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+    }
+  }
+
+  // ── Path 4: informational Gmail with completion signals →
+  //    check cross-source whether it closes an open task (Drive or any source) ─
+  if (
+    !linkedTaskId &&
+    classification === "informational" &&
+    (msg.source_type === "gmail" || msg.source_type === "gmail_sent") &&
+    hasCompletionKeywords(`${msg.subject || ""} ${bodyForAI(msg).substring(0, 400)}`)
+  ) {
+    try {
+      const link = await checkCrossSourceLink(msg, msg.user_id, "email_to_open_tasks", null, sys);
+      if (link) {
+        const { data: targetTask } = await supabase
+          .from("tasks").select("id").eq("id", link.taskId).eq("user_id", msg.user_id).maybeSingle();
+        if (targetTask) {
+          const completionAnalysis: ThreadAnalysis = {
+            ...analysis,
+            completionSignal: true,
+            completionReason: link.reason,
+            reason: link.reason,
+          };
+          await appendUpdateToTask(link.taskId, msg, completionAnalysis, "informational");
+          linkedTaskId = link.taskId;
+          classification = "informational_followup";
+          classificationReason = `cross-source: closes task ${link.taskId} — ${link.reason}`;
+          totalInputTokens += 0; // Haiku call tracked inside callClaude via ai_usage
+        }
+      }
+    } catch (e) {
+      await supabase.from("log_entries").insert({
+        user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
+        status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
+      }).catch(() => {});
+    }
+  }
+
+  // ── Path 5: new Drive task → check if a past email already confirms it ────
+  if (driveForceActionable && linkedTaskId) {
+    try {
+      const link = await checkCrossSourceLink(msg, msg.user_id, "drive_task_to_past_emails", linkedTaskId, sys);
+      if (link?.sourceMessageId) {
+        const { data: emailMsg } = await supabase
+          .from("source_messages").select("*")
+          .eq("id", link.sourceMessageId).eq("user_id", msg.user_id).maybeSingle();
+        if (emailMsg) {
+          const completionAnalysis: ThreadAnalysis = {
+            classification: "informational",
+            reason: link.reason,
+            newSummary: "",
+            state: "open",
+            completionSignal: true,
+            completionReason: link.reason,
+            inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, model: "",
+          };
+          await appendUpdateToTask(linkedTaskId, emailMsg, completionAnalysis, "informational");
+        }
+      }
+    } catch (e) {
+      await supabase.from("log_entries").insert({
+        user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
+        status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
+      }).catch(() => {});
     }
   }
 
