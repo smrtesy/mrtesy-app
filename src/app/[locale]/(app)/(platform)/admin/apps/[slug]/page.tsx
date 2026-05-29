@@ -6,8 +6,9 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound, SlidersHorizontal } from "lucide-react";
+import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound, SlidersHorizontal, FileText } from "lucide-react";
 import { AppStatusCard } from "@/components/admin/AppStatusCard";
+import { getAdminSections, type AdminSectionKey } from "@/lib/apps/registry";
 
 interface AppRow {
   id: string;
@@ -44,47 +45,48 @@ export default async function AdminAppDetailPage({
 
   const base = `/${locale}/admin/apps/${slug}`;
 
-  const sections = [
-    {
-      key: "services",
-      title: t("appServicesTitle"),
-      description: t("appServicesDesc"),
-      icon: Activity,
-      href: `${base}/services`,
-    },
-    {
-      key: "prompts",
-      title: t("appPromptsTitle"),
-      description: t("appPromptsDesc"),
-      icon: Sparkles,
-      href: `${base}/prompts`,
-    },
-    {
-      key: "secrets",
-      title: t("appSecretsTitle"),
-      description: t("appSecretsDesc"),
-      icon: KeyRound,
-      href: `${base}/secrets`,
-    },
-    ...(slug === "smrttask"
-      ? [{
-          key: "parameters",
-          title: t("appParametersTitle"),
-          description: t("appParametersDesc"),
-          icon: SlidersHorizontal,
-          href: `${base}/parameters`,
-        }]
-      : []),
-    ...(app.guide_url
-      ? [{
-          key: "guide",
-          title: t("appGuideTitle"),
-          description: t("appGuideDesc"),
-          icon: BookOpen,
-          href: `/${locale}${app.guide_url}`,
-        }]
-      : []),
-  ];
+  // Each app declares its own card set (see lib/apps/registry). This keeps
+  // smrtTask-only surfaces (service sync, WhatsApp secrets, system params)
+  // off apps they don't apply to.
+  const SECTION_DEFS: Record<
+    AdminSectionKey,
+    { titleKey: string; descKey: string; icon: typeof Activity; path: string }
+  > = {
+    services:   { titleKey: "appServicesTitle",   descKey: "appServicesDesc",   icon: Activity,         path: "services" },
+    prompts:    { titleKey: "appPromptsTitle",    descKey: "appPromptsDesc",    icon: Sparkles,         path: "prompts" },
+    secrets:    { titleKey: "appSecretsTitle",    descKey: "appSecretsDesc",    icon: KeyRound,         path: "secrets" },
+    parameters: { titleKey: "appParametersTitle", descKey: "appParametersDesc", icon: SlidersHorizontal, path: "parameters" },
+    documents:  { titleKey: "appDocumentsTitle",  descKey: "appDocumentsDesc",  icon: FileText,         path: "documents" },
+  };
+
+  interface SectionCard {
+    key: string;
+    title: string;
+    description: string;
+    icon: typeof Activity;
+    href: string;
+  }
+
+  const sections: SectionCard[] = getAdminSections(slug).map((key) => {
+    const def = SECTION_DEFS[key];
+    return {
+      key,
+      title: t(def.titleKey),
+      description: t(def.descKey),
+      icon: def.icon,
+      href: `${base}/${def.path}`,
+    };
+  });
+
+  if (app.guide_url) {
+    sections.push({
+      key: "guide",
+      title: t("appGuideTitle"),
+      description: t("appGuideDesc"),
+      icon: BookOpen,
+      href: `/${locale}${app.guide_url}`,
+    });
+  }
 
   return (
     <div className="space-y-6">
