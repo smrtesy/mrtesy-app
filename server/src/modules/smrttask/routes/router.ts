@@ -174,7 +174,13 @@ Checklist: only populate when the user describes multiple discrete sub-items.
 Project assignment:
 - A "Projects" list is provided with each project's id, name, and whether it is a sub-project of another. If the input names or clearly refers to one of them, set payload.project_id to that project's exact id from the list.
 - A sub-project is a more specific match than its parent — when the user names the sub-project (or both), choose the SUB-PROJECT's id.
-- Only ever use an id that appears verbatim in the provided list. If no project is referenced, or you are unsure, set project_id to null. Never invent an id.`;
+- Only ever use an id that appears verbatim in the provided list. If no project is referenced, or you are unsure, set project_id to null. Never invent an id.
+
+DEEP-LINK PRESERVATION (system-wide): if the user's text contains a
+specific URL, you MUST emit it verbatim in description / body / checklist
+items / subtasks — never strip it down to the bare domain. The point of
+this system is to take the user from inbox to the right page in one
+click. Bare-domain links defeat that.`;
 }
 
 function buildProjectList(projects: ProjectRow[]): string {

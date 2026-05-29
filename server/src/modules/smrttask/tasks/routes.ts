@@ -438,7 +438,12 @@ router.post("/tasks/:id/materials/upload", async (req: Request, res: Response) =
   });
 });
 
-/** POST /tasks/:id/updates — append a manual note to updates[] */
+/** POST /tasks/:id/updates — append a manual note to updates[].
+ *  After the note is saved, refresh task.description via Haiku so the
+ *  description reflects the current state of the task ("where everything
+ *  stands at a glance"). The user-facing toast already says "added";
+ *  the description refresh happens best-effort and does not block the
+ *  201 response if AI fails. */
 router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
   const { content, type = "note" } = req.body ?? {};
   if (!content || typeof content !== "string" || !content.trim()) {
@@ -447,7 +452,7 @@ router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
 
   const { data: current } = await db
     .from("tasks")
-    .select("updates")
+    .select("updates, title, title_he, description")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -471,8 +476,125 @@ router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
     .eq("id", req.params.id);
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // Fire-and-forget AI description refresh. Don't await — return the
+  // entry immediately so the client UX is snappy. The refresh writes to
+  // task.description; the client's onUpdate() refetch picks it up.
+  void refreshTaskDescription({
+    taskId: req.params.id,
+    orgId: req.org!.id,
+    userId: req.user!.id,
+    currentDescription: (current.description as string | null) ?? "",
+    title: (current.title_he as string | null) ?? (current.title as string | null) ?? "",
+    updates: next,
+  }).catch((e) => {
+    console.error("[updates] description refresh failed:", (e as Error).message);
+  });
+
   res.status(201).json({ update: entry });
 });
+
+/** Re-synthesize task.description so it reflects "where everything
+ *  stands right now" — used after both manual notes and (eventually)
+ *  auto updates from ai-process. Cheap Haiku call. */
+async function refreshTaskDescription(opts: {
+  taskId: string;
+  orgId: string;
+  userId: string;
+  currentDescription: string;
+  title: string;
+  updates: unknown[];
+}): Promise<void> {
+  // Take the last ~10 updates in chronological order — enough context
+  // for Haiku to write a coherent state summary without blowing the
+  // input budget on huge histories.
+  const recent = (opts.updates as Array<Record<string, unknown>>)
+    .slice(-10)
+    .map((u, i) => {
+      const ts = typeof u.created_at === "string" ? u.created_at : "";
+      const actor = typeof u.actor === "string" ? u.actor : "system";
+      const content = typeof u.content === "string" ? u.content : "";
+      return `[${i + 1}] (${ts}, ${actor}) ${content}`;
+    })
+    .join("\n");
+
+  const systemPrompt = `אתה משכתב את התיאור של משימה כך שישקף את ה"איפה הדברים עומדים עכשיו".
+
+קלט: תיאור קודם של המשימה, וכל העדכונים שנוספו אליה (מהמשתמש או מה-AI), בסדר כרונולוגי.
+
+פלט: תיאור חדש (עד 350 תווים) בעברית, שמסכם את המצב הנוכחי של המשימה — מה כבר נעשה, מה ממתין, ומי החייב לבצע את הצעד הבא. כתוב בצורה שמשתמש יבין בהצצה אחת איפה הדברים עומדים.
+
+כללי ניסוח חשובים (חובה) — שלושה רובדים, אל תערבב ביניהם:
+
+(1) אפשרות / תנאי / ניסיון:
+    דוגמאות: "אנסה", "אולי", "אם יהיה לי זמן", "אני יכול לנסות",
+             "I can try", "I might", "I'll see", "perhaps".
+    נסח: "אמר שיכול לנסות" / "הציע לבדוק" / "ציין שאולי יבדוק".
+    אסור: "התחייב" / "הבטיח".
+
+(2) הצהרת כוונה בעתיד פשוט (ללא לשון הבטחה):
+    דוגמאות: "אתקשר", "אשלח", "אעדכן", "אעביר עד מחר",
+             "I will call", "I'll send tomorrow", "I'm going to pay".
+    נסח: "אמר שיתקשר" / "אמר שישלח" / "ציין שיעדכן".
+    עתיד פשוט הוא הצהרה — לא הבטחה. הדובר אמר מה בכוונתו לעשות,
+    הוא לא הבטיח. אסור לכתוב "התחייב" / "הבטיח" עבור עתיד פשוט —
+    זה מטעה את המשתמש.
+
+(3) הבטחה מפורשת בלבד (חובה לשון הבטחה):
+    דוגמאות: "מבטיח שאתקשר", "מתחייב לשלוח", "ערב לכך ש", "נשבע ש",
+             "I promise to call", "I commit", "I guarantee", "you have my word".
+    נסח: "התחייב להתקשר" / "הבטיח לשלוח" — מותר אך ורק כאן.
+    הדובר חייב להשתמש בלשון הבטחה מפורשת (מבטיח / מתחייב / ערב / נשבע
+    / promise / commit / guarantee).
+
+דוגמאות:
+  קלט: "I will call AT&T tomorrow"
+  שגוי: "Chanoch התחייב להתקשר ל-AT&T"
+  נכון: "Chanoch אמר שיתקשר ל-AT&T מחר"
+
+  קלט: "I can try"
+  שגוי: "Chanoch התחייב לבדוק"
+  נכון: "Chanoch אמר שיכול לנסות"
+
+  קלט: "I promise to send the report by Friday"
+  נכון: "Chanoch הבטיח לשלוח את הדו״ח עד שישי" (יש "promise" → "הבטיח")
+
+בספק בין (2) ל-(3): ברירת מחדל "אמר ש..." / "ציין ש...".
+
+כללים נוספים:
+- שמור על URLs מלאים מהמקור verbatim, אל תקצר לדומיין בלבד.
+- אל תוסיף הקדמות כמו "כאן התיאור המעודכן" — החזר רק את הטקסט.
+- אל תוסיף שורות חדשות שאינן נחוצות.
+
+החזר טקסט בלבד, בלי JSON, בלי גרשיים מסביב.`;
+
+  const userMessage = `כותרת המשימה: ${opts.title}
+
+תיאור קודם:
+${opts.currentDescription || "(ריק)"}
+
+העדכונים שנכנסו לפי הסדר:
+${recent || "(אין עדכונים)"}
+
+שכתב את התיאור.`;
+
+  const { content } = await simpleCall(
+    "haiku",
+    systemPrompt,
+    userMessage,
+    600,
+    { component: "smrttask.tasks.update.refresh_description", userId: opts.userId },
+  );
+
+  const cleaned = content.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (!cleaned) return;
+
+  await db
+    .from("tasks")
+    .update({ description: cleaned.slice(0, 1000), updated_at: new Date().toISOString() })
+    .eq("organization_id", opts.orgId)
+    .eq("id", opts.taskId);
+}
 
 /**
  * POST /tasks/:id/approve-as-project
