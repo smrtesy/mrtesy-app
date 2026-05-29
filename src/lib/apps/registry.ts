@@ -29,8 +29,6 @@ export interface AppDef {
   guideHref: string;
   /** Path to the app's settings tab inside /settings. */
   settingsHref: string;
-  /** Which admin detail-page cards this app shows, in display order. */
-  adminSections: AdminSectionKey[];
 }
 
 export const APPS: Record<string, AppDef> = {
@@ -40,7 +38,6 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtTaskIcon,
     guideHref: "/tasks/guide",
     settingsHref: "/settings/apps/smrttask",
-    adminSections: ["services", "prompts", "secrets", "parameters", "documents"],
   },
   smrtvoice: {
     slug: "smrtvoice",
@@ -48,9 +45,6 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtVoiceIcon,
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
-    // No Gmail/Drive/Calendar/WhatsApp sync and no smrtTask params; voice
-    // keys are read-only (env-managed, shared with the Python voice-engine).
-    adminSections: ["prompts", "secrets", "documents"],
   },
 };
 
@@ -59,9 +53,23 @@ export function getApp(slug: string): AppDef | undefined {
 }
 
 /**
- * Admin detail-page sections for a slug. Unregistered apps fall back to the
- * universally-applicable cards (every app has AI prompts and may carry docs).
+ * Which admin detail-page cards each app shows, in display order. Kept
+ * separate from APPS because some apps (e.g. smrtplan) have an admin surface
+ * without being a launchable app in the registry.
+ *
+ * These used to be identical for every app even though most only applied to
+ * smrtTask. The AI-prompts catalog is smrtTask-only (no other app defines
+ * prompts), service sync / WhatsApp secrets / system params are smrtTask-only,
+ * and voice keys are env-managed. So only smrtTask gets the full set; other
+ * apps get what actually applies to them. Every app can carry plan/spec
+ * documents (app_plans), so `documents` is the universal fallback.
  */
+const ADMIN_SECTIONS: Record<string, AdminSectionKey[]> = {
+  smrttask: ["services", "prompts", "secrets", "parameters", "documents"],
+  smrtvoice: ["secrets", "documents"],
+  smrtplan: ["documents"],
+};
+
 export function getAdminSections(slug: string): AdminSectionKey[] {
-  return APPS[slug]?.adminSections ?? ["prompts", "documents"];
+  return ADMIN_SECTIONS[slug] ?? ["documents"];
 }

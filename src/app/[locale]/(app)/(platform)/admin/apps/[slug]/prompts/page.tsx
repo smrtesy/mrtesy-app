@@ -16,7 +16,14 @@ import { toast } from "sonner";
 //   {{user}}         → "Name at OrgName"
 //   {{userName}}     → user's display name
 //   {{gmailAddress}} → user's primary Gmail address
-const DEFAULT_PROMPTS: Record<string, { label: string; description: string; default: string }> = {
+interface PromptDef { label: string; description: string; default: string }
+
+// smrtTask's AI prompt catalog. These are the only app-specific prompts in
+// the system — the classifier / task-builder / summary / suggester prompts
+// that drive the smrtTask pipeline. Other apps (smrtVoice, smrtPlan) define
+// no AI prompts, so their Prompts surface is empty (and the card is hidden
+// for them via getAdminSections).
+const SMRTTASK_PROMPTS: Record<string, PromptDef> = {
   edge_classifier: {
     label: "Message Classifier — LIVE (Haiku)",
     description: "The live classifier that runs on every incoming message (Gmail / Calendar / Drive / WhatsApp) via the ai-process edge function. Decides ACTIONABLE / INFORMATIONAL / SPAM and tracks thread state. Changes take effect within a minute. ⚠️ Do not change the JSON output structure.",
@@ -292,6 +299,11 @@ Be specific. Use Hebrew where appropriate. Do not repeat facts.`,
   },
 };
 
+/** Per-app prompt catalogs. Only smrtTask has prompts today. */
+const PROMPTS_BY_APP: Record<string, Record<string, PromptDef>> = {
+  smrttask: SMRTTASK_PROMPTS,
+};
+
 interface Prompt {
   id: string;
   prompt_key: string;
@@ -302,6 +314,7 @@ interface Prompt {
 
 export default function AdminAppPromptsPage() {
   const { locale, slug } = useParams() as { locale: string; slug: string };
+  const catalog = PROMPTS_BY_APP[slug] ?? {};
   const supabase = createClient();
   const [prompts, setPrompts] = useState<Record<string, Prompt>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -327,17 +340,18 @@ export default function AdminAppPromptsPage() {
       vals[p.prompt_key] = p.content;
     }
 
-    // Fill defaults for prompts not yet saved
-    for (const key of Object.keys(DEFAULT_PROMPTS)) {
+    // Fill defaults for prompts not yet saved (this app's catalog only)
+    const cat = PROMPTS_BY_APP[slug] ?? {};
+    for (const key of Object.keys(cat)) {
       if (!vals[key]) {
-        vals[key] = DEFAULT_PROMPTS[key].default;
+        vals[key] = cat[key].default;
       }
     }
 
     setPrompts(map);
     setEditValues(vals);
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, slug]);
 
   useEffect(() => {
     loadPrompts();
@@ -369,7 +383,7 @@ export default function AdminAppPromptsPage() {
       });
 
       if (error) throw error;
-      toast.success(`Prompt "${DEFAULT_PROMPTS[key]?.label ?? key}" saved (v${nextVersion})`);
+      toast.success(`Prompt "${catalog[key]?.label ?? key}" saved (v${nextVersion})`);
       await loadPrompts();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -379,7 +393,7 @@ export default function AdminAppPromptsPage() {
   }
 
   function resetToDefault(key: string) {
-    setEditValues((v) => ({ ...v, [key]: DEFAULT_PROMPTS[key]?.default ?? "" }));
+    setEditValues((v) => ({ ...v, [key]: catalog[key]?.default ?? "" }));
   }
 
   function toggleExpanded(key: string) {
@@ -413,7 +427,13 @@ export default function AdminAppPromptsPage() {
         </p>
       </div>
 
-      {Object.entries(DEFAULT_PROMPTS).map(([key, meta]) => {
+      {Object.keys(catalog).length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          This app has no AI prompts.
+        </p>
+      )}
+
+      {Object.entries(catalog).map(([key, meta]) => {
         const saved = prompts[key];
         const isDirty = editValues[key] !== (saved?.content ?? meta.default);
         const isExpanded = expanded[key] ?? false;

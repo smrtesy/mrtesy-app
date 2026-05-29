@@ -1,21 +1,27 @@
 export const dynamic = "force-dynamic";
 
-import { readdirSync, readFileSync } from "fs";
-import { join } from "path";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { ArrowLeft } from "lucide-react";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { DocsBrowser } from "@/components/admin/DocsBrowser";
-import docsMeta from "@/generated/docs-meta.json";
 
-type DocMeta = { created: string | null; updated: string | null };
+interface AppPlanRow {
+  id: string;
+  title: string;
+  content: string;
+  doc_type: string;
+  version: number;
+  is_current: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
 
 /**
- * Per-app spec/docs surface. Renders the markdown files committed under
- * `docs/apps/<slug>/` — the convention for an app's design/spec docs that
- * live in the repo. Empty until the app's first doc is added there.
+ * Per-app documents surface. Renders the plan / spec documents stored for the
+ * app in the `app_plans` table (markdown content authored while shaping the
+ * app — architecture, spec, idea, notes). Most-current first.
  */
 export default async function AdminAppDocumentsPage({
   params,
@@ -25,11 +31,11 @@ export default async function AdminAppDocumentsPage({
   const { locale, slug } = await params;
   const t = await getTranslations("admin");
 
-  // Reject anything that isn't a clean slug before touching the filesystem.
-  if (!/^[a-z][a-z0-9-]{1,39}$/.test(slug)) notFound();
-
+  // /admin is super-admin-gated by the layout; read with the service-role
+  // client so app_plans rows are visible regardless of org-scoped RLS.
   const admin = createAdminSupabaseClient();
   if (!admin) notFound();
+
   const { data: app } = await admin
     .from("apps")
     .select("name")
@@ -37,25 +43,22 @@ export default async function AdminAppDocumentsPage({
     .maybeSingle<{ name: string }>();
   if (!app) notFound();
 
-  const dir = join(process.cwd(), "docs", "apps", slug);
-  const meta = docsMeta as Record<string, DocMeta>;
-  let docs: { filename: string; content: string; created: string | null; updated: string | null }[] = [];
-  try {
-    docs = readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .map((filename) => {
-        const key = `apps/${slug}/${filename}`;
-        return {
-          filename,
-          content: readFileSync(join(dir, filename), "utf-8"),
-          created: meta[key]?.created ?? null,
-          updated: meta[key]?.updated ?? null,
-        };
-      });
-  } catch {
-    /* folder may not exist yet for this app */
-  }
+  const { data: plans } = await admin
+    .from("app_plans")
+    .select("id, title, content, doc_type, version, is_current, created_at, updated_at")
+    .eq("app_slug", slug)
+    .order("is_current", { ascending: false })
+    .order("version", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .returns<AppPlanRow[]>();
+
+  const docs = (plans ?? []).map((p) => ({
+    // Title carries the doc type + version so the nav reads at a glance.
+    filename: `${p.title} · ${p.doc_type} v${p.version}`,
+    content: p.content,
+    created: p.created_at,
+    updated: p.updated_at,
+  }));
 
   return (
     <div className="space-y-4">
@@ -68,16 +71,10 @@ export default async function AdminAppDocumentsPage({
           {app.name}
         </Link>
         <h1 className="text-2xl font-bold">{t("appDocumentsTitle")}</h1>
-        <p className="text-xs text-muted-foreground">
-          {t("appDocumentsPageHint", { path: `docs/apps/${slug}/` })}
-        </p>
+        <p className="text-xs text-muted-foreground">{t("appDocumentsPageHint")}</p>
       </div>
 
-      <DocsBrowser
-        docs={docs}
-        pathPrefix={`docs/apps/${slug}/`}
-        emptyMessage={t("appDocumentsEmpty", { path: `docs/apps/${slug}/` })}
-      />
+      <DocsBrowser docs={docs} pathPrefix="" emptyMessage={t("appDocumentsEmpty")} />
     </div>
   );
 }
