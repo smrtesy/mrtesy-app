@@ -1401,16 +1401,16 @@ async function refreshSourceMessageThread(
     .filter(Boolean)
     .join("\n");
 
-  // Every chat is now per-message classified: the thread row is kept
-  // only as a context object (WhatsApp view, debugging), and the actual
-  // classification fans out across per-message source_message rows
-  // emitted below. Rolling up an entire thread into one classifier call
-  // loses individual commitments — e.g. a 14-message burst where the
-  // user wrote "Take a little longer but should be done mid next week"
-  // mid-thread used to inherit the LAST message's "no pending" reading
-  // and never produced a follow-up task. Per-message rows fix that.
-  const threadProcessingStatus = "classified";
-  const threadClassification = isSelfChat ? "self_chat_thread_skip" : "thread_skip";
+  // For SELF-CHAT we deliberately mark the thread-level row as already
+  // classified so the deep classifier doesn't pull it in. The thread row
+  // exists only as a context object (kept for the WhatsApp view + future
+  // debugging); the *actual* task creation runs off the per-message
+  // source_messages we emit below. Without this skip, a self-chat with
+  // 8 voice-memo "משימה ל..." entries would still be summarised as a
+  // single classifier decision and 7 of the 8 voice memos would be lost
+  // — which is the exact bug this whole code path fixes.
+  const threadProcessingStatus = isSelfChat ? "classified" : "pending";
+  const threadClassification = isSelfChat ? "self_chat_thread_skip" : null;
 
   const { error: upsertErr } = await db.from("source_messages").upsert(
     {
@@ -1434,103 +1434,94 @@ async function refreshSourceMessageThread(
 
   if (upsertErr) throw new Error(upsertErr.message);
 
-  // Emit one source_message per WhatsApp message in the thread (both
-  // directions for normal chats; outgoing only for self-chats — where
-  // incoming is by definition the same user). Each gets its own
-  // classifier call so multi-message bursts don't get rolled up into
-  // a single decision. Dedup key is (user_id, source_type, source_id)
-  // with source_id = wa:<chatId>:<wamid> — wamid is the WhatsApp
-  // Cloud API's stable per-message identifier.
-  await emitPerMessageSourceRows(db, userId, chatId, chatName, fromPhone, isSelfChat, rawContent);
+  // ── Self-chat: emit one source_message per OUTGOING voice memo ─────────
+  // Each is its own classifier candidate, so 8 "משימה ל..." voice memos
+  // produce 8 tasks instead of one classification that swallows seven of
+  // them. We dedupe on (user_id, source_type='whatsapp_echo', source_id),
+  // where source_id is wa:<chatId>:<wamid> — a stable per-message key
+  // from the WhatsApp Cloud API. Ignore-duplicates so re-runs after the
+  // user sends a new message don't reset processing_status on rows the
+  // pipeline has already classified.
+  if (isSelfChat) {
+    await emitSelfChatPerMessageSourceRows(db, userId, chatId, chatName, fromPhone);
+  }
 }
 
 /**
- * Look up recent WhatsApp messages in a chat and upsert a per-message
- * source_message row for each. Each becomes its own classifier candidate,
- * so multi-message bursts produce per-message decisions instead of one
- * rolled-up call that loses individual commitments.
+ * For a self-chat, look up every OUTGOING whatsapp_message in the chat and
+ * upsert a per-message source_message row for it. Idempotent: rows already
+ * present are left untouched (ignoreDuplicates), so this is also the
+ * backfill path for voice memos that arrived BEFORE the per-message
+ * ingestion existed.
  *
- * Idempotent — rows already present are left untouched (ignoreDuplicates),
- * which also makes this the backfill path for messages that arrived
- * before per-message ingestion was generalised beyond self-chat.
- *
- * For self-chats we still emit OUTGOING-only (incoming side is the same
- * user). For normal chats we emit BOTH directions so:
- *   • incoming questions / requests get classified individually
- *   • outgoing commitments ("I'll send", "next week") get tracked
- *
- * Bounded to 100 most recent messages per refresh to keep webhook
- * latency predictable.
+ * Bounded to 200 most recent outgoing messages — well above typical
+ * backlog size; if someone has more, the older ones can be picked up
+ * by widening the limit later. We start narrow to keep webhook latency
+ * predictable.
  */
-async function emitPerMessageSourceRows(
+async function emitSelfChatPerMessageSourceRows(
   db: SupabaseAdmin,
   userId: string,
   chatId: string,
   chatName: string,
   fromPhone: string,
-  isSelfChat: boolean,
-  threadContext: string,
 ): Promise<void> {
-  let q = db
+  const { data: outgoing, error } = await db
     .from("whatsapp_messages")
-    .select("wamid, body_text, received_at, message_type, direction")
+    .select("wamid, body_text, received_at, message_type")
     .eq("user_id", userId)
     .eq("chat_id", chatId)
+    .eq("direction", "outgoing")
     .order("received_at", { ascending: false })
-    .limit(100);
-  if (isSelfChat) q = q.eq("direction", "outgoing");
+    .limit(200);
 
-  const { data: rows, error } = await q;
   if (error) {
-    console.error("[whatsapp per-message] fetch:", error.message);
+    console.error("[self-chat per-message] fetch outgoing:", error.message);
     return;
   }
-  if (!rows || rows.length === 0) return;
+  if (!outgoing || outgoing.length === 0) return;
 
-  // Filter out empty bodies (failed transcripts, empty stickers). A
-  // source_message with no text gives the classifier nothing to act
-  // on and just costs tokens.
-  const inserts = rows
+  // Filter out empty bodies (e.g. failed transcripts, empty stickers). A
+  // source_message with no text gives the classifier nothing to act on
+  // and just costs tokens.
+  const rows = outgoing
     .filter((m) => typeof m.wamid === "string" && m.wamid.length > 0)
     .filter((m) => String(m.body_text ?? "").trim().length > 0)
     .map((m) => {
       const text = String(m.body_text ?? "").trim();
       const ts = String(m.received_at ?? "").slice(0, 16);
-      const dir = String(m.direction ?? "incoming").toUpperCase();
-      // Each per-message row carries the full thread snapshot for
-      // context PLUS a focus marker so the classifier knows which
-      // exact line to reason about. The marker is what turns an
-      // ambiguous "Take a little longer..." mid-thread into an
-      // outgoing-commitment trigger.
       const rawContent = [
-        threadContext,
-        `\n--- FOCUS ON THIS MESSAGE ---`,
-        `[${dir} ${ts}] ${text.replace(/\s+/g, " ")}`,
+        `Chat: ${chatName}`,
+        `Phone: ${fromPhone}`,
+        `Group: false`,
+        `Self-chat: true (this is the user talking to their own WhatsApp number — they use it as a voice-memo channel for task capture; every message is a deliberate self-note, treat as ACTIONABLE unless clearly a status remark)`,
+        `\n--- MESSAGE ---`,
+        `[OUTGOING ${ts}] ${text.replace(/\s+/g, " ")}`,
       ].join("\n");
       return {
         user_id: userId,
-        source_type: m.direction === "outgoing" ? "whatsapp_echo" : "whatsapp",
+        source_type: "whatsapp_echo",
         source_id: `wa:${chatId}:${m.wamid as string}`,
         sender: chatName,
         sender_email: null,
         subject: chatName,
         body_text: text.slice(0, 1000),
-        raw_content: rawContent.slice(0, 4000),
+        raw_content: rawContent.slice(0, 3000),
         received_at: m.received_at,
         source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
         reply_to_context: fromPhone,
         processing_status: "pending",
-        metadata: { chatId, chatName, fromPhone, wamid: m.wamid, message_type: m.message_type, isSelfChat },
+        metadata: { chatId, chatName, fromPhone, wamid: m.wamid, message_type: m.message_type },
       };
     });
 
-  if (inserts.length === 0) return;
+  if (rows.length === 0) return;
 
   const { error: insertErr } = await db.from("source_messages").upsert(
-    inserts,
+    rows,
     { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
   );
   if (insertErr) {
-    console.error("[whatsapp per-message] upsert:", insertErr.message);
+    console.error("[self-chat per-message] upsert:", insertErr.message);
   }
 }
