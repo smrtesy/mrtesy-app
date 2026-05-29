@@ -537,13 +537,28 @@ async function appendUpdateToTask(
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
 
-  // Dedup guard: if we already appended an update for this exact
-  // source_message_id, skip. The same message can re-enter ai-process
-  // through multiple paths (sibling-link, cross-source link, retry from
-  // the worker) and each call would otherwise produce a near-duplicate
-  // entry — the user sees the same content twice or three times,
-  // sometimes hours apart, with nothing new in any of them.
-  if (msg?.id && existingUpdates.some((u) => u?.source_message_id === msg.id)) {
+  // Dedup guard: skip ONLY if we already appended an update for this
+  // exact source_message id at this exact received_at. For email/Gmail
+  // the row never changes after insert, so id alone is enough. For
+  // WhatsApp the webhook upserts ONE row per chat (source_id=wa:<chatId>)
+  // and rewrites it whenever a new message arrives — same row id, new
+  // content, new received_at. Dedupping by id alone made T284 (and
+  // every other multi-burst WhatsApp thread) stop receiving updates
+  // after the first one, because the second processing pass landed on
+  // the same source_message_id and returned silently.
+  //
+  // Legacy update entries (created before source_received_at was added
+  // to the shape) have id-only and are treated as non-dupes here so we
+  // don't get permanently stuck on old rows.
+  if (
+    msg?.id
+    && existingUpdates.some(
+      (u) =>
+        u?.source_message_id === msg.id
+        && typeof u?.source_received_at === "string"
+        && u.source_received_at === msg.received_at,
+    )
+  ) {
     return;
   }
 
@@ -559,6 +574,7 @@ async function appendUpdateToTask(
         actor: "system",
         content: analysis.reason || msg.subject || "הודעת המשך בשרשור",
         source_message_id: msg.id,
+        source_received_at: msg.received_at,
         source_type: msg.source_type,
         completion_signal: analysis.completionSignal,
       },
