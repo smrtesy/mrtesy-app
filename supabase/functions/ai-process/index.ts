@@ -96,6 +96,15 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   // source_messages has no dedicated recipient column — Part1 stores the TO
   // address in reply_to_context and metadata.to. Fall back through all three.
   const recipient = (msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "").toLowerCase();
+  // For `to=<addr>` skip rules, the `recipient` string only captures the
+  // visible To header. gmail-sync now stores every recipient-side
+  // address (To, Cc, Bcc, Delivered-To, X-Forwarded-To, X-Original-To)
+  // as metadata.recipients[], so the BCC and forwarded-to cases (T367
+  // family: mail sent from office@maor.org to a customer with BCC
+  // outbox@maor.org) finally have something to match against.
+  const recipients: string[] = Array.isArray((msg.metadata as any)?.recipients)
+    ? ((msg.metadata as any).recipients as string[]).map((s) => String(s).toLowerCase())
+    : [];
   const sourceType = msg.source_type || "";
   const myEmails = (settings.my_emails || []).map((e: string) => e.toLowerCase());
   const officeAddresses = (settings.office_addresses || []).map((e: string) => e.toLowerCase());
@@ -106,9 +115,14 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
   const categoryFilter: Set<string> = settings.__category_filter instanceof Set ? settings.__category_filter : new Set();
 
-  // rules_memory to=/from= skip rules (UI-configured)
+  // rules_memory to=/from= skip rules (UI-configured).
+  // `to=` matches the visible To header AND every other recipient-side
+  // address (Cc, Bcc, Delivered-To, X-Forwarded-To, X-Original-To) —
+  // that's what makes `to=outbox@maor.org` catch BCC traffic.
   for (const addr of toSkip) {
-    if (recipient.includes(addr)) return { result: "skip", skipReason: `to_rule: ${addr}` };
+    if (recipient.includes(addr) || recipients.some((r) => r.includes(addr))) {
+      return { result: "skip", skipReason: `to_rule: ${addr}` };
+    }
   }
   for (const addr of fromSkip) {
     if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
@@ -777,8 +791,14 @@ const GMAIL_REVIEW_LABELS = {
 } as const;
 
 function reviewLabelFor(classification: string): keyof typeof GMAIL_REVIEW_LABELS | null {
-  switch (classification) {
+  // Normalise to lowercase so legacy uppercase values from the
+  // removed server-side Part3 classifier (INFORMATIONAL, ACTIONABLE,
+  // UPDATE, …) also map to the right label. The backfill route
+  // depends on this — without it, ~50 already-classified messages
+  // would skip past tagging silently.
+  switch (String(classification).toLowerCase()) {
     case "skip":
+    case "skipped":
     case "spam":
       return "skip";
     case "informational":
@@ -787,6 +807,7 @@ function reviewLabelFor(classification: string): keyof typeof GMAIL_REVIEW_LABEL
       return "actionable";
     case "actionable_followup":
     case "informational_followup":
+    case "update":
       return "update";
     default:
       return null;
@@ -876,6 +897,61 @@ async function getOrCreateGmailLabels(token: string, names: string[]): Promise<M
 // Best-effort: tag one Gmail message with the label for its final
 // classification. Never throws — a labeling failure is logged but must not
 // affect message processing.
+/**
+ * Re-apply Gmail labels to every already-classified Gmail message for a
+ * user, WITHOUT re-running the AI classifier. Used after a fix to
+ * reviewLabelFor (e.g. when legacy uppercase classifications start
+ * mapping to the right kind) so historical messages catch up to the
+ * new behaviour without paying for re-classification.
+ *
+ * Idempotent — Gmail's `addLabelIds` is a set-union, so re-running on
+ * already-labelled messages is cheap and safe.
+ */
+async function relabelGmailForUser(userId: string): Promise<{
+  scanned: number;
+  tagged: number;
+  no_kind: number;
+  errors: number;
+}> {
+  let scanned = 0;
+  let tagged = 0;
+  let noKind = 0;
+  let errors = 0;
+  // Page through processed gmail rows. processed_at is the natural cursor;
+  // we order ASC so reruns pick up where we left off if the function
+  // times out partway.
+  const PAGE = 200;
+  let cursor: string | null = null;
+  while (true) {
+    let q = supabase
+      .from("source_messages")
+      .select("id, user_id, source_type, source_id, ai_classification, processed_at, metadata")
+      .eq("user_id", userId)
+      .eq("source_type", "gmail")
+      .not("ai_classification", "is", null)
+      .order("processed_at", { ascending: true, nullsFirst: true })
+      .limit(PAGE);
+    if (cursor) q = q.gt("processed_at", cursor);
+    const { data, error } = await q;
+    if (error) throw new Error(`relabel scan: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const msg of data) {
+      scanned++;
+      const kind = reviewLabelFor(String(msg.ai_classification ?? ""));
+      if (!kind) { noKind++; continue; }
+      try {
+        await tagGmailReview(msg, String(msg.ai_classification));
+        tagged++;
+      } catch {
+        errors++;
+      }
+    }
+    cursor = (data[data.length - 1]?.processed_at as string | null) ?? null;
+    if (!cursor) break;
+  }
+  return { scanned, tagged, no_kind: noKind, errors };
+}
+
 async function tagGmailReview(msg: any, classification: string): Promise<void> {
   if (msg.source_type !== "gmail" || !msg.source_id) return;
   const kind = reviewLabelFor(classification);
@@ -891,13 +967,23 @@ async function tagGmailReview(msg: any, classification: string): Promise<void> {
         getOrCreateGmailLabels(token, ["smrtTask", ...Object.values(GMAIL_REVIEW_LABELS)]),
       );
     }
-    const labelId = (await gmailLabelMapCache.get(userId)!).get(GMAIL_REVIEW_LABELS[kind]);
-    if (!labelId) return;
+    const labelMap = await gmailLabelMapCache.get(userId)!;
+    const specificId = labelMap.get(GMAIL_REVIEW_LABELS[kind]);
+    if (!specificId) return;
+    // Always attach BOTH the specific kind (smrtTask/דילוג, smrtTask/הצעה,
+    // …) AND the parent "smrtTask" label. Gmail's nested labels are
+    // independent — `smrtTask/הצעה` doesn't auto-imply `smrtTask` — so
+    // tagging just the kind leaves the parent empty and the user has to
+    // expand the tree to see anything we processed.
+    // Also drop `UNREAD`: once smrtTask has classified a message it's
+    // been "read" by the system, and the boldface in Gmail is noise.
+    const parentId = labelMap.get("smrtTask");
+    const addLabelIds = parentId ? [specificId, parentId] : [specificId];
 
     await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.source_id}/modify`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ addLabelIds: [labelId] }),
+      body: JSON.stringify({ addLabelIds, removeLabelIds: ["UNREAD"] }),
     });
   } catch (e) {
     await supabase.from("log_entries").insert({
@@ -1400,6 +1486,26 @@ Deno.serve(async (req) => {
       const supabaseAuth = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!);
       const { data: { user } } = await supabaseAuth.auth.getUser(authHeader);
       if (!user) return new Response("Unauthorized", { status: 401 });
+    }
+
+    // One-off backfill mode: re-apply Gmail labels to already-classified
+    // messages WITHOUT re-running classification. Triggered by
+    //   POST .../ai-process?action=relabel_gmail&user_id=<uuid>
+    // and admin-bounded by the cron secret (same gate the scheduler uses).
+    // Without this, retroactively fixing reviewLabelFor (which used to
+    // ignore legacy uppercase classifications) would never touch the
+    // messages that were processed before the fix.
+    const reqUrl = new URL(req.url);
+    if (reqUrl.searchParams.get("action") === "relabel_gmail") {
+      if (authHeader !== cronSecret && req.headers.get("x-cron-secret") !== cronSecret) {
+        return new Response("Forbidden — admin only", { status: 403 });
+      }
+      const targetUserId = reqUrl.searchParams.get("user_id");
+      if (!targetUserId) return new Response("user_id required", { status: 400 });
+      gmailTokenCache.clear();
+      gmailLabelMapCache.clear();
+      const result = await relabelGmailForUser(targetUserId);
+      return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
     }
 
     const sys = await loadSystemParams();

@@ -156,12 +156,36 @@ async function fetchMessageDetails(token: string, messageId: string) {
 function extractHeaders(msg: any) {
   const headers = msg.payload?.headers || [];
   const get = (name: string) => headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+  // BCC visibility: Gmail strips the `Bcc` header from delivered mail
+  // (recipients can't see each other), but when YOUR mailbox is the BCC
+  // recipient Gmail keeps a `Delivered-To` header listing the address
+  // the message was actually delivered to. `X-Forwarded-To` and
+  // `X-Original-To` cover the forwarding case (outbox@maor.org → us).
+  // For SENT mail we still have access to our own Bcc/Cc headers.
   return {
     from: get("From"),
     to: get("To"),
+    cc: get("Cc"),
+    bcc: get("Bcc"),
+    deliveredTo: get("Delivered-To"),
+    forwardedTo: get("X-Forwarded-To"),
+    originalTo: get("X-Original-To"),
     subject: get("Subject"),
     date: get("Date"),
   };
+}
+
+// Parse a comma-separated address-list header into normalised emails:
+// '"Name" <a@b>, c@d' → ['a@b', 'c@d']. Lowercased; deduped by caller.
+function parseAddressList(value: string): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((s) => {
+      const m = s.match(/<([^>]+)>/);
+      return (m ? m[1] : s).trim().toLowerCase();
+    })
+    .filter((s) => s.includes("@"));
 }
 
 function extractBody(msg: any): string {
@@ -303,6 +327,20 @@ async function syncUserGmail(userId: string) {
       continue;
     }
 
+    // Collect every recipient-side address we can see — To, Cc, Bcc (when
+    // the user is the sender), plus Delivered-To / X-Forwarded-To /
+    // X-Original-To (which surface the actual BCC mailbox when WE are
+    // a BCC recipient that arrived via forwarding). Skip rules of the
+    // form `to=<addr>` need to match against ALL of these, not just To.
+    const allRecipients = Array.from(new Set([
+      ...parseAddressList(h.to),
+      ...parseAddressList(h.cc),
+      ...parseAddressList(h.bcc),
+      ...parseAddressList(h.deliveredTo),
+      ...parseAddressList(h.forwardedTo),
+      ...parseAddressList(h.originalTo),
+    ]));
+
     await supabase.from("source_messages").upsert(
       {
         user_id: userId,
@@ -327,7 +365,9 @@ async function syncUserGmail(userId: string) {
         // ai-process uses these in preClassify to decide informational vs
         // needs_claude — replacing the previous hardcoded keyword list.
         // threadId powers the follow-up linking in ai-process.
-        metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [] },
+        // recipients[] captures every address-side header so `to=` skip
+        // rules can match BCC/forwarding cases (T367-style false positives).
+        metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [], recipients: allRecipients },
       },
       { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true }
     );
