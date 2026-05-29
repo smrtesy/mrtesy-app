@@ -19,12 +19,21 @@ function fmt(iso: string | null): string | null {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-export function DocsBrowser({ docs }: { docs: Doc[] }) {
+export function DocsBrowser({
+  docs,
+  pathPrefix = "docs/",
+  emptyMessage = "אין מסמכים.",
+}: {
+  docs: Doc[];
+  /** Path label shown above the rendered doc (e.g. "docs/apps/smrtvoice/"). */
+  pathPrefix?: string;
+  emptyMessage?: string;
+}) {
   const preferred = docs.findIndex((d) => d.filename === "new-app-guide.md");
   const [idx, setIdx] = useState(preferred >= 0 ? preferred : 0);
 
   if (docs.length === 0) {
-    return <p className="text-sm text-muted-foreground">אין מסמכים.</p>;
+    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
   }
 
   const active = docs[idx] ?? docs[0];
@@ -67,7 +76,7 @@ export function DocsBrowser({ docs }: { docs: Doc[] }) {
       <div className="min-w-0 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <code className="block text-xs text-muted-foreground truncate">docs/{active.filename}</code>
+            <code className="block text-xs text-muted-foreground truncate">{pathPrefix}{active.filename}</code>
             {fmt(active.created) && (
               <span className="block text-[11px] text-muted-foreground mt-0.5">
                 נוצר: {fmt(active.created)}

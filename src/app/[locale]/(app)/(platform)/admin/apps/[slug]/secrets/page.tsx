@@ -34,6 +34,10 @@ interface WhatsAppConnection {
 }
 
 interface SecretsResponse {
+  /** false → keys are env-managed (shared with an external service); read-only. */
+  editable: boolean;
+  /** true → show the WhatsApp webhook URL + per-WABA connections sections. */
+  whatsapp: boolean;
   platform: PlatformSecret[];
   connections: WhatsAppConnection[];
 }
@@ -86,7 +90,9 @@ export default function AdminAppSecretsPage() {
           {slug}
         </Link>
         <h1 className="text-2xl font-bold">{t("title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("description")}</p>
+        <p className="text-sm text-muted-foreground">
+          {data && !data.editable ? t("envReadOnlyDescription") : t("description")}
+        </p>
       </div>
 
       {loading && (
@@ -101,33 +107,42 @@ export default function AdminAppSecretsPage() {
           {/* Webhook URL — the value the operator pastes into DualHook's
               Webhook Override field. Read-only, copyable. Shown here as
               well as in /onboarding/whatsapp so a super-admin debugging a
-              tenant doesn't have to leave the admin surface. */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Webhook className="h-4 w-4 text-muted-foreground" />
-                {t("webhookUrlSection")}
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">{t("webhookUrlHint")}</p>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-2">
-                <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={copyWebhook}
-                  aria-label={t("copy")}
-                >
-                  {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+              tenant doesn't have to leave the admin surface. WhatsApp-only. */}
+          {data.whatsapp && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Webhook className="h-4 w-4 text-muted-foreground" />
+                  {t("webhookUrlSection")}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">{t("webhookUrlHint")}</p>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-2">
+                  <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={copyWebhook}
+                    aria-label={t("copy")}
+                  >
+                    {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-          <PlatformSection slug={slug} platform={data.platform} onSaved={load} />
-          <ConnectionsSection slug={slug} connections={data.connections} onSaved={load} />
+          <PlatformSection
+            slug={slug}
+            platform={data.platform}
+            editable={data.editable}
+            onSaved={load}
+          />
+          {data.whatsapp && (
+            <ConnectionsSection slug={slug} connections={data.connections} onSaved={load} />
+          )}
         </>
       )}
     </div>
@@ -137,10 +152,12 @@ export default function AdminAppSecretsPage() {
 function PlatformSection({
   slug,
   platform,
+  editable,
   onSaved,
 }: {
   slug: string;
   platform: PlatformSecret[];
+  editable: boolean;
   onSaved: () => void;
 }) {
   const t = useTranslations("adminSecrets");
@@ -148,11 +165,13 @@ function PlatformSection({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">{t("platformSection")}</CardTitle>
-        <p className="text-xs text-muted-foreground">{t("platformHint")}</p>
+        <p className="text-xs text-muted-foreground">
+          {editable ? t("platformHint") : t("envReadOnlyHint")}
+        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         {platform.map((p) => (
-          <PlatformRow key={p.key} slug={slug} secret={p} onSaved={onSaved} />
+          <PlatformRow key={p.key} slug={slug} secret={p} editable={editable} onSaved={onSaved} />
         ))}
       </CardContent>
     </Card>
@@ -162,10 +181,12 @@ function PlatformSection({
 function PlatformRow({
   slug,
   secret,
+  editable,
   onSaved,
 }: {
   slug: string;
   secret: PlatformSecret;
+  editable: boolean;
   onSaved: () => void;
 }) {
   const t = useTranslations("adminSecrets");
@@ -244,7 +265,7 @@ function PlatformRow({
       </div>
 
       <div className="flex flex-col gap-1">
-        {!editing ? (
+        {!editable ? null : !editing ? (
           <Button size="sm" variant="outline" onClick={() => setEditing(true)} className="h-7">
             <Edit2 className="h-3 w-3 me-1" />
             {t("edit")}

@@ -183,7 +183,9 @@ router.patch("/admin/apps/:slug/status", async (req: Request, res: Response) => 
 
 /** Catalog of platform-wide keys we know about for the smrttask app.
  *  Drives the GET response when the row doesn't exist yet (so the UI can
- *  render the field) and constrains what PUT accepts.
+ *  render the field) and constrains what PUT accepts. These are consumed
+ *  only by our Node backend (via getAppSecret), so they're safe to edit
+ *  from the admin UI and are stored in app_secrets / Supabase Vault.
  */
 const SMRTTASK_PLATFORM_KEYS = [
   { key: "GEMINI_API_KEY",        is_secret: true,  default_value: null },
@@ -191,6 +193,28 @@ const SMRTTASK_PLATFORM_KEYS = [
   { key: "GEMINI_THINKING_LEVEL", is_secret: false, default_value: "low" },
   { key: "META_API_VERSION",      is_secret: false, default_value: "v21.0" },
 ] as const;
+
+/** Apps whose platform secrets live in app_secrets / Vault and are editable
+ *  from the admin UI. Maps slug → its editable key catalog. */
+const EDITABLE_PLATFORM_KEYS: Record<string, ReadonlyArray<{ key: string; is_secret: boolean; default_value: string | null }>> = {
+  smrttask: SMRTTASK_PLATFORM_KEYS,
+};
+
+/** Apps whose "secrets" are environment variables — surfaced read-only.
+ *  These keys are shared with an external service (e.g. the Python
+ *  voice-engine), so editing them from here would desync the two services.
+ *  We only report set/missing; the operator changes them in the hosting env. */
+const ENV_PLATFORM_KEYS: Record<string, ReadonlyArray<{ key: string; is_secret: boolean }>> = {
+  smrtvoice: [
+    { key: "VOICE_ENGINE_URL",            is_secret: false },
+    { key: "VOICE_ENGINE_API_KEY",        is_secret: true },
+    { key: "VOICE_ENGINE_WEBHOOK_SECRET", is_secret: true },
+  ],
+};
+
+/** Apps that own per-WABA WhatsApp connections (the connections + webhook
+ *  section). Only smrtTask integrates WhatsApp today. */
+const WHATSAPP_APPS = new Set<string>(["smrttask"]);
 
 interface PlatformSecretRow {
   key: string;
@@ -201,13 +225,31 @@ interface PlatformSecretRow {
 
 /** GET /admin/apps/:slug/secrets */
 router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
+  const { slug } = req.params;
   const { data: app, error: appErr } = await db
     .from("apps")
     .select("id")
-    .eq("slug", req.params.slug)
+    .eq("slug", slug)
     .maybeSingle();
   if (appErr) return res.status(500).json({ error: appErr.message });
   if (!app) return res.status(404).json({ error: "app not found" });
+
+  // Env-based apps (e.g. smrtvoice): report set/missing only, never editable.
+  const envCatalog = ENV_PLATFORM_KEYS[slug];
+  if (envCatalog) {
+    const platform = envCatalog.map((spec) => {
+      const envVal = process.env[spec.key] ?? null;
+      return {
+        key: spec.key,
+        is_secret: spec.is_secret,
+        value_text: spec.is_secret ? null : envVal,
+        is_set: Boolean(envVal),
+      };
+    });
+    return res.json({ editable: false, whatsapp: false, platform, connections: [] });
+  }
+
+  const catalog = EDITABLE_PLATFORM_KEYS[slug] ?? [];
 
   const { data: rows, error: rowsErr } = await db
     .from("app_secrets")
@@ -218,7 +260,7 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
   // Merge catalog with stored rows so the UI always sees every expected key,
   // even before the operator has saved anything for it.
   const stored = new Map((rows as PlatformSecretRow[] ?? []).map((r) => [r.key, r]));
-  const platform = SMRTTASK_PLATFORM_KEYS.map((spec) => {
+  const platform = catalog.map((spec) => {
     const row = stored.get(spec.key);
     return {
       key: spec.key,
@@ -229,6 +271,11 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
         : Boolean(row?.value_text || spec.default_value),
     };
   });
+
+  const whatsapp = WHATSAPP_APPS.has(slug);
+  if (!whatsapp) {
+    return res.json({ editable: true, whatsapp: false, platform, connections: [] });
+  }
 
   // Per-WABA secrets — masked indicators only.
   const { data: conns, error: connsErr } = await db
@@ -253,18 +300,25 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
     verify_token_set: Boolean(c.verify_token_id),
   }));
 
-  res.json({ platform, connections });
+  res.json({ editable: true, whatsapp: true, platform, connections });
 });
 
 /** PUT /admin/apps/:slug/secrets/:key  body: { value: string } */
 router.put("/admin/apps/:slug/secrets/:key", async (req: Request, res: Response) => {
-  const { key } = req.params;
+  const { slug, key } = req.params;
   const { value } = (req.body ?? {}) as { value?: string };
   if (typeof value !== "string") {
     return res.status(400).json({ error: "value must be a string" });
   }
 
-  const spec = SMRTTASK_PLATFORM_KEYS.find((s) => s.key === key);
+  // Env-based apps are read-only here — their keys are shared with an external
+  // service and must be changed in the hosting environment, not the DB.
+  if (ENV_PLATFORM_KEYS[slug]) {
+    return res.status(400).json({ error: "secrets for this app are read-only (managed via environment variables)" });
+  }
+
+  const catalog = EDITABLE_PLATFORM_KEYS[slug] ?? [];
+  const spec = catalog.find((s) => s.key === key);
   if (!spec) return res.status(400).json({ error: `unknown key: ${key}` });
 
   const { data: app, error: appErr } = await db
