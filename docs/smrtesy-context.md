@@ -8,10 +8,9 @@ platform.
 
 This is a **context/briefing** doc, not a step-by-step tutorial. For the
 build checklist see `docs/new-app-guide.md`; for the cross-app SDK see
-`docs/platform-integration.md`; for the working rules see `CLAUDE.md` and
-`PROJECT_GUIDE.md`. Where those disagree with this file, **this file is the
-current snapshot of reality** — the older ones describe earlier single-tenant
-stages.
+`docs/platform-integration.md`; for the operating/working rules see
+`CLAUDE.md`. Where any other doc disagrees with this file, **this file is the
+current snapshot of reality.**
 
 *Last verified against the codebase: 2026-05-29.*
 
@@ -71,6 +70,12 @@ Shared services:
 > **Supabase Secrets** (used by Edge Functions). Updating one does not update
 > the other. Same goes for any Google / model key shared across the server and
 > the edge functions.
+
+**Other surfaces.** Besides the web app there is a native **Android client**
+in `android-app/` (Kotlin / Gradle). It is a separate client that talks to the
+same backend API — it is **not** built or deployed by Vercel/Railway and is out
+of scope for most platform/app work, but be aware it exists and consumes the
+same `/api/*` contract.
 
 ---
 
