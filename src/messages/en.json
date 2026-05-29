@@ -505,6 +505,11 @@
       "alreadyDone": "Initial scan already completed",
       "enterApp": "Enter App"
     },
+    "driveFoldersStep": {
+      "title": "Pick folders to scan",
+      "description": "smrtTask will only scan the folders you select here (sub-folders included). You can continue without picking — you'll be able to edit the list later in Settings.",
+      "continue": "Continue"
+    },
     "skip": "Skip",
     "connect": "Connect",
     "signedInAs": "Signed in as"

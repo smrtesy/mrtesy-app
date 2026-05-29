@@ -201,8 +201,12 @@ export async function GET(request: Request) {
     if (redirectTo === "account") {
       return NextResponse.redirect(`${origin}/${locale}/account`);
     }
+    // First-time onboarding: route to the folder picker so the user
+    // actually selects what to scan before WhatsApp. Without this step
+    // we'd land them on WhatsApp with an empty drive_folder_ids and
+    // never sync anything — silent dead end.
     return NextResponse.redirect(
-      `${origin}/${locale}/onboarding/whatsapp`
+      `${origin}/${locale}/onboarding/drive/folders`
     );
   }
 
