@@ -1313,7 +1313,7 @@ async function refreshSourceMessageThread(
 ): Promise<void> {
   const { data: msgs, error } = await db
     .from("whatsapp_messages")
-    .select("direction, body_text, received_at, from_phone, from_name, is_history")
+    .select("direction, body_text, received_at, from_phone, from_name, to_phone, is_history")
     .eq("user_id", userId)
     .eq("chat_id", chatId)
     .order("received_at", { ascending: false })
@@ -1352,11 +1352,26 @@ async function refreshSourceMessageThread(
     .maybeSingle();
   const customName = (stateRow?.custom_name as string | null)?.trim() || null;
   const latestIncoming = [...ordered].reverse().find((m) => m.direction === "incoming");
+  // chatName resolution. The naive fallback to `last.from_name` is wrong
+  // when the thread contains only outgoing messages: from_name on an
+  // outgoing line is the literal "אני (מהטלפון)" placeholder (see
+  // normalizeMessage), so we'd label the whole thread as a self-chat even
+  // though the actual peer is the recipient. Prefer, in order:
+  //   1. user-set custom name
+  //   2. any incoming sender's name (the peer)
+  //   3. last outgoing message's to_phone (the peer when nothing came in)
+  //   4. anything non-placeholder on the last message
+  //   5. chatId
+  const lastOutgoing = [...ordered].reverse().find((m) => m.direction === "outgoing" && m.to_phone);
+  const lastFromName = (last.from_name as string | null) || null;
+  const lastFromPhone = (last.from_phone as string | null) || null;
+  const SELF_PLACEHOLDER = "אני (מהטלפון)";
   const chatName =
     customName ||
     (latestIncoming?.from_name as string | null) ||
-    (last.from_name as string | null) ||
-    (last.from_phone as string | null) ||
+    (lastOutgoing?.to_phone as string | null) ||
+    (lastFromName && lastFromName !== SELF_PLACEHOLDER ? lastFromName : null) ||
+    (lastFromPhone && lastFromPhone !== SELF_PLACEHOLDER ? lastFromPhone : null) ||
     chatId;
   const fromPhone =
     (latestIncoming?.from_phone as string | null) ||
