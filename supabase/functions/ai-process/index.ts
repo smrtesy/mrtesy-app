@@ -412,33 +412,54 @@ If the user's own address is the sender:
 - Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
 - Just acknowledging closure → INFORMATIONAL
 
-═══ COMMITMENT vs POSSIBILITY — wording rule (mandatory) ═══
-When reason_he / new_summary describe what the user (or another party)
-said, DO NOT collapse a soft possibility into a hard commitment.
+═══ COMMITMENT vs POSSIBILITY vs STATEMENT — wording rule (mandatory) ═══
+THREE registers — never collapse one into another in reason_he / new_summary.
 
-Soft possibility (modal / conditional / tentative):
-  EN: "I can try", "I might", "I'll see", "I could", "let me try",
-      "if I have time", "perhaps", "maybe I'll",
-      "I could give it a shot", "I might be able to"
-  HE: "אנסה", "אולי אעשה", "אם יהיה לי זמן", "אני יכול לנסות",
-      "אבדוק אם אפשר", "אולי", "ייתכן ש", "אני אשתדל"
-  → say "אמר שיכול לנסות" / "הציע לנסות" / "ציין שאולי יבדוק".
-  NEVER write "התחייב" for these.
+(1) Soft possibility (modal / conditional / tentative):
+    EN: "I can try", "I might", "I'll see", "I could", "let me try",
+        "if I have time", "perhaps", "maybe I'll",
+        "I might be able to"
+    HE: "אנסה", "אולי אעשה", "אם יהיה לי זמן", "אני יכול לנסות",
+        "אבדוק אם אפשר", "אולי", "ייתכן ש", "אני אשתדל"
+    → "אמר שיכול לנסות" / "הציע לנסות" / "ציין שאולי יבדוק".
+    NEVER use "התחייב" / "הבטיח" for these.
 
-Firm commitment (definite future, no hedging):
-  EN: "I will call", "I'll send by tomorrow", "I'm going to pay",
-      "I promise", "you'll have it by Friday"
-  HE: "אתקשר", "אשלח", "אעדכן", "אבדוק" (in unhedged future), "אסיים",
-      "אעביר עד מחר", "מבטיח ש"
-  → "התחייב להתקשר" / "הבטיח לעדכן" is appropriate.
+(2) Statement of intent (plain future tense, no promise vocabulary):
+    EN: "I will call", "I'll send tomorrow", "I'm going to pay",
+        "you'll have it by Friday", "let's meet at 3"
+    HE: "אתקשר", "אשלח", "אעדכן", "אבדוק" (unhedged future),
+        "אסיים", "אעביר עד מחר", "ניפגש ב-3"
+    → "אמר שיתקשר" / "אמר שישלח" / "ציין שיעדכן" /
+      "Wagner אמר שיבדוק".
+    Plain future-tense is NOT a commitment. The speaker stated what
+    they intend to do; they did NOT make an explicit promise. NEVER
+    write "התחייב" / "הבטיח" for these — that's misleading.
 
-In English: "I can try" is POSSIBILITY (not commitment) — render as
-"אמר שיכול לנסות", never as "התחייב". Same for "I might", "I'll see",
-"if I get to it", etc.
+(3) Explicit promise / commitment ONLY:
+    EN: "I promise to call", "I commit to send", "you have my word",
+        "I guarantee", "I pledge to"
+    HE: "מבטיח שאתקשר", "מתחייב לשלוח", "מתחייב להעביר",
+        "ערב לכך ש", "נשבע ש", "מילתי על"
+    → "התחייב להתקשר" / "הבטיח לשלוח" — appropriate ONLY here.
+    The speaker must use explicit promise vocabulary
+    (promise/commit/guarantee/pledge/מבטיח/מתחייב/ערב/נשבע).
 
-This applies equally to the OTHER party's wording (don't write "Wagner
-הבטיח" if Wagner only said "I'll look into it" — that's "אמר שיבדוק").
-Reserve "הבטיח" / "התחייב" for explicit promises.
+WORKED EXAMPLES:
+  Input: "I will call AT&T tomorrow"
+  WRONG: "Chanoch התחייב להתקשר ל-AT&T"
+  RIGHT: "Chanoch אמר שיתקשר ל-AT&T מחר"
+
+  Input: "I can try to handle it"
+  WRONG: "Chanoch התחייב לטפל"
+  RIGHT: "Chanoch אמר שיכול לנסות לטפל"
+
+  Input: "I promise I'll send the report by Friday"
+  RIGHT: "Chanoch הבטיח לשלוח את הדו״ח עד שישי"
+  (explicit "I promise" → "הבטיח" is correct)
+
+When in doubt between (2) and (3): default to "אמר ש" / "ציין ש". Saying
+someone committed when they merely stated intent erodes the user's
+trust in the system's wording.
 
 ═══ WORKED EXAMPLE ═══
 Input: "Please be advised that we are currently looking into the
