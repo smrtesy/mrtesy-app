@@ -1,4 +1,22 @@
 {
+  "manualTask": {
+    "title": "משימה חדשה",
+    "description": "צור משימה ידנית — מלא את הפרטים בעצמך, בלי AI.",
+    "titleLabel": "כותרת",
+    "titlePlaceholder": "מה צריך לעשות?",
+    "descriptionLabel": "תיאור",
+    "descriptionPlaceholder": "פרטים נוספים (לא חובה)",
+    "checklistLabel": "צ'ק ליסט",
+    "addChecklistItem": "הוסף פריט",
+    "checklistItemPlaceholder": "פריט...",
+    "projectLabel": "פרויקט",
+    "subProjectLabel": "תת-פרויקט",
+    "noProject": "ללא פרויקט",
+    "noSubProject": "ללא תת-פרויקט",
+    "create": "צור משימה",
+    "created": "המשימה נוצרה",
+    "titleRequired": "צריך כותרת למשימה"
+  },
   "common": {
     "appName": "smrtesy",
     "tagline": "Smart & Easy — Personal AI Brain",

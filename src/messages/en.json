@@ -1,4 +1,22 @@
 {
+  "manualTask": {
+    "title": "New Task",
+    "description": "Create a task manually — fill in the details yourself, no AI.",
+    "titleLabel": "Title",
+    "titlePlaceholder": "What needs to be done?",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "More details (optional)",
+    "checklistLabel": "Checklist",
+    "addChecklistItem": "Add item",
+    "checklistItemPlaceholder": "Item...",
+    "projectLabel": "Project",
+    "subProjectLabel": "Sub-project",
+    "noProject": "No project",
+    "noSubProject": "No sub-project",
+    "create": "Create task",
+    "created": "Task created",
+    "titleRequired": "A task title is required"
+  },
   "common": {
     "appName": "smrtesy",
     "tagline": "Smart & Easy — Personal AI Brain",
