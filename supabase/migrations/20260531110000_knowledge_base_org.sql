@@ -33,11 +33,13 @@ ALTER TABLE knowledge_base
 -- author of record = the original owner
 UPDATE knowledge_base SET created_by = user_id WHERE created_by IS NULL;
 
--- attribute to the author's org only when they belong to exactly one org
+-- attribute to the author's org only when they belong to exactly one org.
+-- (array_agg(...))[1] rather than max(): uuid has no max() aggregate, and the
+-- n=1 filter guarantees a single membership so the pick is unambiguous.
 UPDATE knowledge_base kb
 SET organization_id = sub.org_id
 FROM (
-  SELECT user_id, max(org_id) AS org_id, count(*) AS n
+  SELECT user_id, (array_agg(org_id))[1] AS org_id, count(*) AS n
   FROM org_members
   GROUP BY user_id
 ) sub
