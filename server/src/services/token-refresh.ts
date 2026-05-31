@@ -75,27 +75,42 @@ export async function getOAuthClient(userId: string, service: string) {
       // blips, Google 5xx, scope mismatches) leave the row intact and
       // the UI silently shows "disconnected" with no breadcrumb.
       const msg = err instanceof Error ? err.message : String(err);
-      // Treat any "the token is permanently dead" signal from Google
-      // the same way: nuke the credential row + tell the user.
-      //   • invalid_grant  — refresh_token was revoked / expired / unused too long
-      //   • invalid_client — refresh_token is bound to a different
-      //                      GOOGLE_CLIENT_ID/SECRET than we have now (typical
-      //                      after rotating OAuth credentials in Google Cloud —
-      //                      the token was issued by the old client and Google
-      //                      refuses to refresh it under the new one).
-      // Both states are permanent: only a fresh OAuth grant fixes them.
-      const isDeadToken = /invalid_grant/i.test(msg) || /invalid_client/i.test(msg);
+      // Two failure classes that look similar but need OPPOSITE handling:
+      //
+      //   • invalid_grant  — USER-level. The refresh_token was revoked by the
+      //                      user / expired / unused too long. Only a fresh
+      //                      OAuth grant by that user fixes it. Wipe the row
+      //                      and tell the user to reconnect.
+      //
+      //   • invalid_client — APP-level. The GOOGLE_CLIENT_ID/SECRET this
+      //                      runtime is sending don't authenticate (wrong,
+      //                      missing, or rotated out of sync between Vercel and
+      //                      the Supabase edge secrets). This is NOT the user's
+      //                      fault and reconnecting does NOT help — the freshly
+      //                      minted token dies the same way on the next refresh.
+      //                      Deleting the row here is actively harmful: it makes
+      //                      the user re-grant Drive over and over while the real
+      //                      fix is an env correction. Keep the credential intact
+      //                      so the connection self-heals the instant the secret
+      //                      is fixed, surface it as a SYSTEM error (the level:
+      //                      "error" log feeds the org error-handler notification
+      //                      pipeline), and do NOT show a pointless "reconnect"
+      //                      prompt. The UI still reads "disconnected" correctly
+      //                      because this function throws — the health probe's
+      //                      catch simply omits the service from its set.
+      const isUserRevoked   = /invalid_grant/i.test(msg);
+      const isClientMismatch = /invalid_client/i.test(msg);
       try {
         await db.from("log_entries").insert({
           user_id: userId,
-          level: isDeadToken ? "error" : "warning",
+          level: (isUserRevoked || isClientMismatch) ? "error" : "warning",
           category: "token_refresh",
           status: "failed",
           error_message: `${dbService}: ${msg}`.slice(0, 1000),
         });
       } catch { /* logging is best-effort */ }
 
-      if (isDeadToken) {
+      if (isUserRevoked) {
         // Wipe the credential row so the connection indicator flips to
         // "disconnected" instead of staying green forever, and notify
         // the user so they actually know to reconnect.

@@ -22,14 +22,18 @@ async function notifyDisconnect(userId: string, reason: string) {
   }).catch(() => {});
 
   if (membership?.org_id) {
+    // type MUST be one of the notifications CHECK values
+    // ('info','warning','success','action_required'). "sync_disconnected"
+    // violated the constraint and the insert was silently swallowed by the
+    // .catch below — so cron-time disconnects never produced a notification.
     await supabase.from("notifications").insert({
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "sync_disconnected",
-      title: "Google Drive disconnected",
-      body: `Drive connection was lost (${reason}). Please reconnect in Settings → Connections.`,
-      link: "/settings",
+      type: "action_required",
+      title: "Google Drive התנתק",
+      body: `החיבור ל-Google Drive פג תוקף (${reason}). לחץ כדי להתחבר מחדש — סנכרון לא ירוץ עד שתעשה את זה.`,
+      link: "/account",
     }).catch(() => {});
   }
 }
@@ -61,7 +65,34 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
 
   if (!resp.ok) {
     const err = await resp.text();
-    if (resp.status === 401 || resp.status === 400) {
+    // invalid_client = OUR client_id/secret failed to authenticate (wrong /
+    // missing / out of sync with the backend + Google Cloud). NOT a user
+    // revocation: do NOT flip drive_connected=false and do NOT tell the user to
+    // reconnect — a fresh grant dies the same way. Just record it so the next
+    // cron run self-heals once the secret is corrected. invalid_grant (and any
+    // other 400/401) is a genuine dead grant → disable + notify reconnect.
+    const isClientMismatch = /invalid_client/i.test(err);
+    if (isClientMismatch) {
+      const { data: syncState } = await supabase
+        .from("sync_state")
+        .select("consecutive_failures")
+        .eq("user_id", userId)
+        .eq("source", "google_drive")
+        .maybeSingle();
+      await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "google_drive",
+        last_error: `Token refresh failed (invalid_client — check GOOGLE_CLIENT_ID/SECRET): ${err}`.slice(0, 1000),
+        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+      }, { onConflict: "user_id,source" });
+      await supabase.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "drive_sync",
+        status: "failed",
+        error_message: `google_drive: invalid_client — OAuth client auth failed; check GOOGLE_CLIENT_ID/SECRET`,
+      }).catch(() => {});
+    } else if (resp.status === 401 || resp.status === 400) {
       await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
       // Record the error in sync_state so it's visible in admin logs
       const { data: syncState } = await supabase

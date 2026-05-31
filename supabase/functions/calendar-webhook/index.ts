@@ -32,7 +32,11 @@ async function refreshGoogleToken(userId: string): Promise<string> {
   });
 
   if (!resp.ok) {
-    if (resp.status === 401 || resp.status === 400) {
+    const err = await resp.text();
+    // invalid_client = our OAuth client_id/secret failed to authenticate, not a
+    // user revocation — don't disable calendar (the next run self-heals once the
+    // secret is fixed). Only genuine 400/401 grant failures disable it.
+    if (!/invalid_client/i.test(err) && (resp.status === 401 || resp.status === 400)) {
       await supabase.from("user_settings").update({ calendar_connected: false }).eq("user_id", userId);
     }
     throw new Error(`Token refresh failed: ${resp.status}`);

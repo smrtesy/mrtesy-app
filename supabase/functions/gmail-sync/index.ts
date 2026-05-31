@@ -23,14 +23,18 @@ async function notifyDisconnect(userId: string, reason: string) {
   }).catch(() => {});
 
   if (membership?.org_id) {
+    // type MUST satisfy the notifications CHECK constraint
+    // ('info','warning','success','action_required'). "sync_disconnected"
+    // violated it and the insert was silently dropped by the .catch — so the
+    // user never got a cron-time disconnect notification.
     await supabase.from("notifications").insert({
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "sync_disconnected",
-      title: "Gmail disconnected",
-      body: `Gmail connection was lost (${reason}). Please reconnect in Settings → Connections.`,
-      link: "/settings",
+      type: "action_required",
+      title: "Gmail התנתק",
+      body: `החיבור ל-Gmail פג תוקף (${reason}). לחץ כדי להתחבר מחדש — סנכרון לא ירוץ עד שתעשה את זה.`,
+      link: "/account",
     }).catch(() => {});
   }
 }
@@ -73,8 +77,28 @@ async function refreshGoogleToken(userId: string): Promise<string> {
 
   if (!resp.ok) {
     const err = await resp.text();
-    // Token revoked or expired — soft disconnect
-    if (resp.status === 401 || resp.status === 400) {
+    // invalid_client = OUR OAuth client_id/secret failed to authenticate, NOT a
+    // user revocation. Reconnecting won't help and the real fix is an env
+    // correction, so don't disable gmail or prompt a pointless reconnect — just
+    // log it so the next cron run self-heals once the secret is fixed.
+    const isClientMismatch = /invalid_client/i.test(err);
+    if (isClientMismatch) {
+      await supabase
+        .from("sync_state")
+        .update({
+          last_error: `Token refresh failed (invalid_client — check GOOGLE_CLIENT_ID/SECRET): ${err}`.slice(0, 1000),
+        })
+        .eq("user_id", userId)
+        .eq("source", "gmail");
+      await supabase.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "gmail_sync",
+        status: "failed",
+        error_message: `gmail: invalid_client — OAuth client auth failed; check GOOGLE_CLIENT_ID/SECRET`,
+      }).catch(() => {});
+    } else if (resp.status === 401 || resp.status === 400) {
+      // Token revoked or expired — soft disconnect
       await supabase
         .from("user_settings")
         .update({ gmail_connected: false })
