@@ -252,13 +252,20 @@ export function TaskList({ locale }: { locale: string }) {
   }
 
   function handleSelect(task: Task) {
+    const nowIso = new Date().toISOString();
     if (!task.seen_at) {
-      const nowIso = new Date().toISOString();
       setTodayTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
       setAllTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, seen_at: nowIso } : t)));
       api(`/api/tasks/${task.id}/seen`, { method: "POST" }).catch(() => {});
     }
-    setSelectedTask({ ...task, seen_at: task.seen_at ?? new Date().toISOString() });
+    // Reading the task clears its unread-update flag, so the "עדכון חדש"
+    // banner disappears the moment the user opens it.
+    if (task.has_unread_update) {
+      setTodayTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, has_unread_update: false } : t)));
+      setAllTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, has_unread_update: false } : t)));
+      api(`/api/tasks/${task.id}`, { method: "PATCH", body: { has_unread_update: false } }).catch(() => {});
+    }
+    setSelectedTask({ ...task, seen_at: task.seen_at ?? nowIso, has_unread_update: false });
     setDetailOpen(true);
   }
 

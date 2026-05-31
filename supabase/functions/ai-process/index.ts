@@ -475,6 +475,34 @@ When in doubt between (2) and (3): default to "אמר ש" / "ציין ש". Sayin
 someone committed when they merely stated intent erodes the user's
 trust in the system's wording.
 
+═══ GROUNDING — NO FABRICATION (mandatory) ═══
+reason_he / new_summary may attribute to a party ONLY what they literally
+said. This is separate from the register rule above: even when you pick
+"אמר ש" correctly, you must not INVENT the object or scope of the statement,
+and you must not move a topic raised by one party onto another party.
+
+  • Vague / impersonal acknowledgements — "יטופל", "נטפל בזה", "אני אדאג",
+    "we'll handle it", "I'll take care of it", "leave it with me" — are NOT
+    a commitment to any SPECIFIC sub-task. Report them as the vague statement
+    they are, quoted: 'אמר ש"יטופל"' / 'ציין שייטפל בכך'. NEVER expand "יטופל"
+    into "אמר/התחייב שיבדוק את <נושא ספציפי>".
+  • If party A asked about topic X and party B answered only "I don't know",
+    do NOT later write that B will check / committed to checking X. B said
+    nothing about X beyond not knowing.
+  • A topic the USER raised (or said they don't know about) does NOT
+    automatically become something the OTHER party agreed to handle. Attribute
+    each open item to whoever actually owns it per the literal text; if it is
+    unowned, say it is still open — do not assign it to anyone.
+
+WORKED EXAMPLE (the failure this rule prevents):
+  Thread: user asked an accountant to prepare a final statement; user asked
+  about salary (answered) and about "בוטמן" (user said "I don't know"); the
+  accountant replied only "יטופל".
+  WRONG: "רוה״ח התחייב לבדוק את נושא בוטמן ולהכין את החשבון" — fabricates a
+         בוטמן commitment that was never made and mis-registers "יטופל".
+  RIGHT: 'רוה״ח אמר ש"יטופל" — נדרש מעקב על החשבון הסופי. נושא בוטמן עדיין
+         פתוח (המשתמש לא ידע).'
+
 ═══ WORKED EXAMPLE ═══
 Input: "Please be advised that we are currently looking into the
 collection action against your son. I will let you know as soon as we
@@ -618,7 +646,7 @@ async function appendUpdateToTask(
   });
 }
 
-const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the outgoing-mail rule above) ═══\nThe body is a chat transcript with lines like\n  [INCOMING <timestamp>] <text>\n  [OUTGOING <timestamp>] <text>\n[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.\nClassify by the LAST message in the transcript:\n  • Last line is [INCOMING] → ACTIONABLE (the user owes a response)\n  • Last line is [OUTGOING] containing a commitment ("אחזור", "אבדוק", "אשלח",\n    "אעדכן", "תוך X זמן", a specific time/date) → ACTIONABLE\n    (the user owes a follow-through on what they promised)\n  • Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה") → INFORMATIONAL\n  • Conversation appears closed and resolved → INFORMATIONAL\nThe generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
+const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the outgoing-mail rule above) ═══\nThe body is a chat transcript with lines like\n  [INCOMING <timestamp>] <text>\n  [OUTGOING <timestamp>] <text>\n[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.\nClassify by the LAST message in the transcript:\n  • Last line is [INCOMING] → ACTIONABLE (the user owes a response)\n  • Last line is [OUTGOING] containing a commitment ("אחזור", "אבדוק", "אשלח",\n    "אעדכן", "תוך X זמן", a specific time/date) → ACTIONABLE\n    (the user owes a follow-through on what they promised)\n  • Last line is [OUTGOING] that asks a question or makes a request and is still\n    awaiting the other side's reply ("?", "אתם פתוחים?", "אפשר?", "מה לגבי",\n    any open ask) → ACTIONABLE (the user is waiting on the other party and\n    needs a tracker so it does not silently expire — the user is NOT the one\n    who owes a reply here)\n  • Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה") → INFORMATIONAL\n  • Conversation appears closed and resolved → INFORMATIONAL\nThe generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
 
 async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
   const model = sys.classification_model;
@@ -722,7 +750,7 @@ Build the task by READING the content:
 The TRACKING-TASK / QUOTED-TEXT / ONE-TASK-PER-EMAIL rules above are for
 inbound messages and DO NOT apply to Drive documents.`;
 
-const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] with a commitment (אחזור / אבדוק / אשלח / אעדכן\n    / time pledge) → the user owes a follow-through. Title starts with\n    "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
+const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request / is still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>, not\n    replying to them. Title starts with "לעקוב מול <name>" or\n    "לוודא ש<name> חוזר על <topic>". The description must say the user\n    already sent it and is waiting for the other side's answer.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
 
 async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }) {
   const model = sys.summary_model;

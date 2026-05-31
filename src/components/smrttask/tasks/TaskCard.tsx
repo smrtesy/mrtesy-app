@@ -84,7 +84,6 @@ export function TaskCard({
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
         isNew && "border-s-2 border-s-blue-400/30",
         isPendingCompletion && "border-s-4 border-s-emerald-500",
-        hasUnread && !isPendingCompletion && "border-s-4 border-s-amber-500",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
