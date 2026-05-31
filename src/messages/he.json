@@ -793,6 +793,7 @@
     "infoTitlePlaceholder": "כותרת — על מה המידע?",
     "infoBodyPlaceholder": "התוכן המלא (אפשר להשאיר ריק)",
     "infoTarget": "שמור לפרויקט",
+    "infoTargetPlaceholder": "בחר פרויקט",
     "infoSave": "שמירה",
     "infoSaved": "המידע נשמר",
     "infoSavedToOther": "המידע נשמר לפרויקט הנבחר",
