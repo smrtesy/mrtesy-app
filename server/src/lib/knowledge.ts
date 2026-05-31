@@ -46,11 +46,54 @@ export async function lookupKnowledge(
   return data[0] as KnowledgeMatch;
 }
 
-/** Store an approved question→answer pair with its question embedding. */
+/**
+ * Org-wide variant: find the best APPROVED answer across the whole organization.
+ * This is what the draft pipeline uses now — a fact one teammate approved is
+ * reusable by everyone in the org. Pending/rejected suggestions are excluded by
+ * match_knowledge_base_org. No-ops (null) when Voyage is unconfigured.
+ */
+export async function lookupKnowledgeForOrg(
+  orgId: string,
+  questionText: string,
+  meta?: { userId?: string; refId?: string },
+): Promise<KnowledgeMatch | null> {
+  const embedding = await embedText(questionText, "query", meta);
+  if (!embedding) return null;
+
+  const { data, error } = await db.rpc("match_knowledge_base_org", {
+    query_embedding: JSON.stringify(embedding),
+    p_org_id: orgId,
+    match_threshold: MATCH_THRESHOLD,
+    match_count: 1,
+  });
+
+  // A real RPC error (e.g. the match_knowledge_base_org migration not yet
+  // applied) is otherwise invisible — drafts just silently stop reusing
+  // knowledge. Log it so the cause is findable; still degrade to null.
+  if (error) {
+    console.error("[knowledge] match_knowledge_base_org failed:", error.message);
+    return null;
+  }
+  if (!data || data.length === 0) return null;
+  return data[0] as KnowledgeMatch;
+}
+
+/**
+ * Store a question→answer pair with its question embedding.
+ *
+ * Org-aware: the entry belongs to `organizationId` and starts in `status`
+ * ('pending' for a member suggestion, 'approved' when a manager adds/approves
+ * it directly). `createdBy` records the author; `approvedBy`/`approvedAt` are
+ * set only when it lands approved.
+ */
 export async function saveKnowledge(opts: {
   userId: string;
+  organizationId: string;
   question: string;
   answer: string;
+  status: "pending" | "approved";
+  createdBy: string;
+  approvedBy?: string | null;
   sourceType?: string | null;
   language?: string | null;
   taskId?: string | null;
@@ -71,12 +114,17 @@ export async function saveKnowledge(opts: {
     .from("knowledge_base")
     .insert({
       user_id: opts.userId,
+      organization_id: opts.organizationId,
       question,
       answer,
       embedding: JSON.stringify(embedding),
       source_type: opts.sourceType ?? null,
       language: opts.language ?? null,
       task_id: opts.taskId ?? null,
+      status: opts.status,
+      created_by: opts.createdBy,
+      approved_by: opts.status === "approved" ? (opts.approvedBy ?? opts.createdBy) : null,
+      approved_at: opts.status === "approved" ? new Date().toISOString() : null,
     })
     .select("id")
     .single();

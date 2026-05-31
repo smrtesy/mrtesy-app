@@ -274,4 +274,78 @@ router.patch("/projects/:id/brief/verify-fact",
   },
 );
 
+// ── /projects/:id/info-items ─────────────────────────────────────────────────
+// Manual notes/info saved against a project (the project Information Center).
+// Rows carry source='manual' to distinguish them from router-captured info.
+
+/** POST /projects/:id/info-items  body: { title, body? } */
+router.post("/projects/:id/info-items", async (req: Request, res: Response) => {
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!title) return res.status(400).json({ error: "title is required" });
+
+  if (!await verifyProjectInOrg(req.params.id, req.org!.id)) {
+    return res.status(404).json({ error: "project not found in this org" });
+  }
+
+  const { data, error } = await db
+    .from("project_information_items")
+    .insert({
+      user_id: req.user!.id,
+      organization_id: req.org!.id,
+      project_id: req.params.id,
+      title: title.slice(0, 200),
+      body,
+      source: "manual",
+    })
+    .select("id, title, body, created_at")
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ item: data });
+});
+
+/** PATCH /projects/:id/info-items/:itemId  body: { title?, body? } */
+router.patch("/projects/:id/info-items/:itemId", async (req: Request, res: Response) => {
+  if (!await verifyProjectInOrg(req.params.id, req.org!.id)) {
+    return res.status(404).json({ error: "project not found in this org" });
+  }
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (typeof req.body?.title === "string" && req.body.title.trim()) {
+    updates.title = req.body.title.trim().slice(0, 200);
+  }
+  if (typeof req.body?.body === "string") updates.body = req.body.body.trim();
+  if (!("title" in updates) && !("body" in updates)) {
+    return res.status(400).json({ error: "nothing to update" });
+  }
+
+  const { data, error } = await db
+    .from("project_information_items")
+    .update(updates)
+    .eq("id", req.params.itemId)
+    .eq("project_id", req.params.id)
+    .eq("organization_id", req.org!.id)
+    .select("id, title, body, created_at")
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "info item not found" });
+  res.json({ item: data });
+});
+
+/** DELETE /projects/:id/info-items/:itemId */
+router.delete("/projects/:id/info-items/:itemId", async (req: Request, res: Response) => {
+  const { error, count } = await db
+    .from("project_information_items")
+    .delete({ count: "exact" })
+    .eq("id", req.params.itemId)
+    .eq("project_id", req.params.id)
+    .eq("organization_id", req.org!.id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (count === 0) return res.status(404).json({ error: "info item not found" });
+  res.json({ ok: true });
+});
+
 export default router;

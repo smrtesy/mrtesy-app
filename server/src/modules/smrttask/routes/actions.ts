@@ -12,7 +12,7 @@ import { simpleCall } from "../../../anthropic";
 import { createDraft, searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
 import { createCalendarEvent } from "../../../services/calendar";
 import { getUserPromptContext } from "../../../lib/user-context";
-import { lookupKnowledge } from "../../../lib/knowledge";
+import { lookupKnowledgeForOrg } from "../../../lib/knowledge";
 
 const router = Router();
 
@@ -119,9 +119,12 @@ router.post("/execute", async (req: Request, res: Response) => {
   // reference material. No-ops (null) when Voyage is unconfigured or nothing
   // matches, so drafting is unaffected. We embed the incoming question text.
   let kbReference = "";
-  if (typeof action_type === "string" && action_type.startsWith("draft_")) {
+  if (typeof action_type === "string" && action_type.startsWith("draft_") && task.organization_id) {
     const question = `${task.title_he ?? task.title}\n${originalContent}`.trim();
-    const match = await lookupKnowledge(userId, question, task_id);
+    const match = await lookupKnowledgeForOrg(task.organization_id as string, question, {
+      userId,
+      refId: task_id,
+    });
     if (match) {
       kbReference =
         `\n\nA previously-approved answer to a very similar question is below. ` +
