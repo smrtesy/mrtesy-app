@@ -182,6 +182,9 @@ export type Database = {
           messages_synced_total: number | null
           source: string
           user_id: string
+          watch_channel_id: string | null
+          watch_resource_id: string | null
+          watch_expiration: string | null
         }
         Insert: {
           [key: string]: unknown
