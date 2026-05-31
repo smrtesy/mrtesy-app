@@ -475,6 +475,34 @@ When in doubt between (2) and (3): default to "אמר ש" / "ציין ש". Sayin
 someone committed when they merely stated intent erodes the user's
 trust in the system's wording.
 
+═══ GROUNDING — NO FABRICATION (mandatory) ═══
+reason_he / new_summary may attribute to a party ONLY what they literally
+said. This is separate from the register rule above: even when you pick
+"אמר ש" correctly, you must not INVENT the object or scope of the statement,
+and you must not move a topic raised by one party onto another party.
+
+  • Vague / impersonal acknowledgements — "יטופל", "נטפל בזה", "אני אדאג",
+    "we'll handle it", "I'll take care of it", "leave it with me" — are NOT
+    a commitment to any SPECIFIC sub-task. Report them as the vague statement
+    they are, quoted: 'אמר ש"יטופל"' / 'ציין שייטפל בכך'. NEVER expand "יטופל"
+    into "אמר/התחייב שיבדוק את <נושא ספציפי>".
+  • If party A asked about topic X and party B answered only "I don't know",
+    do NOT later write that B will check / committed to checking X. B said
+    nothing about X beyond not knowing.
+  • A topic the USER raised (or said they don't know about) does NOT
+    automatically become something the OTHER party agreed to handle. Attribute
+    each open item to whoever actually owns it per the literal text; if it is
+    unowned, say it is still open — do not assign it to anyone.
+
+WORKED EXAMPLE (the failure this rule prevents):
+  Thread: user asked an accountant to prepare a final statement; user asked
+  about salary (answered) and about "בוטמן" (user said "I don't know"); the
+  accountant replied only "יטופל".
+  WRONG: "רוה״ח התחייב לבדוק את נושא בוטמן ולהכין את החשבון" — fabricates a
+         בוטמן commitment that was never made and mis-registers "יטופל".
+  RIGHT: 'רוה״ח אמר ש"יטופל" — נדרש מעקב על החשבון הסופי. נושא בוטמן עדיין
+         פתוח (המשתמש לא ידע).'
+
 ═══ WORKED EXAMPLE ═══
 Input: "Please be advised that we are currently looking into the
 collection action against your son. I will let you know as soon as we
