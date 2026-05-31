@@ -192,6 +192,12 @@
       "medium": "בינוני",
       "low": "נמוך"
     },
+    "changePriority": "שנה דחיפות",
+    "sortBy": {
+      "label": "מיון",
+      "priority": "לפי דחיפות",
+      "date": "לפי תאריך"
+    },
     "actions": {
       "complete": "בוצע",
       "snooze": "נדנד",

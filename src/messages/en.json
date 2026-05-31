@@ -192,6 +192,12 @@
       "medium": "Medium",
       "low": "Low"
     },
+    "changePriority": "Change priority",
+    "sortBy": {
+      "label": "Sort",
+      "priority": "By priority",
+      "date": "By date"
+    },
     "actions": {
       "complete": "Done",
       "snooze": "Snooze",

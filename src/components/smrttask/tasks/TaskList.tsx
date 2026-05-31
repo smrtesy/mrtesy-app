@@ -29,9 +29,21 @@ import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
 import { SnoozeDialog } from "./SnoozeDialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import { GripVertical, ChevronDown, ChevronUp } from "lucide-react";
+import { GripVertical, ChevronDown, ChevronUp, ArrowUpDown } from "lucide-react";
 import type { Task } from "@/types/task";
+
+/** Rank for priority sorting — lower sorts first (most urgent on top). */
+const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+type AllSort = "priority" | "date";
+const ALL_SORT_KEY = "smrtesy:tasks:allSort";
 
 /** Wrapper that adds drag handle + sortable behaviour to a TaskCard in the Today list. */
 function SortableTaskCard({
@@ -44,6 +56,7 @@ function SortableTaskCard({
   onQuickAction,
   onDriveSearch,
   onToggleToday,
+  onPriorityChange,
 }: {
   task: Task;
   locale: string;
@@ -54,6 +67,7 @@ function SortableTaskCard({
   onQuickAction: (id: string, action: { label: string; prompt: string }) => void;
   onDriveSearch: (id: string, description: string) => void;
   onToggleToday: (id: string) => void;
+  onPriorityChange: (id: string, priority: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.id });
@@ -86,6 +100,7 @@ function SortableTaskCard({
           onQuickAction={onQuickAction}
           onDriveSearch={onDriveSearch}
           onToggleToday={onToggleToday}
+          onPriorityChange={onPriorityChange}
         />
       </div>
     </div>
@@ -107,6 +122,19 @@ export function TaskList({ locale }: { locale: string }) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<Task[] | null>(null);
+  const [allSort, setAllSort] = useState<AllSort>("priority");
+
+  // Restore the user's last "All" sort choice (client-only; avoids SSR
+  // hydration mismatch by reading localStorage after mount).
+  useEffect(() => {
+    const saved = window.localStorage.getItem(ALL_SORT_KEY);
+    if (saved === "priority" || saved === "date") setAllSort(saved);
+  }, []);
+
+  const changeAllSort = useCallback((next: AllSort) => {
+    setAllSort(next);
+    window.localStorage.setItem(ALL_SORT_KEY, next);
+  }, []);
 
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
@@ -239,6 +267,24 @@ export function TaskList({ locale }: { locale: string }) {
     }
   }
 
+  async function handlePriorityChange(taskId: string, priority: string) {
+    // Optimistic update across both lists so the badge — and any active
+    // priority sort — reflect the change immediately.
+    const p = priority as Task["priority"];
+    const apply = (list: Task[]) =>
+      list.map((t) => (t.id === taskId ? { ...t, priority: p } : t));
+    setTodayTasks(apply);
+    setAllTasks(apply);
+    setSearchResults((prev) => (prev ? apply(prev) : prev));
+    setSelectedTask((prev) => (prev && prev.id === taskId ? { ...prev, priority: p } : prev));
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { priority } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
+    }
+  }
+
   async function handleDelete(taskId: string) {
     if (!window.confirm(t("actions.deleteConfirm"))) return;
     try {
@@ -337,7 +383,19 @@ export function TaskList({ locale }: { locale: string }) {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const displayAll = searchResults !== null ? searchResults : allTasks;
+  // Search results keep their relevance order. Otherwise apply the chosen
+  // sort: by priority (urgent → low, tie-break newest first) or by date
+  // (newest first — the API's default order).
+  const sortedAll =
+    allSort === "priority"
+      ? [...allTasks].sort((a, b) => {
+          const rank =
+            (PRIORITY_RANK[a.priority] ?? 99) - (PRIORITY_RANK[b.priority] ?? 99);
+          if (rank !== 0) return rank;
+          return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+        })
+      : allTasks;
+  const displayAll = searchResults !== null ? searchResults : sortedAll;
 
   return (
     <div className="space-y-6">
@@ -383,6 +441,7 @@ export function TaskList({ locale }: { locale: string }) {
                         onQuickAction={handleQuickAction}
                         onDriveSearch={handleDriveSearch}
                         onToggleToday={handleRemoveFromToday}
+                        onPriorityChange={handlePriorityChange}
                       />
                     ))}
                   </div>
@@ -393,9 +452,38 @@ export function TaskList({ locale }: { locale: string }) {
 
           {/* ── ALL section ──────────────────────────────────────────── */}
           <section>
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-              הכל
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                הכל
+              </h2>
+              {searchResults === null && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                      title={t("sortBy.label")}
+                    >
+                      <ArrowUpDown className="h-3.5 w-3.5" />
+                      {allSort === "priority" ? t("sortBy.priority") : t("sortBy.date")}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup
+                      value={allSort}
+                      onValueChange={(v) => changeAllSort(v as AllSort)}
+                    >
+                      <DropdownMenuRadioItem value="priority">
+                        {t("sortBy.priority")}
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="date">
+                        {t("sortBy.date")}
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
             {displayAll.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {t("noTasksInView")}
@@ -415,6 +503,7 @@ export function TaskList({ locale }: { locale: string }) {
                         onQuickAction={handleQuickAction}
                         onDriveSearch={handleDriveSearch}
                         onToggleToday={handleAddToToday}
+                        onPriorityChange={handlePriorityChange}
                       />
                     </div>
                   </div>
