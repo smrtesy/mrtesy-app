@@ -86,11 +86,15 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       if (stopPropagation) e.stopPropagation();
       if (typeof window === "undefined") return;
-      if (!window.matchMedia("(max-width: 767px)").matches) return;
+      // Gate on the actual device, not viewport width: a narrow desktop window
+      // (split panel, zoom) must still open Gmail directly — the deep link only
+      // breaks on real phones. UA detection keeps desktop on the direct link.
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent);
+      if (!isMobile) return;
       // Mobile Gmail can't deep-link to a specific message — both the app and
       // m.gmail web ignore the "#all/<id>" fragment and land on the inbox. So
       // on mobile we open the email's stored content in the in-app reader
-      // instead of navigating to Gmail. Desktop keeps the direct link.
+      // instead of navigating to Gmail.
       if (isGmail && row.id) {
         e.preventDefault();
         setReaderOpen(true);
