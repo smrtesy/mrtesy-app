@@ -83,8 +83,8 @@ export interface Task {
   /** Embedded via Supabase left-join: projects(id, name, name_he, color, parent_id) */
   projects?: { id: string; name: string; name_he: string | null; color: string | null; parent_id: string | null } | null;
   source_message_id: string | null;
-  /** Embedded via Supabase left-join: source_messages(source_type, source_url, serial_display, metadata) */
-  source_messages?: { source_type: string | null; source_url: string | null; serial_display: string | null; metadata?: { rfc822MsgId?: string | null } | null } | null;
+  /** Embedded via Supabase left-join: source_messages(id, source_type, source_url, serial_display) */
+  source_messages?: { id?: string | null; source_type: string | null; source_url: string | null; serial_display: string | null } | null;
   task_type: "action" | "project_suggestion" | "brief_review" | "followup";
   /** Human-readable serial: T1, T2, ... — assigned by DB trigger */
   serial_display: string;

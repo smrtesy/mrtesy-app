@@ -17,6 +17,14 @@
     "created": "המשימה נוצרה",
     "titleRequired": "צריך כותרת למשימה"
   },
+  "emailReader": {
+    "title": "המייל המקורי",
+    "from": "מאת",
+    "noSubject": "(ללא נושא)",
+    "noContent": "אין תוכן זמין למייל הזה.",
+    "openInGmail": "פתח בג'ימייל",
+    "loadError": "לא ניתן לטעון את המייל."
+  },
   "common": {
     "appName": "smrtesy",
     "tagline": "Smart & Easy — Personal AI Brain",
