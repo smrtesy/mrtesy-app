@@ -201,6 +201,12 @@
       "low": "Low"
     },
     "changePriority": "Change priority",
+    "duplicateSuggestionLabel": "Possible duplicate of {serial}",
+    "duplicateSuggestionReview": "Review & merge",
+    "duplicateSuggestionDismiss": "Not a duplicate",
+    "duplicateSuggestionDismissed": "Suggestion dismissed",
+    "duplicateSuggestionBadge": "Duplicate?",
+    "duplicateSuggestionBadgeTitle": "Possible duplicate of an existing task — open to review and merge",
     "sortBy": {
       "label": "Sort",
       "priority": "By priority",

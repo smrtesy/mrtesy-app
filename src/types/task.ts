@@ -88,4 +88,12 @@ export interface Task {
   task_type: "action" | "project_suggestion" | "brief_review" | "followup";
   /** Human-readable serial: T1, T2, ... — assigned by DB trigger */
   serial_display: string;
+  /**
+   * Medium-confidence cross-source duplicate suggestion set by ai-process:
+   * the id of an existing open task this one may duplicate. Null when there is
+   * no suggestion. High-confidence matches are auto-linked and never land here.
+   */
+  suggested_duplicate_of: string | null;
+  /** Embedded via Supabase left-join on suggested_duplicate_of. */
+  suggested_duplicate?: { id: string; title: string; title_he: string | null; serial_display: string } | null;
 }
