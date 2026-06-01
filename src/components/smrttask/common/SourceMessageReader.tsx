@@ -42,11 +42,52 @@ function linkify(text: string) {
 }
 
 // Gmail stores the body as-is; when an email has no text/plain part the
-// collector keeps the raw HTML, which is gibberish shown as text. Detect that
-// and render it in a sandboxed iframe instead (no allow-scripts → inert, so no
-// XSS; allow-popups + <base target=_blank> so the sender's links still open).
-function looksLikeHtml(text: string): boolean {
-  return /<(!doctype|html|head|body|table|tr|td|div|p|br|span|style|a|img|ul|ol)\b/i.test(text);
+// collector keeps the raw HTML. We render that in a sandboxed iframe (no
+// allow-scripts → inert, so no XSS; allow-popups + <base target=_blank> so the
+// sender's links still open) — but ONLY when there's real, renderable content.
+// Some senders' stored bodies are almost entirely a giant stylesheet (with the
+// visible content truncated off by the collector's size cap), so a naive iframe
+// would just dump CSS as text. We strip the boilerplate first and decide.
+
+function stripNonContent(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head>/gi, " ");
+}
+
+// True only when, after dropping <style>/<script>/<head>, there's an actual
+// content-bearing HTML tag left to render. A body that is just a DOCTYPE +
+// naked CSS rules returns false and falls back to text/empty.
+function hasRenderableHtml(html: string): boolean {
+  return /<(body|table|div|p|a|img|ul|ol|h[1-6]|tr|td|span|br)[\s>/]/i.test(stripNonContent(html));
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+// Best-effort plain-text extraction: drop style/script/head, strip naked CSS
+// rule blocks (only when the body actually contains `{…}`), turn block tags
+// into line breaks, then strip remaining tags and decode entities. Plain-text
+// emails (no braces, no tags) pass through essentially untouched.
+function extractReadableText(raw: string): string {
+  let s = stripNonContent(raw);
+  if (s.includes("{") && s.includes("}")) {
+    s = s.replace(/@media[^{]*\{(?:[^{}]+|\{[^{}]*\})*\}/gi, " ");
+    s = s.replace(/[^{}<>;]+\{[^{}]*\}/g, " ");
+  }
+  s = s.replace(/<\/(p|div|tr|li|h[1-6]|table)>/gi, "\n").replace(/<br\s*\/?>/gi, "\n");
+  s = s.replace(/<[^>]+>/g, " ");
+  s = decodeEntities(s);
+  return s.replace(/[ \t ]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function withBaseTarget(html: string): string {
@@ -126,35 +167,49 @@ export function SourceMessageReader({
               )}
             </div>
 
-            {data.body_text ? (
-              looksLikeHtml(data.body_text) ? (
-                <iframe
-                  title="email"
-                  sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-                  srcDoc={withBaseTarget(data.body_text)}
-                  referrerPolicy="no-referrer"
-                  className="w-full rounded border bg-white"
-                  style={{ height: iframeHeight }}
-                  onLoad={(e) => {
-                    // Size the frame to its content (capped) so short emails
-                    // don't leave a big empty box and long ones scroll inside.
-                    try {
-                      const doc = e.currentTarget.contentDocument;
-                      if (doc?.body) {
-                        const h = Math.min(doc.body.scrollHeight + 24, window.innerHeight * 0.6);
-                        if (h > 0) setIframeHeight(h);
-                      }
-                    } catch { /* opaque origin — keep default height */ }
-                  }}
-                />
+            {(() => {
+              const body = data.body_text;
+              if (!body) {
+                return <p className="text-muted-foreground">{t("noContent")}</p>;
+              }
+              // Real HTML email → render faithfully in the sandboxed iframe.
+              if (hasRenderableHtml(body)) {
+                return (
+                  <iframe
+                    title="email"
+                    sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                    srcDoc={withBaseTarget(body)}
+                    referrerPolicy="no-referrer"
+                    className="w-full rounded border bg-white"
+                    style={{ height: iframeHeight }}
+                    onLoad={(e) => {
+                      // Size the frame to its content (capped) so short emails
+                      // don't leave a big empty box and long ones scroll inside.
+                      try {
+                        const doc = e.currentTarget.contentDocument;
+                        if (doc?.body) {
+                          const h = Math.min(doc.body.scrollHeight + 24, window.innerHeight * 0.6);
+                          if (h > 0) setIframeHeight(h);
+                        }
+                      } catch { /* opaque origin — keep default height */ }
+                    }}
+                  />
+                );
+              }
+              // Otherwise extract readable text. If nothing usable survives
+              // (e.g. the stored body is just a truncated stylesheet), show the
+              // empty state + the "open in Gmail" escape hatch below, instead
+              // of dumping CSS/markup at the user.
+              const text = extractReadableText(body);
+              const stillNoise = !text || /[{}]|!important|@media|-webkit-/.test(text);
+              return stillNoise ? (
+                <p className="text-muted-foreground">{t("noContent")}</p>
               ) : (
                 <div className="whitespace-pre-wrap break-words leading-relaxed" dir="auto">
-                  {linkify(data.body_text)}
+                  {linkify(text)}
                 </div>
-              )
-            ) : (
-              <p className="text-muted-foreground">{t("noContent")}</p>
-            )}
+              );
+            })()}
 
             {data.source_url && (
               <a
