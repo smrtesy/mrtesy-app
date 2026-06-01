@@ -17,6 +17,14 @@
     "created": "Task created",
     "titleRequired": "A task title is required"
   },
+  "emailReader": {
+    "title": "Original email",
+    "from": "From",
+    "noSubject": "(no subject)",
+    "noContent": "No content available for this email.",
+    "openInGmail": "Open in Gmail",
+    "loadError": "Couldn't load the email."
+  },
   "common": {
     "appName": "smrtesy",
     "tagline": "Smart & Easy — Personal AI Brain",
