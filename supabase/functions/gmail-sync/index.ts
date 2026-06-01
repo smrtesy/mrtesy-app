@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { parseSkipRules } from "../_shared/rule-filters.ts";
+import { GMAIL_REVIEW_LABELS, getOrCreateGmailLabels, applyReviewLabel } from "../_shared/gmail-labels.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -321,6 +322,11 @@ async function syncUserGmail(userId: string) {
 
   // Fetch details and upsert
   let synced = 0;
+  // Lazily resolved on the first skip in this run so syncs with no skipped
+  // mail pay nothing. Caches the smrtTask + smrtTask/דילוג label IDs for the
+  // whole batch. null = not yet resolved; on resolution failure stays null and
+  // labeling is silently skipped (best-effort, never wedges the sync).
+  let skipLabelMap: Map<string, string> | null = null;
   for (const msgId of messageIds) {
     const msg = await fetchMessageDetails(token, msgId);
     if (!msg) continue;
@@ -418,6 +424,21 @@ async function syncUserGmail(userId: string) {
           classification_reason: skipReason,
         });
         if (skipLogErr) console.error(`gmail-sync skip log insert failed (${msgId}):`, skipLogErr.message);
+
+        // Tag the message in Gmail exactly like the ai-process skip path:
+        // smrtTask/דילוג + parent smrtTask, and drop UNREAD. Best-effort —
+        // a labeling failure must never wedge the sync. Sent mail isn't
+        // tagged (matches ai-process's source_type === "gmail" guard).
+        if (sourceType === "gmail") {
+          try {
+            if (!skipLabelMap) {
+              skipLabelMap = await getOrCreateGmailLabels(token, ["smrtTask", GMAIL_REVIEW_LABELS.skip]);
+            }
+            await applyReviewLabel(token, msgId, "skip", skipLabelMap);
+          } catch (e) {
+            console.error(`gmail-sync skip label failed (${msgId}):`, e instanceof Error ? e.message : String(e));
+          }
+        }
       }
       synced++;
       continue;
