@@ -180,7 +180,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                     <SerialBadge serial={task.serial_display} />
                   </div>
                   {task.description && (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir="auto">
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir="auto">
                       {task.description}
                     </p>
                   )}

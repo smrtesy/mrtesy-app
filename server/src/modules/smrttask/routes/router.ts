@@ -154,7 +154,9 @@ Output JSON shape (return ONLY valid JSON, no markdown fences):
     "subtasks": ["new subtask 1"],
     "update_text": "free-text progress note",
     "notes_for_user": "optional clarifying note shown in the preview",
-    "project_id": "uuid of the matched project/sub-project, or null"
+    "project_id": "uuid of the matched existing project/sub-project, or null",
+    "new_project_name": "name of a NEW top-level project to create (save_info only), or null",
+    "new_subproject_name": "name of a NEW sub-project to create (save_info only), or null"
   }
 }
 
@@ -164,7 +166,7 @@ Only include payload fields that are relevant to the chosen intent:
 - add_subtask: subtasks (array of strings)
 - add_update: update_text
 - complete_task / dismiss_task: leave payload empty unless the user provided a reason in description
-- save_info: title_he (required, short heading ≤80 chars), body (full text, may equal title_he if brief), project_id (matched from list or null)
+- save_info: title_he (required, short heading ≤80 chars), body (full text, may equal title_he if brief), project_id (matched from list or null), and new_project_name / new_subproject_name when the user asks to file the info under a project/sub-project that does NOT yet exist (see "Creating new projects" below)
 - unknown: leave payload empty, set notes_for_user to a clarifying question in Hebrew
 
 Date interpretation: relative dates ("מחר", "ביום ראשון", "in 3 days") should be resolved against the given "today" date.
@@ -175,6 +177,12 @@ Project assignment:
 - A "Projects" list is provided with each project's id, name, and whether it is a sub-project of another. If the input names or clearly refers to one of them, set payload.project_id to that project's exact id from the list.
 - A sub-project is a more specific match than its parent — when the user names the sub-project (or both), choose the SUB-PROJECT's id.
 - Only ever use an id that appears verbatim in the provided list. If no project is referenced, or you are unsure, set project_id to null. Never invent an id.
+
+Creating new projects (save_info only):
+- If the user explicitly asks to file the info under a project or sub-project that is NOT in the list — phrases like "תת פרוייקט חדש", "פרויקט חדש", "create a new project / sub-project", "תפתח תת-פרויקט" — do NOT force-match an existing project. Create the new one instead.
+- New SUB-project under an EXISTING parent: set project_id to the existing parent's exact id from the list, AND new_subproject_name to the new sub-project's name. (Example: input names parent "אישי" and "תת פרוייקט חדש - סיוע בדירה/אוכל" → project_id = id of "אישי", new_subproject_name = "סיוע בדירה/אוכל".)
+- New TOP-LEVEL project: set new_project_name. To also create a sub under that brand-new parent, additionally set new_subproject_name.
+- If a project/sub-project with that name already EXISTS in the list, prefer matching its id via project_id over re-creating it.
 
 DEEP-LINK PRESERVATION (system-wide): if the user's text contains a
 specific URL, you MUST emit it verbatim in description / body / checklist
@@ -421,6 +429,10 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
   const payload: DecisionPayload = { ...(decision.payload as DecisionPayload), ...(overrides.payload ?? {}) };
 
   let appliedTaskId: string | null = null;
+  // save_info produces a project_information_items row, not a task. It is
+  // tracked separately because applied_task_id has an FK to tasks(id) and
+  // must never hold an info-item id (router_decisions_applied_task_id_fkey).
+  let appliedInfoItemId: string | null = null;
 
   try {
     if (intent === "create_task") {
@@ -579,37 +591,66 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       if (error) throw new Error(error.message);
       appliedTaskId = targetTaskId;
     } else if (intent === "save_info") {
+      // Idempotency: a previous apply may have inserted the info item (and any
+      // on-the-fly project) but failed before flipping the decision to
+      // 'applied' — leaving status='pending'. Reuse the existing item instead
+      // of creating duplicate items/projects on retry.
+      const { data: existingRows, error: existErr } = await db
+        .from("project_information_items")
+        .select("id")
+        .eq("source_router_decision_id", decision.id)
+        .limit(1);
+      if (existErr) throw new Error(existErr.message);
+      if (existingRows && existingRows.length > 0) {
+        appliedInfoItemId = (existingRows[0] as { id: string }).id;
+      } else {
       const title = (payload.title_he || decision.input_text).trim().slice(0, 200);
       const body = (payload.body || payload.title_he || decision.input_text).trim();
       if (!title) throw new Error("title required for save_info");
 
       let projectId: string | null = null;
 
-      if (payload.new_project_name?.trim().length) {
-        // Create a new parent project (and optional sub-project) on-the-fly.
-        const projName = payload.new_project_name.trim();
-        const { data: newProj, error: projErr } = await db
+      // Find-or-create a project by name under an optional parent. Dedups on
+      // (organization_id, parent_id, name) so naming an existing project/
+      // sub-project never spawns a duplicate. user_id is set for RLS isolation.
+      const findOrCreateProject = async (parentId: string | null, rawName: string): Promise<string> => {
+        const name = rawName.trim();
+        let findQ = db
           .from("projects")
-          .insert({ organization_id: orgId, name: projName, name_he: projName, is_active: true })
+          .select("id")
+          .eq("organization_id", orgId)
+          .eq("name", name)
+          .eq("is_active", true)
+          .limit(1);
+        findQ = parentId ? findQ.eq("parent_id", parentId) : findQ.is("parent_id", null);
+        const { data: existing, error: findErr } = await findQ;
+        if (findErr) throw new Error(findErr.message);
+        if (existing && existing.length > 0) return (existing[0] as { id: string }).id;
+        const { data: created, error: createErr } = await db
+          .from("projects")
+          .insert({ user_id: userId, organization_id: orgId, name, name_he: name, parent_id: parentId, is_active: true })
           .select("id")
           .single();
-        if (projErr) throw new Error(projErr.message);
-        const parentId = (newProj as { id: string }).id;
+        if (createErr) throw new Error(createErr.message);
+        return (created as { id: string }).id;
+      };
 
-        if (payload.new_subproject_name?.trim()) {
-          const subName = payload.new_subproject_name.trim();
-          const { data: newSub, error: subErr } = await db
-            .from("projects")
-            .insert({ organization_id: orgId, name: subName, name_he: subName, parent_id: parentId, is_active: true })
-            .select("id")
-            .single();
-          if (subErr) throw new Error(subErr.message);
-          projectId = (newSub as { id: string }).id;
-        } else {
-          projectId = parentId;
-        }
+      // Resolve the project this info belongs to:
+      //  (a) new_project_name      → a brand-new top-level project
+      //      (+ new_subproject_name → and a sub-project under it).
+      //  (b) existing project_id + new_subproject_name
+      //                            → a NEW sub-project under that existing parent.
+      //  (c) existing project_id, no new sub → use it as-is (may be null).
+      if (payload.new_project_name?.trim().length) {
+        const parentId = await findOrCreateProject(null, payload.new_project_name);
+        projectId = payload.new_subproject_name?.trim()
+          ? await findOrCreateProject(parentId, payload.new_subproject_name)
+          : parentId;
       } else {
-        projectId = await validateProjectId(payload.project_id, orgId);
+        const parentId = await validateProjectId(payload.project_id, orgId);
+        projectId = payload.new_subproject_name?.trim()
+          ? await findOrCreateProject(parentId, payload.new_subproject_name)
+          : parentId;
       }
 
       const { data: infoItem, error } = await db
@@ -626,7 +667,8 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
         .select("id")
         .single();
       if (error) throw new Error(error.message);
-      appliedTaskId = (infoItem as { id: string }).id;
+      appliedInfoItemId = (infoItem as { id: string }).id;
+      }
     } else {
       return res.status(400).json({ error: `cannot apply intent ${intent}` });
     }
@@ -644,7 +686,7 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       .eq("id", decision.id);
     if (updErr) throw new Error(updErr.message);
 
-    res.json({ ok: true, applied_task_id: appliedTaskId, intent });
+    res.json({ ok: true, applied_task_id: appliedTaskId, info_item_id: appliedInfoItemId, intent });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }

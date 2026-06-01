@@ -363,7 +363,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     )}
                   </div>
                   {task.description ? (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
                       {task.description}
                     </p>
                   ) : null}

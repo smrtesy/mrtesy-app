@@ -139,6 +139,11 @@ export function TaskList({ locale }: { locale: string }) {
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  // True once the first load has populated the lists. Subsequent refetches
+  // (mutations, realtime events) must NOT flip back to the skeleton view —
+  // collapsing the list to 3 short skeletons loses the scroll position and
+  // jumps the page to the top on every edit.
+  const hasLoadedRef = useRef(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -161,7 +166,10 @@ export function TaskList({ locale }: { locale: string }) {
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
-    setLoading(true);
+    // Only show the full-page skeleton on the very first load. Background
+    // refetches keep the existing list rendered so the scroll position is
+    // preserved (cards are keyed by task.id and update in place).
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       const activeStatuses = "inbox,in_progress,pending_completion";
 
@@ -180,6 +188,7 @@ export function TaskList({ locale }: { locale: string }) {
       );
       setAllTasks(allRows ?? []);
 
+      hasLoadedRef.current = true;
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("smrtesy:badge-refresh"));
       }
