@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
@@ -455,7 +456,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap text-sm" dir={dir}>
-                      {task.description || (
+                      {task.description ? (
+                        <LinkifiedText>{task.description}</LinkifiedText>
+                      ) : (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
                     </div>
@@ -532,7 +535,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                               }}
                               style={{ cursor: isLong ? "pointer" : "default" }}
                             >
-                              {display}
+                              <LinkifiedText>{display}</LinkifiedText>
                             </div>
                           </li>
                         );

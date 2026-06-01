@@ -28,6 +28,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
 import { translateActionLabel } from "@/lib/actionLabels";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import type { Task } from "@/types/task";
@@ -181,7 +182,7 @@ export function TaskCard({
       {/* Description preview */}
       {task.description && (
         <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
-          {task.description}
+          <LinkifiedText>{task.description}</LinkifiedText>
         </p>
       )}
 
