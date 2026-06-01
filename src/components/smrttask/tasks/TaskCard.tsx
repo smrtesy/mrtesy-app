@@ -101,7 +101,7 @@ export function TaskCard({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
+        "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer overflow-hidden",
         isNew && "border-s-2 border-s-blue-400/30",
         isPendingCompletion && "border-s-4 border-s-emerald-500",
         selected && "ring-2 ring-primary/50"
@@ -137,7 +137,7 @@ export function TaskCard({
             aria-label="select"
           />
         )}
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir={locale === "he" ? "rtl" : "ltr"}>
+        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
@@ -223,14 +223,14 @@ export function TaskCard({
               key={i}
               variant="outline"
               size="sm"
-              className="h-8 text-xs gap-1"
+              className="h-8 max-w-full min-w-0 text-xs gap-1"
               onClick={(e) => {
                 e.stopPropagation();
                 onQuickAction(task.id, action);
               }}
             >
-              <Zap className="h-3 w-3" />
-              {translateActionLabel(action.label, tActions)}
+              <Zap className="h-3 w-3 shrink-0" />
+              <span className="truncate">{translateActionLabel(action.label, tActions)}</span>
             </Button>
           ))}
         </div>
