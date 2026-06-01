@@ -234,7 +234,28 @@ async function syncUserGmail(userId: string) {
 
   if (checkpoint) {
     // Incremental sync via history
-    const result = await gmailHistorySync(userId, token, checkpoint);
+    let result: { newMessages: string[]; newHistoryId: string | null; needsReconcile: boolean };
+    try {
+      result = await gmailHistorySync(userId, token, checkpoint);
+    } catch (e) {
+      const errMsg = (e as Error).message;
+      await supabase.from("sync_state").upsert(
+        {
+          user_id: userId,
+          source: "gmail",
+          last_error: errMsg,
+          consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+        },
+        { onConflict: "user_id,source" }
+      );
+      await supabase.from("log_entries").insert({
+        user_id: userId,
+        category: "gmail_sync",
+        status: "failed",
+        error_message: `gmailHistorySync threw: ${errMsg}`,
+      }).catch(() => {});
+      return { error: errMsg };
+    }
     if (result.needsReconcile) {
       // Checkpoint unusable (Gmail returned 404/400). Clear it so the NEXT run
       // takes the no-checkpoint path: fresh fetch of unread + a new valid
