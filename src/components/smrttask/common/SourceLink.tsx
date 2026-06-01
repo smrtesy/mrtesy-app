@@ -15,7 +15,13 @@ const SOURCE_ICONS: Record<string, typeof Mail> = {
   google_calendar: Calendar,
 };
 
-type SourceRow = { source_type: string | null; source_url: string | null; serial_display: string | null };
+type SourceRow = {
+  source_type: string | null;
+  source_url: string | null;
+  serial_display: string | null;
+  /** source_messages.metadata jsonb — gmail rows carry { rfc822MsgId } here */
+  metadata?: { rfc822MsgId?: string | null } | null;
+};
 
 interface SourceLinkProps {
   /**
@@ -38,25 +44,27 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
   const { locale } = useParams<{ locale: string }>();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
-  // Android Gmail: build the Intent URL and store it in state so the anchor
-  // renders with href="intent://..." BEFORE the user taps. Chrome reads href
-  // at tap time; mutations inside onClick fire too late for intent:// routing.
-  const sourceUrl = row?.source_url ?? null;
+  // Mobile Gmail: build a per-message URL and store it in state so the anchor
+  // carries the right href BEFORE the user taps (avoids onClick timing races).
+  //
+  // The desktop source_url uses the "#all/<internalId>" fragment. That format
+  // is desktop-web only — mobile Gmail (both the app and m.gmail web) ignores
+  // it and lands the user on the inbox. The RFC-822 Message-ID is the only
+  // identifier that survives into mobile Gmail, so on mobile we route through a
+  // "#search/rfc822msgid:" query that resolves to the one specific message.
   const sourceType = row?.source_type ?? null;
-  const [gmailIntentHref, setGmailIntentHref] = useState<string | null>(null);
+  const rfc822MsgId =
+    sourceType === "gmail" || sourceType === "gmail_sent"
+      ? (row?.metadata?.rfc822MsgId ?? null)
+      : null;
+  const [mobileGmailHref, setMobileGmailHref] = useState<string | null>(null);
   useEffect(() => {
-    if (!sourceUrl || (sourceType !== "gmail" && sourceType !== "gmail_sent")) return;
-    if (!/Android/i.test(navigator.userAgent)) return;
+    if (!rfc822MsgId) return;
     if (!window.matchMedia("(max-width: 767px)").matches) return;
-    const m = sourceUrl.match(/mail\.google\.com(\/[^#]*)(?:#(.*))?$/);
-    if (!m) return;
-    const path = m[1] ?? "/mail/u/0/";
-    const frag = m[2];
-    const intentPath = path + (frag ? `%23${frag}` : "");
-    setGmailIntentHref(
-      `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(sourceUrl)};end`
+    setMobileGmailHref(
+      `https://mail.google.com/mail/u/0/#search/rfc822msgid:${encodeURIComponent(rfc822MsgId)}`
     );
-  }, [sourceUrl, sourceType]);
+  }, [rfc822MsgId]);
 
   if (!row?.serial_display && !row?.source_url) return null;
 
@@ -96,17 +104,18 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
       if (stopPropagation) e.stopPropagation();
       if (typeof window === "undefined") return;
       if (!window.matchMedia("(max-width: 767px)").matches) return;
-      // Android Gmail: anchor already has the intent:// href from useEffect.
-      // All other mobile (iOS Universal Links, Drive, Calendar): switch to
-      // same-tab navigation so the OS can intercept the URL.
-      if (!gmailIntentHref) e.currentTarget.target = "_self";
+      // Mobile Gmail with a known Message-ID already has the #search href from
+      // useEffect. Everything else on mobile (Gmail rows missing the Message-ID,
+      // Drive, Calendar, iOS Universal Links): switch to same-tab navigation so
+      // the OS / Gmail web can intercept the URL instead of opening a dead tab.
+      if (!mobileGmailHref) e.currentTarget.target = "_self";
     };
 
     return (
       <a
-        href={gmailIntentHref ?? row.source_url}
-        target={gmailIntentHref ? "_self" : "_blank"}
-        rel={gmailIntentHref ? undefined : "noopener noreferrer"}
+        href={mobileGmailHref ?? row.source_url}
+        target={mobileGmailHref ? "_self" : "_blank"}
+        rel={mobileGmailHref ? undefined : "noopener noreferrer"}
         onClick={handleClick}
         title={`${label} — open source`}
         className={cn(base, interactive, className)}
