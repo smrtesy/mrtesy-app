@@ -20,11 +20,13 @@ import { DismissDialog } from "./DismissDialog";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
 
 interface SourceJoin {
+  id?: string | null;
   source_type: string | null;
   source_url: string | null;
   serial_display: string | null;
@@ -101,7 +103,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       // projects(...) is needed so the edit-button TaskDetail sheet can
       // show the linked project chip; without the join it silently
       // disappears in the editor.
-      .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)", { count: "exact" })
+      .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)", { count: "exact" })
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -285,7 +287,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           un-searched list. */}
       <SmartSearch
         onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
-        selectClause="*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
+        selectClause="*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
         refineQuery={(q) => q
           .eq("status", "inbox")
           .eq("manually_verified", false)
@@ -387,6 +389,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
               <SuggestionActions
                 taskId={task.id as string}
+                infoProjectId={(task.project_id as string | null) ?? null}
+                infoTitle={title as string}
+                infoBody={(task.description as string | null) ?? null}
                 onFastDismiss={() => handleFastDismiss(task.id as string)}
                 onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string, source?.source_type ?? null)}
                 onApprove={() => handleApprove(task.id as string)}
@@ -463,6 +468,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
  */
 function SuggestionActions({
   taskId,
+  infoProjectId,
+  infoTitle,
+  infoBody,
   onFastDismiss,
   onDismissWithReason,
   onApprove,
@@ -471,6 +479,9 @@ function SuggestionActions({
   onComplete,
 }: {
   taskId: string;
+  infoProjectId: string | null;
+  infoTitle: string;
+  infoBody: string | null;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
@@ -507,6 +518,11 @@ function SuggestionActions({
         >
           <Clock className="h-4 w-4" />
         </Button>
+        <SaveAsInfoButton
+          defaultProjectId={infoProjectId}
+          defaultTitle={infoTitle}
+          defaultBody={infoBody}
+        />
         <div className="flex-1" />
         <Button
           size="icon"

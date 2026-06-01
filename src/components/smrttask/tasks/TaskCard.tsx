@@ -5,11 +5,18 @@ import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Zap,
   MessageCircle,
   FolderSearch,
   Clock,
   CheckCircle2,
+  Check,
   Folder,
   CheckSquare,
   Sunrise,
@@ -36,6 +43,8 @@ interface TaskCardProps {
   onDelete?: (taskId: string) => void;
   onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
+  /** When provided, the priority badge becomes a quick-edit dropdown. */
+  onPriorityChange?: (taskId: string, priority: string) => void;
   /** Optional bulk-select integration. When provided, a checkbox is shown. */
   selected?: boolean;
   onToggleSelect?: (taskId: string) => void;
@@ -50,6 +59,16 @@ const priorityColors: Record<string, string> = {
   low: "bg-gray-400 text-white",
 };
 
+/** Small color dot matching each priority, shown in the quick-edit menu. */
+const priorityDotColors: Record<string, string> = {
+  urgent: "bg-red-500",
+  high: "bg-orange-500",
+  medium: "bg-blue-500",
+  low: "bg-gray-400",
+};
+
+const PRIORITY_ORDER = ["urgent", "high", "medium", "low"] as const;
+
 export function TaskCard({
   task,
   locale,
@@ -61,6 +80,7 @@ export function TaskCard({
   onDelete,
   onQuickAction,
   onDriveSearch,
+  onPriorityChange,
   selected,
   onToggleSelect,
   extraActions,
@@ -81,10 +101,9 @@ export function TaskCard({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer",
+        "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer overflow-hidden",
         isNew && "border-s-2 border-s-blue-400/30",
         isPendingCompletion && "border-s-4 border-s-emerald-500",
-        hasUnread && !isPendingCompletion && "border-s-4 border-s-amber-500",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
@@ -118,14 +137,44 @@ export function TaskCard({
             aria-label="select"
           />
         )}
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1" dir={locale === "he" ? "rtl" : "ltr"}>
+        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
           <SerialBadge serial={task.serial_display} stopPropagation />
-          <Badge className={cn("text-[10px]", priorityColors[task.priority])}>
-            {t(`priority.${task.priority}`)}
-          </Badge>
+          {onPriorityChange ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                <button type="button" title={t("changePriority")} aria-label={t("changePriority")}>
+                  <Badge className={cn("text-[10px] cursor-pointer", priorityColors[task.priority])}>
+                    {t(`priority.${task.priority}`)}
+                  </Badge>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {PRIORITY_ORDER.map((p) => (
+                  <DropdownMenuItem
+                    key={p}
+                    onSelect={() => {
+                      if (p !== task.priority) onPriorityChange(task.id, p);
+                    }}
+                    className="gap-2"
+                  >
+                    <span className={cn("h-2.5 w-2.5 rounded-full shrink-0", priorityDotColors[p])} />
+                    <span className="flex-1">{t(`priority.${p}`)}</span>
+                    {p === task.priority && <Check className="h-3.5 w-3.5" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Badge className={cn("text-[10px]", priorityColors[task.priority])}>
+              {t(`priority.${task.priority}`)}
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -174,14 +223,14 @@ export function TaskCard({
               key={i}
               variant="outline"
               size="sm"
-              className="h-8 text-xs gap-1"
+              className="h-8 max-w-full min-w-0 text-xs gap-1"
               onClick={(e) => {
                 e.stopPropagation();
                 onQuickAction(task.id, action);
               }}
             >
-              <Zap className="h-3 w-3" />
-              {translateActionLabel(action.label, tActions)}
+              <Zap className="h-3 w-3 shrink-0" />
+              <span className="truncate">{translateActionLabel(action.label, tActions)}</span>
             </Button>
           ))}
         </div>

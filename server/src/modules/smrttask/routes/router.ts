@@ -459,7 +459,7 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       const { data: task, error } = await db
         .from("tasks")
         .insert(insertBody)
-        .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+        .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
         .single();
       if (error) throw new Error(error.message);
       appliedTaskId = task.id as string;

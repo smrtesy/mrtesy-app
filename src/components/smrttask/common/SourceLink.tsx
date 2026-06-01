@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SourceMessageReader } from "./SourceMessageReader";
 
 
 const SOURCE_ICONS: Record<string, typeof Mail> = {
@@ -15,7 +16,13 @@ const SOURCE_ICONS: Record<string, typeof Mail> = {
   google_calendar: Calendar,
 };
 
-type SourceRow = { source_type: string | null; source_url: string | null; serial_display: string | null };
+type SourceRow = {
+  /** source_messages PK — needed to open the in-app reader on mobile Gmail */
+  id?: string | null;
+  source_type: string | null;
+  source_url: string | null;
+  serial_display: string | null;
+};
 
 interface SourceLinkProps {
   /**
@@ -38,25 +45,8 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
   const { locale } = useParams<{ locale: string }>();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
-  // Android Gmail: build the Intent URL and store it in state so the anchor
-  // renders with href="intent://..." BEFORE the user taps. Chrome reads href
-  // at tap time; mutations inside onClick fire too late for intent:// routing.
-  const sourceUrl = row?.source_url ?? null;
-  const sourceType = row?.source_type ?? null;
-  const [gmailIntentHref, setGmailIntentHref] = useState<string | null>(null);
-  useEffect(() => {
-    if (!sourceUrl || (sourceType !== "gmail" && sourceType !== "gmail_sent")) return;
-    if (!/Android/i.test(navigator.userAgent)) return;
-    if (!window.matchMedia("(max-width: 767px)").matches) return;
-    const m = sourceUrl.match(/mail\.google\.com(\/[^#]*)(?:#(.*))?$/);
-    if (!m) return;
-    const path = m[1] ?? "/mail/u/0/";
-    const frag = m[2];
-    const intentPath = path + (frag ? `%23${frag}` : "");
-    setGmailIntentHref(
-      `intent://mail.google.com${intentPath}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(sourceUrl)};end`
-    );
-  }, [sourceUrl, sourceType]);
+  // In-app email reader, opened on mobile Gmail taps (see handleClick below).
+  const [readerOpen, setReaderOpen] = useState(false);
 
   if (!row?.serial_display && !row?.source_url) return null;
 
@@ -92,29 +82,47 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
   }
 
   if (row.source_url) {
+    const isGmail = row.source_type === "gmail" || row.source_type === "gmail_sent";
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       if (stopPropagation) e.stopPropagation();
       if (typeof window === "undefined") return;
       if (!window.matchMedia("(max-width: 767px)").matches) return;
-      // Android Gmail: anchor already has the intent:// href from useEffect.
-      // All other mobile (iOS Universal Links, Drive, Calendar): switch to
-      // same-tab navigation so the OS can intercept the URL.
-      if (!gmailIntentHref) e.currentTarget.target = "_self";
+      // Mobile Gmail can't deep-link to a specific message — both the app and
+      // m.gmail web ignore the "#all/<id>" fragment and land on the inbox. So
+      // on mobile we open the email's stored content in the in-app reader
+      // instead of navigating to Gmail. Desktop keeps the direct link.
+      if (isGmail && row.id) {
+        e.preventDefault();
+        setReaderOpen(true);
+        return;
+      }
+      // Other mobile sources (Drive, Calendar): same-tab nav so the OS / app
+      // can intercept the URL instead of opening a dead background tab.
+      e.currentTarget.target = "_self";
     };
 
     return (
-      <a
-        href={gmailIntentHref ?? row.source_url}
-        target={gmailIntentHref ? "_self" : "_blank"}
-        rel={gmailIntentHref ? undefined : "noopener noreferrer"}
-        onClick={handleClick}
-        title={`${label} — open source`}
-        className={cn(base, interactive, className)}
-      >
-        <Icon className="h-3 w-3" />
-        <span>{label}</span>
-        <ExternalLink className="h-2.5 w-2.5 opacity-70" />
-      </a>
+      <>
+        <a
+          href={row.source_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleClick}
+          title={`${label} — open source`}
+          className={cn(base, interactive, className)}
+        >
+          <Icon className="h-3 w-3" />
+          <span>{label}</span>
+          <ExternalLink className="h-2.5 w-2.5 opacity-70" />
+        </a>
+        {isGmail && row.id && (
+          <SourceMessageReader
+            sourceMessageId={row.id}
+            open={readerOpen}
+            onClose={() => setReaderOpen(false)}
+          />
+        )}
+      </>
     );
   }
 

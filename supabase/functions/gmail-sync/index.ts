@@ -283,21 +283,31 @@ async function syncUserGmail(userId: string) {
       }
     }
   } else {
-    // No checkpoint — initial fetch of unread. Skip-rule exclusions are NOT
-    // applied to the query any more: we now WANT to fetch auto-skipped emails
-    // so they can be recorded in the log (see the per-message skip handling
-    // below). They're marked skip + processed without hitting Claude, so no AI
-    // cost is incurred.
+    // No checkpoint — initial fetch of unread. Paginate through ALL matching
+    // pages instead of a single 50-message page: after a historyId reset this
+    // fallback is the only collector running until the daily reconcile, so
+    // capping it at 50 silently dropped everything older than the 50 most-recent
+    // unread messages — a multi-day backlog would sit invisible until reconcile
+    // swept it. maxResults=500 is Gmail's per-page max; the loop follows
+    // nextPageToken with a 2000-id runaway guard.
+    // Skip-rule exclusions are NOT applied to the query: we now WANT to fetch
+    // auto-skipped emails so they can be recorded in the log (see the
+    // per-message skip handling below). They're marked skip + processed without
+    // hitting Claude, so no AI cost is incurred.
     const queryParts = ["is:unread"];
     const q = encodeURIComponent(queryParts.join(" "));
-    const resp = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=50`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (resp.ok) {
+    let pageToken: string | undefined = undefined;
+    do {
+      const pageParam = pageToken ? `&pageToken=${pageToken}` : "";
+      const resp = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=500${pageParam}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!resp.ok) break;
       const data = await resp.json();
-      messageIds = (data.messages || []).map((m: any) => m.id);
-    }
+      messageIds.push(...(data.messages || []).map((m: any) => m.id));
+      pageToken = data.nextPageToken;
+    } while (pageToken && messageIds.length < 2000);
     // Get current historyId as checkpoint
     const profileResp = await fetch(
       "https://gmail.googleapis.com/gmail/v1/users/me/profile",

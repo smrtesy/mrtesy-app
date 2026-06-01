@@ -9,7 +9,6 @@ import {
   Bell,
   Settings,
   FolderOpen,
-  Plus,
   Shield,
   MessageCircle,
   FlaskConical,
@@ -18,11 +17,15 @@ import {
   Mic,
   Users,
   MoreHorizontal,
+  BookOpen,
+  Sparkles,
+  ListPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
+import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS } from "@/lib/apps/registry";
@@ -41,6 +44,7 @@ const smrtTaskItems = [
   { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
   { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
   { key: "projects",      href: "/projects", icon: FolderOpen    },
+  { key: "knowledge",     href: "/knowledge", icon: BookOpen     },
 ] as const;
 
 const smrtVoiceItems = [
@@ -56,6 +60,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
+  const [manualTaskOpen, setManualTaskOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [openTasksCount, setOpenTasksCount] = useState(0);
@@ -205,8 +210,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   // Log moved into smrtTask settings; transcription experiment moved to
   // management; both are no longer per-app sidebar items.
   const smrtTaskMoreItems: MobileNavItem[] = hasSmrtTask ? [
-    { key: "projects", href: "/projects", icon: FolderOpen    },
-    { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
+    { key: "projects",  href: "/projects",  icon: FolderOpen    },
+    { key: "whatsapp",  href: "/whatsapp",  icon: MessageCircle },
+    { key: "knowledge", href: "/knowledge", icon: BookOpen      },
   ] : [];
   const smrtVoiceMoreItems: MobileNavItem[] = hasSmrtVoice ? [
     { key: "voiceCharacters", href: "/voice/characters", icon: Users },
@@ -306,9 +312,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
         </nav>
 
         {hasSmrtTask && (
-          <div className="p-3 border-t">
+          <div className="p-3 border-t space-y-2">
+            <Button onClick={() => setManualTaskOpen(true)} variant="outline" className="w-full gap-2">
+              <ListPlus className="h-4 w-4" />
+              {t("newTask")}
+            </Button>
             <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
-              <Plus className="h-4 w-4" />
+              <Sparkles className="h-4 w-4" />
               {t("update")}
             </Button>
           </div>
@@ -362,15 +372,28 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
         </div>
       </nav>
 
-      {/* FAB — bumped up so it doesn't sit on top of "More" in the tab bar. */}
+      {/* FABs — bumped up so they don't sit on top of "More" in the tab bar.
+          Manual "new task" sits above the AI "update" FAB. */}
       {hasSmrtTask && (
-        <Button
-          size="icon"
-          className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-          onClick={() => setTaskInputOpen(true)}
-        >
-          <Plus className="h-6 w-6" />
-        </Button>
+        <>
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t("newTask")}
+            className="fixed bottom-40 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+            onClick={() => setManualTaskOpen(true)}
+          >
+            <ListPlus className="h-6 w-6" />
+          </Button>
+          <Button
+            size="icon"
+            aria-label={t("update")}
+            className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+            onClick={() => setTaskInputOpen(true)}
+          >
+            <Sparkles className="h-6 w-6" />
+          </Button>
+        </>
       )}
 
       {/* More sheet — organized by app, with AppSectionHeader on top of each group. */}
@@ -415,6 +438,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
         open={taskInputOpen}
         onClose={() => setTaskInputOpen(false)}
         onApplied={() => {
+          window.location.reload();
+        }}
+      />
+
+      <ManualTaskInput
+        open={manualTaskOpen}
+        onClose={() => setManualTaskOpen(false)}
+        onCreated={() => {
           window.location.reload();
         }}
       />

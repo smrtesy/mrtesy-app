@@ -53,8 +53,10 @@ Deno.serve(async (req) => {
     const channelId = req.headers.get("X-Goog-Channel-ID") || "";
     const resourceState = req.headers.get("X-Goog-Resource-State") || "";
 
-    // channelId format: "calendar-{userId}"
-    const userId = channelId.replace("calendar-", "");
+    // channelId format: "calendar-{userId}" (legacy) or "calendar-{userId}-{ts}"
+    // (current — a unique suffix is appended on each renewal). The userId is a
+    // 36-char UUID, so take the first 36 chars after the prefix either way.
+    const userId = channelId.replace(/^calendar-/, "").slice(0, 36);
 
     if (!userId || resourceState === "sync") {
       // Initial sync confirmation — just acknowledge
