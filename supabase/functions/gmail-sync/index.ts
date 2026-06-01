@@ -29,12 +29,51 @@ async function notifyDisconnect(userId: string, reason: string) {
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "sync_disconnected",
+      type: "warning",
       title: "Gmail disconnected",
       body: `Gmail connection was lost (${reason}). Please reconnect in Settings → Connections.`,
       link: "/settings",
     }).catch(() => {});
   }
+}
+
+/** Insert a warning notification for the user when a sync fails.
+ *  De-duped to at most one unread alert per source per hour so a noisy
+ *  failure loop doesn't flood the Notifications tab. */
+async function notifySyncError(userId: string, source: string, message: string) {
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+  if (!membership?.org_id) return;
+
+  const sourceLabel = source === "gmail" ? "Gmail" : source === "gmail_sent" ? "Gmail (Sent)" : source;
+  const title = `בעיה בסינכרון ${sourceLabel}`;
+
+  // At most one unread alert per source per hour
+  const { data: existing } = await supabase
+    .from("notifications")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("type", "warning")
+    .eq("title", title)
+    .eq("is_read", false)
+    .gt("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (existing) return;
+
+  await supabase.from("notifications").insert({
+    user_id: userId,
+    org_id: membership.org_id,
+    app_slug: "smrttask",
+    type: "warning",
+    title,
+    body: message.substring(0, 500),
+    link: "/log",
+  }).catch(() => {});
 }
 
 async function loadSkipRules(userId: string) {
@@ -207,8 +246,9 @@ async function syncUserGmail(userId: string) {
       { onConflict: "user_id,source" }
     ).catch(() => {});
     await supabase.from("log_entries").insert({
-      user_id: userId, category: "gmail_sync", status: "failed", error_message: errMsg,
+      user_id: userId, level: "error", category: "gmail_sync", status: "failed", error_message: errMsg,
     }).catch(() => {});
+    await notifySyncError(userId, "gmail", errMsg).catch(() => {});
     return { error: errMsg };
   }
 }
@@ -226,6 +266,9 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
 
   // Check consecutive failures
   if (syncState && syncState.consecutive_failures >= 5) {
+    await notifySyncError(userId, "gmail",
+      `סינכרון Gmail נתקע — ${syncState.consecutive_failures} כשלים ברצף. בדוק את הגדרות החיבור.`
+    ).catch(() => {});
     return { skipped: true, reason: "Too many failures — reconnect Gmail" };
   }
 
@@ -270,10 +313,12 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       );
       await supabase.from("log_entries").insert({
         user_id: userId,
+        level: "error",
         category: "gmail_sync",
         status: "failed",
         error_message: `gmailHistorySync threw: ${errMsg}`,
       }).catch(() => {});
+      await notifySyncError(userId, "gmail", `gmailHistorySync: ${errMsg}`).catch(() => {});
       return { error: errMsg };
     }
     if (result.needsReconcile) {
