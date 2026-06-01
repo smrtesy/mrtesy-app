@@ -241,6 +241,19 @@
         "custom": "Custom action"
       }
     },
+    "linkActions": {
+      "joinZoom": "Join Zoom",
+      "joinMeet": "Join Meet",
+      "joinTeams": "Join Teams",
+      "openDoc": "Open doc",
+      "openSheet": "Open sheet",
+      "openSlides": "Open slides",
+      "openDrive": "Open in Drive",
+      "openCalendar": "Open in Calendar",
+      "openEmail": "Open email",
+      "openWhatsapp": "Open in WhatsApp",
+      "openLink": "Open link"
+    },
     "detail": {
       "description": "Description",
       "updates": "Update History",
