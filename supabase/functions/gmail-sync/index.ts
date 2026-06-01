@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { parseSkipRules } from "../_shared/rule-filters.ts";
 import { GMAIL_REVIEW_LABELS, getOrCreateGmailLabels, applyReviewLabel } from "../_shared/gmail-labels.ts";
+import { extractEmailBody } from "../_shared/email-body.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -189,21 +190,6 @@ function parseAddressList(value: string): string[] {
     .filter((s) => s.includes("@"));
 }
 
-function extractBody(msg: any): string {
-  const parts = msg.payload?.parts || [];
-  // Try text/plain first
-  for (const part of parts) {
-    if (part.mimeType === "text/plain" && part.body?.data) {
-      return atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-    }
-  }
-  // Fallback to payload body
-  if (msg.payload?.body?.data) {
-    return atob(msg.payload.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-  }
-  return "";
-}
-
 function extractEmail(fromHeader: string): string {
   const match = fromHeader.match(/<([^>]+)>/);
   return match ? match[1] : fromHeader;
@@ -335,7 +321,7 @@ async function syncUserGmail(userId: string) {
     if (msg.labelIds?.includes("DRAFT")) continue;
 
     const h = extractHeaders(msg);
-    const body = extractBody(msg);
+    const body = extractEmailBody(msg.payload);
     const senderEmail = extractEmail(h.from);
     const isSent = msg.labelIds?.includes("SENT") || false;
 
