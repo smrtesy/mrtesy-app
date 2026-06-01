@@ -1,20 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { parseSkipRules } from "../_shared/rule-filters.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
-
-async function loadSkipRules(userId: string) {
-  const { data } = await supabase
-    .from("rules_memory")
-    .select("trigger, rule_type, is_active")
-    .eq("user_id", userId)
-    .eq("is_active", true);
-  return parseSkipRules(data ?? []);
-}
 
 async function refreshGoogleToken(userId: string): Promise<string> {
   const { data: cred } = await supabase
@@ -56,14 +46,14 @@ async function reconcileUser(userId: string) {
   const token = await refreshGoogleToken(userId);
 
   // Get last 7 days of Gmail message IDs. Scope the query the same way the
-  // live sync (gmail-sync) and initial-scan do: restrict to the inbox, exclude
-  // drafts, and apply the user's skip-rule query filters. Without this the
-  // reconcile sweep would re-ingest archived/non-inbox mail and resurrect
-  // exactly the senders/subjects the user has skip rules for — and because it
-  // runs daily, it would do so every morning.
-  const skipFilter = await loadSkipRules(userId);
+  // live sync (gmail-sync) and initial-scan do: restrict to the inbox and
+  // exclude drafts. Skip rules are NOT applied to the query — skip-matched
+  // mail is ingested so ai-process can label + mark-read + log it. This does
+  // NOT resurrect skipped mail daily: once ai-process processes it (as
+  // ai_classification="skip"), the row is in source_messages and the reconcile
+  // diff below (Gmail-not-in-DB) no longer flags it.
   const after = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
-  const queryParts = [`after:${after}`, "in:inbox", "-in:drafts", ...skipFilter.gmailQueryFilters];
+  const queryParts = [`after:${after}`, "in:inbox", "-in:drafts"];
   const q = encodeURIComponent(queryParts.join(" "));
   const resp = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=500`,

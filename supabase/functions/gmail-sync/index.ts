@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { parseSkipRules } from "../_shared/rule-filters.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -33,15 +32,6 @@ async function notifyDisconnect(userId: string, reason: string) {
       link: "/settings",
     }).catch(() => {});
   }
-}
-
-async function loadSkipRules(userId: string) {
-  const { data } = await supabase
-    .from("rules_memory")
-    .select("trigger, rule_type, is_active")
-    .eq("user_id", userId)
-    .eq("is_active", true);
-  return parseSkipRules(data ?? []);
 }
 
 async function refreshGoogleToken(userId: string): Promise<string> {
@@ -239,8 +229,6 @@ async function syncUserGmail(userId: string) {
     return { error: errMsg };
   }
 
-  const skipFilter = await loadSkipRules(userId);
-
   const checkpoint = syncState?.checkpoint;
   let messageIds: string[] = [];
   let newCheckpoint: string | null = null;
@@ -283,15 +271,16 @@ async function syncUserGmail(userId: string) {
       }
     }
   } else {
-    // No checkpoint — initial fetch of unread (with skip rules applied to query).
-    // Paginate through ALL matching pages instead of a single 50-message page.
-    // After a historyId reset this fallback is the only collector running until
-    // the daily reconcile, so capping it at 50 silently dropped everything older
+    // No checkpoint — initial fetch of ALL unread. Skip rules are NOT applied
+    // to the query: skip-matched mail is fetched and ingested so ai-process can
+    // label + mark-read + log it (then short-circuit before Claude). Paginate
+    // through ALL matching pages instead of a single 50-message page. After a
+    // historyId reset this fallback is the only collector running until the
+    // daily reconcile, so capping it at 50 silently dropped everything older
     // than the 50 most-recent unread messages — a multi-day backlog would sit
     // invisible until reconcile swept it. maxResults=500 is Gmail's per-page max;
     // the loop follows nextPageToken with a 2000-id runaway guard.
-    const queryParts = ["is:unread", ...skipFilter.gmailQueryFilters];
-    const q = encodeURIComponent(queryParts.join(" "));
+    const q = encodeURIComponent("is:unread");
     let pageToken: string | undefined = undefined;
     do {
       const pageParam = pageToken ? `&pageToken=${pageToken}` : "";
@@ -329,13 +318,10 @@ async function syncUserGmail(userId: string) {
     const senderEmail = extractEmail(h.from);
     const isSent = msg.labelIds?.includes("SENT") || false;
 
-    // Apply skip rules from rules_memory (single source of truth). Pass
-    // subject too so composite rules `from=X&subject_contains=Y` can match
-    // at runtime — Gmail's query exclusion catches most of these at fetch
-    // time, but the runtime check is the safety net.
-    if (skipFilter.shouldSkip({ from: h.from, to: h.to, senderEmail, subject: h.subject })) {
-      continue;
-    }
+    // Skip rules are intentionally NOT applied here. Skip-matched mail is
+    // ingested like everything else; ai-process.preClassify evaluates the
+    // rules_memory skip grammar (the single source of truth) and labels +
+    // marks-read + logs it without paying for a Claude call.
 
     // Collect every recipient-side address we can see — To, Cc, Bcc (when
     // the user is the sender), plus Delivered-To / X-Forwarded-To /

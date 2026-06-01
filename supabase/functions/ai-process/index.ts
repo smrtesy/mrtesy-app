@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { parseSkipRules, type ParsedSkipRules } from "../_shared/rule-filters.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -110,22 +111,25 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   const officeAddresses = (settings.office_addresses || []).map((e: string) => e.toLowerCase());
   const skipSenders = (settings.skip_senders || []).map((e: string) => e.toLowerCase());
   const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
-  const toSkip: Set<string> = settings.__toSkip instanceof Set ? settings.__toSkip : new Set();
-  const fromSkip: Set<string> = settings.__fromSkip instanceof Set ? settings.__fromSkip : new Set();
   const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
   const categoryFilter: Set<string> = settings.__category_filter instanceof Set ? settings.__category_filter : new Set();
 
-  // rules_memory to=/from= skip rules (UI-configured).
-  // `to=` matches the visible To header AND every other recipient-side
-  // address (Cc, Bcc, Delivered-To, X-Forwarded-To, X-Original-To) —
-  // that's what makes `to=outbox@maor.org` catch BCC traffic.
-  for (const addr of toSkip) {
-    if (recipient.includes(addr) || recipients.some((r) => r.includes(addr))) {
-      return { result: "skip", skipReason: `to_rule: ${addr}` };
+  // rules_memory skip rules (from=/to=/domain=/subject_contains= and composite
+  // combinations like `from=X&subject_contains=Y`), UI-configured. Enforced
+  // HERE, post-fetch, rather than at the Gmail query level: the collectors
+  // (gmail-sync / gmail-reconcile / initial-scan) no longer exclude skip mail
+  // from the fetch, so matching messages are still ingested, labeled and
+  // logged via the `skip` branch downstream — they just never reach the paid
+  // Claude call. shouldSkip is pure string matching, so this costs nothing.
+  // `to` is built from every recipient-side address we captured (To, Cc, Bcc,
+  // Delivered-To, X-Forwarded-To, X-Original-To) so `to=` rules still catch
+  // BCC / forwarded traffic (the T367 family).
+  const skipFilter = settings.__skipFilter as ParsedSkipRules | undefined;
+  if (skipFilter) {
+    const toCombined = [recipient, ...recipients].join(" ");
+    if (skipFilter.shouldSkip({ from: msg.sender || "", to: toCombined, senderEmail: sender, subject: msg.subject || "" })) {
+      return { result: "skip", skipReason: "rules_memory_skip" };
     }
-  }
-  for (const addr of fromSkip) {
-    if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
   }
 
   // Legacy user_settings skip lists
@@ -1553,25 +1557,20 @@ Deno.serve(async (req) => {
       const [settingsRes, categoryRulesRes, skipRulesRes, promptsRes, userAuthRes] = await Promise.all([
         supabase.from("user_settings").select("*").eq("user_id", userId).single(),
         supabase.from("rules_memory").select("trigger, is_active").eq("user_id", userId).ilike("trigger", "category=%"),
-        supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%"),
+        supabase.from("rules_memory").select("trigger, rule_type, is_active").eq("user_id", userId).eq("is_active", true),
         supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
         supabase.auth.admin.getUserById(userId),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
       settings.__category_filter = buildCategoryFilter(categoryRulesRes.data ?? []);
-      // Build to=/from= skip sets from rules_memory (the UI stores them here,
-      // not in user_settings.skip_recipients/skip_senders).
-      const toSkip = new Set<string>();
-      const fromSkip = new Set<string>();
-      for (const r of (skipRulesRes.data ?? [])) {
-        const m = String(r.trigger).match(/^(to|from)=(.+)$/i);
-        if (!m) continue;
-        if (m[1].toLowerCase() === "to") toSkip.add(m[2].toLowerCase());
-        else fromSkip.add(m[2].toLowerCase());
-      }
-      settings.__toSkip = toSkip;
-      settings.__fromSkip = fromSkip;
+      // Full skip-rule grammar (from / to / domain / subject_contains /
+      // composite) lives in rules_memory. parseSkipRules is the single source
+      // of truth shared with the collectors; we evaluate shouldSkip in
+      // preClassify so skip mail is still ingested + labeled + logged but
+      // never sent to Claude. (category= rules are handled separately via
+      // __category_filter → the "informational" path.)
+      settings.__skipFilter = parseSkipRules(skipRulesRes.data ?? []);
       // Admin-editable prompt overrides (fallback to the inline defaults). Loaded
       // once per user per run so the cached system prefix stays stable.
       const promptMap = new Map((promptsRes.data ?? []).map((p: any) => [p.prompt_key, p.content as string]));

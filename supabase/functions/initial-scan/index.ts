@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { parseSkipRules } from "../_shared/rule-filters.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,15 +10,6 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
-
-async function loadSkipRules(userId: string) {
-  const { data } = await supabase
-    .from("rules_memory")
-    .select("trigger, rule_type, is_active")
-    .eq("user_id", userId)
-    .eq("is_active", true);
-  return parseSkipRules(data ?? []);
-}
 
 async function refreshGoogleToken(userId: string, service: string): Promise<string> {
   const { data: cred } = await supabase
@@ -99,12 +89,14 @@ Deno.serve(async (req) => {
     if (settings?.gmail_connected) {
       try {
         const token = await refreshGoogleToken(userId, "gmail");
-        const skipFilter = await loadSkipRules(userId);
         const after = Math.floor((Date.now() - daysBack * 24 * 60 * 60 * 1000) / 1000);
         let pageToken = "";
         let allMsgIds: string[] = [];
 
-        const queryParts = [`after:${after}`, "-in:drafts", ...skipFilter.gmailQueryFilters];
+        // Skip rules are NOT applied to the query — skip-matched mail is
+        // ingested so ai-process can label + mark-read + log it without a
+        // paid Claude call (shouldSkip runs in preClassify).
+        const queryParts = [`after:${after}`, "-in:drafts"];
         const q = encodeURIComponent(queryParts.join(" "));
 
         do {
