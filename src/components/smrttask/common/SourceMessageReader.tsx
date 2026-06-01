@@ -41,6 +41,18 @@ function linkify(text: string) {
   );
 }
 
+// Gmail stores the body as-is; when an email has no text/plain part the
+// collector keeps the raw HTML, which is gibberish shown as text. Detect that
+// and render it in a sandboxed iframe instead (no allow-scripts → inert, so no
+// XSS; allow-popups + <base target=_blank> so the sender's links still open).
+function looksLikeHtml(text: string): boolean {
+  return /<(!doctype|html|head|body|table|tr|td|div|p|br|span|style|a|img|ul|ol)\b/i.test(text);
+}
+
+function withBaseTarget(html: string): string {
+  return `<base target="_blank"><meta charset="utf-8">${html}`;
+}
+
 /**
  * In-app reader for a Gmail source message. Opened from SourceLink on mobile,
  * where Gmail can't deep-link to a specific message (it lands on the inbox).
@@ -60,6 +72,7 @@ export function SourceMessageReader({
   const [data, setData] = useState<SourceMessageContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [iframeHeight, setIframeHeight] = useState(320);
 
   useEffect(() => {
     if (!open || !sourceMessageId) return;
@@ -114,9 +127,31 @@ export function SourceMessageReader({
             </div>
 
             {data.body_text ? (
-              <div className="whitespace-pre-wrap break-words leading-relaxed">
-                {linkify(data.body_text)}
-              </div>
+              looksLikeHtml(data.body_text) ? (
+                <iframe
+                  title="email"
+                  sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                  srcDoc={withBaseTarget(data.body_text)}
+                  referrerPolicy="no-referrer"
+                  className="w-full rounded border bg-white"
+                  style={{ height: iframeHeight }}
+                  onLoad={(e) => {
+                    // Size the frame to its content (capped) so short emails
+                    // don't leave a big empty box and long ones scroll inside.
+                    try {
+                      const doc = e.currentTarget.contentDocument;
+                      if (doc?.body) {
+                        const h = Math.min(doc.body.scrollHeight + 24, window.innerHeight * 0.6);
+                        if (h > 0) setIframeHeight(h);
+                      }
+                    } catch { /* opaque origin — keep default height */ }
+                  }}
+                />
+              ) : (
+                <div className="whitespace-pre-wrap break-words leading-relaxed">
+                  {linkify(data.body_text)}
+                </div>
+              )
             ) : (
               <p className="text-muted-foreground">{t("noContent")}</p>
             )}
