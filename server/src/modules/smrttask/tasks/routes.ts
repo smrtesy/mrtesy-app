@@ -196,7 +196,7 @@ router.get("/tasks", async (req: Request, res: Response) => {
 
   let q = db
     .from("tasks")
-    .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)")
     .eq("organization_id", req.org!.id);
 
   q = applyTaskFilters(q, req.query);
@@ -226,7 +226,7 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("tasks")
-    .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -260,7 +260,7 @@ router.post("/tasks", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("tasks")
     .insert(payload)
-    .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)")
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
@@ -292,7 +292,7 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     .update(updates)
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)")
     .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });

@@ -28,6 +28,7 @@ interface SourceJoin {
   source_type: string | null;
   source_url: string | null;
   serial_display: string | null;
+  metadata?: { rfc822MsgId?: string | null } | null;
 }
 
 export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpdate?: () => void }) {
@@ -101,7 +102,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       // projects(...) is needed so the edit-button TaskDetail sheet can
       // show the linked project chip; without the join it silently
       // disappears in the editor.
-      .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)", { count: "exact" })
+      .select("*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)", { count: "exact" })
       .eq("user_id", user.id)
       .eq("status", "inbox")
       .eq("manually_verified", false)
@@ -285,7 +286,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           un-searched list. */}
       <SmartSearch
         onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
-        selectClause="*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
+        selectClause="*, source_messages(source_type, source_url, serial_display, metadata), projects(id, name, name_he, color, parent_id)"
         refineQuery={(q) => q
           .eq("status", "inbox")
           .eq("manually_verified", false)
