@@ -17,6 +17,7 @@ import {
   Mic,
   Users,
   MoreHorizontal,
+  BookOpen,
   Sparkles,
   ListPlus,
 } from "lucide-react";
@@ -43,6 +44,7 @@ const smrtTaskItems = [
   { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
   { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
   { key: "projects",      href: "/projects", icon: FolderOpen    },
+  { key: "knowledge",     href: "/knowledge", icon: BookOpen     },
 ] as const;
 
 const smrtVoiceItems = [
@@ -208,8 +210,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   // Log moved into smrtTask settings; transcription experiment moved to
   // management; both are no longer per-app sidebar items.
   const smrtTaskMoreItems: MobileNavItem[] = hasSmrtTask ? [
-    { key: "projects", href: "/projects", icon: FolderOpen    },
-    { key: "whatsapp", href: "/whatsapp", icon: MessageCircle },
+    { key: "projects",  href: "/projects",  icon: FolderOpen    },
+    { key: "whatsapp",  href: "/whatsapp",  icon: MessageCircle },
+    { key: "knowledge", href: "/knowledge", icon: BookOpen      },
   ] : [];
   const smrtVoiceMoreItems: MobileNavItem[] = hasSmrtVoice ? [
     { key: "voiceCharacters", href: "/voice/characters", icon: Users },

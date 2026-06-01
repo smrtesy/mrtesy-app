@@ -306,6 +306,12 @@ export default async function ProjectDetailPage({
           suggestions={infoCenterSuggestions}
           tasks={infoCenterTasks}
           infoItems={infoCenterInfoItems}
+          projectId={id}
+          projectName={name}
+          subProjects={subProjects.map((sub) => ({
+            id: sub.id as string,
+            name: (locale === "he" && sub.name_he ? sub.name_he : sub.name) as string,
+          }))}
         />
       </div>
     </div>

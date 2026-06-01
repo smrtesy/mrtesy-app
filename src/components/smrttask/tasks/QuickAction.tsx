@@ -111,11 +111,11 @@ export function QuickAction({
   async function handleSaveToKnowledge() {
     setSavingKb(true);
     try {
-      await api("/api/knowledge/save", {
+      const res = await api<{ status?: string }>("/api/knowledge/save", {
         method: "POST",
         body: { task_id: taskId, answer: result },
       });
-      toast.success(t("savedToKnowledge"));
+      toast.success(res.status === "pending" ? t("savedToKnowledgePending") : t("savedToKnowledge"));
     } catch (e) {
       const msg = (e as Error).message;
       toast.error(msg.includes("embedding_unavailable") ? t("knowledgeUnavailable") : msg);

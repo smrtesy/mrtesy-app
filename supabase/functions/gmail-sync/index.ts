@@ -1,6 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { parseSkipRules } from "../_shared/rule-filters.ts";
+import { GMAIL_REVIEW_LABELS, getOrCreateGmailLabels, applyReviewLabel } from "../_shared/gmail-labels.ts";
+import { extractEmailBody } from "../_shared/email-body.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -27,12 +29,51 @@ async function notifyDisconnect(userId: string, reason: string) {
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "sync_disconnected",
+      type: "warning",
       title: "Gmail disconnected",
       body: `Gmail connection was lost (${reason}). Please reconnect in Settings → Connections.`,
       link: "/settings",
     }).catch(() => {});
   }
+}
+
+/** Insert a warning notification for the user when a sync fails.
+ *  De-duped to at most one unread alert per source per hour so a noisy
+ *  failure loop doesn't flood the Notifications tab. */
+async function notifySyncError(userId: string, source: string, message: string) {
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+  if (!membership?.org_id) return;
+
+  const sourceLabel = source === "gmail" ? "Gmail" : source === "gmail_sent" ? "Gmail (Sent)" : source;
+  const title = `בעיה בסינכרון ${sourceLabel}`;
+
+  // At most one unread alert per source per hour
+  const { data: existing } = await supabase
+    .from("notifications")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("type", "warning")
+    .eq("title", title)
+    .eq("is_read", false)
+    .gt("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (existing) return;
+
+  await supabase.from("notifications").insert({
+    user_id: userId,
+    org_id: membership.org_id,
+    app_slug: "smrttask",
+    type: "warning",
+    title,
+    body: message.substring(0, 500),
+    link: "/log",
+  }).catch(() => {});
 }
 
 async function loadSkipRules(userId: string) {
@@ -188,27 +229,32 @@ function parseAddressList(value: string): string[] {
     .filter((s) => s.includes("@"));
 }
 
-function extractBody(msg: any): string {
-  const parts = msg.payload?.parts || [];
-  // Try text/plain first
-  for (const part of parts) {
-    if (part.mimeType === "text/plain" && part.body?.data) {
-      return atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-    }
-  }
-  // Fallback to payload body
-  if (msg.payload?.body?.data) {
-    return atob(msg.payload.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-  }
-  return "";
-}
-
 function extractEmail(fromHeader: string): string {
   const match = fromHeader.match(/<([^>]+)>/);
   return match ? match[1] : fromHeader;
 }
 
 async function syncUserGmail(userId: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let syncState: any = null;
+  try {
+    return await _syncUserGmailInner(userId, (s) => { syncState = s; });
+  } catch (e: unknown) {
+    const errMsg = `syncUserGmail uncaught: ${e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e)}`;
+    await supabase.from("sync_state").upsert(
+      { user_id: userId, source: "gmail", last_error: errMsg, consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1 },
+      { onConflict: "user_id,source" }
+    ).catch(() => {});
+    await supabase.from("log_entries").insert({
+      user_id: userId, level: "error", category: "gmail_sync", status: "failed", error_message: errMsg,
+    }).catch(() => {});
+    await notifySyncError(userId, "gmail", errMsg).catch(() => {});
+    return { error: errMsg };
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => void) {
   // Get sync state
   const { data: syncState } = await supabase
     .from("sync_state")
@@ -216,9 +262,13 @@ async function syncUserGmail(userId: string) {
     .eq("user_id", userId)
     .eq("source", "gmail")
     .single();
+  setSyncState(syncState);
 
   // Check consecutive failures
   if (syncState && syncState.consecutive_failures >= 5) {
+    await notifySyncError(userId, "gmail",
+      `סינכרון Gmail נתקע — ${syncState.consecutive_failures} כשלים ברצף. בדוק את הגדרות החיבור.`
+    ).catch(() => {});
     return { skipped: true, reason: "Too many failures — reconnect Gmail" };
   }
 
@@ -247,7 +297,30 @@ async function syncUserGmail(userId: string) {
 
   if (checkpoint) {
     // Incremental sync via history
-    const result = await gmailHistorySync(userId, token, checkpoint);
+    let result: { newMessages: string[]; newHistoryId: string | null; needsReconcile: boolean };
+    try {
+      result = await gmailHistorySync(userId, token, checkpoint);
+    } catch (e) {
+      const errMsg = (e as Error).message;
+      await supabase.from("sync_state").upsert(
+        {
+          user_id: userId,
+          source: "gmail",
+          last_error: errMsg,
+          consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+        },
+        { onConflict: "user_id,source" }
+      );
+      await supabase.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "gmail_sync",
+        status: "failed",
+        error_message: `gmailHistorySync threw: ${errMsg}`,
+      }).catch(() => {});
+      await notifySyncError(userId, "gmail", `gmailHistorySync: ${errMsg}`).catch(() => {});
+      return { error: errMsg };
+    }
     if (result.needsReconcile) {
       // Checkpoint unusable (Gmail returned 404/400). Clear it so the NEXT run
       // takes the no-checkpoint path: fresh fetch of unread + a new valid
@@ -283,14 +356,18 @@ async function syncUserGmail(userId: string) {
       }
     }
   } else {
-    // No checkpoint — initial fetch of unread (with skip rules applied to query).
-    // Paginate through ALL matching pages instead of a single 50-message page.
-    // After a historyId reset this fallback is the only collector running until
-    // the daily reconcile, so capping it at 50 silently dropped everything older
-    // than the 50 most-recent unread messages — a multi-day backlog would sit
-    // invisible until reconcile swept it. maxResults=500 is Gmail's per-page max;
-    // the loop follows nextPageToken with a 2000-id runaway guard.
-    const queryParts = ["is:unread", ...skipFilter.gmailQueryFilters];
+    // No checkpoint — initial fetch of unread. Paginate through ALL matching
+    // pages instead of a single 50-message page: after a historyId reset this
+    // fallback is the only collector running until the daily reconcile, so
+    // capping it at 50 silently dropped everything older than the 50 most-recent
+    // unread messages — a multi-day backlog would sit invisible until reconcile
+    // swept it. maxResults=500 is Gmail's per-page max; the loop follows
+    // nextPageToken with a 2000-id runaway guard.
+    // Skip-rule exclusions are NOT applied to the query: we now WANT to fetch
+    // auto-skipped emails so they can be recorded in the log (see the
+    // per-message skip handling below). They're marked skip + processed without
+    // hitting Claude, so no AI cost is incurred.
+    const queryParts = ["is:unread"];
     const q = encodeURIComponent(queryParts.join(" "));
     let pageToken: string | undefined = undefined;
     do {
@@ -317,6 +394,11 @@ async function syncUserGmail(userId: string) {
 
   // Fetch details and upsert
   let synced = 0;
+  // Lazily resolved on the first skip in this run so syncs with no skipped
+  // mail pay nothing. Caches the smrtTask + smrtTask/דילוג label IDs for the
+  // whole batch. null = not yet resolved; on resolution failure stays null and
+  // labeling is silently skipped (best-effort, never wedges the sync).
+  let skipLabelMap: Map<string, string> | null = null;
   for (const msgId of messageIds) {
     const msg = await fetchMessageDetails(token, msgId);
     if (!msg) continue;
@@ -325,17 +407,9 @@ async function syncUserGmail(userId: string) {
     if (msg.labelIds?.includes("DRAFT")) continue;
 
     const h = extractHeaders(msg);
-    const body = extractBody(msg);
+    const body = extractEmailBody(msg.payload);
     const senderEmail = extractEmail(h.from);
     const isSent = msg.labelIds?.includes("SENT") || false;
-
-    // Apply skip rules from rules_memory (single source of truth). Pass
-    // subject too so composite rules `from=X&subject_contains=Y` can match
-    // at runtime — Gmail's query exclusion catches most of these at fetch
-    // time, but the runtime check is the safety net.
-    if (skipFilter.shouldSkip({ from: h.from, to: h.to, senderEmail, subject: h.subject })) {
-      continue;
-    }
 
     // Collect every recipient-side address we can see — To, Cc, Bcc (when
     // the user is the sender), plus Delivered-To / X-Forwarded-To /
@@ -351,33 +425,108 @@ async function syncUserGmail(userId: string) {
       ...parseAddressList(h.originalTo),
     ]));
 
+    const sourceType = isSent ? "gmail_sent" : "gmail";
+    const sourceUrl = `https://mail.google.com/mail/u/0/#all/${msgId}`;
+    // Safe date parsing — new Date(invalid).toISOString() throws RangeError
+    let receivedAt: string;
+    try {
+      receivedAt = h.date ? new Date(h.date).toISOString() : new Date(parseInt(msg.internalDate)).toISOString();
+    } catch {
+      receivedAt = new Date().toISOString();
+    }
+
+    const baseRow = {
+      user_id: userId,
+      source_type: sourceType,
+      source_id: msgId,
+      source_url: sourceUrl,
+      sender: h.from,
+      sender_email: senderEmail,
+      recipient: h.to,
+      subject: h.subject,
+      body_text: body.substring(0, 10000),
+      has_attachments: (msg.payload?.parts || []).some(
+        (p: any) => p.filename && p.filename.length > 0
+      ),
+      received_at: receivedAt,
+      // metadata.labels carries Gmail's own categorisation
+      // (CATEGORY_PROMOTIONS / SOCIAL / UPDATES / FORUMS / PERSONAL etc.).
+      // ai-process uses these in preClassify to decide informational vs
+      // needs_claude — replacing the previous hardcoded keyword list.
+      // threadId powers the follow-up linking in ai-process.
+      // recipients[] captures every address-side header so `to=` skip
+      // rules can match BCC/forwarding cases (T367-style false positives).
+      metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [], recipients: allRecipients },
+    };
+
+    // Skip rules from rules_memory (single source of truth). Pass subject too
+    // so composite rules `from=X&subject_contains=Y` match at runtime.
+    // Previously a match dropped the email silently (continue) and it never
+    // appeared anywhere. Now we still record it as a `skip`-classified row +
+    // a log entry so EVERY email shows in the log — but mark it processed so
+    // ai-process never picks it up and no Claude/AI cost is incurred.
+    const skipTrigger = skipFilter.skipMatch({ from: h.from, to: h.to, senderEmail, subject: h.subject });
+    if (skipTrigger) {
+      const skipReason = `skip_rule: ${skipTrigger}`;
+      // ignoreDuplicates → .select() returns the row only on a fresh insert;
+      // on conflict it returns null, so we don't write a duplicate log entry
+      // when the same message is seen again on a later sync.
+      const { data: inserted, error: skipUpsertErr } = await supabase.from("source_messages").upsert(
+        {
+          ...baseRow,
+          processing_status: "processed",
+          ai_classification: "skip",
+          skip_reason: skipReason,
+          processed_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true }
+      ).select("id").maybeSingle();
+      // Don't throw — a single bad row shouldn't wedge the whole batch — but
+      // surface the error: a silently-failed skip row leaves the email with no
+      // log entry, defeating the point of recording it.
+      if (skipUpsertErr) console.error(`gmail-sync skip upsert failed (${msgId}):`, skipUpsertErr.message);
+      if (inserted?.id) {
+        const { error: skipLogErr } = await supabase.from("log_entries").insert({
+          user_id: userId,
+          category: "ai_process",
+          status: "skipped",
+          source_message_id: inserted.id,
+          source_type: sourceType,
+          source_id: msgId,
+          source_url: sourceUrl,
+          sender: h.from,
+          sender_email: senderEmail,
+          subject: h.subject,
+          pre_classification: "skip",
+          ai_classification: "skip",
+          classification_reason: skipReason,
+        });
+        if (skipLogErr) console.error(`gmail-sync skip log insert failed (${msgId}):`, skipLogErr.message);
+
+        // Tag the message in Gmail exactly like the ai-process skip path:
+        // smrtTask/דילוג + parent smrtTask, and drop UNREAD. Best-effort —
+        // a labeling failure must never wedge the sync. Sent mail isn't
+        // tagged (matches ai-process's source_type === "gmail" guard).
+        if (sourceType === "gmail") {
+          try {
+            if (!skipLabelMap) {
+              skipLabelMap = await getOrCreateGmailLabels(token, ["smrtTask", GMAIL_REVIEW_LABELS.skip]);
+            }
+            await applyReviewLabel(token, msgId, "skip", skipLabelMap);
+          } catch (e) {
+            console.error(`gmail-sync skip label failed (${msgId}):`, e instanceof Error ? e.message : String(e));
+          }
+        }
+      }
+      synced++;
+      continue;
+    }
+
     await supabase.from("source_messages").upsert(
       {
-        user_id: userId,
-        source_type: isSent ? "gmail_sent" : "gmail",
-        source_id: msgId,
-        source_url: `https://mail.google.com/mail/u/0/#all/${msgId}`,
-        sender: h.from,
-        sender_email: senderEmail,
-        recipient: h.to,
-        subject: h.subject,
-        body_text: body.substring(0, 10000), // Limit body size
-        has_attachments: (msg.payload?.parts || []).some(
-          (p: any) => p.filename && p.filename.length > 0
-        ),
-        received_at: h.date
-          ? new Date(h.date).toISOString()
-          : new Date(parseInt(msg.internalDate)).toISOString(),
+        ...baseRow,
         processing_status: "pending",
         ai_classification: "pending",
-        // metadata.labels carries Gmail's own categorisation
-        // (CATEGORY_PROMOTIONS / SOCIAL / UPDATES / FORUMS / PERSONAL etc.).
-        // ai-process uses these in preClassify to decide informational vs
-        // needs_claude — replacing the previous hardcoded keyword list.
-        // threadId powers the follow-up linking in ai-process.
-        // recipients[] captures every address-side header so `to=` skip
-        // rules can match BCC/forwarding cases (T367-style false positives).
-        metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [], recipients: allRecipients },
       },
       { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true }
     );

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { extractEmailBody } from "../_shared/email-body.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -71,27 +72,6 @@ function extractHeaders(msg: any) {
   };
 }
 
-function extractBody(msg: any): string {
-  const parts = msg.payload?.parts || [];
-  for (const part of parts) {
-    if (part.mimeType === "text/plain" && part.body?.data) {
-      return atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-    }
-  }
-  for (const part of parts) {
-    if (part.parts) {
-      for (const sub of part.parts) {
-        if (sub.mimeType === "text/plain" && sub.body?.data) {
-          return atob(sub.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-        }
-      }
-    }
-  }
-  if (msg.payload?.body?.data) {
-    return atob(msg.payload.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-  }
-  return "";
-}
 
 function extractEmail(fromHeader: string): string {
   const match = fromHeader.match(/<([^>]+)>/);
@@ -185,7 +165,7 @@ Deno.serve(async (req) => {
             }
 
             const h = extractHeaders(detail);
-            const body = extractBody(detail);
+            const body = extractEmailBody(detail.payload);
             const senderEmail = extractEmail(h.from);
             const isSent = detail.labelIds?.includes("SENT") || false;
             const isDraft = detail.labelIds?.includes("DRAFT") || false;

@@ -375,7 +375,7 @@ router.post("/tasks/merge", async (req: Request, res: Response) => {
   const resolvedTargetId = (data as { target_id: string }).target_id;
   const { data: targetRow, error: fetchErr } = await db
     .from("tasks")
-    .select("*, source_messages(source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
     .eq("organization_id", req.org!.id)
     .eq("id", resolvedTargetId)
     .maybeSingle();
