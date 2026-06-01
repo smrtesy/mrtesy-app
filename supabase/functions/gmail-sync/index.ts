@@ -196,6 +196,25 @@ function extractEmail(fromHeader: string): string {
 }
 
 async function syncUserGmail(userId: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let syncState: any = null;
+  try {
+    return await _syncUserGmailInner(userId, (s) => { syncState = s; });
+  } catch (e: unknown) {
+    const errMsg = `syncUserGmail uncaught: ${e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e)}`;
+    await supabase.from("sync_state").upsert(
+      { user_id: userId, source: "gmail", last_error: errMsg, consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1 },
+      { onConflict: "user_id,source" }
+    ).catch(() => {});
+    await supabase.from("log_entries").insert({
+      user_id: userId, category: "gmail_sync", status: "failed", error_message: errMsg,
+    }).catch(() => {});
+    return { error: errMsg };
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => void) {
   // Get sync state
   const { data: syncState } = await supabase
     .from("sync_state")
@@ -203,6 +222,7 @@ async function syncUserGmail(userId: string) {
     .eq("user_id", userId)
     .eq("source", "gmail")
     .single();
+  setSyncState(syncState);
 
   // Check consecutive failures
   if (syncState && syncState.consecutive_failures >= 5) {
@@ -362,6 +382,14 @@ async function syncUserGmail(userId: string) {
 
     const sourceType = isSent ? "gmail_sent" : "gmail";
     const sourceUrl = `https://mail.google.com/mail/u/0/#all/${msgId}`;
+    // Safe date parsing — new Date(invalid).toISOString() throws RangeError
+    let receivedAt: string;
+    try {
+      receivedAt = h.date ? new Date(h.date).toISOString() : new Date(parseInt(msg.internalDate)).toISOString();
+    } catch {
+      receivedAt = new Date().toISOString();
+    }
+
     const baseRow = {
       user_id: userId,
       source_type: sourceType,
@@ -371,13 +399,11 @@ async function syncUserGmail(userId: string) {
       sender_email: senderEmail,
       recipient: h.to,
       subject: h.subject,
-      body_text: body.substring(0, 10000), // Limit body size
+      body_text: body.substring(0, 10000),
       has_attachments: (msg.payload?.parts || []).some(
         (p: any) => p.filename && p.filename.length > 0
       ),
-      received_at: h.date
-        ? new Date(h.date).toISOString()
-        : new Date(parseInt(msg.internalDate)).toISOString(),
+      received_at: receivedAt,
       // metadata.labels carries Gmail's own categorisation
       // (CATEGORY_PROMOTIONS / SOCIAL / UPDATES / FORUMS / PERSONAL etc.).
       // ai-process uses these in preClassify to decide informational vs
