@@ -19,6 +19,11 @@ export interface MessageHeaders {
 export interface ParsedSkipRules {
   gmailQueryFilters: string[];
   shouldSkip(msg: MessageHeaders): boolean;
+  /** Like shouldSkip, but returns the *trigger string* of the first skip rule
+   *  that matched (e.g. "from=spam@x.com" or "from=a@b&subject_contains=c"),
+   *  or null when nothing matched. Used by gmail-sync to write a meaningful
+   *  skip reason into the log for auto-skipped emails. */
+  skipMatch(msg: MessageHeaders): string | null;
 }
 
 const CLAUSE_RE = /^(from|sender|to|domain|category|subject_contains|subject)\s*=\s*(.+)$/i;
@@ -117,7 +122,9 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
   );
 
   const queryFilters: string[] = [];
-  const checks: Array<(args: { from: string; to: string; subject: string }) => boolean> = [];
+  // Each check carries the trigger that produced it so skipMatch can report
+  // *which* rule fired (for the log's skip reason), not just a boolean.
+  const checks: Array<{ trigger: string; test: (args: { from: string; to: string; subject: string }) => boolean }> = [];
 
   for (const r of skipRules) {
     const clauses = parseClauses(r.trigger);
@@ -144,18 +151,22 @@ export function parseSkipRules(rules: SkipRuleRow[]): ParsedSkipRules {
     const runtimeChecks = clauses.map(clauseToRuntimeCheck);
     if (runtimeChecks.every((c) => c !== null)) {
       const checkers = runtimeChecks as Array<NonNullable<(typeof runtimeChecks)[number]>>;
-      checks.push((args) => checkers.every((check) => check(args)));
+      checks.push({ trigger: r.trigger, test: (args) => checkers.every((check) => check(args)) });
     }
   }
 
+  const skipMatch = ({ from, to, senderEmail, subject }: MessageHeaders): string | null => {
+    const fromVal = extractEmail((senderEmail ?? from ?? "").toString());
+    const toVal = (to ?? "").toString().toLowerCase();
+    const subjectVal = (subject ?? "").toString().toLowerCase();
+    const hit = checks.find((c) => c.test({ from: fromVal, to: toVal, subject: subjectVal }));
+    return hit ? hit.trigger : null;
+  };
+
   return {
     gmailQueryFilters: queryFilters,
-    shouldSkip: ({ from, to, senderEmail, subject }) => {
-      const fromVal = extractEmail((senderEmail ?? from ?? "").toString());
-      const toVal = (to ?? "").toString().toLowerCase();
-      const subjectVal = (subject ?? "").toString().toLowerCase();
-      return checks.some((check) => check({ from: fromVal, to: toVal, subject: subjectVal }));
-    },
+    skipMatch,
+    shouldSkip: (msg) => skipMatch(msg) !== null,
   };
 }
 

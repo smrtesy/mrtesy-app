@@ -86,10 +86,13 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
       // `in:inbox` is essential: without it, Gmail's `q` searches ALL labels,
       // pulling Sent/Chats/Archive into source_messages and creating
       // "reply-to-yourself" task suggestions from the user's own outbound mail.
+      // Skip-rule exclusions are NOT applied to the query: we now fetch
+      // auto-skipped emails too and record them (marked skip + processed, no
+      // AI cost) so every email shows in the log. See the per-message skip
+      // handling below.
       const query = [
         `after:${afterUnix}`,
         `in:inbox`,
-        ...skipFilter.gmailQueryFilters,
         `-in:drafts`,
       ].join(" ");
 
@@ -107,6 +110,61 @@ export async function runPart1(opts: Part1Options): Promise<{ sessionId: string 
           // LAST `>` on multi-recipient headers, producing garbage like
           // `alice@a.com>, "Bob" <bob@b.com`.
           const fromEmail = (from.match(/<([^>]+)>/) ?? [])[1] ?? from;
+
+          // Skip rules from rules_memory. Previously these were excluded at the
+          // Gmail query level and never appeared anywhere. Now we record a
+          // `skip`-classified row + a log entry so every email shows in the
+          // log, but mark it processed so Part3/ai-process never touches it
+          // (no AI cost). Composite rules `from=X&subject_contains=Y` match via
+          // subject. ignoreDuplicates → .select() returns the row only on a
+          // fresh insert, so a re-sync won't write a duplicate log entry.
+          const skipTrigger = skipFilter.skipMatch({ from, to, senderEmail: fromEmail, subject });
+          if (skipTrigger) {
+            const skipReason = `skip_rule: ${skipTrigger}`;
+            const toEmailForSkip = (to.match(/<([^>]+)>/) ?? [])[1] ?? to.trim();
+            const skipUrl = `https://mail.google.com/mail/u/0/#all/${id}`;
+            const { data: skipInserted, error: skipUpsertErr } = await db.from("source_messages").upsert(
+              {
+                user_id: userId,
+                source_type: "gmail",
+                source_id: id,
+                sender: from,
+                sender_email: fromEmail,
+                subject,
+                body_text: body.slice(0, 1000),
+                received_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+                processing_status: "processed",
+                ai_classification: "skip",
+                skip_reason: skipReason,
+                processed_at: new Date().toISOString(),
+                reply_to_context: toEmailForSkip,
+                source_url: skipUrl,
+                metadata: { threadId, to: toEmailForSkip },
+              },
+              { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+            ).select("id").maybeSingle();
+            if (skipUpsertErr) throw new Error(skipUpsertErr.message);
+            if (skipInserted?.id) {
+              const { error: skipLogErr } = await db.from("log_entries").insert({
+                user_id: userId,
+                category: "ai_process",
+                status: "skipped",
+                source_message_id: skipInserted.id,
+                source_type: "gmail",
+                source_id: id,
+                source_url: skipUrl,
+                sender: from,
+                sender_email: fromEmail,
+                subject,
+                pre_classification: "skip",
+                ai_classification: "skip",
+                classification_reason: skipReason,
+              });
+              if (skipLogErr) throw new Error(skipLogErr.message);
+            }
+            itemsProcessed++;
+            continue;
+          }
 
           // If this is a reply (has In-Reply-To header), fetch thread history so
           // Part3 sees the full conversation context, not just the last message.
