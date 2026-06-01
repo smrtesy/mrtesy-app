@@ -98,7 +98,7 @@ export function SourceMessageReader({
         onClick={(e) => e.stopPropagation()}
       >
         <DialogHeader>
-          <DialogTitle className="text-base break-words">
+          <DialogTitle className="text-base break-words" dir="auto">
             {data?.subject || (loading ? t("title") : t("noSubject"))}
           </DialogTitle>
         </DialogHeader>
@@ -120,7 +120,7 @@ export function SourceMessageReader({
           <div className="space-y-3 text-sm">
             <div className="text-muted-foreground">
               <span className="font-medium">{t("from")}: </span>
-              {data.sender || data.sender_email || "—"}
+              <span dir="auto" className="inline-block align-bottom">{data.sender || data.sender_email || "—"}</span>
               {receivedLabel && (
                 <span className="block text-xs mt-0.5">{receivedLabel}</span>
               )}
@@ -148,7 +148,7 @@ export function SourceMessageReader({
                   }}
                 />
               ) : (
-                <div className="whitespace-pre-wrap break-words leading-relaxed">
+                <div className="whitespace-pre-wrap break-words leading-relaxed" dir="auto">
                   {linkify(data.body_text)}
                 </div>
               )
