@@ -192,6 +192,12 @@
       "medium": "Medium",
       "low": "Low"
     },
+    "changePriority": "Change priority",
+    "sortBy": {
+      "label": "Sort",
+      "priority": "By priority",
+      "date": "By date"
+    },
     "actions": {
       "complete": "Done",
       "snooze": "Snooze",
@@ -787,6 +793,7 @@
     "infoTitlePlaceholder": "Title — what is this about?",
     "infoBodyPlaceholder": "Full content (optional)",
     "infoTarget": "Save to project",
+    "infoTargetPlaceholder": "Choose a project",
     "infoSave": "Save",
     "infoSaved": "Info saved",
     "infoSavedToOther": "Info saved to the selected project",

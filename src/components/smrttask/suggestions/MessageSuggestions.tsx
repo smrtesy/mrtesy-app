@@ -20,6 +20,7 @@ import { DismissDialog } from "./DismissDialog";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
@@ -388,6 +389,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
               <SuggestionActions
                 taskId={task.id as string}
+                infoProjectId={(task.project_id as string | null) ?? null}
+                infoTitle={title as string}
+                infoBody={(task.description as string | null) ?? null}
                 onFastDismiss={() => handleFastDismiss(task.id as string)}
                 onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string, source?.source_type ?? null)}
                 onApprove={() => handleApprove(task.id as string)}
@@ -464,6 +468,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
  */
 function SuggestionActions({
   taskId,
+  infoProjectId,
+  infoTitle,
+  infoBody,
   onFastDismiss,
   onDismissWithReason,
   onApprove,
@@ -472,6 +479,9 @@ function SuggestionActions({
   onComplete,
 }: {
   taskId: string;
+  infoProjectId: string | null;
+  infoTitle: string;
+  infoBody: string | null;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
@@ -508,6 +518,11 @@ function SuggestionActions({
         >
           <Clock className="h-4 w-4" />
         </Button>
+        <SaveAsInfoButton
+          defaultProjectId={infoProjectId}
+          defaultTitle={infoTitle}
+          defaultBody={infoBody}
+        />
         <div className="flex-1" />
         <Button
           size="icon"
