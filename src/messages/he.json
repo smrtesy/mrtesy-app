@@ -201,6 +201,12 @@
       "low": "נמוך"
     },
     "changePriority": "שנה דחיפות",
+    "duplicateSuggestionLabel": "כנראה כפילות של {serial}",
+    "duplicateSuggestionReview": "בדוק ומזג",
+    "duplicateSuggestionDismiss": "לא כפילות",
+    "duplicateSuggestionDismissed": "ההצעה הוסרה",
+    "duplicateSuggestionBadge": "כפילות?",
+    "duplicateSuggestionBadgeTitle": "כנראה כפילות של משימה קיימת — פתח כדי לבדוק ולמזג",
     "sortBy": {
       "label": "מיון",
       "priority": "לפי דחיפות",

@@ -23,6 +23,7 @@ import {
   Trash2,
   Bell,
   RotateCcw,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
@@ -142,6 +143,16 @@ export function TaskCard({
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
+          {task.suggested_duplicate_of && (
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-0.5 border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+              title={t("duplicateSuggestionBadgeTitle")}
+            >
+              <Copy className="h-3 w-3" />
+              {t("duplicateSuggestionBadge")}
+            </Badge>
+          )}
           <SerialBadge serial={task.serial_display} stopPropagation />
           {onPriorityChange ? (
             <DropdownMenu>
