@@ -89,7 +89,7 @@ function SortableTaskCard({
       >
         <GripVertical className="h-4 w-4" />
       </button>
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <TaskCard
           task={task}
           locale={locale}
@@ -492,7 +492,7 @@ export function TaskList({ locale }: { locale: string }) {
               <div className="space-y-3">
                 {displayAll.map((task) => (
                   <div key={task.id} className="flex gap-2 items-start">
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <TaskCard
                         task={task}
                         locale={locale}
