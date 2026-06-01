@@ -421,6 +421,10 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
   const payload: DecisionPayload = { ...(decision.payload as DecisionPayload), ...(overrides.payload ?? {}) };
 
   let appliedTaskId: string | null = null;
+  // save_info produces a project_information_items row, not a task. It is
+  // tracked separately because applied_task_id has an FK to tasks(id) and
+  // must never hold an info-item id (router_decisions_applied_task_id_fkey).
+  let appliedInfoItemId: string | null = null;
 
   try {
     if (intent === "create_task") {
@@ -579,6 +583,19 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       if (error) throw new Error(error.message);
       appliedTaskId = targetTaskId;
     } else if (intent === "save_info") {
+      // Idempotency: a previous apply may have inserted the info item (and any
+      // on-the-fly project) but failed before flipping the decision to
+      // 'applied' — leaving status='pending'. Reuse the existing item instead
+      // of creating duplicate items/projects on retry.
+      const { data: existingRows, error: existErr } = await db
+        .from("project_information_items")
+        .select("id")
+        .eq("source_router_decision_id", decision.id)
+        .limit(1);
+      if (existErr) throw new Error(existErr.message);
+      if (existingRows && existingRows.length > 0) {
+        appliedInfoItemId = (existingRows[0] as { id: string }).id;
+      } else {
       const title = (payload.title_he || decision.input_text).trim().slice(0, 200);
       const body = (payload.body || payload.title_he || decision.input_text).trim();
       if (!title) throw new Error("title required for save_info");
@@ -626,7 +643,8 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
         .select("id")
         .single();
       if (error) throw new Error(error.message);
-      appliedTaskId = (infoItem as { id: string }).id;
+      appliedInfoItemId = (infoItem as { id: string }).id;
+      }
     } else {
       return res.status(400).json({ error: `cannot apply intent ${intent}` });
     }
@@ -644,7 +662,7 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       .eq("id", decision.id);
     if (updErr) throw new Error(updErr.message);
 
-    res.json({ ok: true, applied_task_id: appliedTaskId, intent });
+    res.json({ ok: true, applied_task_id: appliedTaskId, info_item_id: appliedInfoItemId, intent });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
