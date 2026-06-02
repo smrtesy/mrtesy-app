@@ -476,15 +476,25 @@ FROM apps WHERE slug = 'smrtcrm';
 ## STEP 11 — Logging: Write to log_entries
 
 `log_entries` is a **shared platform table** — it already exists (no per-app
-migration needed). A DB trigger fans out any row with `level = "error"` to
-super-admins as an `action_required` notification, so error rows here surface in
-**Platform → Logs** *and* alert the admins.
+migration needed; its schema is documented in
+`supabase/migrations/20260602120000_log_entries_documented.sql`). A DB trigger
+fans out any row with `level = "error"` to super-admins as an `action_required`
+notification, so error rows here surface in **Platform → Logs** *and* alert the
+admins.
 
-Common columns: `user_id`, `level` (`"info"` default / `"warning"` / `"error"`),
-`category` (use `app.entity.action`), `status` (`"ok"` / `"failed"` / `"skipped"`),
-`error_message`. The table also carries domain-specific columns used by smrtTask
-(`task_id`, `task_title`, `ai_model_used`, `ai_cost_usd`, …); only set the ones
-your app actually has — there is no generic `details` JSON column.
+Columns you'll use from any app:
+- `user_id` (FK → `auth.users`), `created_at` (default `now()`)
+- `level` — CHECK `('info','warning','error')`, default `'info'`
+- `category` — **required**; use `app.entity.action` (e.g. `smrtcrm.contact.create`)
+- `status` — CHECK `('ok','skipped','failed','duplicate')`, default `'ok'`
+- `error_message` — text
+- `details` — `jsonb` default `'{}'`; put any app-specific structured payload here
+
+The table also carries smrtTask-specific columns (`task_id`, `task_title`,
+`source_message_id`, `ai_model_used`, `ai_cost_usd`, `processing_duration_ms`, …)
+— ignore those from other apps; use `details` for your own structured data.
+Note the RLS policy is **per-user** (`user_id = auth.uid()`), not org-scoped, so
+writes generally happen through the service-role `db` client.
 
 ```typescript
 import { db } from "../../db";
@@ -496,14 +506,15 @@ const { error: logErr } = await db.from("log_entries").insert({
   category: "smrtcrm.contact.create",   // app.entity.action
   status: "failed",
   error_message: err instanceof Error ? err.message : String(err),
+  details: { org_id: req.org!.id, input: req.body },
 });
 if (logErr) console.error("[log_entries]", logErr.message);
 
 // For successful actions (optional but useful):
 await db.from("log_entries").insert({
   user_id: req.user!.id,
-  category: "smrtcrm.contact.create",   // level defaults to "info"
-  status: "ok",
+  category: "smrtcrm.contact.create",   // level defaults to "info", status to "ok"
+  details: { org_id: req.org!.id, contact_id: data.id },
 });
 ```
 
