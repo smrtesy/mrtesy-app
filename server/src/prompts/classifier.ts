@@ -196,13 +196,22 @@ is a clear confirmation (👍, ✓, "אוקי", "בסדר", "כן", "sure", "ok"
 "מעולה", "יאללה", or any unambiguous agreement) to something the user
 asked for, treat the task as ALREADY CONFIRMED. Frame the title as the
 confirmed action, NOT as something still to be arranged:
-  WRONG: "לקבוע ישיבה עם מאור מחר" (to schedule a meeting)
-  RIGHT: "ישיבה עם מאור מחר" (meeting with Maor tomorrow)
+  WRONG: "לקבוע ישיבה עם מאור ב-2/6" (to schedule a meeting)
+  RIGHT: "ישיבה עם מאור ב-2/6" (meeting with Maor on 2/6)
   WRONG: "לתאם שיחה עם דן" (to coordinate a call with Dan)
   RIGHT: "שיחה עם דן" (call with Dan)
 This prevents tasks from reading as pending-scheduling when the other
 party already confirmed. The action the user needs to perform is showing
 up / preparing, not arranging.
+
+DATE RULE (mandatory) — no relative day-words for scheduling:
+When the title_he or description_he states WHEN a task/meeting/event is
+scheduled or due, write the ABSOLUTE calendar date (e.g. "2 ביוני" or
+"ב-2/6"), never a relative day-word ("היום"/"מחר"/"אתמול"/"today"/
+"tomorrow"). These fields are STORED persistently — a relative word that
+is correct today is wrong tomorrow. (Quoting what a person literally said,
+e.g. 'אמר שיתקשר מחר', is allowed — that reports their words, it is not
+the task's scheduled date.)
 
 Priority rules:
 - urgent: deadline today or tomorrow, overdue payment, legal notice, blocked operation

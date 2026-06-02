@@ -11,7 +11,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Zap,
   MessageCircle,
   FolderSearch,
   Clock,
@@ -24,10 +23,13 @@ import {
   Trash2,
   Bell,
   RotateCcw,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
-import { translateActionLabel } from "@/lib/actionLabels";
+import { extractTaskLinks } from "@/lib/smrttask/links";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import type { Task } from "@/types/task";
@@ -41,7 +43,9 @@ interface TaskCardProps {
   onToggleToday?: (taskId: string) => void;
   onActivate?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
-  onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
+  /** No longer rendered on the card (AI ⚡ buttons hidden for now); kept so
+   *  callers can stay unchanged and for easy restoration. */
+  onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
   /** When provided, the priority badge becomes a quick-edit dropdown. */
   onPriorityChange?: (taskId: string, priority: string) => void;
@@ -78,7 +82,6 @@ export function TaskCard({
   onToggleToday,
   onActivate,
   onDelete,
-  onQuickAction,
   onDriveSearch,
   onPriorityChange,
   selected,
@@ -87,10 +90,9 @@ export function TaskCard({
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
-  const tActions = useTranslations("tasks.actions");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
-  const aiActions = (task.ai_actions || []).slice(0, 2);
+  const links = extractTaskLinks(task);
   const source = task.source_messages ?? null;
   const checklist = task.checklist ?? [];
   const checklistTotal = checklist.length;
@@ -141,6 +143,16 @@ export function TaskCard({
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
+          {task.suggested_duplicate_of && (
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-0.5 border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+              title={t("duplicateSuggestionBadgeTitle")}
+            >
+              <Copy className="h-3 w-3" />
+              {t("duplicateSuggestionBadge")}
+            </Badge>
+          )}
           <SerialBadge serial={task.serial_display} stopPropagation />
           {onPriorityChange ? (
             <DropdownMenu>
@@ -181,7 +193,7 @@ export function TaskCard({
       {/* Description preview */}
       {task.description && (
         <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
-          {task.description}
+          <LinkifiedText>{task.description}</LinkifiedText>
         </p>
       )}
 
@@ -215,26 +227,11 @@ export function TaskCard({
         )}
       </div>
 
-      {/* AI Action Buttons */}
-      {aiActions.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {aiActions.map((action, i) => (
-            <Button
-              key={i}
-              variant="outline"
-              size="sm"
-              className="h-8 max-w-full min-w-0 text-xs gap-1"
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickAction(task.id, action);
-              }}
-            >
-              <Zap className="h-3 w-3 shrink-0" />
-              <span className="truncate">{translateActionLabel(action.label, tActions)}</span>
-            </Button>
-          ))}
-        </div>
-      )}
+      {/* Actionable links pulled from the task (Zoom/Meet/doc/…) so the user
+          can act straight from the card. AI suggestion buttons are hidden for
+          now (until they're genuinely useful) — see git history to restore. */}
+      <LinkActions links={links} />
+
 
       {/* Pending-completion: prominent approve / reopen row REPLACES the regular row */}
       {isPendingCompletion ? (

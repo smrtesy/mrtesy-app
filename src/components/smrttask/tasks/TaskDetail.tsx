@@ -29,11 +29,13 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { ProjectCombobox } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { ProjectOption } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { Task } from "@/types/task";
@@ -56,6 +58,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
   const tActions = useTranslations("tasks.actions");
+  const tMerge = useTranslations("merge");
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -83,6 +86,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [dismissingDup, setDismissingDup] = useState(false);
 
   /** Locally-refreshed snapshot of the task, kept in sync after operations
    *  that the parent's onUpdate() callback only refreshes at list-level
@@ -126,6 +131,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const updates = (effectiveTask.updates || []).slice(-20).reverse();
   const generated = effectiveTask.ai_generated_content || [];
   const docs = effectiveTask.linked_drive_docs || [];
+
+  // Dismiss a medium-confidence duplicate suggestion ("not a duplicate"):
+  // clears the pointer so the banner stops showing.
+  async function dismissDuplicateSuggestion() {
+    if (!task) return;
+    setDismissingDup(true);
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { suggested_duplicate_of: null } });
+      toast.success(t("duplicateSuggestionDismissed"));
+      onUpdate();
+    } catch {
+      toast.error(tCommon("error"));
+    } finally {
+      setDismissingDup(false);
+    }
+  }
 
   async function startFieldEdit() {
     if (!task) return;
@@ -315,6 +336,27 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             </div>
           </div>
 
+          {/* Cross-source duplicate suggestion (medium confidence). High-confidence
+              matches are auto-linked upstream and never reach here. */}
+          {effectiveTask.suggested_duplicate_of && effectiveTask.suggested_duplicate && (
+            <div className="border-b bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5 flex items-center gap-2 text-sm" dir={dir}>
+              <div className="flex-1 min-w-0 text-amber-900 dark:text-amber-200">
+                {t("duplicateSuggestionLabel", { serial: effectiveTask.suggested_duplicate.serial_display })}
+                <span className="block truncate text-xs opacity-80">
+                  {locale === "he"
+                    ? (effectiveTask.suggested_duplicate.title_he ?? effectiveTask.suggested_duplicate.title)
+                    : (effectiveTask.suggested_duplicate.title ?? effectiveTask.suggested_duplicate.title_he)}
+                </span>
+              </div>
+              <Button size="sm" variant="outline" className="h-7 shrink-0" onClick={() => setMergeOpen(true)}>
+                {t("duplicateSuggestionReview")}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 shrink-0" disabled={dismissingDup} onClick={dismissDuplicateSuggestion}>
+                {t("duplicateSuggestionDismiss")}
+              </Button>
+            </div>
+          )}
+
           {/* Plain overflow-y-auto instead of <ScrollArea> here. The Radix
               viewport occasionally fails to size correctly inside this
               dialog when the inner content has its own border/overflow
@@ -455,7 +497,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap text-sm" dir={dir}>
-                      {task.description || (
+                      {task.description ? (
+                        <LinkifiedText>{task.description}</LinkifiedText>
+                      ) : (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
                     </div>
@@ -532,7 +576,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                               }}
                               style={{ cursor: isLong ? "pointer" : "default" }}
                             >
-                              {display}
+                              <LinkifiedText>{display}</LinkifiedText>
                             </div>
                           </li>
                         );
@@ -708,6 +752,25 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         onClose={() => setSnoozeOpen(false)}
         onConfirm={handleSnoozeConfirm}
       />
+
+      {effectiveTask.suggested_duplicate && (
+        <MergeModal
+          open={mergeOpen}
+          onClose={() => setMergeOpen(false)}
+          fromTasksList
+          locale={locale}
+          sources={[
+            { id: effectiveTask.id, title: effectiveTask.title, title_he: effectiveTask.title_he, task_type: effectiveTask.task_type, status: effectiveTask.status, ai_confidence: effectiveTask.ai_confidence },
+            { id: effectiveTask.suggested_duplicate.id, title: effectiveTask.suggested_duplicate.title, title_he: effectiveTask.suggested_duplicate.title_he, task_type: "action", status: "inbox" },
+          ]}
+          onMerged={() => {
+            setMergeOpen(false);
+            toast.success(tMerge("successToast"));
+            onUpdate();
+            onClose();
+          }}
+        />
+      )}
     </Dialog>
   );
 }

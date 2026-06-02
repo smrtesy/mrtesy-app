@@ -201,6 +201,12 @@
       "low": "Low"
     },
     "changePriority": "Change priority",
+    "duplicateSuggestionLabel": "Possible duplicate of {serial}",
+    "duplicateSuggestionReview": "Review & merge",
+    "duplicateSuggestionDismiss": "Not a duplicate",
+    "duplicateSuggestionDismissed": "Suggestion dismissed",
+    "duplicateSuggestionBadge": "Duplicate?",
+    "duplicateSuggestionBadgeTitle": "Possible duplicate of an existing task — open to review and merge",
     "sortBy": {
       "label": "Sort",
       "priority": "By priority",
@@ -240,6 +246,19 @@
         "draft_settlement_request": "Draft settlement request",
         "custom": "Custom action"
       }
+    },
+    "linkActions": {
+      "joinZoom": "Join Zoom",
+      "joinMeet": "Join Meet",
+      "joinTeams": "Join Teams",
+      "openDoc": "Open doc",
+      "openSheet": "Open sheet",
+      "openSlides": "Open slides",
+      "openDrive": "Open in Drive",
+      "openCalendar": "Open in Calendar",
+      "openEmail": "Open email",
+      "openWhatsapp": "Open in WhatsApp",
+      "openLink": "Open link"
     },
     "detail": {
       "description": "Description",

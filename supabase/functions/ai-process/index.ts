@@ -760,7 +760,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // Static instructions → cached prefix (admin-editable via ai_prompts key
   // "edge_task_builder"). Dynamic context (WhatsApp rules, project brief,
   // contact memory, body) goes in the user message to keep the cache warm.
-  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   let context = "";
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
@@ -1177,10 +1177,255 @@ async function checkCrossSourceLink(
   return null;
 }
 
+// ── Cross-source duplicate detection ─────────────────────────────────────────
+// The thread/sibling linkers above only connect items that share a Gmail
+// threadId or a WhatsApp chatId. They cannot connect the SAME real-world event
+// arriving from DIFFERENT sources — e.g. a Google Calendar appointment and a
+// Gmail reminder for that same appointment (the T241/T455 case). This matcher
+// closes that gap: cheap deterministic recall (contact / date overlap) narrows
+// the open tasks to a handful of candidates, then a strict AI call decides
+// whether it is genuinely the same thing. A false link is worse than a miss,
+// so the prompt is conservative and the result is tiered:
+//   • high   → auto-link (append as update to the existing task)
+//   • medium → suggest to the user (stamp suggested_duplicate_of), no auto-merge
+
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
+const PHONE_RE = /\+?\d[\d\-().\s]{6,}\d/g;
+
+interface DupeProbe {
+  title: string;
+  description: string;
+  dueDate: string | null; // YYYY-MM-DD proxy (event date / arrival date)
+  emails: Set<string>;
+  domains: Set<string>;
+  phones: Set<string>;
+}
+
+function extractEmails(...vals: (string | null | undefined)[]): Set<string> {
+  const out = new Set<string>();
+  for (const v of vals) {
+    if (!v) continue;
+    const m = String(v).match(EMAIL_RE);
+    if (m) for (const e of m) out.add(e.toLowerCase());
+  }
+  return out;
+}
+
+function emailDomains(emails: Set<string>): Set<string> {
+  const d = new Set<string>();
+  for (const e of emails) {
+    const i = e.indexOf("@");
+    if (i > 0) {
+      const dom = e.slice(i + 1);
+      // Skip generic/no-reply sender domains that would over-match unrelated
+      // automated mail. They carry no "same party" signal.
+      if (!/^(gmail|googlemail|outlook|hotmail|yahoo|icloud)\./.test(dom)) d.add(dom);
+    }
+  }
+  return d;
+}
+
+// Last 10 digits, so +1-212-908-6671 and (212) 908-6671 compare equal.
+function normPhone(s: string): string {
+  const digits = s.replace(/\D/g, "");
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+function extractPhones(...vals: (string | null | undefined)[]): Set<string> {
+  const out = new Set<string>();
+  for (const v of vals) {
+    if (!v) continue;
+    const m = String(v).match(PHONE_RE);
+    if (m) for (const p of m) { const n = normPhone(p); if (n.length >= 9) out.add(n); }
+  }
+  return out;
+}
+
+function extractUrls(text: string): string[] {
+  const m = String(text).match(URL_RE);
+  return m ? Array.from(new Set(m)) : [];
+}
+
+function dayDiff(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const ta = Date.parse(a.length === 10 ? `${a}T00:00:00Z` : a);
+  const tb = Date.parse(b.length === 10 ? `${b}T00:00:00Z` : b);
+  if (isNaN(ta) || isNaN(tb)) return null;
+  return Math.abs(ta - tb) / 86_400_000;
+}
+
+// Build a probe from the raw inbound message. Contact emails/phones are pulled
+// from the sender, the recipients, the AI-supplied owner_contact (when present)
+// and the head of the body — calendar events carry the assessor's email only
+// in the body, not in any sender field. The due-date proxy is the message's
+// received_at (for calendar that IS the event time; for mail it's arrival, and
+// the ±-window in the recall filter absorbs the gap).
+function buildProbe(msg: any, ownerContact?: string | null): DupeProbe {
+  const bodyHead = bodyForAI(msg).slice(0, 1200);
+  const emails = extractEmails(msg.sender_email, msg.sender, (msg.metadata as any)?.to, ownerContact, bodyHead);
+  const phones = extractPhones((msg.metadata as any)?.fromPhone, ownerContact, bodyHead);
+  const dueProxy = msg.received_at ? new Date(msg.received_at).toISOString().slice(0, 10) : null;
+  return {
+    title: msg.subject || "",
+    description: bodyHead,
+    dueDate: dueProxy,
+    emails,
+    domains: emailDomains(emails),
+    phones,
+  };
+}
+
+const DUPE_MATCH_PROMPT = `You decide whether a NEW item refers to the SAME real-world event, appointment, obligation, or thread as one of the user's EXISTING open tasks — even when they arrived from DIFFERENT sources (a calendar event, an email, a WhatsApp chat, a Drive document).
+
+A MATCH means the SAME concrete thing — not merely the same person or the same topic. Require at least 2 of the following to agree:
+• Same date — the appointment / deadline / event date is the same (±1 day).
+• Same party — the same person or organization (email, phone, email domain, or unmistakably the same named party).
+• Same specific subject — the same meeting name, invoice / reference / case number, document, or decision.
+
+confidence:
+• "high"   — date AND party match, OR an exact reference/invoice/subject match. Safe to merge automatically.
+• "medium" — strong overlap but one pillar is ambiguous (e.g. same person and topic but the date is unclear). Suggest to the user; do NOT auto-merge.
+
+NEVER match on person alone. NEVER match on topic alone. Two DIFFERENT meetings with the same person are NOT a match. A recurring event's separate occurrences are NOT a match unless the date is the same. When unsure, return {"match": false}. A false match is worse than a missed one.
+
+Return ONLY valid JSON, no markdown:
+{"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew: name the 2+ matching specifics — date, party, subject>"}
+OR
+{"match": false}`;
+
+async function findDuplicateOpenTask(
+  userId: string,
+  probe: DupeProbe,
+  sys: SystemParams,
+  refId: string,
+): Promise<{ taskId: string; serial: string; confidence: "high" | "medium"; reason: string } | null> {
+  // No signal to match on → skip entirely (no DB read, no AI call).
+  if (probe.emails.size === 0 && probe.phones.size === 0 && !probe.dueDate) return null;
+
+  const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
+  const { data: open, error: openErr } = await supabase
+    .from("tasks")
+    .select("id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone")
+    .eq("user_id", userId)
+    .in("status", ["inbox", "in_progress"])
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(80);
+  if (openErr || !open || open.length === 0) return null;
+
+  // Deterministic recall: keep only tasks that share a contact OR fall within
+  // 3 days of the probe date. Contact extraction reads BOTH the structured
+  // columns AND the free-text related_contact field, because Sonnet often
+  // packs the email/phone into related_contact ("Robin Speary — robin@x.com —
+  // (212)…") and leaves related_contact_email null.
+  const candidates = (open as any[]).filter((t) => {
+    const tEmails = extractEmails(t.related_contact_email, t.related_contact);
+    const tPhones = extractPhones(t.related_contact_phone, t.related_contact);
+    const tDomains = emailDomains(tEmails);
+    const contactHit =
+      [...probe.emails].some((e) => tEmails.has(e)) ||
+      [...probe.phones].some((p) => tPhones.has(p)) ||
+      [...probe.domains].some((d) => tDomains.has(d));
+    const dist = dayDiff(probe.dueDate, t.due_date);
+    const dateHit = dist !== null && dist <= 3;
+    return contactHit || dateHit;
+  }).slice(0, 12);
+
+  if (candidates.length === 0) return null;
+
+  const candList = candidates.map((t) =>
+    `TASK_ID: ${t.id}\nSerial: ${t.serial_display || "—"}\nTitle: ${t.title_he || t.title}\nDue: ${t.due_date || "—"}\nContact: ${t.related_contact || t.related_contact_email || t.related_contact_phone || "—"}\nDescription: ${String(t.description || "").substring(0, 400)}`,
+  ).join("\n\n---\n\n");
+
+  const userMessage = `NEW ITEM (about to become a task):\nTitle: ${probe.title}\nDate: ${probe.dueDate || "—"}\nContact emails: ${[...probe.emails].join(", ") || "—"}\nContact phones: ${[...probe.phones].join(", ") || "—"}\nBody:\n${probe.description.substring(0, 900)}\n\n═══ OPEN TASK CANDIDATES ═══\n${candList}`;
+
+  const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
+    { component: "ai_process.dupe_match", userId, refId });
+
+  try {
+    const m = result.text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]);
+    if (parsed.match && parsed.matched_task_id && (parsed.confidence === "high" || parsed.confidence === "medium")) {
+      const hit = candidates.find((c) => c.id === parsed.matched_task_id);
+      if (!hit) return null; // guard against a hallucinated id
+      return {
+        taskId: String(parsed.matched_task_id),
+        serial: hit.serial_display || "",
+        confidence: parsed.confidence,
+        reason: String(parsed.reason_he ?? ""),
+      };
+    }
+  } catch { /* ignore parse errors — treat as no match */ }
+  return null;
+}
+
+// HIGH-confidence: append the new message to the existing task as an update,
+// preserving any deep links from the body verbatim (system-wide rule), and
+// enrich the task with details the existing copy was missing (a source link,
+// a contact email). Then register thread memory so future messages on the new
+// message's own thread attach to the same task automatically.
+async function linkAndEnrichDuplicate(
+  taskId: string,
+  msg: any,
+  analysis: ThreadAnalysis,
+  reasonHe: string,
+) {
+  const urls = extractUrls(bodyForAI(msg));
+  const linkAnalysis: ThreadAnalysis = {
+    ...analysis,
+    // Don't clobber the existing task's description with this message's summary;
+    // record the cross-source link reason + the verbatim deep link(s) instead.
+    newSummary: "",
+    completionSignal: false,
+    completionReason: "",
+    reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
+  };
+  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable");
+
+  // Backfill fields the existing task lacked.
+  const { data: t } = await supabase
+    .from("tasks").select("source_link, related_contact_email").eq("id", taskId).maybeSingle();
+  const patch: Record<string, unknown> = {};
+  if (t && !t.source_link && (msg.source_url || urls[0])) patch.source_link = msg.source_url || urls[0];
+  if (t && !t.related_contact_email && msg.sender_email) patch.related_contact_email = msg.sender_email;
+  if (Object.keys(patch).length > 0) {
+    const { error } = await supabase.from("tasks").update(patch).eq("id", taskId);
+    if (error) {
+      await supabase.from("log_entries").insert({
+        user_id: msg.user_id, level: "warning", category: "ai_process_dupe", status: "failed",
+        ...msgLogFields(msg), error_message: `enrich update: ${error.message}`,
+      });
+    }
+  }
+
+  // Register thread memory for the NEW message's own thread (Gmail/WhatsApp)
+  // so the next reply on it attaches here too. Calendar has no thread key.
+  const tk = threadKey(msg);
+  if (tk) await upsertThreadMemory(msg.user_id, tk, { related_task_id: taskId, last_message_id: msg.id });
+}
+
+// MEDIUM-confidence: the new task was created normally but flagged as a
+// possible duplicate. Record an activity so the suggestion is auditable
+// alongside the suggested_duplicate_of pointer the UI reads.
+async function logDuplicateSuggestion(userId: string, newTaskId: string, suggestedOfTaskId: string) {
+  await supabase.from("task_activities").insert({
+    user_id: userId,
+    task_id: newTaskId,
+    activity_type: "duplicate_suggested",
+    note: `Possible duplicate of task ${suggestedOfTaskId}`,
+    actor: "system",
+  });
+}
+
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
   let linkedTaskId: string | null = null;
+  // Medium-confidence cross-source duplicate: stamped onto the task we are
+  // about to create (set in Path 2.5, applied in Path 3).
+  let dupSuggestionTaskId: string | null = null;
 
   // User reclassified this message as actionable via the log UI — bypass
   // preClassify skip/defer/informational logic and force actionable after AI.
@@ -1321,6 +1566,29 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     }
   }
 
+  // ── Path 2.5: cross-source duplicate detection ────────────────────────────
+  // The sibling linker above only connects same-thread items. This catches the
+  // SAME real-world event arriving from a DIFFERENT source (e.g. a Gmail
+  // reminder for an appointment already tracked from a Calendar event).
+  //   high   → link to the existing task now (skip creating a duplicate)
+  //   medium → create normally, but flag the suspected duplicate for the user
+  if (!linkedTaskId && classification === "actionable") {
+    try {
+      const dup = await findDuplicateOpenTask(msg.user_id, buildProbe(msg), sys, msg.id);
+      if (dup && dup.confidence === "high") {
+        await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason);
+        linkedTaskId = dup.taskId;
+        classification = "actionable_followup";
+        classificationReason = `cross-source duplicate of ${dup.serial || dup.taskId} (high) — ${dup.reason}`;
+      } else if (dup && dup.confidence === "medium") {
+        dupSuggestionTaskId = dup.taskId;
+        classificationReason = `possible duplicate of ${dup.serial || dup.taskId} (medium) — ${dup.reason}`;
+      }
+    } catch (e) {
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_dupe", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+    }
+  }
+
   if (!linkedTaskId && classification === "actionable") {
     try {
       // Calendar events: build the task directly from the event's own data.
@@ -1339,17 +1607,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           status: "inbox", manually_verified: false,
           due_date: dueDateStr,
           ai_actions: [], ai_confidence: 1.0, ai_model_used: "calendar",
+          suggested_duplicate_of: dupSuggestionTaskId,
           updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
         }).select("id").single();
         if (newTask) {
           linkedTaskId = newTask.id as string;
-          classificationReason = "calendar event → direct task (no AI)";
+          classificationReason = dupSuggestionTaskId ? classificationReason : "calendar event → direct task (no AI)";
           await supabase.from("task_activities").insert({
             user_id: msg.user_id, task_id: newTask.id,
             activity_type: "created", new_value: "inbox",
             note: `Created from google_calendar: ${eventTitle}`,
             actor: "system",
           });
+          if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
         }
       } else {
         let projectContext: { projectId: string; brief: string } | undefined;
@@ -1393,11 +1663,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               project_id: taskResult.projectId,
               ai_actions: task.ai_actions || [], related_contact: task.owner_contact,
               related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
+              // Stamp the medium-confidence dup suggestion onto the first task only.
+              suggested_duplicate_of: firstTaskId ? null : dupSuggestionTaskId,
               updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
             }).select("id").single();
             if (newTask) {
-              if (!firstTaskId) firstTaskId = newTask.id as string;
+              const isFirst = !firstTaskId;
+              if (isFirst) firstTaskId = newTask.id as string;
               await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+              if (isFirst && dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
             }
           }
           if (firstTaskId) linkedTaskId = firstTaskId;

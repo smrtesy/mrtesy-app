@@ -45,6 +45,9 @@ const UPDATABLE_FIELDS = new Set([
   "has_unread_update", "completion_signal_detected", "completion_signal_reason",
   // Today work-plan position (null = הכל, 0+ = position in היום list)
   "today_position",
+  // Cross-source duplicate suggestion — set by ai-process, cleared (→ null)
+  // by the UI when the user dismisses the suggestion or merges the tasks.
+  "suggested_duplicate_of",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
@@ -196,7 +199,7 @@ router.get("/tasks", async (req: Request, res: Response) => {
 
   let q = db
     .from("tasks")
-    .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id), suggested_duplicate:tasks!suggested_duplicate_of(id, title, title_he, serial_display)")
     .eq("organization_id", req.org!.id);
 
   q = applyTaskFilters(q, req.query);
@@ -226,7 +229,7 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("tasks")
-    .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+    .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id), suggested_duplicate:tasks!suggested_duplicate_of(id, title, title_he, serial_display)")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -452,7 +455,7 @@ router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
 
   const { data: current } = await db
     .from("tasks")
-    .select("updates, title, title_he, description")
+    .select("updates, title, title_he, description, due_date")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -486,6 +489,7 @@ router.post("/tasks/:id/updates", async (req: Request, res: Response) => {
     userId: req.user!.id,
     currentDescription: (current.description as string | null) ?? "",
     title: (current.title_he as string | null) ?? (current.title as string | null) ?? "",
+    dueDate: (current.due_date as string | null) ?? null,
     updates: next,
   }).catch((e) => {
     console.error("[updates] description refresh failed:", (e as Error).message);
@@ -503,6 +507,7 @@ async function refreshTaskDescription(opts: {
   userId: string;
   currentDescription: string;
   title: string;
+  dueDate: string | null;
   updates: unknown[];
 }): Promise<void> {
   // Take the last ~10 updates in chronological order — enough context
@@ -574,6 +579,16 @@ async function refreshTaskDescription(opts: {
   שהצד השני התחייב לטפל בו. אם נושא נותר ללא בעלים — כתוב שהוא עדיין פתוח,
   אל תייחס אותו לאף אחד.
 
+כלל תאריכים (חובה) — אסור מילות-זמן-יחסיות:
+כשאתה מתאר מתי משימה / פגישה / אירוע מתוכננים או צריכים להתבצע, כתוב תמיד
+את התאריך המוחלט בלוח השנה (למשל "2 ביוני" או "ב-2/6"). אסור להשתמש ב-
+"היום" / "מחר" / "אתמול" / "מחרתיים" כדי לתאר את מועד המשימה — התיאור
+נשמר לאורך זמן, ומילים יחסיות מתיישנות והופכות שגויות כבר למחרת. אם
+התיאור הקודם כתב "היום"/"מחר" לגבי מועד — החלף במועד המוחלט (השתמש בשדה
+"מועד המשימה" שמסופק למטה, או בתאריך המוחלט שכבר מופיע בטקסט). חריג יחיד:
+ציטוט מילולי של דברי אדם ("אמר שיתקשר מחר") מותר — זה דיווח על מה שנאמר,
+לא קביעת מועד.
+
 כללים נוספים:
 - שמור על URLs מלאים מהמקור verbatim, אל תקצר לדומיין בלבד.
 - אל תוסיף הקדמות כמו "כאן התיאור המעודכן" — החזר רק את הטקסט.
@@ -582,6 +597,7 @@ async function refreshTaskDescription(opts: {
 החזר טקסט בלבד, בלי JSON, בלי גרשיים מסביב.`;
 
   const userMessage = `כותרת המשימה: ${opts.title}
+מועד המשימה (due_date): ${opts.dueDate || "(לא נקבע)"}
 
 תיאור קודם:
 ${opts.currentDescription || "(ריק)"}
