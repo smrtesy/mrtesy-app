@@ -70,6 +70,7 @@
     "voiceSettings": "Voice settings",
     "voiceGuide": "smrtVoice guide",
     "sectionVoice": "smrtVoice",
+    "crm": "Contacts",
     "more": "More"
   },
   "account": {
@@ -1218,6 +1219,40 @@
     "typeStyle": "Style",
     "typePreference": "Preference",
     "typeFinancial": "Financial"
+  },
+  "smrtCRM": {
+    "title": "Contacts",
+    "subtitle": "All your organization's contacts in one place — by tags, groups and audiences",
+    "searchPlaceholder": "Search by name, phone or email",
+    "filterByTag": "Filter by tag",
+    "allTags": "All tags",
+    "addContact": "Add contact",
+    "totalCount": "{count, plural, =0 {No contacts} one {1 contact} other {# contacts}}",
+    "noContacts": "No contacts yet",
+    "unnamed": "Unnamed",
+    "addValidation": "At least a name, phone or email is required",
+    "addCreated": "Contact added",
+    "addMerged": "Contact merged with an existing record",
+    "firstName": "First name",
+    "lastName": "Last name",
+    "phone": "Phone",
+    "email": "Email",
+    "cancel": "Cancel",
+    "save": "Save",
+    "source": {
+      "manual": "Manual",
+      "csv": "Import",
+      "bot": "Bot",
+      "api": "API",
+      "migration": "Migration"
+    },
+    "guide": {
+      "title": "smrtCRM guide",
+      "intro": "smrtCRM is your organization's shared contact database. It ingests contacts from the bot, from CSV import and from manual entry — keeping every one tagged with the source it came from.",
+      "point1": "Each contact gets a tag for the project it came from — contacts from multiple sources get multiple tags.",
+      "point2": "The system detects duplicates by phone and email and merges them automatically, so you never get duplicate records.",
+      "point3": "Search, filter by tag and import lists — and the audiences built here are available to smrtReach for outreach."
+    }
   },
   "smrtVoice": {
     "appName": "smrtVoice",

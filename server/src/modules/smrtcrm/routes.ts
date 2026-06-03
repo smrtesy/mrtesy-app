@@ -1,0 +1,414 @@
+/**
+ * smrtCRM — Express routes.
+ *
+ * Every route requires the standard chain:
+ *   requireAuth → requireOrg → requireApp("smrtcrm")
+ *
+ * Permissions (CRM-2): two roles (project_manager / user) are modeled at the
+ * app-membership level, but enforcement is currently equal — everyone added to
+ * the org can do everything here. The structure is ready to restrict later
+ * (e.g. add requireRole on writes) without a migration.
+ */
+
+import { Router } from "express";
+import type { Request, Response } from "express";
+
+import { db } from "../../db";
+import { requireAuth, requireOrg, requireApp } from "../../middleware";
+import { emitEvent, notifyError } from "../../lib/platform";
+
+import {
+  upsertContact,
+  ensureTag,
+  assignTag,
+  normalizeEmail,
+  normalizePhone,
+} from "./contacts-service";
+import type { ContactInput, ImportRow } from "./types";
+
+const router = Router();
+
+router.use(requireAuth, requireOrg, requireApp("smrtcrm"));
+
+// ============================================================
+// CONTACTS
+// ============================================================
+
+// GET /crm/contacts?q=&tag_id=&group_id=&has_email=&limit=&offset=
+router.get("/crm/contacts", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const tagId = typeof req.query.tag_id === "string" ? req.query.tag_id : null;
+  const groupId = typeof req.query.group_id === "string" ? req.query.group_id : null;
+  const hasEmail = req.query.has_email === "true";
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const offset = Number(req.query.offset) || 0;
+
+  // Resolve the id set for tag/group filters first (cheap, indexed).
+  let restrictIds: string[] | null = null;
+  if (tagId) {
+    const { data, error } = await db
+      .from("smrtcrm_tag_assignments")
+      .select("contact_id")
+      .eq("org_id", orgId)
+      .eq("tag_id", tagId);
+    if (error) return res.status(500).json({ error: error.message });
+    restrictIds = (data ?? []).map((r) => r.contact_id as string);
+  }
+  if (groupId) {
+    const { data, error } = await db
+      .from("smrtcrm_group_members")
+      .select("contact_id")
+      .eq("org_id", orgId)
+      .eq("group_id", groupId);
+    if (error) return res.status(500).json({ error: error.message });
+    const groupIds = (data ?? []).map((r) => r.contact_id as string);
+    restrictIds = restrictIds ? restrictIds.filter((id) => groupIds.includes(id)) : groupIds;
+  }
+
+  // An empty restrict set means "no matches" — short-circuit.
+  if (restrictIds && restrictIds.length === 0) {
+    return res.json({ contacts: [], total: 0 });
+  }
+
+  let query = db
+    .from("smrtcrm_contacts")
+    .select("*", { count: "exact" })
+    .eq("org_id", orgId);
+
+  if (restrictIds) query = query.in("id", restrictIds);
+  if (hasEmail) query = query.not("email", "is", null);
+  if (q) {
+    // PostgREST splits the .or() string on commas and treats ()/* as syntax,
+    // so neutralize those separators in the user-supplied term first.
+    const safe = q.replace(/[,()*\\]/g, " ");
+    const like = `%${safe}%`;
+    query = query.or(
+      `first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},email.ilike.${like}`,
+    );
+  }
+
+  const { data, error, count } = await query
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to list contacts", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  res.json({ contacts: data ?? [], total: count ?? 0 });
+});
+
+// POST /crm/contacts  — create (or merge) a single contact, optionally tagged.
+router.post("/crm/contacts", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const body = (req.body ?? {}) as ContactInput & { tag_id?: string };
+
+  if (!body.phone && !body.email && !body.first_name?.trim()) {
+    return res.status(400).json({ error: "at least one of phone, email or first_name is required" });
+  }
+
+  try {
+    const result = await upsertContact(orgId, req.user!.id, { ...body, source: body.source ?? "manual" });
+    if (body.tag_id) await assignTag(orgId, result.id, body.tag_id);
+
+    await emitEvent(
+      orgId,
+      "smrtcrm",
+      result.outcome === "created" ? "contact.created" : "contact.merged",
+      "contact",
+      result.id,
+      { source: body.source ?? "manual" },
+    );
+
+    const { data } = await db.from("smrtcrm_contacts").select("*").eq("id", result.id).single();
+    res.status(result.outcome === "created" ? 201 : 200).json({ contact: data, outcome: result.outcome });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtcrm", { title: "Failed to create contact", body: msg });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// PATCH /crm/contacts/:id  — direct field update (no dedup; explicit edit).
+router.patch("/crm/contacts/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const body = (req.body ?? {}) as ContactInput;
+
+  const patch: Record<string, unknown> = {};
+  if (body.first_name !== undefined) patch.first_name = body.first_name?.trim() || null;
+  if (body.last_name !== undefined) patch.last_name = body.last_name?.trim() || null;
+  if (body.phone !== undefined) patch.phone = normalizePhone(body.phone);
+  if (body.email !== undefined) patch.email = normalizeEmail(body.email);
+  if (body.notes !== undefined) patch.notes = body.notes ?? null;
+  if (body.custom_fields !== undefined) patch.custom_fields = body.custom_fields ?? {};
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "no updatable fields provided" });
+  }
+
+  const { data, error } = await db
+    .from("smrtcrm_contacts")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to update contact", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) return res.status(404).json({ error: "contact not found" });
+
+  await emitEvent(orgId, "smrtcrm", "contact.updated", "contact", req.params.id, {});
+  res.json({ contact: data });
+});
+
+// DELETE /crm/contacts/:id
+router.delete("/crm/contacts/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { error } = await db
+    .from("smrtcrm_contacts")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("id", req.params.id);
+
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to delete contact", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  await emitEvent(orgId, "smrtcrm", "contact.deleted", "contact", req.params.id, {});
+  res.json({ ok: true });
+});
+
+// POST /crm/contacts/bulk  — { action, contact_ids, tag_id?, group_id? }
+router.post("/crm/contacts/bulk", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { action, contact_ids, tag_id, group_id } = (req.body ?? {}) as {
+    action?: string;
+    contact_ids?: string[];
+    tag_id?: string;
+    group_id?: string;
+  };
+
+  if (!action || !Array.isArray(contact_ids) || contact_ids.length === 0) {
+    return res.status(400).json({ error: "action and a non-empty contact_ids array are required" });
+  }
+
+  try {
+    if (action === "add_tag") {
+      if (!tag_id) return res.status(400).json({ error: "tag_id is required for add_tag" });
+      const rows = contact_ids.map((cid) => ({ org_id: orgId, contact_id: cid, tag_id }));
+      const { error } = await db
+        .from("smrtcrm_tag_assignments")
+        .upsert(rows, { onConflict: "contact_id,tag_id" });
+      if (error) throw new Error(error.message);
+    } else if (action === "remove_tag") {
+      if (!tag_id) return res.status(400).json({ error: "tag_id is required for remove_tag" });
+      const { error } = await db
+        .from("smrtcrm_tag_assignments")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("tag_id", tag_id)
+        .in("contact_id", contact_ids);
+      if (error) throw new Error(error.message);
+    } else if (action === "add_group") {
+      if (!group_id) return res.status(400).json({ error: "group_id is required for add_group" });
+      const rows = contact_ids.map((cid) => ({ org_id: orgId, contact_id: cid, group_id }));
+      const { error } = await db
+        .from("smrtcrm_group_members")
+        .upsert(rows, { onConflict: "group_id,contact_id" });
+      if (error) throw new Error(error.message);
+    } else if (action === "delete") {
+      const { error } = await db
+        .from("smrtcrm_contacts")
+        .delete()
+        .eq("org_id", orgId)
+        .in("id", contact_ids);
+      if (error) throw new Error(error.message);
+    } else {
+      return res.status(400).json({ error: `unknown action: ${action}` });
+    }
+    res.json({ ok: true, affected: contact_ids.length });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtcrm", { title: "Bulk action failed", body: msg });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ============================================================
+// TAGS
+// ============================================================
+
+router.get("/crm/tags", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtcrm_tags")
+    .select("*")
+    .eq("org_id", req.org!.id)
+    .order("name");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tags: data ?? [] });
+});
+
+router.post("/crm/tags", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  try {
+    const id = await ensureTag(orgId, name, { kind: "manual", createdBy: req.user!.id });
+    await emitEvent(orgId, "smrtcrm", "tag.created", "tag", id, { name });
+    const { data } = await db.from("smrtcrm_tags").select("*").eq("id", id).single();
+    res.status(201).json({ tag: data });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtcrm", { title: "Failed to create tag", body: msg });
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.delete("/crm/tags/:id", async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtcrm_tags")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ============================================================
+// GROUPS
+// ============================================================
+
+router.get("/crm/groups", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtcrm_groups")
+    .select("*")
+    .eq("org_id", req.org!.id)
+    .order("name");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ groups: data ?? [] });
+});
+
+router.post("/crm/groups", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  const { data, error } = await db
+    .from("smrtcrm_groups")
+    .insert({ org_id: orgId, created_by: req.user!.id, name, description: req.body?.description ?? null })
+    .select("*")
+    .single();
+
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to create group", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  await emitEvent(orgId, "smrtcrm", "group.created", "group", data.id, { name });
+  res.status(201).json({ group: data });
+});
+
+router.delete("/crm/groups/:id", async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtcrm_groups")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ============================================================
+// SEGMENTS (saved dynamic queries — CRM-1; read by smrtReach as audiences)
+// ============================================================
+
+router.get("/crm/segments", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtcrm_segments")
+    .select("*")
+    .eq("org_id", req.org!.id)
+    .order("name");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ segments: data ?? [] });
+});
+
+router.post("/crm/segments", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  const { data, error } = await db
+    .from("smrtcrm_segments")
+    .insert({ org_id: orgId, created_by: req.user!.id, name, filter: req.body?.filter ?? {} })
+    .select("*")
+    .single();
+
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to create segment", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  await emitEvent(orgId, "smrtcrm", "segment.created", "segment", data.id, { name });
+  res.status(201).json({ segment: data });
+});
+
+// ============================================================
+// CSV IMPORT
+// ============================================================
+// The frontend parses the CSV and posts the mapped rows here, plus an optional
+// tag/group to apply to every row. Each row goes through upsertContact, so the
+// dedup logic (CRM-3) handles duplicates automatically.
+
+router.post("/crm/import", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { rows, tag_id, group_id } = (req.body ?? {}) as {
+    rows?: ImportRow[];
+    tag_id?: string;
+    group_id?: string;
+  };
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: "a non-empty rows array is required" });
+  }
+  if (rows.length > 10000) {
+    return res.status(400).json({ error: "import is limited to 10,000 rows per request" });
+  }
+
+  let created = 0;
+  let merged = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const row of rows) {
+    if (!row.phone && !row.email && !row.first_name) {
+      skipped++;
+      continue;
+    }
+    try {
+      const result = await upsertContact(orgId, req.user!.id, { ...row, source: "csv" });
+      if (result.outcome === "created") created++;
+      else merged++;
+      if (tag_id) await assignTag(orgId, result.id, tag_id);
+      if (group_id) {
+        const { error } = await db
+          .from("smrtcrm_group_members")
+          .upsert(
+            { org_id: orgId, group_id, contact_id: result.id },
+            { onConflict: "group_id,contact_id" },
+          );
+        if (error) throw new Error(error.message);
+      }
+    } catch (e) {
+      skipped++;
+      if (errors.length < 20) errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  await emitEvent(orgId, "smrtcrm", "import.completed", "import", orgId, { created, merged, skipped });
+  res.json({ created, merged, skipped, errors });
+});
+
+export default router;

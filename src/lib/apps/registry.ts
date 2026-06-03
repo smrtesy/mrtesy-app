@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { SmrtTaskIcon } from "@/components/icons/SmrtTaskIcon";
 import { SmrtVoiceIcon } from "@/components/icons/SmrtVoiceIcon";
+import { SmrtCRMIcon } from "@/components/icons/SmrtCRMIcon";
 
 /**
  * The built-in admin section cards an app exposes on its
@@ -46,6 +47,13 @@ export const APPS: Record<string, AppDef> = {
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
   },
+  smrtcrm: {
+    slug: "smrtcrm",
+    word: "CRM",
+    Icon: SmrtCRMIcon,
+    guideHref: "/crm/guide",
+    settingsHref: "/settings/apps/smrtcrm",
+  },
 };
 
 export function getApp(slug: string): AppDef | undefined {
@@ -67,6 +75,7 @@ export function getApp(slug: string): AppDef | undefined {
 const ADMIN_SECTIONS: Record<string, AdminSectionKey[]> = {
   smrttask: ["services", "prompts", "secrets", "parameters", "documents"],
   smrtvoice: ["secrets", "documents"],
+  smrtcrm: ["documents"],
   smrtplan: ["documents"],
 };
 
