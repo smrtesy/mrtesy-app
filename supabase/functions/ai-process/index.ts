@@ -278,6 +278,10 @@ interface ThreadAnalysis {
   state: "open" | "pending_user_action" | "pending_other_party" | "resolved";
   completionSignal: boolean;
   completionReason: string;
+  // True when this message opens a matter DISTINCT from what the linked task
+  // tracks (a different action/topic), rather than continuing the same one.
+  // Drives the "spin off a new task vs reopen/append" decision in Path 1.
+  newMatter: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -349,7 +353,8 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
   "new_summary": "Hebrew, ≤ 400 chars. Incorporates this new message into the running thread context. State the current open question and who owes the next step.",
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
-  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string"
+  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string",
+  "new_matter": true | false
 }
 
 - ACTIONABLE = either (a) the user must take a concrete step now, OR
@@ -417,6 +422,26 @@ confirmed as completed — not merely planned or scheduled.
 Be conservative only when the answer is genuinely partial or ambiguous
 (e.g. "I'll check and get back to you" — that's still pending). When the
 requested answer is plainly in the message, set completion=true.
+
+═══ new_matter — is this a DIFFERENT open matter? ═══
+new_matter=true means: this message opens an actionable matter that is
+DISTINCT from what the existing thread summary / linked task was tracking
+— a different action, deliverable, meeting, or topic — NOT just the next
+turn of the same one. Judge against the "Existing thread summary" block.
+
+  • Same matter continuing (more back-and-forth on the SAME question,
+    a status update, the other party finally answering the original ask)
+    → new_matter=false.
+  • A genuinely new ask/commitment/event on top of (or after) the original
+    → new_matter=true. Classic case: the original question was just
+    answered (completion=true) and the conversation pivots to scheduling a
+    call, sending a document, or a new request — that scheduling/request is
+    a NEW matter that deserves its own task.
+
+Set new_matter=false when classification is not ACTIONABLE, or when there
+is no existing thread summary (first message — there is nothing to be
+distinct from). Default to false when unsure: re-opening or appending to
+the known task is safer than spawning a duplicate.
 
 IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
 already captured in new_summary's prior version. Base decisions on the FRESHLY
@@ -511,11 +536,26 @@ Correct output: ACTIONABLE, state=pending_other_party. reason_he should
 reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
 INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
 
+  // Mandatory output-contract addendum, appended AFTER the (possibly
+  // admin-overridden) staticPrompt so the new_matter field is always required
+  // even when a tenant has customized the edge_classifier prompt. Without this,
+  // a custom prompt that predates new_matter would never emit it and the
+  // spin-off-vs-reopen logic in Path 1 would silently no-op for that tenant.
+  const newMatterContract = `\n\n═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
+In addition to any shape above, the JSON you return MUST include the boolean
+field "new_matter". new_matter=true ONLY when classification is ACTIONABLE AND
+this message opens a matter DISTINCT from what the existing thread summary /
+linked task tracks (a different action, deliverable, meeting, or topic) — NOT
+the next turn of the same one. The classic case: the original question was just
+answered (completion=true) and the conversation pivots to a new ask (scheduling
+a call, sending a document) — that pivot is a new_matter. Set new_matter=false
+when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
+
   // Per-message context goes in the user message (NOT the cached system prefix).
   const contextBlock = `${identityBlock}${memoryBlock}${whatsappNote}`;
   const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
 
-  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -537,6 +577,7 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
       state: memory?.state ?? "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       cacheReadTokens: result.cacheReadTokens,
@@ -558,6 +599,8 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
     state,
     completionSignal: Boolean(parsed.completion),
     completionReason: String(parsed.completion_reason_he ?? ""),
+    // Only an ACTIONABLE message can introduce a new trackable matter.
+    newMatter: classification === "actionable" && parsed.new_matter === true,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     cacheReadTokens: result.cacheReadTokens,
@@ -571,6 +614,7 @@ async function appendUpdateToTask(
   msg: any,
   analysis: ThreadAnalysis,
   classification: string,
+  opts?: { reopen?: boolean },
 ) {
   const { data: existing } = await supabase
     .from("tasks")
@@ -630,7 +674,14 @@ async function appendUpdateToTask(
     updateFields.description = analysis.newSummary;
   }
 
-  if (analysis.completionSignal) {
+  // reopen wins over a stale completion flag: the thread resumed with a new
+  // actionable turn on the SAME matter, so pull the task back to active and
+  // clear any prior completion signal so it stops looking "done" in the UI.
+  if (opts?.reopen) {
+    updateFields.status = "in_progress";
+    updateFields.completion_signal_detected = false;
+    updateFields.completion_signal_reason = null;
+  } else if (analysis.completionSignal) {
     updateFields.status = "pending_completion";
     updateFields.completion_signal_detected = true;
     updateFields.completion_signal_reason = analysis.completionReason;
@@ -640,7 +691,7 @@ async function appendUpdateToTask(
   await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: analysis.completionSignal ? "completion_signal" : "thread_followup",
+    activity_type: opts?.reopen ? "reopened" : analysis.completionSignal ? "completion_signal" : "thread_followup",
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
@@ -1474,6 +1525,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       state: "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -1490,6 +1542,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       state: "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -1537,15 +1590,66 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       : "user manually reclassified as actionable";
   }
 
-  // ── Path 1: known existing task in this thread → always append ────────────
-  // Catches BOTH actionable_followup (the user owes more action) and
-  // informational_followup (payment confirmation, "thanks", etc.).
+  // ── Path 1: known existing task in this thread → append / reopen / spin off ─
+  // Three outcomes, decided by the message's relationship to the linked task:
+  //   (a) NEW distinct matter (analysis.newMatter)        → spin off a fresh
+  //       task (fall through to Path 2/3); close the old one first if this
+  //       same message also resolved its original question.
+  //   (b) actionable resumption of an ALREADY-CLOSED task → reopen + append.
+  //   (c) anything else (open task continuing, or an informational follow-up)
+  //                                                       → append as before.
+  // Before the regression fix, every message hit (c) unconditionally, so new
+  // asks (e.g. scheduling a call after the original question was answered) got
+  // buried as silent updates inside a task already marked pending_completion.
   if (memory?.related_task_id && classification !== "spam") {
     try {
-      await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
-      linkedTaskId = memory.related_task_id;
-      classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
-      classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+      const { data: linkedTask } = await supabase
+        .from("tasks").select("id, status")
+        .eq("id", memory.related_task_id).eq("user_id", msg.user_id).maybeSingle();
+
+      if (!linkedTask) {
+        // The task was deleted/merged away — the thread_memory link is stale.
+        // Don't append into a ghost; let the create/link paths below handle
+        // this message from scratch (and re-point thread_memory if a task is made).
+      } else {
+        // Only the natural "done" states reopen on a resumed actionable turn.
+        // dismissed/archived were deliberately killed (don't auto-resurrect);
+        // snoozed is a user-intended hide — both keep their prior append
+        // behavior via branch (c) below.
+        const REOPENABLE_STATUSES = ["pending_completion", "completed"];
+        const taskClosed = REOPENABLE_STATUSES.includes(String(linkedTask.status));
+
+        if (classification === "actionable" && analysis.newMatter && (analysis.completionSignal || taskClosed)) {
+          // (a) New, distinct matter AND the old task is closing or already
+          // closed → spin off a fresh task. If this same message resolved the
+          // old task's original question, record that closure (which moves it
+          // to pending_completion). Then leave linkedTaskId unset so Path 2/3
+          // creates a new task and thread_memory re-points to it.
+          // Why gate on closed: Path 2's sibling linker re-attaches by
+          // source_message_id (one row per WhatsApp chat), and the dup linker
+          // by contact — both only match inbox/in_progress. Once the old task
+          // is closed, neither can re-swallow the new matter. If the old task
+          // is still OPEN and unresolved, a new matter can't get its own task
+          // cleanly (it would relink), so we fall through to (c) and append —
+          // same as before, no regression.
+          if (analysis.completionSignal && !taskClosed) {
+            await appendUpdateToTask(memory.related_task_id, msg, analysis, "informational");
+          }
+        } else if (taskClosed && classification === "actionable") {
+          // (b) Same-topic resumption of an already-closed task → reopen it
+          // rather than burying new actionable content as a silent update.
+          await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
+          linkedTaskId = memory.related_task_id;
+          classification = "actionable_followup";
+          classificationReason = `reopened task ${memory.related_task_id} via ${msg.source_type} — thread resumed`;
+        } else {
+          // (c) Open task continuing, or an informational follow-up → append.
+          await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
+          linkedTaskId = memory.related_task_id;
+          classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
+          classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+        }
+      }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
     }
@@ -1734,6 +1838,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             state: "open",
             completionSignal: true,
             completionReason: link.reason,
+            newMatter: false,
             inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, model: "",
           };
           await appendUpdateToTask(linkedTaskId, emailMsg, completionAnalysis, "informational");
