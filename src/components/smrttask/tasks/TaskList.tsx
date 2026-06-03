@@ -409,7 +409,7 @@ export function TaskList({ locale }: { locale: string }) {
   return (
     <div className="space-y-6">
       <SmartSearch
-        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
+        onResults={setSearchResults}
       />
 
       {loading ? (
