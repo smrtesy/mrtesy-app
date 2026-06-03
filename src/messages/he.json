@@ -890,6 +890,9 @@
     "duration": "משך",
     "reason": "סיבה",
     "details": "פרטים נוספים",
+    "searchPlaceholder": "חיפוש בלוג…",
+    "searchClear": "נקה חיפוש",
+    "searchNoResults": "אין פריטים תואמים",
     "openTask": "פתח משימה",
     "addCorrection": "תיקון",
     "addCorrectionTitle": "רישום תיקון עם הסבר"

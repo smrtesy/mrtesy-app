@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight } from "lucide-react";
+import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight, Search, X } from "lucide-react";
 import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
@@ -96,6 +96,7 @@ export function LogPageClient({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(true);
   const [sourceFilter, setSourceFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [reclassifyOpenId, setReclassifyOpenId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -327,11 +328,46 @@ export function LogPageClient({ locale }: { locale: string }) {
     return cls;
   }
 
+  // Free-text search over the loaded entries — matches across every
+  // human-meaningful field so the user can find an item by subject, sender,
+  // reason, task title, serial, etc.
+  const q = searchQuery.trim().toLowerCase();
+  const displayedLogs = q
+    ? logs.filter((l) =>
+        [
+          l.subject, l.sender, l.sender_email, l.recipient,
+          l.classification_reason, l.task_title, l.task_serial,
+          l.serial_display, l.source_type, l.ai_classification, l.error_message,
+        ].some((v) => v && v.toLowerCase().includes(q)),
+      )
+    : logs;
+
   return (
     <>
-      {/* Export corrections — exports the user's flagged fixes (with notes) as
-          a comprehensive JSON file and tracks what was already exported. */}
-      <div className="flex justify-end">
+      {/* Top bar: search + export. Search filters the loaded entries across
+          all meaningful fields. Export hands corrections to Claude Code. */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute start-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={tLog("searchPlaceholder")}
+            dir="auto"
+            className="h-9 w-full rounded-full border bg-background ps-9 pe-9 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute end-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label={tLog("searchClear")}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
         <CorrectionsExportButton refreshKey={correctionsRefreshKey} />
       </div>
 
@@ -375,14 +411,20 @@ export function LogPageClient({ locale }: { locale: string }) {
             <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />
           ))}
         </div>
-      ) : logs.length === 0 ? (
+      ) : displayedLogs.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
-          <p>{t("noEntries")}</p>
-          <p className="text-xs mt-1">{t("entriesAppearAfter")}</p>
+          {q ? (
+            <p>{tLog("searchNoResults")}</p>
+          ) : (
+            <>
+              <p>{t("noEntries")}</p>
+              <p className="text-xs mt-1">{t("entriesAppearAfter")}</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
-          {logs.map((log) => {
+          {displayedLogs.map((log) => {
             const isExpanded = expandedId === log.id;
             const isReclassifyOpen = reclassifyOpenId === log.id;
             const displayTitle = log.subject || log.sender || tLog("noSubject");

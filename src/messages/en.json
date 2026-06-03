@@ -890,6 +890,9 @@
     "duration": "Duration",
     "reason": "Reason",
     "details": "Details",
+    "searchPlaceholder": "Search the log…",
+    "searchClear": "Clear search",
+    "searchNoResults": "No matching entries",
     "openTask": "Open task",
     "addCorrection": "Correction",
     "addCorrectionTitle": "Record a correction with an explanation"
