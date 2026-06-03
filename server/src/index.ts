@@ -27,7 +27,7 @@ import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
-import smrtbotRouter from "./modules/smrtbot";
+import smrtbotRouter, { internalRouter as smrtbotInternalRouter } from "./modules/smrtbot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -140,6 +140,10 @@ app.use("/api", whatsappWebhookRouter);
 // smrtVoice webhook is also unauthenticated — voice-engine signs it with HMAC,
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).
 app.use(smrtvoiceWebhookRouter);
+
+// smrtBot internal inbound — shared-secret guarded (the Vercel webhook forwards
+// here), so it must also come BEFORE the auth-guarded routers.
+app.use(smrtbotInternalRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);

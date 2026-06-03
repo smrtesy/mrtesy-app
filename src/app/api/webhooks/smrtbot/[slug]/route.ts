@@ -45,6 +45,37 @@ async function loadBot(slug: string): Promise<BotRow | null> {
   return (data as BotRow | null) ?? null;
 }
 
+interface InboundForward {
+  from: string;
+  type: string;
+  text?: string;
+  buttonId?: string;
+}
+
+/** Forward an inbound message to the engine on the Railway server. Resilient:
+ *  never throws — the webhook must still ack 200 to Meta. */
+async function forwardToEngine(
+  botId: string,
+  env: "test" | "live",
+  message: InboundForward,
+): Promise<void> {
+  const backend = process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL;
+  const secret = process.env.SMRTBOT_INTERNAL_SECRET ?? process.env.CRON_SECRET;
+  if (!backend || !secret) {
+    console.error("[smrtbot-webhook] missing BACKEND_URL / internal secret — cannot forward");
+    return;
+  }
+  try {
+    await fetch(`${backend}/api/bot/internal/inbound`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-smrtbot-secret": secret },
+      body: JSON.stringify({ bot_id: botId, env, message }),
+    });
+  } catch (e) {
+    console.error("[smrtbot-webhook] forward failed", e instanceof Error ? e.message : String(e));
+  }
+}
+
 // ── GET: Meta verify handshake ───────────────────────────────
 export async function GET(request: NextRequest, { params }: Params): Promise<Response> {
   const { slug } = await params;
@@ -92,9 +123,6 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     const bot = await loadBot(slug);
     if (!bot) return new Response("ok", { status: 200 });
 
-    const db = createAdminSupabaseClient();
-    if (!db) return new Response("ok", { status: 200 });
-
     const payload = (await request.json().catch(() => null)) as
       | { entry?: { changes?: { value?: MetaValue }[] }[] }
       | null;
@@ -112,23 +140,18 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
               : "live";
 
         for (const m of value?.messages ?? []) {
-          const body =
-            m.text?.body ??
-            m.interactive?.button_reply?.id ??
-            m.interactive?.list_reply?.id ??
-            "";
-          const { error } = await db.from("smrtbot_bot_logs").insert({
-            org_id: bot.org_id,
-            bot_id: bot.id,
-            phone: m.from ?? null,
-            direction: "IN",
-            env,
-            message_type: m.type ?? "text",
-            body,
+          if (!m.from) continue;
+          const buttonId =
+            m.interactive?.button_reply?.id ?? m.interactive?.list_reply?.id ?? undefined;
+          const text = m.text?.body ?? undefined;
+          // Forward to the engine on the Railway server (it persists the
+          // inbound log + runs the conversation flow + sends the reply).
+          await forwardToEngine(bot.id, env, {
+            from: m.from,
+            type: m.type ?? "text",
+            text,
+            buttonId,
           });
-          if (error) console.error("[smrtbot-webhook] log insert", error.message);
-          // Conversation-engine dispatch (menu/game/FAQ reply) is wired in
-          // here once the engine is ported; inbound is recorded + acked now.
         }
       }
     }

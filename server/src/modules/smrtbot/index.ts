@@ -15,3 +15,5 @@ const router = Router();
 router.use(smrtbotRoutes);
 
 export default router;
+// Unauthenticated (shared-secret) inbound router — mount BEFORE auth guards.
+export { default as internalRouter } from "./internal";
