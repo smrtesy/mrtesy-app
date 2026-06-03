@@ -17,7 +17,13 @@ export const manifest: AppManifest = {
 
   // smrtCRM ingests bot contacts via an event from smrtBot (CRM-5). The
   // exact event name is finalized when smrtBot is built; wire it here then.
-  subscribes: [],
+  //
+  // It also owns email preferences (CRM-6): when smrtReach's public
+  // unsubscribe page emits contact.unsubscribed, CRM flips the flag on its
+  // own table — Reach never writes smrtCRM directly.
+  subscribes: [
+    { event: "contact.unsubscribed", source: "smrtreach", handler: "handlers/onUnsubscribe" },
+  ],
 
   notifications: {
     "import.completed": {

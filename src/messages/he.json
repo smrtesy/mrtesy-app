@@ -71,6 +71,7 @@
     "voiceGuide": "מדריך smrtVoice",
     "sectionVoice": "smrtVoice",
     "crm": "אנשי קשר",
+    "reach": "דיוור",
     "more": "עוד"
   },
   "account": {
@@ -1219,6 +1220,39 @@
     "typeStyle": "סגנון",
     "typePreference": "העדפה",
     "typeFinancial": "פיננסי"
+  },
+  "smrtReach": {
+    "title": "דיוור",
+    "subtitle": "קמפיינים רב-ערוציים — בוחרים קהל מ-smrtCRM, ערוץ (וואטסאפ/מייל), ושולחים",
+    "newCampaign": "קמפיין חדש",
+    "noCampaigns": "עדיין אין קמפיינים",
+    "nameRequired": "צריך שם לקמפיין",
+    "campaignCreated": "הקמפיין נוצר",
+    "campaignName": "שם הקמפיין",
+    "channel": "ערוץ",
+    "channelEmail": "מייל",
+    "channelWhatsapp": "וואטסאפ",
+    "channelBoth": "שניהם",
+    "audience": "קהל",
+    "audienceAll": "כל אנשי הקשר",
+    "cancel": "ביטול",
+    "create": "יצירה",
+    "status": {
+      "draft": "טיוטה",
+      "approved": "מאושר",
+      "ready": "מוכן",
+      "sending": "נשלח",
+      "paused": "מושהה",
+      "done": "הסתיים",
+      "failed": "נכשל"
+    },
+    "guide": {
+      "title": "מדריך smrtReach",
+      "intro": "smrtReach שולח דיוור רב-ערוצי. בוחרים קהל מתוך אנשי הקשר של smrtCRM, בוחרים ערוץ — וואטסאפ, מייל או שניהם — ושולחים, עם מעקב פתיחות והסרה מרשימת תפוצה.",
+      "point1": "הקהל נשען על התגיות והקבוצות של smrtCRM — מי שביטל הרשמה מסונן אוטומטית.",
+      "point2": "וואטסאפ נשלח דרך smrtBot (שאוכף opt-outs וקצב), ומייל נשלח דרך Amazon SES.",
+      "point3": "כל נמען מקבל קישור הסרה בלחיצה אחת, וההעדפה נשמרת חזרה ב-smrtCRM."
+    }
   },
   "smrtCRM": {
     "title": "אנשי קשר",

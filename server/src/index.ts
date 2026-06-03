@@ -28,6 +28,7 @@ import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter from "./modules/smrtcrm";
+import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter } from "./modules/smrtreach";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -141,11 +142,16 @@ app.use("/api", whatsappWebhookRouter);
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).
 app.use(smrtvoiceWebhookRouter);
 
+// smrtReach public unsubscribe link is unauthenticated (recipients aren't
+// logged in), so it must come BEFORE the auth-guarded smrtReach router.
+app.use("/api", smrtreachUnsubscribeRouter);
+
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
+app.use("/api", smrtreachRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

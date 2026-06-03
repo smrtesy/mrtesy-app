@@ -25,17 +25,30 @@
 ## 1. סדר בנייה מומלץ (high-level)
 
 ```
-שלב A — smrtCRM יסוד        (אנשי קשר + תגיות + קבוצות, CRUD + RLS)
-שלב B — smrtCRM ייבוא/קליטה  (CSV import, קליטת אירועים מהבוט, דה-דופ)
-שלב C — smrtCRM סגמנטים      (שאילתות סינון שמורות, חשיפה ל-Reach)
-שלב D — הגירת נתוני botsite  (סקריפט one-time, מיזוג חוצה-בוטים)
-שלב E — smrtReach יסוד       (קמפיין אב + פרטי-ערוץ, קריאת קהלים מ-CRM)
-שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)
-שלב G — smrtReach וואטסאפ     (חיבור ל-send-service של smrtBot)
-שלב H — Cron + scheduler      (pg_cron → route חסום)
+שלב A — smrtCRM יסוד        (אנשי קשר + תגיות + קבוצות, CRUD + RLS)         ✅ נבנה
+שלב B — smrtCRM ייבוא/קליטה  (CSV import + דה-דופ ✅ ; קליטת אירוע מהבוט — stub, תלוי smrtBot)
+שלב C — smrtCRM סגמנטים      (שאילתות סינון שמורות, חשיפה ל-Reach)          ✅ נבנה
+שלב D — הגירת נתוני botsite  (סקריפט one-time, מיזוג חוצה-בוטים)            ⬜ טרם
+שלב E — smrtReach יסוד       (קמפיין אב + פרטי-ערוץ, קריאת קהלים מ-CRM)     ✅ נבנה
+שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)             🟡 unsubscribe+queue+tracking schema ✅ ; שליחת SES ממתינה לסודות
+שלב G — smrtReach וואטסאפ     (חיבור ל-send-service של smrtBot)             ⬜ ממתין ל-smrtBot
+שלב H — Cron + scheduler      (pg_cron → route חסום)                        ⬜ טרם
 ```
 
 CRM (A–D) חייב להסתיים לפני Reach (E–G), כי Reach קורא קהלים מ-CRM.
+
+### מצב מימוש (2026-06-03)
+**נבנה ונדחף:** יסוד smrtCRM מלא (CRUD אנשי קשר/תגיות/קבוצות/סגמנטים, חיפוש/סינון/
+pagination, bulk, ייבוא CSV, דה-דופ/upsert) + יסוד smrtReach (קמפיינים, פתרון קהל
+מ-CRM, תבניות, תצוגת נמענים, עמוד unsubscribe ציבורי שכותב חזרה ל-CRM דרך אירוע).
+שתי האפליקציות מחוברות מלא (manifest/registry/sidebar/i18n he+en), build נקי.
+
+**נותר (תלוי חוץ או היקף):**
+- שליחת מייל בפועל דרך **SES** — ממתין לסודות ב-`app_secrets` (slug `smrtreach`).
+- שליחת וואטסאפ — ממתין לחוזה ה-send-service של **smrtBot**.
+- **קליטת אנשי קשר מהבוט** (CRM-5) — subscribe stub, ממתין לשם האירוע מ-smrtBot.
+- **סקריפט הגירת botsite** (שלב D) — טרם.
+- **Cron scheduler** (שלב H) — טרם (pg_cron → route חסום).
 
 ---
 
