@@ -340,6 +340,9 @@
     "search": {
       "placeholder": "Search tasks, T<#>, or source G/S/W/E/D/C<#>...",
       "includeArchive": "Include archive",
+      "groupSuggestions": "Suggestions",
+      "groupTasks": "Tasks",
+      "noResults": "No results",
       "naturalLanguage": "What about the bank?"
     },
     "smartInput": {
