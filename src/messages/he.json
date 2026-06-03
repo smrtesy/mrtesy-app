@@ -340,6 +340,9 @@
     "search": {
       "placeholder": "חפש משימות, T<מס׳>, או מקור G/S/W/E/D/C<מס׳>...",
       "includeArchive": "כלול ארכיון",
+      "groupSuggestions": "הצעות",
+      "groupTasks": "משימות",
+      "noResults": "לא נמצאו תוצאות",
       "naturalLanguage": "מה עם הבנק?"
     },
     "smartInput": {

@@ -21,7 +21,7 @@ import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/M
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
-import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
+import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
 
@@ -47,10 +47,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
-  // searchResults: null = no active search, [] = search returned nothing,
-  // otherwise the SmartSearch matches scoped to this list (inbox + unverified).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
   const mergeJob = useMergeJob();
@@ -161,13 +157,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [focusId, loading, suggestions, pathname, router, searchParams]);
 
-  // When SmartSearch is active, displayed rows come from it. Otherwise we show
-  // the regularly-fetched suggestion list. SmartSearch is scoped to the same
-  // filter as fetchSuggestions (status=inbox, manually_verified=false,
-  // source_message_id NOT NULL) via its refineQuery prop below, so the two
-  // sources are interchangeable from a row-shape perspective.
-  const displayed = searchResults ?? suggestions;
-
   function toggleSelect(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -178,7 +167,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   function selectAllFiltered() {
-    setSelected(new Set(displayed.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
+    setSelected(new Set(suggestions.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
   }
 
   function clearSelection() { setSelected(new Set()); }
@@ -261,44 +250,23 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
-  if (loading) {
-    return (
-      <div className="space-y-3">
-        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
-      </div>
-    );
-  }
-
-  if (suggestions.length === 0) {
-    return (
-      <div className="py-12 text-center text-muted-foreground">
-        <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
-        <p>{t("noSuggestions")}</p>
-      </div>
-    );
-  }
-
-  return (
+  // The suggestion list itself. The unified search (CombinedSearch) wraps this
+  // and takes over the view whenever a query is active; the list shows when
+  // there's no active search.
+  const body = loading ? (
     <div className="space-y-3">
-      {/* Server-side search, same UX as the Tasks page.
-          The query is scoped to the suggestion filter (inbox + unverified +
-          has source_message) and pulls the same joined columns as
-          fetchSuggestions so search results render identically to the
-          un-searched list. */}
-      <SmartSearch
-        onResults={setSearchResults}
-        selectClause="*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
-        refineQuery={(q) => q
-          .eq("status", "inbox")
-          .eq("manually_verified", false)
-          .not("source_message_id", "is", null)
-        }
-        hideArchiveToggle
-      />
-
+      {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
+    </div>
+  ) : suggestions.length === 0 ? (
+    <div className="py-12 text-center text-muted-foreground">
+      <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
+      <p>{t("noSuggestions")}</p>
+    </div>
+  ) : (
+    <div className="space-y-3">
       <SuggestionToolbar
         total={totalCount || suggestions.length}
-        filtered={displayed.length}
+        filtered={suggestions.length}
         selectedCount={selected.size}
         searchQuery=""
         onSearchChange={() => {}}
@@ -310,13 +278,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         hideSearch
       />
 
-      {displayed.length === 0 && (
-        <div className="py-8 text-center text-muted-foreground text-sm">
-          {t("noSuggestions")}
-        </div>
-      )}
-
-      {displayed.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
+      {suggestions.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
         const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
         // YYYY-MM-DD parsed via new Date() lands at UTC midnight and shifts back a
@@ -403,6 +365,14 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           </Card>
         );
       })}
+    </div>
+  );
+
+  return (
+    <>
+      <CombinedSearch locale={locale} onUpdate={() => { fetchSuggestions(); onUpdate?.(); }}>
+        {body}
+      </CombinedSearch>
 
       <DismissDialog
         taskId={dismissTarget?.id ?? null}
@@ -453,7 +423,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           onUpdate?.();
         }}
       />
-    </div>
+    </>
   );
 }
 

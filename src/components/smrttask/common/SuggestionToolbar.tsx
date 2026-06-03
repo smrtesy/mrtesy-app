@@ -22,7 +22,7 @@ interface SuggestionToolbarProps {
    *  own tab. */
   onBulkMerge?: () => void;
   /** When true, skip rendering the built-in search input — the caller is
-   *  rendering its own search (e.g. the shared SmartSearch component). */
+   *  rendering its own search (e.g. the shared CombinedSearch component). */
   hideSearch?: boolean;
 }
 
@@ -45,7 +45,7 @@ export function SuggestionToolbar({
 
   return (
     <div className="space-y-2 pb-1">
-      {/* Search input — omitted when the caller renders its own (SmartSearch). */}
+      {/* Search input — omitted when the caller renders its own (CombinedSearch). */}
       {!hideSearch && (
         <div className="relative">
           <Search className="absolute top-1/2 -translate-y-1/2 start-2 h-4 w-4 text-muted-foreground pointer-events-none" />
