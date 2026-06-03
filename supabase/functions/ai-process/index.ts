@@ -2148,18 +2148,25 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           if (whatsappRoutingActive && analysis.state === "pending_other_party" && createdTaskIds.length > 0) {
             const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
             const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
-            await supabase.from("tasks")
+            // Destructure { error }: an RLS denial / FK error here would otherwise
+            // leave the task stuck inbox→snoozed with no trail and no log.
+            const { error: snoozeErr } = await supabase.from("tasks")
               .update({ task_type: "followup", status: "snoozed", snoozed_until: surfaceAt })
               .in("id", createdTaskIds);
-            for (const tid of createdTaskIds) {
-              await supabase.from("task_activities").insert({
-                user_id: msg.user_id, task_id: tid,
-                activity_type: "snoozed", new_value: "snoozed",
-                note: `Follow-up scheduled for ${surfaceAt} (${FOLLOWUP_LEAD_HOURS} business hours — awaiting WhatsApp reply)`,
-                actor: "system",
-              });
+            if (snoozeErr) {
+              await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_wa_followup", status: "failed", ...msgLogFields(msg), error_message: `defer snooze failed: ${snoozeErr.message}` });
+            } else {
+              for (const tid of createdTaskIds) {
+                const { error: actErr } = await supabase.from("task_activities").insert({
+                  user_id: msg.user_id, task_id: tid,
+                  activity_type: "snoozed", new_value: "snoozed",
+                  note: `Follow-up scheduled for ${surfaceAt} (${FOLLOWUP_LEAD_HOURS} business hours — awaiting WhatsApp reply)`,
+                  actor: "system",
+                });
+                if (actErr) await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_wa_followup", status: "failed", ...msgLogFields(msg), error_message: `defer activity insert failed: ${actErr.message}` });
+              }
+              classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (pending_other_party)`;
             }
-            classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (pending_other_party)`;
           }
           if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
         }
