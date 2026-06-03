@@ -142,7 +142,7 @@ export function TaskCard({
             aria-label="select"
           />
         )}
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
+        <h3 className="font-medium text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
