@@ -254,6 +254,20 @@
 - [ ] bulk select + bulk actions
 - [ ] status badges → **טוקני `status-ok/warn/late`**
 
+## 16א. טבלאות/פיצ'רים שנמצאו ב-dump (השלמת parity)
+- [ ] `publish_batches` — טבלת publish/version אמיתית (version, status, note, published_by, tables_json, changes_json) [B]
+- [ ] `referral_log` — לוג הפניות (referrer_phone, new_phone) [B]
+- [ ] `campaign_alerts` — התראות על קמפיינים (alert_type, severity, dismissed) [R]
+- [ ] `contact_lists` — רשימות CSV שהועלו (file_path על דיסק → Storage) [R]
+- [ ] `email_templates` — תבניות מייל שמורות [R]
+- [ ] `email_queue` — תור שליחת מייל (status, scheduled_for, retry_count, provider_message_id) [R]
+- [ ] `email_tracking` — אירועי open/click (event_type, link_url, ip, user_agent) [R]
+- [ ] `email_campaign_targets` — יעדי קמפיין מייל (target_type/id/mode include/exclude) [R]
+- [ ] `email_accounts` — חשבונות Gmail + טוקנים → **נזרק** (SES בלבד) [R]
+- [ ] `webhook_status_log` — סטטוס מסירת וואטסאפ → לא מהגר; סטטוס עתידי ב-bot_logs/campaign_logs [B/R]
+- [ ] `bots.email_footer_text` / `public_phone_number` / `waba_id` — שדות בוט נוספים [B]
+- [ ] טבלת `users` הגלובלית (legacy) → לא מהגר; `wa_users` היא המקור [B]
+
 ## 17. נוסף
 - [ ] שליחה: sendText/sendButtons/sendList/sendImage/sendVideo/sendDocument [B]
 - [ ] תבניות Meta: fetch/send/delete (Graph API) [R]

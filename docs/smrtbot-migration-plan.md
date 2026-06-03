@@ -130,6 +130,32 @@
 
 מיגרציות (לכל אפליקציה): `..._register_<slug>.sql` (INSERT INTO apps + app_status) · `..._<slug>_schema.sql` · `..._smrtbot_storage.sql` · `..._smrtbot_retention.sql`.
 
+### 6א. מציאות הסכמה מתוך ה-dump (2026-06-03)
+
+ה-dump החי חשף **46 טבלאות** (יותר מסריקת הקוד), ועובדות שמשנות את ההגירה:
+
+- **בוט אחד בלבד** היום (RL). רב-בוטיות = היערכות לעתיד. הגירת דאטה קטנה ופשוטה.
+- **מפתחות ראשיים `integer`** (serial) — לא uuid. ההגירה בונה מפת `old_int_id → new_uuid`
+  לכל טבלה ומכתבת מחדש את ה-FKs.
+- **נפחים:** contacts 9,175 (+group_members 9,164) · wa_users 477 · diamonds_log 5,290 ·
+  trivia 585 · menu_nodes 766 · holidays 357 · children 205 · missions 77.
+- **לא מהגרים (רעש היסטורי):** `webhook_status_log` (50,804), `logs` (3,237),
+  `email_queue` (6,928), וטבלאות הלוג שכבר הוחרגו מה-dump.
+- **שתי טבלאות משתמשים:** `wa_users` (per-bot, המקור) מול `users` (גלובלי לפי טלפון, legacy → לא מהגרים).
+- **טבלאות שנמצאו ולא היו במיפוי המקורי, וממופות כך:**
+  - `publish_batches` → `smrtbot_publish_batches` (טבלת ה-publish/version האמיתית; `deploy_snapshots`/`bot_messages_archive` ריקות/legacy) **[B]**
+  - `referral_log` → `smrtbot_referral_log` **[B]**
+  - `webhook_status_log` → לא מהגרים; סטטוס מסירה עתידי יירשם ב-`smrtbot_bot_logs`/`smrtreach_campaign_logs` **[B/R]**
+  - `campaign_alerts` → `smrtreach_campaign_alerts` **[R]**
+  - `contact_lists` → `smrtreach_contact_lists` (⚠️ `file_path` מצביע לקבצי CSV על דיסק — לא בדמפ; נעלה ל-Storage אם נדרש) **[R]**
+  - `email_accounts` (Gmail + טוקנים) → **נזרק** (עוברים ל-SES) **[R]**
+  - `email_templates` → `smrtreach_templates` · `email_queue` → `smrtreach_queue` · `email_tracking` → `smrtreach_tracking` · `email_campaign_targets` → `smrtreach_campaign_targets` **[R]**
+  - `bot_messages_archive` → ההודעות החיות ב-`menu_nodes` (type=text); ארכיון לא מהגר **[B]**
+- **`bots`** מכיל: legacy `wa_*` + `test_*` + `live_*` (phone_number_id/access_token/verify_token),
+  `public_phone_number`, `waba_id`, `email_footer_text`, `openai_api_key` (→ מבוטל, Gemini),
+  `sheet_url` (→ מבוטל אחרי וידאו), `logo_path` (→ Storage), `admin_phones`, `timezone`.
+  הטוקנים = סודות → `smrtbot_bots` (טיפול זהיר, לא נחשפים בלוגים).
+
 ---
 
 ## 7. שרת — מודולים
