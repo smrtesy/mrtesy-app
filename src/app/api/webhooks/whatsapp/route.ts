@@ -1322,21 +1322,30 @@ async function refreshSourceMessageThread(
   if (error) throw new Error(error.message);
   if (!msgs || msgs.length === 0) return;
 
-  // Self-chat detection: the user sent a message to their own WhatsApp
-  // number, using their phone as a voice-memo / task-capture channel.
-  // We compare digits-only chatId to the connected line's display number.
-  let isSelfChat = false;
+  // The user's own connected WhatsApp number(s) — ALL active lines, not just
+  // one. Used for two things:
+  //   1. Self-chat detection (user messaging their own number as a voice-memo
+  //      / task-capture channel) — true when the chat key is one of these.
+  //   2. Guarding against own-number mis-attribution: a Coexistence echo can
+  //      record an OUTGOING message with the user's OWN number as from_phone.
+  //      If that leaked into fromPhone below, source_url / reply_to_context
+  //      would point at the user instead of the real contact — and the
+  //      matter-router would later match unrelated messages on the user's own
+  //      number. So the user's own number is never treated as the chat peer.
+  const myNumbers = new Set<string>();
   {
-    const { data: conn } = await db
+    const { data: conns } = await db
       .from("whatsapp_connections")
       .select("display_phone_number")
       .eq("user_id", userId)
-      .is("disconnected_at", null)
-      .maybeSingle();
-    const mineDigits = String(conn?.display_phone_number ?? "").replace(/\D/g, "");
-    const chatDigits = String(chatId).replace(/\D/g, "");
-    isSelfChat = mineDigits.length > 0 && mineDigits === chatDigits;
+      .is("disconnected_at", null);
+    for (const c of conns ?? []) {
+      const d = String(c.display_phone_number ?? "").replace(/\D/g, "");
+      if (d) myNumbers.add(d);
+    }
   }
+  const chatDigits = String(chatId).replace(/\D/g, "");
+  const isSelfChat = myNumbers.has(chatDigits);
 
   const ordered = [...msgs].reverse();
   const last = ordered[ordered.length - 1];
@@ -1373,10 +1382,17 @@ async function refreshSourceMessageThread(
     (lastFromName && lastFromName !== SELF_PLACEHOLDER ? lastFromName : null) ||
     (lastFromPhone && lastFromPhone !== SELF_PLACEHOLDER ? lastFromPhone : null) ||
     chatId;
+  // Resolve the peer phone — never the user's own number. A mis-attributed
+  // echo can stamp the user's own number as from_phone on a non-self chat;
+  // using it would point source_url / reply_to_context at the user instead of
+  // the contact and pollute matter-routing. Skip own-number candidates and
+  // fall back to the chatId (the real peer key). For a genuine self-chat all
+  // candidates are the user's number, so we fall through to chatId — which is
+  // correct there, and isSelfChat already marks the thread accordingly.
   const fromPhone =
-    (latestIncoming?.from_phone as string | null) ||
-    (last.from_phone as string | null) ||
-    chatId;
+    [latestIncoming?.from_phone, last.from_phone, chatId].find(
+      (p) => p && !myNumbers.has(String(p).replace(/\D/g, "")),
+    ) || chatId;
   const isGroup = !/^\d+$/.test(chatId) || chatId.length > 15;
 
   const conversationLines = ordered
