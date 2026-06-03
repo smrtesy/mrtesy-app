@@ -27,7 +27,7 @@ import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
-import smrtbotRouter, { internalRouter as smrtbotInternalRouter } from "./modules/smrtbot";
+import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -141,9 +141,10 @@ app.use("/api", whatsappWebhookRouter);
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).
 app.use(smrtvoiceWebhookRouter);
 
-// smrtBot internal inbound — shared-secret guarded (the Vercel webhook forwards
-// here), so it must also come BEFORE the auth-guarded routers.
+// smrtBot internal inbound + cron job routes — shared-secret guarded (the
+// Vercel webhook / pg_cron call them), so they come BEFORE the auth guards.
 app.use(smrtbotInternalRouter);
+app.use(smrtbotJobsRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
