@@ -393,7 +393,7 @@ export default function SettingsRulesPage() {
                   title={isActive ? t("disable") : t("enable")}
                 >
                   {isActive ? (
-                    <ToggleRight className="h-5 w-5 text-green-500" />
+                    <ToggleRight className="h-5 w-5 text-status-ok" />
                   ) : (
                     <ToggleLeft className="h-5 w-5 text-muted-foreground" />
                   )}
@@ -437,7 +437,7 @@ export default function SettingsRulesPage() {
                       title={isIncluded ? t("excludeCalendar") : t("includeCalendar")}
                     >
                       {isIncluded ? (
-                        <ToggleRight className="h-5 w-5 text-green-500" />
+                        <ToggleRight className="h-5 w-5 text-status-ok" />
                       ) : (
                         <ToggleLeft className="h-5 w-5 text-muted-foreground" />
                       )}
@@ -479,7 +479,7 @@ export default function SettingsRulesPage() {
                     title={rule.is_active ? t("disable") : t("enable")}
                   >
                     {rule.is_active ? (
-                      <ToggleRight className="h-4 w-4 text-green-500" />
+                      <ToggleRight className="h-4 w-4 text-status-ok" />
                     ) : (
                       <ToggleLeft className="h-4 w-4 text-muted-foreground" />
                     )}
@@ -487,7 +487,7 @@ export default function SettingsRulesPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-red-400 hover:text-red-600"
+                    className="h-8 w-8 text-destructive hover:bg-destructive/10"
                     onClick={() => deleteRule(rule.id)}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -517,7 +517,7 @@ export default function SettingsRulesPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-red-400 hover:text-red-600 shrink-0"
+                  className="h-8 w-8 text-destructive hover:bg-destructive/10 shrink-0"
                   onClick={() => deleteRule(rule.id)}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -546,7 +546,7 @@ export default function SettingsRulesPage() {
                       {typeLabel(rule.rule_type)}
                     </Badge>
                     {rule.created_by === "claude" && (
-                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600">
+                      <Badge variant="outline" className="text-xs bg-accent text-accent-foreground">
                         AI
                       </Badge>
                     )}
@@ -565,7 +565,7 @@ export default function SettingsRulesPage() {
                     title={rule.is_active ? t("disable") : t("enable")}
                   >
                     {rule.is_active ? (
-                      <ToggleRight className="h-4 w-4 text-green-500" />
+                      <ToggleRight className="h-4 w-4 text-status-ok" />
                     ) : (
                       <ToggleLeft className="h-4 w-4 text-muted-foreground" />
                     )}
@@ -573,7 +573,7 @@ export default function SettingsRulesPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-red-400 hover:text-red-600"
+                    className="h-8 w-8 text-destructive hover:bg-destructive/10"
                     onClick={() => deleteRule(rule.id)}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -587,16 +587,16 @@ export default function SettingsRulesPage() {
 
       {/* Pending AI suggestions */}
       {pendingSuggestions.length > 0 && (
-        <Card className="border-yellow-200 bg-yellow-50">
+        <Card className="border-status-warn bg-status-warn-bg">
           <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base flex items-center gap-2">
-              <Lightbulb className="h-4 w-4 text-yellow-600" />
+              <Lightbulb className="h-4 w-4 text-status-warn" />
               {t("pendingSuggestions", { count: pendingSuggestions.length })}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 px-4 pb-4 md:px-6 md:pb-6">
             {pendingSuggestions.map((rule) => (
-              <div key={rule.id} className="rounded-lg bg-white border p-3 space-y-2">
+              <div key={rule.id} className="rounded-lg bg-card border p-3 space-y-2">
                 <div className="flex items-start gap-2">
                   <Badge variant="outline" className="shrink-0">
                     {typeLabel(rule.rule_type)}
@@ -617,7 +617,7 @@ export default function SettingsRulesPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="gap-1 text-red-500 h-8"
+                    className="gap-1 text-destructive h-8"
                     onClick={() => rejectRule(rule.id)}
                   >
                     <XCircle className="h-3.5 w-3.5" />

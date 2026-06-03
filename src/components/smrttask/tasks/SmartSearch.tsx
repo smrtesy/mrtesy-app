@@ -8,7 +8,13 @@ import { createClient } from "@/lib/supabase/client";
 import type { Task } from "@/types/task";
 
 interface SmartSearchProps {
-  onResults: (tasks: Task[]) => void;
+  /** Called with the search outcome. `null` means there is NO active search
+   *  (input empty or below the 2-char minimum) — the caller should fall back
+   *  to its full list. An array (possibly empty `[]`) means a search ran:
+   *  the caller must render exactly those rows, including showing an empty
+   *  state when there are no matches. Collapsing `[]` to "show everything"
+   *  is the bug this contract exists to prevent. */
+  onResults: (tasks: Task[] | null) => void;
   /** Override the .select() clause. Defaults to "*". Use this when the
    *  caller needs to render search results with joined relations (e.g.
    *  the suggestion list expects source_messages + projects). */
@@ -44,15 +50,25 @@ export function SmartSearch({ onResults, selectClause, refineQuery, hideArchiveT
   function handleChange(value: string) {
     setQuery(value);
 
-    // Debounce 300ms
     if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    // Clearing the box (or dropping below the 2-char minimum) should restore
+    // the full list immediately — there's nothing to debounce, and waiting
+    // 300ms leaves a stale result set on screen after the input is empty.
+    if (sanitizeFilter(value).length < 2) {
+      onResults(null);
+      return;
+    }
+
+    // Debounce 300ms
     debounceRef.current = setTimeout(() => handleSearch(value), 300);
   }
 
   async function handleSearch(value: string) {
     const sanitized = sanitizeFilter(value);
     if (sanitized.length < 2) {
-      onResults([]);
+      // No active search — caller falls back to its full list.
+      onResults(null);
       return;
     }
 

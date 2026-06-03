@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, ChevronDown, ChevronUp, Copy, Check } from "lucide-react";
+import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight } from "lucide-react";
+import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
+import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 const sourceIcons: Record<string, string> = {
   gmail: "📧",
@@ -20,15 +22,17 @@ const processingBadge: Record<string, { variant: "default" | "secondary" | "outl
   processed: { variant: "outline", key: "badgeProcessed" },
 };
 
+// סטטוס = משמעות. טקסט בצבע מלא, רקע בגוון חלש (לפי מערכת העיצוב).
+// טוקני הסטטוס זהים ב-light/dark, לכן אין צורך בוריאנטי dark:.
 const classificationColors: Record<string, string> = {
-  actionable: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  user_actionable: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  actionable_followup: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  informational: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  informational_followup: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  spam: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-  skip: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
-  pending: "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+  actionable: "bg-status-ok-bg text-status-ok",
+  user_actionable: "bg-status-ok-bg text-status-ok",
+  actionable_followup: "bg-status-ok-bg text-status-ok",
+  informational: "bg-status-warn-bg text-status-warn",
+  informational_followup: "bg-status-warn-bg text-status-warn",
+  spam: "bg-status-warn-bg text-status-warn",
+  skip: "bg-status-warn-bg text-status-warn",
+  pending: "bg-status-late-bg text-status-late",
 };
 
 const sourceFilters = [
@@ -69,6 +73,9 @@ interface SourceEntry {
   classification_reason: string | null;
   task_title: string | null;
   task_serial: string | null;
+  task_id: string | null;
+  task_status: string | null;
+  task_manually_verified: boolean | null;
   error_message: string | null;
   log_status: string | null;
   log_created_at: string | null;
@@ -93,6 +100,10 @@ export function LogPageClient({ locale }: { locale: string }) {
   const [reclassifyOpenId, setReclassifyOpenId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Correction capture (feature: explanation + general/personal scope) and the
+  // refresh key that keeps the export button's "pending" badge in sync.
+  const [correctionDraft, setCorrectionDraft] = useState<CorrectionDraft | null>(null);
+  const [correctionsRefreshKey, setCorrectionsRefreshKey] = useState(0);
 
   const dateFmtLocale = locale === "he" ? "he-IL" : "en-US";
   const dateFormatter = new Intl.DateTimeFormat(dateFmtLocale, {
@@ -120,7 +131,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     let query = supabase
       .from("source_messages")
-      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(serial_display)")
+      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -150,7 +161,8 @@ export function LogPageClient({ locale }: { locale: string }) {
       }
 
       const tasksArr = row.tasks || [];
-      const taskSerial = tasksArr.length > 0 ? tasksArr[0].serial_display : null;
+      const linkedTask = tasksArr.length > 0 ? tasksArr[0] : null;
+      const taskSerial = linkedTask?.serial_display ?? null;
 
       return {
         id: row.id,
@@ -169,6 +181,9 @@ export function LogPageClient({ locale }: { locale: string }) {
         classification_reason: logEntry?.classification_reason || null,
         task_title: logEntry?.task_title || null,
         task_serial: taskSerial,
+        task_id: linkedTask?.id ?? null,
+        task_status: linkedTask?.status ?? null,
+        task_manually_verified: linkedTask?.manually_verified ?? null,
         error_message: logEntry?.error_message || null,
         log_status: logEntry?.status || null,
         log_created_at: logEntry?.created_at || null,
@@ -207,6 +222,68 @@ export function LogPageClient({ locale }: { locale: string }) {
           : l
       )
     );
+    // Offer to record an explanation for the fix (optional — the user can
+    // cancel). This is what turns a one-off reclassify into a learnable rule.
+    openCorrection(log, "reclassify", "ai_classification", log.ai_classification, updates.ai_classification);
+  }
+
+  /** Deep-link to the linked task. Unverified suggestions live in /inbox,
+   *  everything else opens in /tasks via the shared ?focus= mechanism. */
+  function taskHref(log: SourceEntry): string | null {
+    if (!log.task_id) return null;
+    if (log.task_manually_verified === false) {
+      return `/${locale}/inbox?focus=${log.task_id}`;
+    }
+    return `/${locale}/tasks?focus=${log.task_id}`;
+  }
+
+  /** Comprehensive, self-contained snapshot of a log row for the export. */
+  function buildContext(log: SourceEntry): Record<string, unknown> {
+    return {
+      source_type: log.source_type,
+      source_id: log.source_id,
+      source_url: log.source_url,
+      serial_display: log.serial_display,
+      subject: log.subject,
+      sender: log.sender,
+      sender_email: log.sender_email,
+      recipient: log.recipient,
+      received_at: log.received_at,
+      processed_at: log.log_created_at,
+      processing_status: log.processing_status,
+      pre_classification: log.pre_classification,
+      ai_classification: log.ai_classification,
+      classification_reason: log.classification_reason,
+      ai_model_used: log.ai_model_used,
+      ai_input_tokens: log.ai_input_tokens,
+      ai_output_tokens: log.ai_output_tokens,
+      ai_cost_usd: log.ai_cost_usd,
+      processing_duration_ms: log.processing_duration_ms,
+      task: log.task_id
+        ? { id: log.task_id, serial: log.task_serial, title: log.task_title, status: log.task_status }
+        : null,
+      error_message: log.error_message,
+      log_details: log.log_details,
+    };
+  }
+
+  function openCorrection(
+    log: SourceEntry,
+    type: CorrectionDraft["correction_type"],
+    field: string | null,
+    oldValue: string | null,
+    newValue: string | null,
+  ) {
+    setCorrectionDraft({
+      source_message_id: log.id,
+      task_id: log.task_id,
+      log_entry_id: null,
+      correction_type: type,
+      field,
+      old_value: oldValue,
+      new_value: newValue,
+      context: buildContext(log),
+    });
   }
 
   function buildCopyText(log: SourceEntry): string {
@@ -252,6 +329,12 @@ export function LogPageClient({ locale }: { locale: string }) {
 
   return (
     <>
+      {/* Export corrections — exports the user's flagged fixes (with notes) as
+          a comprehensive JSON file and tracks what was already exported. */}
+      <div className="flex justify-end">
+        <CorrectionsExportButton refreshKey={correctionsRefreshKey} />
+      </div>
+
       {/* Source Filter Tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {sourceFilters.map((f) => (
@@ -326,11 +409,23 @@ export function LogPageClient({ locale }: { locale: string }) {
                       {log.serial_display}
                     </span>
                   )}
-                  {log.task_serial && (
-                    <span className="font-mono text-[10px] rounded border px-1 py-0.5 text-primary border-primary/50 bg-primary/10">
-                      → {log.task_serial}
-                    </span>
-                  )}
+                  {log.task_serial && (() => {
+                    const href = taskHref(log);
+                    const cls = "font-mono text-[10px] rounded border px-1 py-0.5 text-primary border-primary/50 bg-primary/10";
+                    return href ? (
+                      <a
+                        href={href}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`${cls} inline-flex items-center gap-0.5 hover:bg-primary/20 transition-colors`}
+                        title={tLog("openTask")}
+                      >
+                        → {log.task_serial}
+                        <ArrowUpRight className="h-2.5 w-2.5" />
+                      </a>
+                    ) : (
+                      <span className={cls}>→ {log.task_serial}</span>
+                    );
+                  })()}
                   <Badge variant={badge.variant} className="text-[10px]">
                     {tLog(badge.key)}
                   </Badge>
@@ -427,17 +522,33 @@ export function LogPageClient({ locale }: { locale: string }) {
                   </p>
                 )}
 
-                {/* Row 4: task created */}
-                {log.task_title && (
-                  <div className="mt-1.5 flex items-center gap-1 text-[11px] text-primary">
-                    <span>→</span>
-                    <span className="truncate" dir="auto">{log.task_title}</span>
-                  </div>
-                )}
+                {/* Row 4: task created — links to the task when one exists */}
+                {log.task_title && (() => {
+                  const href = taskHref(log);
+                  const inner = (
+                    <>
+                      <span>→</span>
+                      <span className="truncate" dir="auto">{log.task_title}</span>
+                      {href && <ArrowUpRight className="h-3 w-3 shrink-0" />}
+                    </>
+                  );
+                  return href ? (
+                    <a
+                      href={href}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1.5 flex items-center gap-1 text-[11px] text-primary hover:underline"
+                      title={tLog("openTask")}
+                    >
+                      {inner}
+                    </a>
+                  ) : (
+                    <div className="mt-1.5 flex items-center gap-1 text-[11px] text-primary">{inner}</div>
+                  );
+                })()}
 
                 {/* Row 5: error (collapsed = clamp, expanded = full) */}
                 {log.error_message && (
-                  <p className={`mt-1.5 text-[11px] text-red-500 ${isExpanded ? "" : "line-clamp-2"}`}>
+                  <p className={`mt-1.5 text-[11px] text-status-late ${isExpanded ? "" : "line-clamp-2"}`}>
                     {log.error_message}
                   </p>
                 )}
@@ -448,19 +559,28 @@ export function LogPageClient({ locale }: { locale: string }) {
                     className="mt-3 rounded-md border bg-muted/40 p-3 space-y-2 text-[11px]"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {/* Header with copy button */}
+                    {/* Header with correction + copy buttons */}
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-xs text-muted-foreground">{tLog("aiDetails")}</span>
-                      <button
-                        className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] bg-background border hover:bg-accent transition-colors"
-                        onClick={(e) => copyDetails(e, log)}
-                      >
-                        {copiedId === log.id ? (
-                          <><Check className="h-3 w-3 text-green-500" /> {tLog("copied")}</>
-                        ) : (
-                          <><Copy className="h-3 w-3" /> {tLog("copyDetails")}</>
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] bg-background border hover:bg-accent transition-colors"
+                          onClick={(e) => { e.stopPropagation(); openCorrection(log, "note", null, null, null); }}
+                          title={tLog("addCorrectionTitle")}
+                        >
+                          <PencilLine className="h-3 w-3" /> {tLog("addCorrection")}
+                        </button>
+                        <button
+                          className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] bg-background border hover:bg-accent transition-colors"
+                          onClick={(e) => copyDetails(e, log)}
+                        >
+                          {copiedId === log.id ? (
+                            <><Check className="h-3 w-3 text-status-ok" /> {tLog("copied")}</>
+                          ) : (
+                            <><Copy className="h-3 w-3" /> {tLog("copyDetails")}</>
+                          )}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Processing time */}
@@ -541,6 +661,13 @@ export function LogPageClient({ locale }: { locale: string }) {
           })}
         </div>
       )}
+
+      <CorrectionDialog
+        open={!!correctionDraft}
+        draft={correctionDraft}
+        onClose={() => setCorrectionDraft(null)}
+        onSaved={() => setCorrectionsRefreshKey((k) => k + 1)}
+      />
     </>
   );
 }

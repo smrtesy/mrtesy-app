@@ -157,7 +157,7 @@ export function AppStatusCard({ slug }: { slug: string }) {
             {/* Blockers */}
             <div>
               <p className="text-xs font-medium mb-1 flex items-center gap-1">
-                <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
+                <AlertTriangle className="h-3.5 w-3.5 text-status-warn" />
                 חוסמים
               </p>
               <div className="space-y-1.5">
@@ -229,12 +229,12 @@ export function AppStatusCard({ slug }: { slug: string }) {
             )}
 
             {status.blockers.length > 0 && (
-              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 space-y-1">
-                <p className="text-xs font-medium text-orange-700 flex items-center gap-1">
+              <div className="rounded-lg border border-status-warn/30 bg-status-warn-bg p-3 space-y-1">
+                <p className="text-xs font-medium text-status-warn flex items-center gap-1">
                   <AlertTriangle className="h-3.5 w-3.5" /> חוסמים
                 </p>
                 {status.blockers.map((b, i) => (
-                  <p key={i} className="text-sm text-orange-800" dir="rtl">• {b}</p>
+                  <p key={i} className="text-sm text-status-warn" dir="rtl">• {b}</p>
                 ))}
               </div>
             )}

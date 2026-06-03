@@ -18,11 +18,11 @@ import { toast } from "sonner";
 export type AppStage = "רעיון" | "בניה" | "טסט" | "מאור" | "לקוחות";
 
 export const STAGE_COLORS: Record<AppStage, string> = {
-  "רעיון":   "bg-gray-100   text-gray-600   border-gray-200",
-  "בניה":    "bg-blue-50    text-blue-700   border-blue-200",
-  "טסט":     "bg-amber-50   text-amber-700  border-amber-200",
-  "מאור":    "bg-purple-50  text-purple-700 border-purple-200",
-  "לקוחות": "bg-green-50   text-green-700  border-green-200",
+  "רעיון":   "bg-muted          text-muted-foreground border-border",
+  "בניה":    "bg-accent         text-primary          border-primary",
+  "טסט":     "bg-status-warn-bg text-status-warn      border-status-warn/30",
+  "מאור":    "bg-accent         text-accent-foreground border-border",
+  "לקוחות": "bg-status-ok-bg   text-status-ok        border-status-ok/30",
 };
 
 interface AdminApp {
@@ -163,7 +163,7 @@ export function AppsRegistryClient() {
                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(a)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-500" onClick={() => handleDelete(a)}>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => handleDelete(a)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>

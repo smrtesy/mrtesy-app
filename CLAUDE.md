@@ -226,9 +226,11 @@ All product names follow the pattern **`smrt` + English word**:
   `@/lib/api/client.ts`, which auto-attaches `Authorization` and
   `X-Org-Id`. Raw `fetch()` to `/api/*` is a bug.
 - **Org scoping**: every backend route that touches user/tenant data
-  requires `requireAuth + requireOrg + requireApp("smrtesy")` unless it's
-  an admin route (`requireSuperAdmin`) or a per-user-no-org route
-  (`/api/me/*`).
+  requires `requireAuth + requireOrg + requireApp("<app-slug>")` — the
+  per-app slug, e.g. `requireApp("smrttask")` or `requireApp("smrtvoice")`
+  (the legacy `"smrtesy"` slug was renamed to `"smrttask"` in migration
+  `20260518000004`). Exceptions: admin routes (`requireSuperAdmin`) and
+  per-user-no-org routes (`/api/me/*`).
 - **Service-role Supabase**: use `createAdminSupabaseClient()` from
   `@/lib/supabase/admin.ts`. Never instantiate `createClient` with the
   service key inline in a page or component.

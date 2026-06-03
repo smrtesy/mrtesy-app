@@ -83,11 +83,91 @@ function bodyForAI(msg: any): string {
   return String(msg.body_text ?? "");
 }
 
-// Returns the most recent business day (Mon–Fri) strictly before `date`.
-function prevBusinessDay(date: Date): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() - 1);
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+// Video-call / meeting join links. A meeting invite buried in a reply is the
+// single highest-value "actionable" an email can carry (a meeting to attend),
+// yet it almost always lands at the BOTTOM of the body — beneath the quoted
+// thread and past body_truncate_classify — so the classifier never sees it and
+// files the thread as "informational closure". (This is exactly the miss the
+// user flagged: a Teams meeting with a lawyer, link at char ~3500, classifier
+// truncates at 2000.) Detect the link across the FULL, untruncated body.
+// Non-global on purpose: we only ever .test()/.exec() once, so there is no
+// lastIndex state to trip over.
+const MEETING_LINK_RE = /(?:https?:\/\/)?(?:[\w.-]*teams\.microsoft\.com\/(?:l\/meetup-join|meet)\/|teams\.live\.com\/meet\/|[\w.-]*zoom\.us\/(?:j|my|w|s)\/|meet\.google\.com\/[a-z]|[\w.-]*webex\.com\/(?:meet|join|[\w.-]*\/j\.php)|[\w.-]*whereby\.com\/[\w-])/i;
+
+function hasMeetingInvite(body: string): boolean {
+  return MEETING_LINK_RE.test(String(body));
+}
+
+// Return the meeting block (header + join URL + Meeting ID + Passcode), with a
+// little context on either side, so the join URL survives verbatim. null when
+// no join link is present.
+function extractMeetingBlock(body: string): string | null {
+  const s = String(body);
+  const m = MEETING_LINK_RE.exec(s);
+  if (!m) return null;
+  // The window must span the ENTIRE join URL verbatim (deep-link rule): Teams
+  // `meetup-join` links carry an encoded `context` JSON and routinely run
+  // 500–900 chars, so a fixed forward window would slice them mid-string. Grab
+  // the full whitespace-delimited URL token, then +160 chars for the Meeting
+  // ID / Passcode lines that follow, and -220 for a preceding header.
+  const urlToken = (s.slice(m.index).match(/^\S*/)?.[0] ?? "").length;
+  const start = Math.max(0, m.index - 220);
+  const end = Math.min(s.length, Math.max(m.index + 400, m.index + urlToken + 160));
+  return s.slice(start, end).trim();
+}
+
+// Body for the classifier / task-builder, capped at `limit`. When a meeting
+// invite exists anywhere in the full body, graft the meeting block onto the
+// TOP, tagged as fresh & actionable: this rescues invites that sit past the
+// truncation window (classifier) and ones that sit below the quoted thread
+// (where the task-builder's QUOTED-TEXT rule would skip them), and keeps the
+// join URL verbatim (system-wide deep-link rule).
+function bodyForClassify(msg: any, limit: number): string {
+  const full = bodyForAI(msg);
+  const head = full.substring(0, limit);
+  const meeting = extractMeetingBlock(full);
+  if (!meeting) return head;
+  return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${head}`;
+}
+
+// ── Business-hours math ──────────────────────────────────────────────────────
+// "Business hours" here = clock hours that fall on a business DAY. A business
+// day is Mon–Fri (Sun=0 and Sat=6 are weekend) — matching the convention this
+// file already used. Nights count; only weekends are skipped. So 48 business
+// hours = "two business days later, jumping over any weekend in between".
+//
+// Used for two product rules:
+//   * follow-up suggestions surface FOLLOWUP_LEAD_HOURS after an outgoing
+//     message that's awaiting a reply (default 48h).
+//   * meeting suggestions surface MEETING_LEAD_HOURS before the event (24h).
+const FOLLOWUP_LEAD_HOURS = 48;
+const MEETING_LEAD_HOURS = 24;
+
+function isBusinessDay(d: Date): boolean {
+  const day = d.getDay();
+  return day !== 0 && day !== 6;
+}
+
+// Advance `start` forward by `hours` business hours.
+function addBusinessHours(start: Date, hours: number): Date {
+  const d = new Date(start);
+  let remaining = hours;
+  while (remaining > 0) {
+    d.setHours(d.getHours() + 1);
+    if (isBusinessDay(d)) remaining--;
+  }
+  return d;
+}
+
+// Move `start` backward by `hours` business hours (the earliest moment that is
+// still `hours` business hours ahead of it).
+function subBusinessHours(start: Date, hours: number): Date {
+  const d = new Date(start);
+  let remaining = hours;
+  while (remaining > 0) {
+    d.setHours(d.getHours() - 1);
+    if (isBusinessDay(d)) remaining--;
+  }
   return d;
 }
 
@@ -138,9 +218,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     const now = new Date();
     const pastCutoff = new Date(now.getTime() - sys.calendar_past_days * 86_400_000);
     if (eventDate < pastCutoff) return { result: "skip", skipReason: "past_calendar_event" };
-    // All calendar events are actionable. Process starting 1 business day before the event.
-    const processFrom = prevBusinessDay(eventDate);
-    processFrom.setHours(0, 0, 0, 0);
+    // All calendar events are actionable, but a meeting should only surface as a
+    // suggestion MEETING_LEAD_HOURS (24) business hours before it starts — not
+    // days in advance. Defer until that lead window opens; the cron re-evaluates
+    // every minute, so it surfaces exactly on time.
+    const processFrom = subBusinessHours(eventDate, MEETING_LEAD_HOURS);
     if (now < processFrom) return { result: "defer", skipReason: "future_calendar_event" };
     return { result: "calendar_actionable" };
   }
@@ -161,7 +243,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     }
   }
 
-  if (sourceType === "whatsapp_echo") return { result: "check_followup" };
+  // whatsapp_echo rows are self-chat captures (voice memos = fresh task
+  // intentions), NOT messages sent to a third party awaiting a reply — they go
+  // through normal analysis and become tasks immediately. Only sent EMAIL is
+  // routed to the deferred 48-business-hour follow-up flow.
+  if (sourceType === "whatsapp_echo") return { result: "needs_claude" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
@@ -278,11 +364,31 @@ interface ThreadAnalysis {
   state: "open" | "pending_user_action" | "pending_other_party" | "resolved";
   completionSignal: boolean;
   completionReason: string;
+  // True when this message opens a matter DISTINCT from what the linked task
+  // tracks (a different action/topic), rather than continuing the same one.
+  // Drives the "spin off a new task vs reopen/append" decision in Path 1.
+  newMatter: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
   model: string;
+}
+
+// Current wall-clock time in the user's timezone, appended to the per-message
+// user content (NOT the cached static prefix, so the cache stays warm). Without
+// a clock anchor the model cannot tell that a stated time window has already
+// passed, cannot reason about "today/tomorrow" priority, and — the bug this was
+// added for (T458) — carries a stale, event-contingent time window forward even
+// after the event that defined it was cancelled. The newest [ts] line plus this
+// "now" let it re-derive availability instead.
+function nowContextLine(): string {
+  const tz = "Asia/Jerusalem";
+  const now = new Date();
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const time = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
+  const weekday = new Intl.DateTimeFormat("he-IL", { timeZone: tz, weekday: "long" }).format(now);
+  return `Current date/time (${tz}): ${date} ${time} (${weekday}). Treat this as "now" when reasoning about deadlines, "today/tomorrow", and whether a stated time window has already passed.`;
 }
 
 async function analyzeWithMemory(
@@ -349,7 +455,8 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
   "new_summary": "Hebrew, ≤ 400 chars. Incorporates this new message into the running thread context. State the current open question and who owes the next step.",
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
-  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string"
+  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string",
+  "new_matter": true | false
 }
 
 - ACTIONABLE = either (a) the user must take a concrete step now, OR
@@ -364,6 +471,10 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
     • Delivery in transit / order being prepared
     • Vendor / contractor / agent quote pending
     • Business deal / negotiation in progress
+    • Meeting / video-call invitation — a Teams / Zoom / Google Meet / Webex
+      join link, or a "MEETING DETAILS" block, means the user has a meeting to
+      attend. ALWAYS ACTIONABLE, even if the rest of the thread looks closed
+      and even if the link sits below quoted history.
 
 - INFORMATIONAL = read-and-forget. No tracking needed. The user did not
   initiate anything that requires a return response. Examples:
@@ -417,6 +528,26 @@ confirmed as completed — not merely planned or scheduled.
 Be conservative only when the answer is genuinely partial or ambiguous
 (e.g. "I'll check and get back to you" — that's still pending). When the
 requested answer is plainly in the message, set completion=true.
+
+═══ new_matter — is this a DIFFERENT open matter? ═══
+new_matter=true means: this message opens an actionable matter that is
+DISTINCT from what the existing thread summary / linked task was tracking
+— a different action, deliverable, meeting, or topic — NOT just the next
+turn of the same one. Judge against the "Existing thread summary" block.
+
+  • Same matter continuing (more back-and-forth on the SAME question,
+    a status update, the other party finally answering the original ask)
+    → new_matter=false.
+  • A genuinely new ask/commitment/event on top of (or after) the original
+    → new_matter=true. Classic case: the original question was just
+    answered (completion=true) and the conversation pivots to scheduling a
+    call, sending a document, or a new request — that scheduling/request is
+    a NEW matter that deserves its own task.
+
+Set new_matter=false when classification is not ACTIONABLE, or when there
+is no existing thread summary (first message — there is nothing to be
+distinct from). Default to false when unsure: re-opening or appending to
+the known task is safer than spawning a duplicate.
 
 IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
 already captured in new_summary's prior version. Base decisions on the FRESHLY
@@ -503,6 +634,48 @@ WORKED EXAMPLE (the failure this rule prevents):
   RIGHT: 'רוה״ח אמר ש"יטופל" — נדרש מעקב על החשבון הסופי. נושא בוטמן עדיין
          פתוח (המשתמש לא ידע).'
 
+═══ SUPERSESSION — NEWER FACTS REPLACE STALE ONES (mandatory) ═══
+new_summary / reason_he describe the situation AS OF THE LATEST message —
+not a pile of every state the thread passed through. When a newer line
+changes a premise an earlier line established, REPLACE the stale premise;
+never state both side by side.
+  • Time windows and deadlines that were CONTINGENT on an event need
+    special care. If a window was framed as "after my 4:00 meeting, before
+    I leave at 6:00" and a later line says that meeting was postponed or
+    cancelled, the window NO LONGER HOLDS — the constraint that created it
+    is gone. Re-derive availability from the latest facts. A postponed or
+    cancelled blocker WIDENS availability; it does not preserve the old
+    narrow window.
+  • Use the [INCOMING <ts>]/[OUTGOING <ts>] timestamps and the current
+    date/time given above to decide which fact is newest. The newest
+    statement wins.
+  • Never produce a summary that contradicts itself (e.g. "the blocking
+    meeting was postponed AND there is a narrow window 5–6"). If both
+    cannot be true now, keep only the one true as of the last line.
+WORKED EXAMPLE (the failure this prevents):
+  Voice memo: "I have a 4:00 meeting, hope it ends ~5:00, then I'll try; at
+  6:00 I leave — so let's try in that 5–6 window." Later line: "the meeting
+  was postponed."
+  WRONG: "...the blocking meeting was postponed and there is a narrow 5–6
+         window today..." — self-contradictory; the 5–6 bound came from the
+         now-cancelled meeting.
+  RIGHT: "פגישת ה-4:00 נדחתה, כך שאילוץ ה-5–6 הקודם כבר לא חל — יש עכשיו
+         יותר זמן עד היציאה ב-6:00. עדיין צריך לבצע את שיחת הוועידה."
+
+═══ NATURAL HEBREW — NO INVENTED WORDS OR SYSTEM JARGON (mandatory) ═══
+  • Use the user's own verb. If they wrote "לעשות שיחת ועידה" / "אעשה
+    שיחה", say "לעשות" / "לקיים שיחת ועידה" — do NOT invent an ill-fitting
+    verb (e.g. "להערים", which is not a real fit) or paraphrase into
+    something they never said.
+  • Plain Hebrew, not calques. "the conditions hold / are met" → "הכל
+    מסודר" / "אפשר להתקדם", never the literal "התנאים עומדים".
+  • Never inject internal/PM jargon into user-facing text. A meeting that
+    was in the way is "הפגישה שעיכבה" / "הפגישה החוסמת" — never "הפגישה
+    בחוסם" (the word "חוסם"/blocker belongs to app-status tracking, not
+    task text).
+  • Never introduce a name, number, or detail absent from the message. If
+    the other party is "שוויגער"/Miryam, do not invent a different name.
+
 ═══ WORKED EXAMPLE ═══
 Input: "Please be advised that we are currently looking into the
 collection action against your son. I will let you know as soon as we
@@ -511,11 +684,26 @@ Correct output: ACTIONABLE, state=pending_other_party. reason_he should
 reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
 INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
 
-  // Per-message context goes in the user message (NOT the cached system prefix).
-  const contextBlock = `${identityBlock}${memoryBlock}${whatsappNote}`;
-  const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
+  // Mandatory output-contract addendum, appended AFTER the (possibly
+  // admin-overridden) staticPrompt so the new_matter field is always required
+  // even when a tenant has customized the edge_classifier prompt. Without this,
+  // a custom prompt that predates new_matter would never emit it and the
+  // spin-off-vs-reopen logic in Path 1 would silently no-op for that tenant.
+  const newMatterContract = `\n\n═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
+In addition to any shape above, the JSON you return MUST include the boolean
+field "new_matter". new_matter=true ONLY when classification is ACTIONABLE AND
+this message opens a matter DISTINCT from what the existing thread summary /
+linked task tracks (a different action, deliverable, meeting, or topic) — NOT
+the next turn of the same one. The classic case: the original question was just
+answered (completion=true) and the conversation pivots to a new ask (scheduling
+a call, sending a document) — that pivot is a new_matter. Set new_matter=false
+when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
 
-  const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
+  // Per-message context goes in the user message (NOT the cached system prefix).
+  const contextBlock = `\n\n${nowContextLine()}${identityBlock}${memoryBlock}${whatsappNote}`;
+  const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
+
+  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -537,6 +725,7 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
       state: memory?.state ?? "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       cacheReadTokens: result.cacheReadTokens,
@@ -558,6 +747,8 @@ INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
     state,
     completionSignal: Boolean(parsed.completion),
     completionReason: String(parsed.completion_reason_he ?? ""),
+    // Only an ACTIONABLE message can introduce a new trackable matter.
+    newMatter: classification === "actionable" && parsed.new_matter === true,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     cacheReadTokens: result.cacheReadTokens,
@@ -571,6 +762,7 @@ async function appendUpdateToTask(
   msg: any,
   analysis: ThreadAnalysis,
   classification: string,
+  opts?: { reopen?: boolean },
 ) {
   const { data: existing } = await supabase
     .from("tasks")
@@ -630,7 +822,14 @@ async function appendUpdateToTask(
     updateFields.description = analysis.newSummary;
   }
 
-  if (analysis.completionSignal) {
+  // reopen wins over a stale completion flag: the thread resumed with a new
+  // actionable turn on the SAME matter, so pull the task back to active and
+  // clear any prior completion signal so it stops looking "done" in the UI.
+  if (opts?.reopen) {
+    updateFields.status = "in_progress";
+    updateFields.completion_signal_detected = false;
+    updateFields.completion_signal_reason = null;
+  } else if (analysis.completionSignal) {
     updateFields.status = "pending_completion";
     updateFields.completion_signal_detected = true;
     updateFields.completion_signal_reason = analysis.completionReason;
@@ -640,7 +839,7 @@ async function appendUpdateToTask(
   await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: analysis.completionSignal ? "completion_signal" : "thread_followup",
+    activity_type: opts?.reopen ? "reopened" : analysis.completionSignal ? "completion_signal" : "thread_followup",
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
@@ -661,7 +860,7 @@ async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
 
   const systemPrompt = `You are a message classifier for a personal task management system.${identityBlock}\n\nRules:\n- Outgoing mail (from the user's own addresses) → informational\n- Payment confirmations of completed transactions → informational\n- Mail to/from the user's office addresses → classify by content (NOT spam)${whatsappBlock}\n\nRespond: WORD | reason in Hebrew. WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM`;
 
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`;
+  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
   const result = await callClaude(model, systemPrompt, userMessage, 100);
   const text = result.text.trim().toUpperCase();
   let classification = "informational";
@@ -797,8 +996,8 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // Static instructions → cached prefix (admin-editable via ai_prompts key
   // "edge_task_builder"). Dynamic context (WhatsApp rules, project brief,
   // contact memory, body) goes in the user message to keep the cache warm.
-  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
-  let context = "";
+  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of an already-completed transaction\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null"\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a completed transaction → return [].\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  let context = `\n\n${nowContextLine()}`;
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
   // Outgoing email (the user is the sender): tell the task builder the
@@ -856,7 +1055,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   if (contactMemory) context += contactMemory;
   const taskUserName: string = settings.__userName ?? "";
   if (taskUserName) context += `\n\nUser's first name: ${taskUserName}. Use "${taskUserName}" instead of "המשתמש" in all Hebrew fields (title_he, description, reason_he).`;
-  const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, truncate)}`;
+  const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForClassify(msg, truncate)}`;
   const result = await callClaude(model, cachedSystem(staticPrompt), userMessage, 2048, { component: "ai_process.task", userId, refId: msg.id });
   let tasks: any[] = [];
   let parsed = true;
@@ -873,7 +1072,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
 
 async function checkFollowup(msg: any, sys: SystemParams) {
   const model = sys.classification_model;
-  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${bodyForAI(msg).substring(0, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -1529,13 +1728,76 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     return;
   }
 
+  // ── Outgoing message awaiting a reply → DEFERRED follow-up suggestion ──────
+  // The user sent an email / WhatsApp and is waiting on the other side. We do
+  // NOT surface a follow-up immediately: a suggestion only appears
+  // FOLLOWUP_LEAD_HOURS (48) business hours later, and only if no reply has
+  // arrived by then. We model this with a snoozed task — the reminders-check
+  // cron wakes it into the inbox at snoozed_until, and suppresses it there if
+  // the other party already replied.
+  if (!userForceActionable && preResult.result === "check_followup") {
+    const fu = await checkFollowup(msg, sys);
+    totalInputTokens += fu.inputTokens;
+    totalOutputTokens += fu.outputTokens;
+    const baseFields = {
+      user_id: msg.user_id, category: "ai_process", ...msgLogFields(msg),
+      pre_classification: preResult.result, processing_duration_ms: Date.now() - startTime,
+    };
+    if (!fu.isFollowup) {
+      // Outgoing message that closes a loop / needs no chasing → informational.
+      await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "informational", classification_reason: `no follow-up needed: ${fu.reason}` });
+      return;
+    }
+
+    // Don't double-create if this sent message was processed before.
+    const { data: existingFu } = await supabase
+      .from("tasks").select("id").eq("source_message_id", msg.id).eq("task_type", "followup").maybeSingle();
+    if (!existingFu) {
+      const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+      const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS);
+      const recipient = msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "";
+      const snippet = (msg.subject || (msg.body_text || "").slice(0, 60) || "הודעה שנשלחה").trim();
+      const title = `מעקב: ${snippet}`;
+      const sourceUrl = resolveSourceUrl(msg);
+      // Preserve the deep link verbatim (system-wide URL rule).
+      const description = [
+        "שלחת הודעה וממתינה לתגובה. אם לא התקבל מענה — כדאי לעשות מעקב.",
+        recipient ? `נשלח אל: ${recipient}` : null,
+        sourceUrl ? `קישור להודעה: ${sourceUrl}` : null,
+      ].filter(Boolean).join("\n");
+      const { data: newTask } = await supabase.from("tasks").insert({
+        user_id: msg.user_id, source_message_id: msg.id,
+        title, title_he: title, description,
+        task_type: "followup", priority: "medium",
+        status: "snoozed", snoozed_until: surfaceAt.toISOString(),
+        manually_verified: false,
+        related_contact_email: recipient || null,
+        source_link: sourceUrl,
+        ai_actions: [], ai_confidence: 0.7, ai_model_used: sys.classification_model,
+        updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
+      }).select("id").single();
+      if (newTask) {
+        await supabase.from("task_activities").insert({
+          user_id: msg.user_id, task_id: newTask.id,
+          activity_type: "created", new_value: "snoozed",
+          note: `Follow-up scheduled for ${surfaceAt.toISOString()} (${FOLLOWUP_LEAD_HOURS} business hours after send)`,
+          actor: "system",
+        });
+      }
+    }
+    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "actionable_followup", classification_reason: `follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours: ${fu.reason}` });
+    return;
+  }
+
   // ── Load thread memory before AI runs so the prompt has running context ───
   const tkey = threadKey(msg);
   const memory = tkey ? await loadThreadMemory(msg.user_id, tkey) : null;
 
-  // Calendar events within 1 business day are always actionable — skip Claude
-  // classification and go straight to task creation. Claude is still called for
-  // the task content itself.
+  // Calendar events inside the meeting lead window (24 business hours before
+  // the event) are always actionable — skip Claude classification and go
+  // straight to task creation. Claude is still called for the task content.
   const calendarForceActionable = !userForceActionable && preResult.result === "calendar_actionable";
   // Drive documents are never spam — skip Claude classification, but still
   // call createTasksFromMessage so Claude reads the document and builds a task.
@@ -1550,6 +1812,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       state: "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -1557,7 +1820,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       model: "",
     };
     classification = "actionable";
-    classificationReason = "calendar: 1 business day before event";
+    classificationReason = "calendar: within meeting lead window (24 business hours)";
   } else if (driveForceActionable) {
     analysis = {
       classification: "actionable",
@@ -1566,6 +1829,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       state: "open",
       completionSignal: false,
       completionReason: "",
+      newMatter: false,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -1613,15 +1877,81 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       : "user manually reclassified as actionable";
   }
 
-  // ── Path 1: known existing task in this thread → always append ────────────
-  // Catches BOTH actionable_followup (the user owes more action) and
-  // informational_followup (payment confirmation, "thanks", etc.).
+  // Meeting-invite guard: a video-call join link (Teams / Zoom / Meet / Webex)
+  // anywhere in the body means there is a meeting to attend — actionable, never
+  // read-and-forget. These invites sit past the classifier's truncation window
+  // and below the quoted thread, so the model routinely mis-files them as
+  // "informational closure". Override here (after the AI verdict, before any
+  // task linkage) so the task-builder — which now receives the grafted MEETING
+  // block — builds a join task with the link preserved verbatim. SPAM is left
+  // alone (a join link in junk is more likely phishing than a real meeting).
+  if (classification === "informational" && hasMeetingInvite(bodyForAI(msg))) {
+    classification = "actionable";
+    classificationReason = classificationReason
+      ? `${classificationReason} | pre:meeting_invite`
+      : "meeting invite (video-call join link in body) → actionable";
+  }
+
+  // ── Path 1: known existing task in this thread → append / reopen / spin off ─
+  // Three outcomes, decided by the message's relationship to the linked task:
+  //   (a) NEW distinct matter (analysis.newMatter)        → spin off a fresh
+  //       task (fall through to Path 2/3); close the old one first if this
+  //       same message also resolved its original question.
+  //   (b) actionable resumption of an ALREADY-CLOSED task → reopen + append.
+  //   (c) anything else (open task continuing, or an informational follow-up)
+  //                                                       → append as before.
+  // Before the regression fix, every message hit (c) unconditionally, so new
+  // asks (e.g. scheduling a call after the original question was answered) got
+  // buried as silent updates inside a task already marked pending_completion.
   if (memory?.related_task_id && classification !== "spam") {
     try {
-      await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
-      linkedTaskId = memory.related_task_id;
-      classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
-      classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+      const { data: linkedTask } = await supabase
+        .from("tasks").select("id, status")
+        .eq("id", memory.related_task_id).eq("user_id", msg.user_id).maybeSingle();
+
+      if (!linkedTask) {
+        // The task was deleted/merged away — the thread_memory link is stale.
+        // Don't append into a ghost; let the create/link paths below handle
+        // this message from scratch (and re-point thread_memory if a task is made).
+      } else {
+        // Only the natural "done" states reopen on a resumed actionable turn.
+        // dismissed/archived were deliberately killed (don't auto-resurrect);
+        // snoozed is a user-intended hide — both keep their prior append
+        // behavior via branch (c) below.
+        const REOPENABLE_STATUSES = ["pending_completion", "completed"];
+        const taskClosed = REOPENABLE_STATUSES.includes(String(linkedTask.status));
+
+        if (classification === "actionable" && analysis.newMatter && (analysis.completionSignal || taskClosed)) {
+          // (a) New, distinct matter AND the old task is closing or already
+          // closed → spin off a fresh task. If this same message resolved the
+          // old task's original question, record that closure (which moves it
+          // to pending_completion). Then leave linkedTaskId unset so Path 2/3
+          // creates a new task and thread_memory re-points to it.
+          // Why gate on closed: Path 2's sibling linker re-attaches by
+          // source_message_id (one row per WhatsApp chat), and the dup linker
+          // by contact — both only match inbox/in_progress. Once the old task
+          // is closed, neither can re-swallow the new matter. If the old task
+          // is still OPEN and unresolved, a new matter can't get its own task
+          // cleanly (it would relink), so we fall through to (c) and append —
+          // same as before, no regression.
+          if (analysis.completionSignal && !taskClosed) {
+            await appendUpdateToTask(memory.related_task_id, msg, analysis, "informational");
+          }
+        } else if (taskClosed && classification === "actionable") {
+          // (b) Same-topic resumption of an already-closed task → reopen it
+          // rather than burying new actionable content as a silent update.
+          await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
+          linkedTaskId = memory.related_task_id;
+          classification = "actionable_followup";
+          classificationReason = `reopened task ${memory.related_task_id} via ${msg.source_type} — thread resumed`;
+        } else {
+          // (c) Open task continuing, or an informational follow-up → append.
+          await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
+          linkedTaskId = memory.related_task_id;
+          classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
+          classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+        }
+      }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
     }
@@ -1676,12 +2006,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         const eventTitle = msg.subject || "ארוע ביומן";
         // Use raw ISO date — toLocaleString with IANA timezones is unreliable in Deno V8.
         const description = `ארוע ביומן: ${eventTitle}`;
+        // Fire the prominent "happening soon" reminder one hour before the
+        // meeting starts. The banner keys off reminder_at (a precise instant,
+        // tz-rendered on the client), so we don't need a tz-correct due_time.
+        const reminderAt = new Date(eventDate.getTime() - 60 * 60 * 1000);
         const { data: newTask } = await supabase.from("tasks").insert({
           user_id: msg.user_id, source_message_id: msg.id,
           title: eventTitle, title_he: eventTitle,
-          description, task_type: "action", priority: "medium",
+          description, task_type: "meeting", priority: "medium",
           status: "inbox", manually_verified: false,
           due_date: dueDateStr,
+          reminder_at: reminderAt.toISOString(),
           ai_actions: [], ai_confidence: 1.0, ai_model_used: "calendar",
           suggested_duplicate_of: dupSuggestionTaskId,
           updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
@@ -1728,12 +2063,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
           if (firstReason) classificationReason = firstReason;
           aiModel = taskResult.model;
+          // An email carrying a video-call join link is a meeting to attend.
+          // Tag it so it gets the meeting indicator (the 24h lead-window gate
+          // only applies to calendar events, which carry a reliable start time).
+          const taskType = hasMeetingInvite(bodyForAI(msg)) ? "meeting" : "action";
           let firstTaskId: string | null = null;
           for (const task of taskResult.tasks) {
             const { data: newTask } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
-              description: task.description, task_type: "action", priority: task.priority || "medium",
+              description: task.description, task_type: taskType, priority: task.priority || "medium",
               status: "inbox", manually_verified: false,
               due_date: task.due_date,
               project_id: taskResult.projectId,
@@ -1810,6 +2149,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             state: "open",
             completionSignal: true,
             completionReason: link.reason,
+            newMatter: false,
             inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, model: "",
           };
           await appendUpdateToTask(linkedTaskId, emailMsg, completionAnalysis, "informational");

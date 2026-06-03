@@ -93,7 +93,7 @@ export function SuperAdminsClient() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold flex items-center gap-2">
-        <Crown className="h-6 w-6 text-amber-600" />
+        <Crown className="h-6 w-6 text-status-warn" />
         {t("superAdminsTitle")} <span className="text-muted-foreground text-base">({admins.length})</span>
       </h1>
 
@@ -153,7 +153,7 @@ export function SuperAdminsClient() {
             <p className="text-sm text-muted-foreground italic">{t("noSuperAdmins")}</p>
           ) : admins.map((a) => (
             <div key={a.user_id} className="flex items-center gap-3 rounded-lg border p-2.5">
-              <Crown className="h-4 w-4 text-amber-600 shrink-0" />
+              <Crown className="h-4 w-4 text-status-warn shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{a.email || a.name || "—"}</div>
                 <div className="text-xs text-muted-foreground flex items-center gap-2">
@@ -169,7 +169,7 @@ export function SuperAdminsClient() {
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-8 w-8 text-red-500"
+                className="h-8 w-8 text-destructive hover:bg-destructive/10"
                 disabled={revoking === a.user_id}
                 onClick={() => handleRevoke(a)}
               >

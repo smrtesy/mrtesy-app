@@ -88,8 +88,8 @@ export default function OnboardingWhatsApp() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-          <MessageCircle className="h-8 w-8 text-emerald-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-status-ok-bg">
+          <MessageCircle className="h-8 w-8 text-status-ok" />
         </div>
         <CardTitle>{tWa("title")}</CardTitle>
         <CardDescription>{tWa("description")}</CardDescription>
@@ -107,9 +107,9 @@ export default function OnboardingWhatsApp() {
         </div>
 
         {/* DualHook setup */}
-        <div className="rounded-lg border bg-amber-50 border-amber-200 p-3 text-xs space-y-2" dir={isHe ? "rtl" : "ltr"}>
-          <p className="font-medium text-amber-900">{tWa("dualhookSetup")}</p>
-          <ol className="list-decimal list-inside space-y-1 text-amber-800">
+        <div className="rounded-lg border bg-status-warn-bg border-status-warn/30 p-3 text-xs space-y-2" dir={isHe ? "rtl" : "ltr"}>
+          <p className="font-medium text-status-warn">{tWa("dualhookSetup")}</p>
+          <ol className="list-decimal list-inside space-y-1 text-status-warn">
             <li>{tWa("dualhookStep1")}</li>
             <li>{tWa("dualhookStep2")}</li>
             <li>{tWa("dualhookStep3")}</li>
@@ -128,7 +128,7 @@ export default function OnboardingWhatsApp() {
               onClick={() => copyToClipboard("url", WEBHOOK_URL)}
               aria-label={tWa("copyToClipboard")}
             >
-              {copiedKey === "url" ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              {copiedKey === "url" ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
         </div>
@@ -239,7 +239,7 @@ export default function OnboardingWhatsApp() {
         {/* Progress dots */}
         <div className="flex justify-center gap-2 pt-2">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className={`h-2 w-8 rounded-full ${i < 3 ? "bg-blue-600" : "bg-muted"}`} />
+            <div key={i} className={`h-2 w-8 rounded-full ${i < 3 ? "bg-primary" : "bg-muted"}`} />
           ))}
         </div>
       </CardContent>

@@ -89,16 +89,16 @@ export default async function AdminAppServicesPage({
                   </div>
                   <div className="text-end">
                     {(s.consecutive_failures || 0) === 0 ? (
-                      <Badge variant="default" className="bg-green-500">OK</Badge>
+                      <Badge variant="default" className="bg-status-ok text-white">OK</Badge>
                     ) : (s.consecutive_failures || 0) >= 5 ? (
                       <Badge variant="destructive">FAILED ({s.consecutive_failures})</Badge>
                     ) : (
-                      <Badge variant="secondary" className="bg-yellow-500 text-white">
+                      <Badge variant="secondary" className="bg-status-warn text-white">
                         WARN ({s.consecutive_failures})
                       </Badge>
                     )}
                     {s.last_error && (
-                      <p className="text-xs text-red-500 mt-1 max-w-[200px] truncate">{s.last_error}</p>
+                      <p className="text-xs text-status-late mt-1 max-w-[200px] truncate">{s.last_error}</p>
                     )}
                   </div>
                 </div>

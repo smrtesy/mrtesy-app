@@ -85,9 +85,13 @@ export interface Task {
   source_message_id: string | null;
   /** Embedded via Supabase left-join: source_messages(id, source_type, source_url, serial_display) */
   source_messages?: { id?: string | null; source_type: string | null; source_url: string | null; serial_display: string | null } | null;
-  task_type: "action" | "project_suggestion" | "brief_review" | "followup";
+  task_type: "action" | "project_suggestion" | "brief_review" | "followup" | "meeting";
   /** Human-readable serial: T1, T2, ... — assigned by DB trigger */
   serial_display: string;
+  /** First task of a recurring series this instance belongs to (null = standalone). */
+  recurrence_parent_id?: string | null;
+  /** Series stop date (null = open-ended). */
+  recurrence_until?: string | null;
   /**
    * Medium-confidence cross-source duplicate suggestion set by ai-process:
    * the id of an existing open task this one may duplicate. Null when there is
