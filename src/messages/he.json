@@ -201,6 +201,12 @@
       "low": "נמוך"
     },
     "changePriority": "שנה דחיפות",
+    "duplicateSuggestionLabel": "כנראה כפילות של {serial}",
+    "duplicateSuggestionReview": "בדוק ומזג",
+    "duplicateSuggestionDismiss": "לא כפילות",
+    "duplicateSuggestionDismissed": "ההצעה הוסרה",
+    "duplicateSuggestionBadge": "כפילות?",
+    "duplicateSuggestionBadgeTitle": "כנראה כפילות של משימה קיימת — פתח כדי לבדוק ולמזג",
     "sortBy": {
       "label": "מיון",
       "priority": "לפי דחיפות",
@@ -216,6 +222,8 @@
       "deleted": "המשימה נמחקה",
       "quickAction": "פעולה מהירה",
       "aiChat": "צור שיחה ב-AI",
+      "addToToday": "הוסף להיום",
+      "removeFromToday": "הסר מהיום",
       "searchDocs": "חפש מסמכים",
       "gmailDraft": "טיוטת Gmail",
       "openInWhatsapp": "פתח בוואטסאפ",
@@ -240,6 +248,19 @@
         "draft_settlement_request": "טיוטת בקשת פשרה",
         "custom": "פעולה מותאמת"
       }
+    },
+    "linkActions": {
+      "joinZoom": "הצטרף ל-Zoom",
+      "joinMeet": "הצטרף ל-Meet",
+      "joinTeams": "הצטרף ל-Teams",
+      "openDoc": "פתח מסמך",
+      "openSheet": "פתח גיליון",
+      "openSlides": "פתח מצגת",
+      "openDrive": "פתח ב-Drive",
+      "openCalendar": "פתח ביומן",
+      "openEmail": "פתח אימייל",
+      "openWhatsapp": "פתח בוואטסאפ",
+      "openLink": "פתח קישור"
     },
     "detail": {
       "description": "תיאור",

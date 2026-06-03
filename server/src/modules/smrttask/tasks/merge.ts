@@ -112,6 +112,16 @@ available — and propose:
   2. A coherent description that synthesizes the content (NOT a concatenation
      with separators — write fresh prose).
 
+     CRITICAL DATE RULE — applies to merged_title_he, merged_description,
+     and every checklist item:
+     - When stating WHEN a task/meeting/event is scheduled or due, write
+       the ABSOLUTE calendar date (e.g. "2 ביוני" or "ב-2/6"). NEVER use
+       a relative day-word ("היום"/"מחר"/"אתמול"/"today"/"tomorrow") to
+       express the date — these fields are stored persistently and a
+       relative word goes stale and becomes wrong the next day.
+     - EXCEPTION: quoting what a person literally said ("אמר שיתקשר מחר")
+       is allowed — that reports their words, not the task's date.
+
      CRITICAL URL RULE — applies everywhere in the description AND in
      every checklist item:
      - When a source contains a SPECIFIC URL (a deep link to a particular

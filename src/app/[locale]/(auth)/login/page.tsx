@@ -53,7 +53,7 @@ export default function LoginPage() {
     <div className="w-full max-w-sm space-y-8">
       {/* Logo */}
       <div className="text-center">
-        <h1 className="text-4xl font-bold text-[#1E4D8C]">smrtesy</h1>
+        <h1 className="text-4xl font-bold text-primary">smrtesy</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Smart &amp; Easy — Personal AI Brain
         </p>

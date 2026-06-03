@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, Mail, MessageCircle, Brain, X } from "lucide-react";
 import { api } from "@/lib/api/client";
@@ -33,6 +34,7 @@ export function QuickAction({
   onDone,
 }: QuickActionProps) {
   const t = useTranslations("tasks.actions");
+  const tCommon = useTranslations("common");
   const { locale } = useParams<{ locale: string }>();
   const router = useRouter();
 
@@ -173,7 +175,7 @@ export function QuickAction({
         <div className="flex-1 overflow-auto py-4">
           {loading && (
             <div className="flex flex-col items-center gap-3 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">{t("quickAction")}...</p>
             </div>
           )}
@@ -206,21 +208,19 @@ export function QuickAction({
               </Button>
             )}
             {isDraft && (
-              <Button
+              <IconButton
+                label={t("saveToKnowledge")}
+                color="violet"
                 onClick={handleSaveToKnowledge}
                 disabled={savingKb}
-                variant="outline"
-                size="icon"
-                title={t("saveToKnowledge")}
-                aria-label={t("saveToKnowledge")}
                 className="min-h-[48px] min-w-[48px]"
               >
-                {savingKb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
-              </Button>
+                {savingKb ? <Loader2 className="animate-spin" /> : <Brain />}
+              </IconButton>
             )}
-            <Button onClick={onClose} variant="ghost" size="icon" className="min-h-[48px] min-w-[48px]">
-              <X className="h-4 w-4" />
-            </Button>
+            <IconButton label={tCommon("close")} color="neutral" onClick={onClose} className="min-h-[48px] min-w-[48px]">
+              <X />
+            </IconButton>
           </div>
         )}
       </SheetContent>

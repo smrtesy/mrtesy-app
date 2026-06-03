@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Dialog, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -29,11 +30,13 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { AITrail } from "@/components/smrttask/common/AITrail";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { ProjectCombobox } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { ProjectOption } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { Task } from "@/types/task";
@@ -56,6 +59,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
   const tActions = useTranslations("tasks.actions");
+  const tMerge = useTranslations("merge");
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -83,6 +87,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [dismissingDup, setDismissingDup] = useState(false);
 
   /** Locally-refreshed snapshot of the task, kept in sync after operations
    *  that the parent's onUpdate() callback only refreshes at list-level
@@ -126,6 +132,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const updates = (effectiveTask.updates || []).slice(-20).reverse();
   const generated = effectiveTask.ai_generated_content || [];
   const docs = effectiveTask.linked_drive_docs || [];
+
+  // Dismiss a medium-confidence duplicate suggestion ("not a duplicate"):
+  // clears the pointer so the banner stops showing.
+  async function dismissDuplicateSuggestion() {
+    if (!task) return;
+    setDismissingDup(true);
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { suggested_duplicate_of: null } });
+      toast.success(t("duplicateSuggestionDismissed"));
+      onUpdate();
+    } catch {
+      toast.error(tCommon("error"));
+    } finally {
+      setDismissingDup(false);
+    }
+  }
 
   async function startFieldEdit() {
     if (!task) return;
@@ -281,12 +303,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <div className="flex items-center justify-between gap-2">
               <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
               <div className="flex items-center gap-1 shrink-0">
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={startFieldEdit} title={tCommon("edit")}>
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose} title={tCommon("close")}>
-                  <X className="h-4 w-4" />
-                </Button>
+                <IconButton label={tCommon("edit")} color="primary" onClick={startFieldEdit}>
+                  <Pencil />
+                </IconButton>
+                <IconButton label={tCommon("close")} color="neutral" onClick={onClose}>
+                  <X />
+                </IconButton>
               </div>
             </div>
             {/* Serial + source + linked project — all sourced from the joined data */}
@@ -314,6 +336,27 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               })()}
             </div>
           </div>
+
+          {/* Cross-source duplicate suggestion (medium confidence). High-confidence
+              matches are auto-linked upstream and never reach here. */}
+          {effectiveTask.suggested_duplicate_of && effectiveTask.suggested_duplicate && (
+            <div className="border-b bg-status-warn-bg px-4 py-2.5 flex items-center gap-2 text-sm" dir={dir}>
+              <div className="flex-1 min-w-0 text-status-warn">
+                {t("duplicateSuggestionLabel", { serial: effectiveTask.suggested_duplicate.serial_display })}
+                <span className="block truncate text-xs opacity-80">
+                  {locale === "he"
+                    ? (effectiveTask.suggested_duplicate.title_he ?? effectiveTask.suggested_duplicate.title)
+                    : (effectiveTask.suggested_duplicate.title ?? effectiveTask.suggested_duplicate.title_he)}
+                </span>
+              </div>
+              <Button size="sm" variant="outline" className="h-7 shrink-0" onClick={() => setMergeOpen(true)}>
+                {t("duplicateSuggestionReview")}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 shrink-0" disabled={dismissingDup} onClick={dismissDuplicateSuggestion}>
+                {t("duplicateSuggestionDismiss")}
+              </Button>
+            </div>
+          )}
 
           {/* Plain overflow-y-auto instead of <ScrollArea> here. The Radix
               viewport occasionally fails to size correctly inside this
@@ -455,7 +498,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap text-sm" dir={dir}>
-                      {task.description || (
+                      {task.description ? (
+                        <LinkifiedText>{task.description}</LinkifiedText>
+                      ) : (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
                     </div>
@@ -532,7 +577,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                               }}
                               style={{ cursor: isLong ? "pointer" : "default" }}
                             >
-                              {display}
+                              <LinkifiedText>{display}</LinkifiedText>
                             </div>
                           </li>
                         );
@@ -599,7 +644,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                               href={item.draft_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="mt-1 inline-flex items-center gap-1 text-blue-600 hover:underline"
+                              className="mt-1 inline-flex items-center gap-1 text-primary hover:underline"
                             >
                               <ExternalLink className="h-3 w-3" /> {t("detail.openDraft")}
                             </a>
@@ -631,7 +676,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                           rel="noopener noreferrer"
                           className="flex items-center gap-2 rounded border p-2 text-xs hover:bg-accent"
                         >
-                          <FolderSearch className="h-4 w-4 text-blue-500" />
+                          <FolderSearch className="h-4 w-4 text-primary" />
                           <span className="flex-1 truncate" dir={dir}>{doc.name}</span>
                           <ExternalLink className="h-3 w-3 text-muted-foreground" />
                         </a>
@@ -653,47 +698,41 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
           {/* Sticky bottom actions */}
           <div className="border-t bg-background px-4 py-3 flex items-center justify-between pb-[max(12px,env(safe-area-inset-bottom))]">
             <div className="flex gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10"
+              <IconButton
+                label={t("actions.aiChat")}
+                color="blue"
                 onClick={() => window.open(
                   `https://claude.ai/new?q=${encodeURIComponent(task.description || title)}`,
                   "_blank"
                 )}
-                title={t("actions.aiChat")}
               >
-                <MessageCircle className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10"
+                <MessageCircle />
+              </IconButton>
+              <IconButton
+                label={t("actions.searchDocs")}
+                color="green"
                 onClick={() => onDriveSearch?.(task.id, task.description || title)}
                 disabled={!onDriveSearch}
-                title={t("actions.searchDocs")}
               >
-                <FolderSearch className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handleSnooze} title={t("actions.snooze")}>
-                <Clock className="h-4 w-4" />
-              </Button>
+                <FolderSearch />
+              </IconButton>
+              <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
+                <Clock />
+              </IconButton>
               {onDelete && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-10 w-10 text-red-600 hover:text-red-700 hover:bg-red-50"
+                <IconButton
+                  label={t("actions.delete")}
+                  color="red"
                   onClick={() => onDelete(task.id)}
-                  title={t("actions.delete")}
                 >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                  <Trash2 />
+                </IconButton>
               )}
             </div>
             <Button
               variant="outline"
               size="sm"
-              className="gap-1 border-green-600/40 text-green-600/60 hover:bg-green-600 hover:text-white hover:border-green-600 active:bg-green-700"
+              className="gap-1 border-status-ok/40 text-status-ok/60 hover:bg-status-ok hover:text-white hover:border-status-ok active:bg-status-ok/90"
               onClick={handleComplete}
             >
               <CheckCircle2 className="h-4 w-4" />
@@ -708,6 +747,25 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         onClose={() => setSnoozeOpen(false)}
         onConfirm={handleSnoozeConfirm}
       />
+
+      {effectiveTask.suggested_duplicate && (
+        <MergeModal
+          open={mergeOpen}
+          onClose={() => setMergeOpen(false)}
+          fromTasksList
+          locale={locale}
+          sources={[
+            { id: effectiveTask.id, title: effectiveTask.title, title_he: effectiveTask.title_he, task_type: effectiveTask.task_type, status: effectiveTask.status, ai_confidence: effectiveTask.ai_confidence },
+            { id: effectiveTask.suggested_duplicate.id, title: effectiveTask.suggested_duplicate.title, title_he: effectiveTask.suggested_duplicate.title_he, task_type: "action", status: "inbox" },
+          ]}
+          onMerged={() => {
+            setMergeOpen(false);
+            toast.success(tMerge("successToast"));
+            onUpdate();
+            onClose();
+          }}
+        />
+      )}
     </Dialog>
   );
 }

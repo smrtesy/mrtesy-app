@@ -133,7 +133,7 @@ export default async function AdminUsagePage({
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-500 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-lg border border-status-late bg-status-late-bg p-3 text-sm text-status-late">
           Failed to load usage: {error.message}
         </div>
       )}

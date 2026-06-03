@@ -303,7 +303,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
                       </span>
                     </div>
                   ) : (
-                    <p className="text-xs text-orange-600">{t("targetMissing")}</p>
+                    <p className="text-xs text-status-warn">{t("targetMissing")}</p>
                   )}
 
                   {pickingTarget && (
@@ -531,7 +531,7 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
               )}
 
               {intent === "unknown" && (
-                <div className="rounded-lg border p-3 space-y-2 bg-orange-50 dark:bg-orange-950/30">
+                <div className="rounded-lg border p-3 space-y-2 bg-status-warn-bg">
                   <p className="text-sm" dir="auto">
                     {editPayload.notes_for_user || t("unknownFallback")}
                   </p>

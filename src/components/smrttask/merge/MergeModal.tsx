@@ -663,8 +663,8 @@ function Step2(props: Step2Props) {
   return (
     <div className="space-y-4 py-2">
       {aiError && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-600 flex-shrink-0" />
+        <div className="rounded-md border border-status-warn/30 bg-status-warn-bg p-3 text-sm flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 mt-0.5 text-status-warn flex-shrink-0" />
           <div>
             <div className="font-medium">{t("aiFailed")}</div>
             <div className="text-muted-foreground text-xs">{aiError}</div>
@@ -673,8 +673,8 @@ function Step2(props: Step2Props) {
       )}
 
       {proposal?.coherence_warning && (
-        <div className="rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 p-3 text-sm flex items-start gap-2">
-          <Sparkles className="h-4 w-4 mt-0.5 text-blue-600 flex-shrink-0" />
+        <div className="rounded-md border border-primary/30 bg-accent p-3 text-sm flex items-start gap-2">
+          <Sparkles className="h-4 w-4 mt-0.5 text-primary flex-shrink-0" />
           <div className="flex-1">{proposal.coherence_warning}</div>
         </div>
       )}
@@ -692,7 +692,7 @@ function Step2(props: Step2Props) {
                 <div className="flex-1 min-w-0">
                   <div className="truncate">{label}</div>
                   {warning && (
-                    <div className="mt-1 text-xs flex items-start gap-1 text-amber-700 dark:text-amber-400">
+                    <div className="mt-1 text-xs flex items-start gap-1 text-status-warn">
                       <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
                       <div>
                         <div>{t("alreadyDoneHint")}</div>
@@ -700,7 +700,7 @@ function Step2(props: Step2Props) {
                         <div className="mt-1 flex gap-2">
                           <button
                             type="button"
-                            className={`underline ${isMarkedDone ? "text-emerald-600" : ""}`}
+                            className={`underline ${isMarkedDone ? "text-status-ok" : ""}`}
                             onClick={() => onToggleCompleted(s.id)}
                           >
                             {isMarkedDone ? t("markedAsDone") : t("markAsDone")}
@@ -712,7 +712,7 @@ function Step2(props: Step2Props) {
                 </div>
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-red-500"
+                  className="text-muted-foreground hover:text-destructive"
                   onClick={() => onRemoveSource(s.id)}
                   title={t("removeFromMerge")}
                 >
@@ -775,7 +775,7 @@ function Step2(props: Step2Props) {
                 />
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-red-500 p-2"
+                  className="text-muted-foreground hover:text-destructive p-2"
                   onClick={() => removeChecklistItem(c.id)}
                   title={t("removeChecklistItem")}
                 >

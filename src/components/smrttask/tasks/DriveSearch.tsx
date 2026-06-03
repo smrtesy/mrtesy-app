@@ -161,7 +161,7 @@ URL: ${file.webViewLink}`,
         <div className="flex-1 overflow-auto py-4">
           {loading && (
             <div className="flex flex-col items-center gap-3 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-green-600" />
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">{t("searchDocs")}...</p>
             </div>
           )}
@@ -182,7 +182,7 @@ URL: ${file.webViewLink}`,
                   rel="noopener noreferrer"
                   className="flex items-center gap-3 rounded-lg border p-3 hover:bg-accent"
                 >
-                  <FolderSearch className="h-5 w-5 text-blue-500 shrink-0" />
+                  <FolderSearch className="h-5 w-5 text-primary shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate" dir="auto">{file.name}</p>
                     <p className="text-xs text-muted-foreground">{file.mimeType}</p>

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Zap,
   MessageCircle,
   FolderSearch,
   Clock,
@@ -24,10 +24,13 @@ import {
   Trash2,
   Bell,
   RotateCcw,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
-import { translateActionLabel } from "@/lib/actionLabels";
+import { extractTaskLinks } from "@/lib/smrttask/links";
+import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import type { Task } from "@/types/task";
@@ -41,7 +44,9 @@ interface TaskCardProps {
   onToggleToday?: (taskId: string) => void;
   onActivate?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
-  onQuickAction: (taskId: string, action: { label: string; prompt: string }) => void;
+  /** No longer rendered on the card (AI ⚡ buttons hidden for now); kept so
+   *  callers can stay unchanged and for easy restoration. */
+  onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
   /** When provided, the priority badge becomes a quick-edit dropdown. */
   onPriorityChange?: (taskId: string, priority: string) => void;
@@ -52,19 +57,21 @@ interface TaskCardProps {
   extraActions?: ReactNode;
 }
 
+// דחיפות לפי הפלטה הסמנטית: דחוף=אדום, גבוה=כתום, בינוני/נמוך=אפור ניטרלי
+// (הצבע בולט רק כשדחוף).
 const priorityColors: Record<string, string> = {
-  urgent: "bg-red-500 text-white",
-  high: "bg-orange-500 text-white",
-  medium: "bg-blue-500 text-white",
-  low: "bg-gray-400 text-white",
+  urgent: "bg-status-late text-white",
+  high: "bg-status-warn text-white",
+  medium: "bg-muted-foreground text-white",
+  low: "bg-muted-foreground/40 text-white",
 };
 
 /** Small color dot matching each priority, shown in the quick-edit menu. */
 const priorityDotColors: Record<string, string> = {
-  urgent: "bg-red-500",
-  high: "bg-orange-500",
-  medium: "bg-blue-500",
-  low: "bg-gray-400",
+  urgent: "bg-status-late",
+  high: "bg-status-warn",
+  medium: "bg-muted-foreground",
+  low: "bg-muted-foreground/40",
 };
 
 const PRIORITY_ORDER = ["urgent", "high", "medium", "low"] as const;
@@ -78,7 +85,6 @@ export function TaskCard({
   onToggleToday,
   onActivate,
   onDelete,
-  onQuickAction,
   onDriveSearch,
   onPriorityChange,
   selected,
@@ -87,10 +93,9 @@ export function TaskCard({
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
-  const tActions = useTranslations("tasks.actions");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
-  const aiActions = (task.ai_actions || []).slice(0, 2);
+  const links = extractTaskLinks(task);
   const source = task.source_messages ?? null;
   const checklist = task.checklist ?? [];
   const checklistTotal = checklist.length;
@@ -102,8 +107,8 @@ export function TaskCard({
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer overflow-hidden",
-        isNew && "border-s-2 border-s-blue-400/30",
-        isPendingCompletion && "border-s-4 border-s-emerald-500",
+        isNew && "border-s-2 border-s-primary/30",
+        isPendingCompletion && "border-s-4 border-s-status-ok",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
@@ -113,7 +118,7 @@ export function TaskCard({
         <div
           className={cn(
             "mb-2 -mx-1 -mt-1 rounded-md px-2 py-1 text-xs flex items-start gap-2",
-            isPendingCompletion ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-900",
+            isPendingCompletion ? "bg-status-ok-bg text-status-ok" : "bg-status-warn-bg text-status-warn",
           )}
         >
           <Bell className="h-3 w-3 mt-0.5 shrink-0" />
@@ -137,10 +142,20 @@ export function TaskCard({
             aria-label="select"
           />
         )}
-        <h3 className="font-semibold text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
+        <h3 className="font-medium text-sm md:text-base leading-tight flex-1 min-w-0 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
+          {task.suggested_duplicate_of && (
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-0.5 border-status-warn bg-status-warn-bg text-status-warn"
+              title={t("duplicateSuggestionBadgeTitle")}
+            >
+              <Copy className="h-3 w-3" />
+              {t("duplicateSuggestionBadge")}
+            </Badge>
+          )}
           <SerialBadge serial={task.serial_display} stopPropagation />
           {onPriorityChange ? (
             <DropdownMenu>
@@ -181,7 +196,7 @@ export function TaskCard({
       {/* Description preview */}
       {task.description && (
         <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
-          {task.description}
+          <LinkifiedText>{task.description}</LinkifiedText>
         </p>
       )}
 
@@ -215,26 +230,11 @@ export function TaskCard({
         )}
       </div>
 
-      {/* AI Action Buttons */}
-      {aiActions.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {aiActions.map((action, i) => (
-            <Button
-              key={i}
-              variant="outline"
-              size="sm"
-              className="h-8 max-w-full min-w-0 text-xs gap-1"
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickAction(task.id, action);
-              }}
-            >
-              <Zap className="h-3 w-3 shrink-0" />
-              <span className="truncate">{translateActionLabel(action.label, tActions)}</span>
-            </Button>
-          ))}
-        </div>
-      )}
+      {/* Actionable links pulled from the task (Zoom/Meet/doc/…) so the user
+          can act straight from the card. AI suggestion buttons are hidden for
+          now (until they're genuinely useful) — see git history to restore. */}
+      <LinkActions links={links} />
+
 
       {/* Pending-completion: prominent approve / reopen row REPLACES the regular row */}
       {isPendingCompletion ? (
@@ -242,7 +242,7 @@ export function TaskCard({
           <Button
             variant="default"
             size="sm"
-            className="h-9 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="h-9 gap-1 bg-status-ok hover:bg-status-ok/90 text-white"
             onClick={(e) => {
               e.stopPropagation();
               onComplete(task.id);
@@ -266,28 +266,26 @@ export function TaskCard({
             </Button>
           )}
           {onDelete && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ms-auto h-9 w-9 text-red-600 hover:text-red-700 hover:bg-red-50"
+            <IconButton
+              label={t("actions.delete")}
+              color="red"
+              className="ms-auto"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
               }}
-              title={t("actions.delete")}
             >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+              <Trash2 />
+            </IconButton>
           )}
         </div>
       ) : (
       /* Regular bottom action row */
       <div className="mt-3 flex items-center justify-between border-t pt-2">
         <div className="flex gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+          <IconButton
+            label={t("actions.aiChat")}
+            color="blue"
             onClick={(e) => {
               e.stopPropagation();
               // Open claude.ai/new with context
@@ -296,76 +294,65 @@ export function TaskCard({
                 "_blank"
               );
             }}
-            title={t("actions.aiChat")}
           >
-            <MessageCircle className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+            <MessageCircle />
+          </IconButton>
+          <IconButton
+            label={t("actions.searchDocs")}
+            color="green"
             onClick={(e) => {
               e.stopPropagation();
               onDriveSearch?.(task.id, task.description || title);
             }}
-            title={t("actions.searchDocs")}
           >
-            <FolderSearch className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+            <FolderSearch />
+          </IconButton>
+          <IconButton
+            label={t("actions.snooze")}
+            color="amber"
             onClick={(e) => {
               e.stopPropagation();
               onSnooze(task.id);
             }}
-            title={t("actions.snooze")}
           >
-            <Clock className="h-4 w-4" />
-          </Button>
+            <Clock />
+          </IconButton>
           {onToggleToday && (
             task.today_position != null ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-amber-500 hover:text-amber-600 hover:bg-amber-50"
+              <IconButton
+                label={t("actions.removeFromToday")}
+                color="amber"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
-                title="הסר מהיום"
               >
-                <Sunset className="h-4 w-4" />
-              </Button>
+                <Sunset />
+              </IconButton>
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-orange-400 hover:text-orange-500 hover:bg-orange-50"
+              <IconButton
+                label={t("actions.addToToday")}
+                color="amber"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
-                title="הוסף להיום"
               >
-                <Sunrise className="h-4 w-4" />
-              </Button>
+                <Sunrise />
+              </IconButton>
             )
           )}
           {onDelete && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10 md:h-8 md:w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+            <IconButton
+              label={t("actions.delete")}
+              color="red"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
               }}
-              title={t("actions.delete")}
             >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+              <Trash2 />
+            </IconButton>
           )}
         </div>
         <Button
           variant="ghost"
           size="sm"
-          className="h-10 md:h-8 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          className="h-10 md:h-8 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok/90"
           onClick={(e) => {
             e.stopPropagation();
             onComplete(task.id);

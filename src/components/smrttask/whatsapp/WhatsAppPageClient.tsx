@@ -137,7 +137,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
       <h1 className="sr-only">{title}</h1>
 
       {error && (
-        <div className="mb-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+        <div className="mb-2 rounded border bg-status-late-bg p-2 text-sm text-status-late">
           {error}
         </div>
       )}

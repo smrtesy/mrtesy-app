@@ -109,7 +109,7 @@ export function DriveFolderManager({ onChange }: { onChange?: (count: number) =>
   return (
     <div className="space-y-4">
       {driveError && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="flex items-start gap-2 rounded-md border border-status-warn/30 bg-status-warn-bg p-3 text-sm text-status-warn">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <span>{driveError}</span>
         </div>
@@ -137,7 +137,7 @@ export function DriveFolderManager({ onChange }: { onChange?: (count: number) =>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 text-red-500"
+                className="h-9 w-9 text-destructive hover:bg-destructive/10"
                 onClick={() => handleRemove(f.id)}
                 disabled={saving}
                 aria-label={t("remove")}
@@ -255,7 +255,7 @@ function FolderPicker({
         </div>
 
         {error && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="flex items-start gap-2 rounded-md border border-status-warn/30 bg-status-warn-bg p-3 text-sm text-status-warn">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>
@@ -281,7 +281,7 @@ function FolderPicker({
                   className={`flex items-center gap-2 w-full rounded-md p-2 text-start text-sm transition-colors hover:bg-accent ${isPicked ? "bg-primary/10" : ""}`}
                 >
                   <div className={`h-4 w-4 shrink-0 rounded border ${isPicked ? "bg-primary border-primary" : "border-muted-foreground"}`}>
-                    {isPicked && <span className="block text-center text-[10px] leading-4 text-white">✓</span>}
+                    {isPicked && <span className="block text-center text-[10px] leading-4 text-primary-foreground">✓</span>}
                   </div>
                   <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="truncate" dir="auto">{f.name}</span>

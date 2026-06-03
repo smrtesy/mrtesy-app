@@ -108,10 +108,10 @@ export default async function AdminUserDetailPage({
                 </span>
               </div>
               {s.consecutive_failures > 0 && (
-                <p className="text-xs text-red-500">{t("failures", { count: s.consecutive_failures })}</p>
+                <p className="text-xs text-status-late">{t("failures", { count: s.consecutive_failures })}</p>
               )}
               {s.last_error && (
-                <p className="text-xs text-red-500 truncate">{s.last_error}</p>
+                <p className="text-xs text-status-late truncate">{s.last_error}</p>
               )}
             </div>
           ))}

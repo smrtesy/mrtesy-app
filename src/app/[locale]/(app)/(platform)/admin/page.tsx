@@ -125,11 +125,11 @@ export default async function AdminDashboard({
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${c.problem ? "text-red-500" : ""}`}>
+                <div className={`text-2xl font-bold ${c.problem ? "text-status-late" : ""}`}>
                   {c.value}
                 </div>
                 {c.subtitle && (
-                  <p className={`text-xs ${c.problem ? "text-red-500" : "text-muted-foreground"}`}>
+                  <p className={`text-xs ${c.problem ? "text-status-late" : "text-muted-foreground"}`}>
                     {c.subtitle}
                   </p>
                 )}

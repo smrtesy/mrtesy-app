@@ -119,7 +119,7 @@ export function AITrailBody({ data, loading, error, showCost, className }: BodyP
   return (
     <div className={cn("rounded-md border bg-muted/30 px-3 py-2 text-xs space-y-2", className)} dir="auto">
       {loading && <p className="text-muted-foreground">{t("loading")}</p>}
-      {error && <p className="text-red-500">{error}</p>}
+      {error && <p className="text-status-late">{error}</p>}
 
       {!loading && !error && !source && (
         <p className="text-muted-foreground">{t("noSource")}</p>
@@ -170,7 +170,7 @@ export function AITrailBody({ data, loading, error, showCost, className }: BodyP
           )}
 
           {log?.error_message && (
-            <div className="rounded bg-red-50 dark:bg-red-950/30 p-2 text-red-700 dark:text-red-300">
+            <div className="rounded bg-status-late-bg p-2 text-status-late">
               {log.error_message}
             </div>
           )}

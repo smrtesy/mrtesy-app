@@ -78,12 +78,12 @@ export function DeployInfoCard() {
           <>
             <DeployRow
               label={t("deployFrontend")}
-              icon={<Globe className="h-4 w-4 text-blue-500" />}
+              icon={<Globe className="h-4 w-4 text-primary" />}
               info={frontend}
             />
             <DeployRow
               label={t("deployBackend")}
-              icon={<Server className="h-4 w-4 text-emerald-500" />}
+              icon={<Server className="h-4 w-4 text-status-ok" />}
               info={backend}
             />
           </>
