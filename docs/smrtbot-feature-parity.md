@@ -278,7 +278,7 @@
 - [ ] ולידציית טלפון בינלאומי [B]/[C]/[R]
 - [ ] ולידציית CSV טריוויה [B]
 - [ ] crash notifier → **`notifyError` + `log_entries`** [B]
-- [ ] אינדקס וידאו → **API חי מאתר מאור** (rebbek.org); `smrtbot_videos` = cache מסונכרן; CSV = seed/fallback. (החליף Google Sheets sync.) חגים = DB-only [B]
+- [ ] אינדקס וידאו → `smrtbot_videos` = מקור-אמת בזמן ריצה. אכלוס: CSV-import + CRUD עכשיו; API של מאור (בתכנון) יתווסף כ-sync adapter. (החליף Google Sheets sync.) חגים = DB-only [B]
 - [ ] שימור provenance ב-CRM: **כל** אנשי הקשר עם `source` (כולל "מהבוט") — דרישת בעל המוצר [C]
 - [ ] בוט שני (Google Sheet + Apps Script) — onboarding עתידי אחרי בניית המערכת [B]
 - [ ] Gmail OAuth → **מבוטל** (SES בלבד)
