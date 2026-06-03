@@ -104,7 +104,7 @@
 | `bot_logs`, `webhook_logs` | `smrtbot_bot_logs`, `smrtbot_webhook_logs` | **+ retention** (pg_cron) |
 | `error_logs`, `audit_log` | `smrtbot_error_logs`, `smrtbot_audit_log` | error קריטי → גם `notifyError`+`log_entries` |
 | `deploy_snapshots` | `smrtbot_snapshots` | publish test→live (פעולת DB, לא GitHub) |
-| **חדש** | `smrtbot_videos` | מהגיליון: `video_name`, `url`, `main_category`, `sub_category`, `sub_category_2`, `rebbe`, `holidays[]`, `vd_id`, `description`, `sort_order`, `active` |
+| **חדש** | `smrtbot_videos` | **cache מסונכרן ממקור חי**. עמודות (מה-CSV, 15): vd_id, vd_internal_id, video_name, video_number, video_link, full_url, display_link, vd_categories, main_category, sub_category, rebbe, holidays, icon, icon_source, search_text. **מקור = API חי מאתר מאור** (rebbek.org) — לא ייבוא סטטי; CSV (1,137 וידאו) = seed/סכמה/fallback |
 | **חדש** | `smrtbot_bot_access` | `(org_id, bot_id, user_id)` unique `(bot_id,user_id)` — הרשאת per-bot |
 
 > **WhatsApp campaigns:** `campaigns`/`campaign_logs` של botsite הם **broadcast** → עוברים ל-**smrtReach** (סעיף למטה), לא ל-smrtBot.
@@ -155,6 +155,19 @@
   `public_phone_number`, `waba_id`, `email_footer_text`, `openai_api_key` (→ מבוטל, Gemini),
   `sheet_url` (→ מבוטל אחרי וידאו), `logo_path` (→ Storage), `admin_phones`, `timezone`.
   הטוקנים = סודות → `smrtbot_bots` (טיפול זהיר, לא נחשפים בלוגים).
+
+### 6ב. עדכונים מבעל המוצר (2026-06-03)
+
+- **מקור הווידאו השתנה לחי:** במקום Google Sheets, smrtBot יצרוך את אינדקס הווידאו
+  **חי מ-API של אתר מאור** (rebbek.org). `smrtbot_videos` = **cache מסונכרן**;
+  CSV (1,137 וידאו, 15 עמודות) = seed ראשוני + סכמה + fallback. מחליף את
+  `getVideoIndex`/`searchVideos` שקראו מהגיליון. **פתוח:** מפרט ה-API (endpoint,
+  auth, והאם כולל את שדות הקוריישן-לבוט או רק וידאו גולמי).
+- **בוט שני עתידי:** אחרי בניית המערכת — onboarding לבוט נוסף שחי כיום רק ב-Google
+  Sheet + Google Apps Script (פשוט יותר). מאמת את ארכיטקטורת הרב-בוטיות; ייבחן בנפרד.
+- **CRM provenance (דרישה):** smrtCRM משמר את **כל** אנשי הקשר (9,175) עם שדה
+  `source` (מקור: manual/csv/bot/...), **כולל סימון מי הגיע מהבוט**. אין צורך
+  בהגירת לוגים — אבל אנשי הקשר והמקור שלהם כן נשמרים.
 
 ---
 
