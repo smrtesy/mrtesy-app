@@ -9,6 +9,7 @@ import type { Request, Response } from "express";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
 
 import botsRouter from "./routes/bots";
+import contentRouter from "./routes/content";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.get("/bot/health", (req: Request, res: Response) => {
 });
 
 router.use(botsRouter);
+router.use(contentRouter);
 
 export default router;
