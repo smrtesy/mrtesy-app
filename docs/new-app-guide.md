@@ -11,12 +11,22 @@ App used as example throughout: **smrtCRM** (`slug: smrtcrm`)
 ```
 smrtesy (platform)          ← manages users, orgs, invites, permissions
   └── apps registered in DB
-        smrtTask  (smrttask)   ← existing
-        smrtCRM   (smrtcrm)    ← new app example
+        smrtTask  (smrttask)   ← existing (legacy — predates some conventions)
+        smrtVoice (smrtvoice)  ← existing (cleanest modern reference app)
+        smrtCRM   (smrtcrm)    ← new app example used throughout this guide
         smrtHR    (smrthr)     ← etc.
 ```
 
 Each org enables apps independently. Users get access only if their org has the app enabled.
+
+> **Which existing app to copy from.** Two apps ship today. **smrtVoice is the
+> reference to model a new app after** — it follows every convention end-to-end:
+> `<slug>_`-prefixed tables with `org_id` + RLS, an `AppManifest`, the
+> `modules/<slug>` + `apps/<slug>` split, registry entries, and a guide page.
+> **smrtTask is older** and predates parts of this model: its tables are *not*
+> `smrttask_`-prefixed (they use legacy names) and it carries smrtTask-only
+> infrastructure (Gmail/Drive/Calendar sync, WhatsApp). Read smrtTask for
+> route/handler patterns, but copy **smrtVoice** for structure.
 
 **Naming rules (from CLAUDE.md):**
 - DB slug: always lowercase, no spaces → `smrtcrm`, `smrthr`, `smrtmail`
@@ -51,7 +61,13 @@ Create `supabase/migrations/YYYYMMDDHHMMSS_smrtcrm_schema.sql`.
 Rules:
 - Table name prefix: `<slug>_` → `smrtcrm_contacts`, `smrtcrm_deals`
 - Every table must have `org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
-- Every table must have `ENABLE ROW LEVEL SECURITY` + an org-members policy
+- Every table must have `ENABLE ROW LEVEL SECURITY` + an org-members policy with
+  **both** `USING` (read) and `WITH CHECK` (write) clauses
+
+The org-membership table is `org_members` (columns `org_id`, `user_id`,
+`role` with `CHECK (role IN ('owner','admin','member'))`, PK `(org_id, user_id)`).
+Live reference: copy the pattern from
+`supabase/migrations/20260526073100_smrtvoice_schema.sql`.
 
 Template:
 
@@ -67,12 +83,11 @@ CREATE TABLE smrtcrm_contacts (
 
 ALTER TABLE smrtcrm_contacts ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "org members access" ON smrtcrm_contacts
-  USING (
-    org_id IN (
-      SELECT org_id FROM org_members WHERE user_id = auth.uid()
-    )
-  );
+-- Name the policy per-table (matches the smrtvoice convention) and gate both
+-- reads and writes on org membership.
+CREATE POLICY "smrtcrm_contacts_org_members" ON smrtcrm_contacts
+  USING      (org_id IN (SELECT org_id FROM org_members WHERE user_id = auth.uid()))
+  WITH CHECK (org_id IN (SELECT org_id FROM org_members WHERE user_id = auth.uid()));
 ```
 
 **Verify:** List tables and confirm RLS is on. Confirm no `CHECK` constraints are being violated by planned inserts (read the migration file).
@@ -81,7 +96,11 @@ CREATE POLICY "org members access" ON smrtcrm_contacts
 
 ## STEP 3 — Server: Create the App Module
 
-The module lives at `server/src/modules/smrtcrm/`. Model it exactly after `server/src/modules/smrttask/`.
+The module lives at `server/src/modules/smrtcrm/`. **Model it after
+`server/src/modules/smrtvoice/`** (the cleanest reference: `index.ts` +
+`routes.ts` + supporting files, all routes gated on the app slug). Read
+`server/src/modules/smrttask/` too for richer handler/cron patterns, but
+smrtVoice is the structural template.
 
 ### 3a — Create the routes file
 
@@ -93,7 +112,7 @@ import type { Request, Response } from "express";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
 import { db } from "../../db";
 import { notifyError, emitEvent } from "../../lib/platform";
-import { toast } from "sonner"; // server-side: use notifyError, not toast
+// Server-side has no toast — surface failures via notifyError + log_entries.
 
 const router = Router();
 
@@ -217,6 +236,14 @@ export const manifest: AppManifest = {
   },
 };
 ```
+
+**Type notes (`server/src/lib/platform/types.ts`):**
+- `subscribes` is **not** a bare string array — it's `ManifestSubscription[]`,
+  each `{ event, source, handler }`. Use `[]` if your app reacts to nothing.
+- Each `notifications` entry's `title` / `body` / `link` may be a **string or a
+  function of the event payload** — e.g. `title: (p) => \`האודיו מוכן: ${p.project_name}\``.
+  See `server/src/apps/smrtvoice/manifest.ts` for the live example.
+- `errors.default_handler_role` is `"owner" | "admin"`.
 
 Register it in `server/src/lib/platform/registry.ts`:
 
@@ -342,30 +369,91 @@ Add a namespace to **both** `src/messages/en.json` and `src/messages/he.json` in
 
 **Never** write `locale === "he" ? "..." : "..."` ternaries. Every visible string through `t()`.
 
+**Namespace convention:** name your app's content namespace `smrt<Word>` to match
+the app — e.g. smrtVoice uses `"smrtVoice"` (and nests, e.g. `"smrtVoice.audio"`).
+So smrtCRM → `"smrtCRM"`. (smrtTask is the exception: it predates this and uses
+the legacy `"tasks"` namespace — don't copy that for a new app.) **Sidebar nav
+labels are separate**: they live under the shared `"nav"` namespace, keyed by the
+nav item's `key` (see STEP 9), not under your app namespace.
+
 ---
 
-## STEP 9 — Frontend: Sidebar Navigation
+## STEP 9 — Frontend: App Registry + Sidebar Navigation
+
+The sidebar does **not** read a flat list of items with a per-item `appSlug`
+gate. It renders one *section per app*, and a section only appears when the org
+has that app enabled. Wiring a new app into the sidebar is three sub-steps.
+
+### 9a — Register the app in the frontend registry
+
+Edit `src/lib/apps/registry.ts`. This is the client-side counterpart to the
+server's `APP_REGISTRY` and is what `AppSectionHeader` uses to render the app
+name (→ guide page) and icon (→ settings page).
+
+First create an icon component at `src/components/icons/SmrtCRMIcon.tsx`
+(copy `SmrtVoiceIcon.tsx`). Then add the app:
+
+```typescript
+import { SmrtCRMIcon } from "@/components/icons/SmrtCRMIcon";
+
+export const APPS: Record<string, AppDef> = {
+  smrttask:  { /* ... */ },
+  smrtvoice: { /* ... */ },
+  smrtcrm: {
+    slug: "smrtcrm",
+    word: "CRM",                         // SmrtName renders "smrt" + word
+    Icon: SmrtCRMIcon,
+    guideHref: "/crm/guide",             // app NAME click → guide (STEP 13)
+    settingsHref: "/settings/apps/smrtcrm",
+  },
+};
+```
+
+If the app needs admin detail-page cards, also add an `ADMIN_SECTIONS` entry in
+the same file (e.g. `smrtcrm: ["documents"]`). Omit it and the app falls back to
+`["documents"]`.
+
+### 9b — Add the section to the Sidebar
 
 Edit `src/components/platform/layout/Sidebar.tsx`.
 
-Find the nav items array and add your app's entry. It will only render if the org has the app enabled (the sidebar already filters by `enabledApps`):
+Nav items are `{ key, href, icon }` — **no `label`, no `appSlug`** (the label is
+resolved from the `"nav"` i18n namespace by `key`; gating is by section, below):
 
 ```typescript
-{
-  key: "crm",
-  label: t("nav.crm"),          // add key to en.json + he.json
-  icon: Users,
-  href: `/${locale}/crm`,
-  appSlug: "smrtcrm",           // gated by this app membership
-},
+const smrtCrmItems = [
+  { key: "crm", href: "/crm", icon: Users },
+] as const;
 ```
 
-Add the i18n keys:
+Derive an enabled flag from the `enabledApps` prop and render the section
+conditionally (mirror the `hasSmrtVoice` block):
+
+```typescript
+const hasSmrtCrm = enabledApps.includes("smrtcrm");
+
+// ...inside <nav>, alongside the smrtTask / smrtVoice sections:
+{hasSmrtCrm && (
+  <>
+    <AppSectionHeader app={APPS.smrtcrm} />
+    {smrtCrmItems.map((item) => (
+      <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+        basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+    ))}
+  </>
+)}
+```
+
+If the app should appear in the mobile bottom-tab bar, add its key to the
+relevant branch of `activeMobileItems` too.
+
+### 9c — Add the nav i18n keys
+
 ```json
-// en.json → nav
+// en.json → "nav"
 "crm": "CRM"
 
-// he.json → nav
+// he.json → "nav"
 "crm": "קשרי לקוחות"
 ```
 
@@ -387,7 +475,26 @@ FROM apps WHERE slug = 'smrtcrm';
 
 ## STEP 11 — Logging: Write to log_entries
 
-Every error path must write a `log_entries` row so it appears in **Platform → Logs**:
+`log_entries` is a **shared platform table** — it already exists (no per-app
+migration needed; its schema is documented in
+`supabase/migrations/20260602120000_log_entries_documented.sql`). A DB trigger
+fans out any row with `level = "error"` to super-admins as an `action_required`
+notification, so error rows here surface in **Platform → Logs** *and* alert the
+admins.
+
+Columns you'll use from any app:
+- `user_id` (FK → `auth.users`), `created_at` (default `now()`)
+- `level` — CHECK `('info','warning','error')`, default `'info'`
+- `category` — **required**; use `app.entity.action` (e.g. `smrtcrm.contact.create`)
+- `status` — CHECK `('ok','skipped','failed','duplicate')`, default `'ok'`
+- `error_message` — text
+- `details` — `jsonb` default `'{}'`; put any app-specific structured payload here
+
+The table also carries smrtTask-specific columns (`task_id`, `task_title`,
+`source_message_id`, `ai_model_used`, `ai_cost_usd`, `processing_duration_ms`, …)
+— ignore those from other apps; use `details` for your own structured data.
+Note the RLS policy is **per-user** (`user_id = auth.uid()`), not org-scoped, so
+writes generally happen through the service-role `db` client.
 
 ```typescript
 import { db } from "../../db";
@@ -398,21 +505,15 @@ const { error: logErr } = await db.from("log_entries").insert({
   level: "error",
   category: "smrtcrm.contact.create",   // app.entity.action
   status: "failed",
-  error_message: err.message,
-  details: {
-    stack: err instanceof Error ? err.stack : undefined,
-    org_id: req.org!.id,
-    input: req.body,
-  },
+  error_message: err instanceof Error ? err.message : String(err),
+  details: { org_id: req.org!.id, input: req.body },
 });
 if (logErr) console.error("[log_entries]", logErr.message);
 
 // For successful actions (optional but useful):
 await db.from("log_entries").insert({
   user_id: req.user!.id,
-  level: "info",
-  category: "smrtcrm.contact.create",
-  status: "success",
+  category: "smrtcrm.contact.create",   // level defaults to "info", status to "ok"
   details: { org_id: req.org!.id, contact_id: data.id },
 });
 ```
@@ -440,6 +541,12 @@ Authorization: Bearer <super-admin token>
 Valid stages in order: `רעיון` → `בניה` → `טסט` → `מאור` → `לקוחות`
 
 Keep the status updated on each significant push (this is Step 4 of the pre-push protocol in CLAUDE.md).
+
+**Plan / spec documents.** The admin app-detail page has a **Documents** card
+backed by the `app_plans` table (per-app markdown: `doc_type` ∈
+`spec | idea | architecture | notes`, with versioning). Use it to keep the app's
+spec and architecture notes alongside the app itself. It's service-role only
+(RLS enabled, no policies), read by the admin Documents page.
 
 ---
 
@@ -510,14 +617,13 @@ export default function SmrtCRMGuidePage() {
 }
 ```
 
-### Add nav entry in Sidebar
+### Link it from the sidebar
 
-In `src/components/platform/layout/Sidebar.tsx`, add to the app's items array:
-```typescript
-{ key: "guide", href: "/crm/guide", icon: BookOpen },
-```
-
-Add `BookOpen` to lucide imports and `"guide": "מדריך"` / `"guide": "Guide"` to `nav` in both i18n files (if not already there — it's shared across all apps).
+There is **no separate "guide" nav item**. The guide is reached by clicking the
+**app name** in the section header (`AppSectionHeader` renders the name as a link
+to `guideHref`, and the icon as a link to `settingsHref`). So as long as you set
+`guideHref: "/crm/guide"` in `src/lib/apps/registry.ts` (STEP 9a), the guide is
+already linked. Just confirm the route file exists at the path you registered.
 
 ### Content guidelines
 
@@ -532,11 +638,23 @@ Write the guide as if explaining to a busy, non-technical manager:
 
 ---
 
-## STEP 14 — Environment Variables
+## STEP 14 — App Settings (optional)
+
+If the app has user-facing settings, they live under the **shared dynamic route**
+`/settings/apps/[appSlug]` (`src/app/[locale]/(app)/(platform)/settings/apps/[appSlug]/`),
+reached by clicking the app **icon** in the sidebar section header (the
+`settingsHref` you set in STEP 9a). You do **not** create a new route group for
+settings. The route renders `SettingsTabs` → `AppsTabPanel`; add your app's
+settings panel there only if it actually has settings. Most new apps need
+nothing here beyond the registered `settingsHref`.
+
+---
+
+## STEP 15 — Environment Variables
 
 No new env vars are needed unless the app calls an external API.
 
-If it does, add to Railway (server) and document here:
+If it does, add to the server host and document here:
 
 | Variable | Required | Description |
 |---|---|---|
@@ -544,7 +662,7 @@ If it does, add to Railway (server) and document here:
 
 ---
 
-## STEP 14 — Pre-Push Review Protocol
+## STEP 16 — Pre-Push Review Protocol
 
 Before `git push`, run the full CLAUDE.md protocol (Steps 1–5). Key items for a new app:
 
@@ -599,11 +717,13 @@ Use this before considering the new app "done" for a sprint:
 ### Frontend
 - [ ] Route group `src/app/[locale]/(app)/(smrtcrm)/` created
 - [ ] Components in `src/components/smrtcrm/`
-- [ ] All strings in `src/messages/en.json` + `src/messages/he.json` under `"smrtCRM"` namespace
+- [ ] App icon component created (`src/components/icons/SmrtCRMIcon.tsx`)
+- [ ] App registered in `src/lib/apps/registry.ts` (`APPS` entry: slug/word/Icon/guideHref/settingsHref; `ADMIN_SECTIONS` if needed)
+- [ ] All strings in `src/messages/en.json` + `src/messages/he.json` under `"smrtCRM"` namespace; nav labels under `"nav"`
 - [ ] All API calls use `api()` from `@/lib/api/client` — zero raw `fetch()` to `/api/*`
-- [ ] Sidebar nav entry added with `appSlug: "smrtcrm"` gate
+- [ ] Sidebar section added: `hasSmrtCrm = enabledApps.includes("smrtcrm")` gating an `AppSectionHeader` + `{ key, href, icon }` items
 - [ ] Guide page created at `src/app/[locale]/(app)/(smrtcrm)/crm/guide/page.tsx` using `AppGuideLayout`
-- [ ] Guide page linked from sidebar (`{ key: "guide", href: "/crm/guide", icon: BookOpen }`)
+- [ ] Guide reachable via the app name in the sidebar (`guideHref` in the registry)
 
 ### Admin
 - [ ] App visible in `/admin/apps` (automatic after DB insert)
@@ -627,27 +747,35 @@ server/src/
   modules/
     platform/                       ← platform core (orgs, members, me, apps, messaging)
     admin/                          ← super-admin routes
-    smrttask/                       ← smrtTask module (pattern to follow)
+    smrttask/                       ← smrtTask module (legacy; rich handler patterns)
+    smrtvoice/                      ← smrtVoice module (STRUCTURAL template to copy)
     smrtcrm/                        ← NEW: your app module
       index.ts
       routes.ts
   apps/
     smrttask/manifest.ts            ← existing
+    smrtvoice/manifest.ts           ← existing (manifest reference)
     smrtcrm/manifest.ts             ← NEW
   lib/platform/
-    registry.ts                     ← add: smrtcrmManifest
+    registry.ts                     ← add: smrtcrmManifest to APP_REGISTRY
 
 src/
   app/[locale]/(app)/
-    (platform)/                     ← inbox, settings, admin
-    (smrttask)/                     ← tasks, projects, calendar, log
+    (platform)/                     ← inbox, settings (incl. settings/apps/[appSlug]), admin
+    (smrttask)/                     ← tasks, projects, knowledge, whatsapp
+    (smrtvoice)/                    ← voice, characters, projects, settings
     (smrtcrm)/                      ← NEW: your app pages
       crm/page.tsx
       crm/guide/page.tsx            ← NEW: user guide (AppGuideLayout)
+  lib/apps/
+    registry.ts                     ← add: APPS["smrtcrm"] + ADMIN_SECTIONS (client registry)
   components/
+    icons/
+      SmrtCRMIcon.tsx               ← NEW: app icon (used by AppSectionHeader)
     ui/                             ← shared primitives
     platform/                       ← layout, org, inbox, onboarding
     smrttask/                       ← smrtTask components
+    smrtvoice/                      ← smrtVoice components
     smrtcrm/                        ← NEW: your app components
       ContactsClient.tsx
   messages/
@@ -673,8 +801,9 @@ Full docs: `docs/platform-integration.md`
 ```typescript
 import { notify, notifyError, emitEvent, linkEntities } from "../../lib/platform";
 
-// Notify a specific user
+// Notify a specific user. `app_slug` is REQUIRED on NotifyParams.
 await notify(orgId, userId, {
+  app_slug: "smrtcrm",
   type:  "info",                    // "info" | "warning" | "success" | "action_required"
   title: "Import complete",
   body:  "123 contacts imported",
@@ -695,6 +824,6 @@ await emitEvent(orgId, "smrtcrm", "deal.closed", "deal", dealId, { value: 5000 }
 await linkEntities(orgId, {
   from: { app: "smrtcrm",  entity: "contact", id: contactId },
   to:   { app: "smrttask", entity: "task",    id: taskId    },
-  type: "created_from",   // "created_from" | "related_to" | "duplicate_of"
+  type: "created_from",   // LinkType: "related" | "created_from" | "blocks" | "resolves"
 });
 ```
