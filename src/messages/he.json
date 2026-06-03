@@ -70,6 +70,8 @@
     "voiceSettings": "הגדרות קול",
     "voiceGuide": "מדריך smrtVoice",
     "sectionVoice": "smrtVoice",
+    "bots": "בוטים",
+    "sectionBot": "smrtBot",
     "more": "עוד"
   },
   "account": {
@@ -1216,6 +1218,17 @@
     "typeStyle": "סגנון",
     "typePreference": "העדפה",
     "typeFinancial": "פיננסי"
+  },
+  "smrtBot": {
+    "appName": "smrtBot",
+    "navSection": "smrtBot",
+    "title": "בוטים",
+    "subtitle": "ניהול הבוטים שלך בוואטסאפ",
+    "emptyState": "אין עדיין בוטים — מסך ניהול הבוטים ייכנס בשלב הבנייה הבא.",
+    "guide": {
+      "title": "מדריך smrtBot",
+      "intro": "smrtBot מריץ את בוטי השיחה שלך בוואטסאפ — תפריט, משחק, שאלות נפוצות ווידאו — שהוגרו לתוך smrtesy."
+    }
   },
   "smrtVoice": {
     "appName": "smrtVoice",

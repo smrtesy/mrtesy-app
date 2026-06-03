@@ -27,6 +27,7 @@ import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
+import smrtbotRouter from "./modules/smrtbot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -144,6 +145,7 @@ app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
+app.use("/api", smrtbotRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

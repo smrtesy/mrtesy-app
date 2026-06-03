@@ -70,6 +70,8 @@
     "voiceSettings": "Voice settings",
     "voiceGuide": "smrtVoice guide",
     "sectionVoice": "smrtVoice",
+    "bots": "Bots",
+    "sectionBot": "smrtBot",
     "more": "More"
   },
   "account": {
@@ -1216,6 +1218,17 @@
     "typeStyle": "Style",
     "typePreference": "Preference",
     "typeFinancial": "Financial"
+  },
+  "smrtBot": {
+    "appName": "smrtBot",
+    "navSection": "smrtBot",
+    "title": "Bots",
+    "subtitle": "Manage your WhatsApp bots",
+    "emptyState": "No bots yet — bot management lands in the next build phase.",
+    "guide": {
+      "title": "smrtBot guide",
+      "intro": "smrtBot runs your WhatsApp conversational bots — menu, game, FAQ and video — migrated into smrtesy."
+    }
   },
   "smrtVoice": {
     "appName": "smrtVoice",
