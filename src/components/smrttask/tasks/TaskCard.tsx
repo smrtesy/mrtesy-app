@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -265,28 +266,26 @@ export function TaskCard({
             </Button>
           )}
           {onDelete && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ms-auto h-9 w-9 text-destructive hover:bg-destructive/10"
+            <IconButton
+              label={t("actions.delete")}
+              color="red"
+              className="ms-auto"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
               }}
-              title={t("actions.delete")}
             >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+              <Trash2 />
+            </IconButton>
           )}
         </div>
       ) : (
       /* Regular bottom action row */
       <div className="mt-3 flex items-center justify-between border-t pt-2">
         <div className="flex gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+          <IconButton
+            label={t("actions.aiChat")}
+            color="blue"
             onClick={(e) => {
               e.stopPropagation();
               // Open claude.ai/new with context
@@ -295,70 +294,59 @@ export function TaskCard({
                 "_blank"
               );
             }}
-            title={t("actions.aiChat")}
           >
-            <MessageCircle className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+            <MessageCircle />
+          </IconButton>
+          <IconButton
+            label={t("actions.searchDocs")}
+            color="green"
             onClick={(e) => {
               e.stopPropagation();
               onDriveSearch?.(task.id, task.description || title);
             }}
-            title={t("actions.searchDocs")}
           >
-            <FolderSearch className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 md:h-8 md:w-8"
+            <FolderSearch />
+          </IconButton>
+          <IconButton
+            label={t("actions.snooze")}
+            color="amber"
             onClick={(e) => {
               e.stopPropagation();
               onSnooze(task.id);
             }}
-            title={t("actions.snooze")}
           >
-            <Clock className="h-4 w-4" />
-          </Button>
+            <Clock />
+          </IconButton>
           {onToggleToday && (
             task.today_position != null ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-status-warn hover:bg-status-warn-bg"
+              <IconButton
+                label={t("actions.removeFromToday")}
+                color="amber"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
-                title="הסר מהיום"
               >
-                <Sunset className="h-4 w-4" />
-              </Button>
+                <Sunset />
+              </IconButton>
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-status-warn hover:bg-status-warn-bg"
+              <IconButton
+                label={t("actions.addToToday")}
+                color="amber"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
-                title="הוסף להיום"
               >
-                <Sunrise className="h-4 w-4" />
-              </Button>
+                <Sunrise />
+              </IconButton>
             )
           )}
           {onDelete && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10 md:h-8 md:w-8 text-destructive hover:bg-destructive/10"
+            <IconButton
+              label={t("actions.delete")}
+              color="red"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
               }}
-              title={t("actions.delete")}
             >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+              <Trash2 />
+            </IconButton>
           )}
         </div>
         <Button

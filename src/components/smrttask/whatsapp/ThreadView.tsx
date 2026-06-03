@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -243,9 +244,9 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
     <div className="flex h-full flex-col rounded-lg border bg-card overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2 border-b bg-muted/40 p-2">
-        <Button variant="ghost" size="icon" className="md:hidden" onClick={onBack} aria-label={t("back")}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        <IconButton label={t("back")} color="neutral" className="md:hidden" onClick={onBack}>
+          <ArrowLeft />
+        </IconButton>
         <div className="min-w-0 flex-1">
           {renaming ? (
             <div className="flex items-center gap-1">
@@ -263,41 +264,36 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
                 maxLength={120}
                 disabled={renameSaving}
               />
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-6 w-6"
+              <IconButton
+                label={t("renameContactSave")}
+                color="green"
+                className="h-6 w-6 md:h-6 md:w-6"
                 onClick={() => void submitRename()}
                 disabled={renameSaving}
-                aria-label={t("renameContactSave")}
-                title={t("renameContactSave")}
               >
-                {renameSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-6 w-6"
+                {renameSaving ? <Loader2 className="animate-spin" /> : <Check />}
+              </IconButton>
+              <IconButton
+                label={t("renameContactCancel")}
+                color="neutral"
+                className="h-6 w-6 md:h-6 md:w-6"
                 onClick={() => setRenaming(false)}
                 disabled={renameSaving}
-                aria-label={t("renameContactCancel")}
-                title={t("renameContactCancel")}
               >
-                <X className="h-3.5 w-3.5" />
-              </Button>
+                <X />
+              </IconButton>
             </div>
           ) : (
             <div className="flex items-center gap-1">
               <p className="font-medium text-sm truncate">{displayName}</p>
-              <button
-                type="button"
+              <IconButton
+                label={t("renameContact")}
+                color="primary"
+                className="h-6 w-6 md:h-6 md:w-6 shrink-0"
                 onClick={startRename}
-                className="text-muted-foreground hover:text-foreground p-0.5 shrink-0"
-                aria-label={t("renameContact")}
-                title={t("renameContact")}
               >
-                <Pencil className="h-3 w-3" />
-              </button>
+                <Pencil />
+              </IconButton>
             </div>
           )}
           {/* Sub-line: "active a few minutes ago" approximation from

@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Trash2, Undo2 } from "lucide-react";
@@ -138,16 +138,13 @@ export function DismissedSuggestions({
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-primary hover:bg-primary/10"
+                  <IconButton
+                    label={t("restoreToInbox")}
+                    color="primary"
                     onClick={() => handleRestore(row.id)}
-                    title={t("restoreToInbox")}
-                    aria-label={t("restoreToInbox")}
                   >
-                    <Undo2 className="h-4 w-4" />
-                  </Button>
+                    <Undo2 />
+                  </IconButton>
                 </div>
               </div>
             </CardContent>

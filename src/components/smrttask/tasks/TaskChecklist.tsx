@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -256,45 +257,44 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
               )}
 
               {isEditing ? (
-                <button
-                  type="button"
-                  aria-label={t("saveEdit")}
+                <IconButton
+                  label={t("saveEdit")}
+                  color="green"
+                  className="shrink-0"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleSaveEdit}
-                  className="text-muted-foreground hover:text-foreground shrink-0"
                 >
-                  <Check className="h-3.5 w-3.5" />
-                </button>
+                  <Check />
+                </IconButton>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    aria-label={t("editItem")}
+                  <IconButton
+                    label={t("editItem")}
+                    color="primary"
                     disabled={saving}
                     onClick={() => handleStartEdit(item)}
-                    className="opacity-0 group-hover:opacity-100 transition text-muted-foreground hover:text-foreground shrink-0"
+                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t("promoteItem")}
+                    <Pencil />
+                  </IconButton>
+                  <IconButton
+                    label={t("promoteItem")}
+                    color="primary"
                     disabled={saving}
                     onClick={() => handlePromote(item)}
-                    className="opacity-0 group-hover:opacity-100 transition text-muted-foreground hover:text-foreground shrink-0"
-                    title={t("promoteItem")}
+                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
-                    <ArrowUpRight className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t("removeItem")}
+                    <ArrowUpRight />
+                  </IconButton>
+                  <IconButton
+                    label={t("removeItem")}
+                    color="red"
                     disabled={saving}
                     onClick={() => handleRemove(item.id)}
-                    className="opacity-0 group-hover:opacity-100 transition text-muted-foreground hover:text-destructive shrink-0"
+                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                    <X />
+                  </IconButton>
                 </>
               )}
             </div>
