@@ -953,6 +953,43 @@ const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ══�
 
 const GMAIL_SENT_TASK_RULES = `\n\n═══ SENT-EMAIL DIRECTION RULE (mandatory) ═══\nThis email was SENT BY THE USER — the From: address is the user's own.\nThe user is the SENDER, not the recipient. NEVER turn the user's own\nrequest into a to-do FOR the user.\n  • If the user ASKED the recipient to do / pay / send / transfer\n    something → the user is now WAITING ON the recipient. The next step\n    is to follow up or confirm the OTHER side acted — NOT to perform the\n    action the user requested from them. Title starts with\n    "לעקוב אחרי <נמען>" or "לוודא ש<נמען> …".\n  • If the user COMMITTED to do something themselves (אשלח / אעביר /\n    אבדוק / a time pledge) → the user owes a follow-through. Title starts\n    with the committed verb / "להשלים מול <נמען> …".\n  • If nothing is pending (closure, thank-you, pure FYI) → return [].\nDIRECTION GUARD (mandatory): money or an action the user REQUESTED from\nthe recipient flows TOWARD the user — never title it as the user\npaying / sending / transferring TO the recipient. owner_contact and any\nnamed party must be the RECIPIENT, never the user themselves.`;
 
+// Incoming mail whose visible To: is NOT one of the user's own addresses —
+// the message is addressed to a THIRD PARTY and the user only received a
+// copy / BCC / forward. The body's 2nd-person "you/your" refers to that
+// third party, not the user. Canonical failure (T475/T436): a Stripe
+// dunning notice the org's OWN merchant account sends to a donor whose
+// recurring-donation card failed — the builder read "update your billing
+// information" as the user's own to-do and inverted payer/payee. The
+// recipient address is injected so owner_contact resolves to the real
+// counterparty instead of the email's support footer.
+const thirdPartyRecipientTaskRules = (recipient: string) => `\n\n═══ THIRD-PARTY RECIPIENT DIRECTION RULE (mandatory) ═══
+This email is NOT addressed to the user. The visible To: address
+(${recipient || "a third party"}) is NOT one of the user's own addresses —
+the user only received a copy / BCC / forward. Every 2nd-person reference
+in the body ("you", "your card", "your subscription", "update your billing
+information", and the Hebrew equivalents "שלך", "הכרטיס שלך", "המנוי שלך")
+refers to that THIRD-PARTY RECIPIENT, NOT to the user. NEVER turn an action
+the recipient must take into a to-do for the user.
+
+This is the norm for automated billing/payment services (Stripe, PayPal,
+etc.) where the user's OWN organization is the MERCHANT / payee: the From
+display name is the user's org and the envelope looks like
+"failed-payments+acct_…@stripe.com" / "<brand> via <service>", while the
+message tells a CUSTOMER / DONOR that their card failed or a payment is due.
+In that case:
+  • The failed card / subscription belongs to the RECIPIENT, not the user.
+    The user's org is RECEIVING the money — it is the payee, not the payer.
+  • The user's action (if any) is to FOLLOW UP WITH the recipient — title
+    like "ליצור קשר עם <נמען> — התשלום/התרומה החוזרת ($סכום) נכשל" — NOT to
+    update the user's own payment method.
+  • owner_contact MUST be the third-party recipient (${recipient || "the To: address"}),
+    never the user's own org and never the service's support-footer address.
+  • If no follow-up by the user is actually warranted (pure FYI, the service
+    retries automatically, the recipient handles it themselves) → return [].
+DIRECTION GUARD: do not invert payer/payee. If the user's org is the one
+RECEIVING money (merchant / payee), never title the task as the user needing
+to pay, update billing, or fix their own card.`;
+
 async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }) {
   const model = sys.summary_model;
   const truncate = sys.body_truncate_task;
@@ -970,9 +1007,48 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   if (!isWhatsApp(msg)) {
     const senderLc = (msg.sender_email || msg.sender || "").toLowerCase();
     const myEmails = (settings.my_emails || []).map((e: string) => String(e).toLowerCase());
+    const officeAddresses = (settings.office_addresses || []).map((e: string) => String(e).toLowerCase());
+    // The user's address lists in user_settings are often incomplete (they may
+    // hold only a personal alias), so fold in the auth-account email too — it's
+    // the most reliable "this is me" signal we have at runtime.
+    const ownAddresses = [...myEmails, ...officeAddresses, settings.__authEmail || ""]
+      .map((e: string) => String(e).toLowerCase()).filter(Boolean);
     const isOutgoingEmail = msg.source_type === "gmail_sent"
       || (msg.source_type === "gmail" && myEmails.some((e: string) => e && senderLc.includes(e)));
-    if (isOutgoingEmail) context += GMAIL_SENT_TASK_RULES;
+    if (isOutgoingEmail) {
+      context += GMAIL_SENT_TASK_RULES;
+    } else {
+      // Incoming mail addressed to someone OTHER than the user, where the
+      // sender is an automated payment processor talking to a CUSTOMER/DONOR
+      // (dunning, failed-charge, receipt). The body's "you" is that third
+      // party, not the user — see thirdPartyRecipientTaskRules.
+      //
+      // Two guards, BOTH required, keep the blast radius tiny:
+      //   1. recipient is known AND matches none of the user's addresses, and
+      //   2. the message looks like customer-facing billing.
+      // Guard 2 is what keeps genuine user-addressed Stripe mail safe even
+      // when the address lists are incomplete: e.g. a "provide business info"
+      // verification for the user's OWN merchant account (verifications@ /
+      // notifications@stripe.com) does NOT match the dunning pattern, so the
+      // rule never fires on it (T356/T366). Mirror preClassify's To fallback.
+      const recipientRaw = (msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "").toString();
+      // Strip a "Name <addr>" wrapper down to the bare address before matching,
+      // so the own-address check compares like-for-like (mirrors the To-header
+      // parsing in part1-collector).
+      const recipientEmail = (recipientRaw.match(/<([^>]+)>/)?.[1] ?? recipientRaw).trim();
+      const recipientLc = recipientEmail.toLowerCase();
+      const recipientIsThirdParty = recipientLc.length > 0
+        && !ownAddresses.some((e) => recipientLc.includes(e));
+      const subjectLc = (msg.subject || "").toLowerCase();
+      const looksLikeCustomerBilling =
+        /(?:failed-payments|invoice|receipts?|billing|dunning|subscription-)[+@]/.test(senderLc)
+        || /\bvia (?:stripe|paypal|square|quickbooks|bill\.com|chargebee|recurly|hellosign)\b/i.test(String(msg.sender || ""))
+        || /(?:payment|charge|invoice|subscription).*(?:unsuccessful|failed|declined|past[- ]?due|overdue|could ?n.?t)/.test(subjectLc)
+        || /update your (?:billing|payment|card)/.test(subjectLc);
+      if (recipientIsThirdParty && looksLikeCustomerBilling) {
+        context += thirdPartyRecipientTaskRules(recipientEmail);
+      }
+    }
   }
   if (projectContext?.brief) context += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   const contactMemory = await loadContactMemory(userId, msg);
@@ -2208,6 +2284,11 @@ Deno.serve(async (req) => {
       };
       const rawFullName = ((userAuthRes.data?.user?.user_metadata?.full_name as string | undefined) || "").trim();
       settings.__userName = rawFullName.split(/\s+/)[0] || "";
+      // Auth-account email — the most reliable "this is the user" address at
+      // runtime. Folded into the own-address set in createTasksFromMessage so
+      // the third-party-recipient direction rule doesn't misfire on mail
+      // genuinely addressed to the user when user_settings.my_emails is sparse.
+      settings.__authEmail = ((userAuthRes.data?.user?.email as string | undefined) || "").toLowerCase();
 
       const withinBudget = await checkDailyBudget(userId, settings.daily_ai_budget_usd || 10.0);
       if (!withinBudget) continue;
