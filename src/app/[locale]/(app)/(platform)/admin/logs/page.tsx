@@ -70,7 +70,7 @@ function LogRow({ log }: { log: LogEntry }) {
   ].filter(([, v]) => v !== null && v !== undefined && v !== "");
 
   return (
-    <div className={`rounded border text-sm ${isError ? "border-red-300 bg-red-50/40 dark:bg-red-950/20" : ""}`}>
+    <div className={`rounded border text-sm ${isError ? "border-status-late bg-status-late-bg" : ""}`}>
       {/* Summary row */}
       <div
         className="flex items-start gap-2 p-2 cursor-pointer hover:bg-accent/40 rounded"
@@ -92,7 +92,7 @@ function LogRow({ log }: { log: LogEntry }) {
             {log.source_type && <span className="text-[11px] text-muted-foreground">{log.source_type}</span>}
           </div>
           {log.error_message && (
-            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 break-words whitespace-pre-wrap">
+            <p className="text-xs text-status-late mt-0.5 break-words whitespace-pre-wrap">
               {log.error_message}
             </p>
           )}
@@ -110,7 +110,7 @@ function LogRow({ log }: { log: LogEntry }) {
         <div className="border-t px-3 pb-3 pt-2 space-y-2">
           <div className="flex justify-end">
             <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={handleCopy}>
-              {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? <Check className="h-3.5 w-3.5 text-status-ok" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? "Copied!" : "Copy JSON"}
             </Button>
           </div>
@@ -118,7 +118,7 @@ function LogRow({ log }: { log: LogEntry }) {
             {debugFields.map(([key, val]) => (
               <div key={key} className="contents">
                 <span className="text-muted-foreground truncate">{key}</span>
-                <span className={`break-all whitespace-pre-wrap ${key === "error_message" ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>
+                <span className={`break-all whitespace-pre-wrap ${key === "error_message" ? "text-status-late font-semibold" : ""}`}>
                   {String(val)}
                 </span>
               </div>

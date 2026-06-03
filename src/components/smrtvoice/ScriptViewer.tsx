@@ -22,8 +22,8 @@ interface Line {
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "text-muted-foreground",
-  processing: "text-blue-500",
-  completed: "text-green-600",
+  processing: "text-primary",
+  completed: "text-status-ok",
   failed: "text-destructive",
   skipped: "text-muted-foreground",
 };

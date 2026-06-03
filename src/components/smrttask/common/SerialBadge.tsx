@@ -44,7 +44,7 @@ export function SerialBadge({ serial, stopPropagation, className }: SerialBadgeP
     >
       <span>{serial}</span>
       {copied
-        ? <Check className="h-2.5 w-2.5 text-green-600" />
+        ? <Check className="h-2.5 w-2.5 text-status-ok" />
         : <Copy className="h-2.5 w-2.5 opacity-60" />}
     </button>
   );

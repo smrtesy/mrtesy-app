@@ -121,7 +121,7 @@ export function KnowledgeCenter() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold text-start flex items-center gap-2">
-          <BookOpen className="h-6 w-6 text-green-600" />
+          <BookOpen className="h-6 w-6 text-status-ok" />
           {t("title")}
         </h1>
         <Button size="sm" className="gap-1" onClick={openAdd}>
@@ -172,14 +172,14 @@ export function KnowledgeCenter() {
                 <div className="mt-2 flex items-center gap-1 justify-end flex-wrap">
                   {isManager && entry.status !== "approved" && (
                     <Button size="sm" variant="ghost"
-                      className="h-7 gap-1 px-2 text-xs text-green-600"
+                      className="h-7 gap-1 px-2 text-xs text-status-ok"
                       onClick={() => act(entry.id, "/approve", "POST", t("approved"))}>
                       <Check className="h-3.5 w-3.5" />{t("approve")}
                     </Button>
                   )}
                   {isManager && entry.status !== "rejected" && (
                     <Button size="sm" variant="ghost"
-                      className="h-7 gap-1 px-2 text-xs text-amber-600"
+                      className="h-7 gap-1 px-2 text-xs text-status-warn"
                       onClick={() => act(entry.id, "/reject", "POST", t("rejected"))}>
                       <X className="h-3.5 w-3.5" />{t("reject")}
                     </Button>

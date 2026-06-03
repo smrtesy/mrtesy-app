@@ -487,8 +487,8 @@ export default function OnboardingSetup() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-purple-100">
-          <Rocket className="h-8 w-8 text-purple-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent">
+          <Rocket className="h-8 w-8 text-primary" />
         </div>
         <CardTitle>{t("step4.title")}</CardTitle>
         <CardDescription>{t("step4.description")}</CardDescription>
@@ -497,7 +497,7 @@ export default function OnboardingSetup() {
         {!scanning && !done && (
           <>
             {/* Explanation */}
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700">
+            <div className="rounded-lg border border-primary bg-accent p-3 text-xs text-accent-foreground">
               <div className="flex items-start gap-2">
                 <Info className="h-4 w-4 shrink-0 mt-0.5" />
                 <p>
@@ -509,7 +509,7 @@ export default function OnboardingSetup() {
             {/* Gmail scan range */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4 text-red-500" />
+                <Mail className="h-4 w-4 text-status-late" />
                 <label className="text-sm font-medium">
                   {tSetup("gmailDaysQuestion")}
                 </label>
@@ -532,7 +532,7 @@ export default function OnboardingSetup() {
             {/* Calendar scan range */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-blue-500" />
+                <Calendar className="h-4 w-4 text-primary" />
                 <label className="text-sm font-medium">
                   {tSetup("calendarMonthsQuestion")}
                 </label>
@@ -559,7 +559,7 @@ export default function OnboardingSetup() {
             {driveConnected && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <FolderOpen className="h-4 w-4 text-green-500" />
+                  <FolderOpen className="h-4 w-4 text-status-ok" />
                   <label className="text-sm font-medium">
                     {tSetup("driveFolderQuestion")}
                   </label>
@@ -597,7 +597,7 @@ export default function OnboardingSetup() {
                           onClick={() => selectFolder(folder)}
                           className="w-full text-start px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center gap-2"
                         >
-                          <FolderOpen className="h-4 w-4 text-green-500 shrink-0" />
+                          <FolderOpen className="h-4 w-4 text-status-ok shrink-0" />
                           <span className="truncate">{folder.name}</span>
                         </button>
                       ))}
@@ -605,7 +605,7 @@ export default function OnboardingSetup() {
                   )}
                 </div>
                 {selectedFolder && (
-                  <p className="text-xs text-green-600 flex items-center gap-1">
+                  <p className="text-xs text-status-ok flex items-center gap-1">
                     <CheckCircle2 className="h-3 w-3" />
                     {tSetup("folderSelected", { name: selectedFolderName })}
                   </p>
@@ -621,7 +621,7 @@ export default function OnboardingSetup() {
             {/* Gmail Categories */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4 text-red-500" />
+                <Mail className="h-4 w-4 text-status-late" />
                 <label className="text-sm font-medium">
                   {tSetup("gmailCategoriesLabel")}
                 </label>
@@ -656,7 +656,7 @@ export default function OnboardingSetup() {
             {calendarConnected && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-blue-500" />
+                  <Calendar className="h-4 w-4 text-primary" />
                   <label className="text-sm font-medium">
                     {tSetup("calendarSelectionLabel")}
                   </label>
@@ -783,7 +783,7 @@ export default function OnboardingSetup() {
         {scanning && (
           <div className="space-y-4 py-4">
             <div className="flex flex-col items-center gap-2">
-              <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm font-medium">
                 {tSetup("scanning")}
               </p>
@@ -800,13 +800,13 @@ export default function OnboardingSetup() {
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1">
-                    <Mail className="h-3 w-3 text-red-500" /> Gmail
+                    <Mail className="h-3 w-3 text-status-late" /> Gmail
                   </span>
                   <span className="font-mono">{progress.gmail.toLocaleString()} {tSetup("messagesUnit")}</span>
                 </div>
-                <div className="h-2 rounded-full bg-red-100 overflow-hidden relative">
+                <div className="h-2 rounded-full bg-status-late-bg overflow-hidden relative">
                   <div
-                    className="absolute inset-0 bg-red-400/40 rounded-full"
+                    className="absolute inset-0 bg-status-late/40 rounded-full"
                     style={{ animation: "shimmer 1.5s ease-in-out infinite" }}
                   />
                 </div>
@@ -815,13 +815,13 @@ export default function OnboardingSetup() {
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3 text-blue-500" /> {tSetup("calendarLabel")}
+                    <Calendar className="h-3 w-3 text-primary" /> {tSetup("calendarLabel")}
                   </span>
                   <span className="font-mono">{progress.calendar.toLocaleString()} {tSetup("eventsUnit")}</span>
                 </div>
-                <div className="h-2 rounded-full bg-blue-100 overflow-hidden relative">
+                <div className="h-2 rounded-full bg-accent overflow-hidden relative">
                   <div
-                    className="absolute inset-0 bg-blue-400/40 rounded-full"
+                    className="absolute inset-0 bg-primary/40 rounded-full"
                     style={{ animation: "shimmer 1.5s ease-in-out infinite 0.3s" }}
                   />
                 </div>
@@ -837,7 +837,7 @@ export default function OnboardingSetup() {
         {done && (
           <div className="space-y-4">
             <div className="flex flex-col items-center gap-2 py-2">
-              <CheckCircle2 className="h-10 w-10 text-green-500" />
+              <CheckCircle2 className="h-10 w-10 text-status-ok" />
               <p className="font-medium">{t("step4.complete")}</p>
               {stats && (
                 <div className="text-center text-sm text-muted-foreground space-y-1">
@@ -850,7 +850,7 @@ export default function OnboardingSetup() {
                 {tSetup("backgroundProcessing")}
               </p>
               {stats && stats.gmail > 1000 && (
-                <p className="text-xs text-amber-600 mt-1">
+                <p className="text-xs text-status-warn mt-1">
                   {tSetup("largeMailboxWarning", { count: stats.gmail.toLocaleString() })}
                 </p>
               )}
@@ -862,10 +862,10 @@ export default function OnboardingSetup() {
         )}
 
         <div className="flex justify-center gap-2 pt-2">
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
         </div>
       </CardContent>
     </Card>

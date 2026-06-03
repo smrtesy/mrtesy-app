@@ -24,7 +24,7 @@ export default async function AdminUsersPage({
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-bold">{t("users")}</h1>
-        <div className="rounded-md border border-amber-400 bg-amber-50 p-3 text-xs text-amber-900">
+        <div className="rounded-md border border-status-warn bg-status-warn-bg p-3 text-xs text-status-warn">
           {tWarn("serviceRoleMissing")}
         </div>
       </div>
@@ -87,7 +87,7 @@ export default async function AdminUsersPage({
       <h1 className="text-2xl font-bold">{t("users")}</h1>
 
       {emailLookup.error === "service_role_missing" && (
-        <div className="rounded-md border border-amber-400 bg-amber-50 p-3 text-xs text-amber-900">
+        <div className="rounded-md border border-status-warn bg-status-warn-bg p-3 text-xs text-status-warn">
           {tWarn("serviceRoleMissing")}
         </div>
       )}

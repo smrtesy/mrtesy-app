@@ -222,7 +222,7 @@ export default async function ProjectDetailPage({
                 <div className="space-y-1">
                   {verifiedFacts.map((fact) => (
                     <div key={fact.id} className="flex items-center gap-2 text-xs">
-                      <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+                      <CheckCircle2 className="h-3 w-3 text-status-ok shrink-0" />
                       <Badge variant="outline" className="text-[10px]">{fact.type}</Badge>
                       <span dir="auto">{fact.value}</span>
                     </div>
@@ -240,7 +240,7 @@ export default async function ProjectDetailPage({
                     href={link.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                    className="flex items-center gap-1 text-xs text-primary hover:underline"
                   >
                     <ExternalLink className="h-3 w-3" />
                     {link.name}

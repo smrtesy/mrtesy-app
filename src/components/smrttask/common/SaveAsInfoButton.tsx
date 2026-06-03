@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -91,16 +92,13 @@ export function SaveAsInfoButton({
 
   return (
     <>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-9 w-9"
+      <IconButton
+        label={t("saveAsInfo")}
+        color="green"
         onClick={handleOpen}
-        title={t("saveAsInfo")}
-        aria-label={t("saveAsInfo")}
       >
-        <StickyNote className="h-4 w-4" />
-      </Button>
+        <StickyNote />
+      </IconButton>
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="bottom" dir={locale === "he" ? "rtl" : "ltr"} className="h-auto max-h-[80vh]">

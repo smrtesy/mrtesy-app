@@ -242,7 +242,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
           <Button variant="outline" size="sm" onClick={handleOpenAsThisOrg}>
             {t("openAsOrg")}
           </Button>
-          <Button variant="outline" size="sm" className="text-red-500 gap-1" onClick={handleDeleteOrg}>
+          <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10 gap-1" onClick={handleDeleteOrg}>
             <Trash2 className="h-3.5 w-3.5" />
             {t("deleteOrg")}
           </Button>
@@ -315,7 +315,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
                       onClick={() => handleRevokeInvite(inv.id)}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -428,7 +428,7 @@ export function OrgDetailClient({ locale, orgId }: { locale: string; orgId: stri
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8 text-red-500"
+                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
                   onClick={() => handleRemoveMember(m.user_id)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />

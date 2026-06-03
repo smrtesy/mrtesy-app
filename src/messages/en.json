@@ -222,6 +222,8 @@
       "deleted": "Task deleted",
       "quickAction": "Quick Action",
       "aiChat": "Chat with AI",
+      "addToToday": "Add to today",
+      "removeFromToday": "Remove from today",
       "searchDocs": "Search Documents",
       "gmailDraft": "Gmail Draft",
       "openInWhatsapp": "Open in WhatsApp",

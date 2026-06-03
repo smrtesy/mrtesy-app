@@ -456,7 +456,7 @@ export default function AdminAppPromptsPage() {
                     <Badge variant="outline" className="text-xs">v{saved.version}</Badge>
                   )}
                   {isDirty && (
-                    <Badge variant="outline" className="text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
+                    <Badge variant="outline" className="text-xs bg-status-warn-bg text-status-warn">
                       Unsaved
                     </Badge>
                   )}

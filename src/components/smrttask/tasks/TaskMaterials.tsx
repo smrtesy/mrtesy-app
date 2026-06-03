@@ -262,7 +262,7 @@ export function TaskMaterials({ taskId, items, onChange }: Props) {
             return (
               <div key={m.id} className="rounded border p-2 text-xs">
                 <div className="flex items-start gap-2">
-                  <Icon className="h-4 w-4 mt-0.5 shrink-0 text-blue-600" />
+                  <Icon className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium break-words" dir="auto">{m.title}</div>
 
@@ -277,7 +277,7 @@ export function TaskMaterials({ taskId, items, onChange }: Props) {
                         href={m.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-blue-600 hover:underline break-all"
+                        className="mt-1 inline-flex items-center gap-1 text-primary hover:underline break-all"
                       >
                         <ExternalLink className="h-3 w-3" />
                         {m.url}
@@ -289,7 +289,7 @@ export function TaskMaterials({ taskId, items, onChange }: Props) {
                         href={m.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-blue-600 hover:underline"
+                        className="mt-1 inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         <ExternalLink className="h-3 w-3" />
                         {m.file_size ? `${Math.round(m.file_size / 1024)} KB` : "open"}
@@ -299,8 +299,8 @@ export function TaskMaterials({ taskId, items, onChange }: Props) {
                     {m.type === "contact" && (
                       <div className="mt-1 space-y-0.5 text-muted-foreground">
                         {m.contact_name  && <div dir="auto">{m.contact_name}</div>}
-                        {m.contact_email && <a href={`mailto:${m.contact_email}`} className="block text-blue-600 hover:underline" dir="ltr">{m.contact_email}</a>}
-                        {m.contact_phone && <a href={`tel:${m.contact_phone}`}   className="block text-blue-600 hover:underline" dir="ltr">{m.contact_phone}</a>}
+                        {m.contact_email && <a href={`mailto:${m.contact_email}`} className="block text-primary hover:underline" dir="ltr">{m.contact_email}</a>}
+                        {m.contact_phone && <a href={`tel:${m.contact_phone}`}   className="block text-primary hover:underline" dir="ltr">{m.contact_phone}</a>}
                       </div>
                     )}
                   </div>

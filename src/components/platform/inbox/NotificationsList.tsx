@@ -22,10 +22,10 @@ interface Notification {
 }
 
 const TYPE_CONFIG = {
-  action_required: { icon: AlertCircle,   color: "text-orange-500", bg: "bg-orange-50 border-orange-200" },
-  warning:         { icon: AlertTriangle, color: "text-yellow-500", bg: "bg-yellow-50 border-yellow-200" },
-  success:         { icon: CheckCircle2,  color: "text-green-500",  bg: "bg-green-50  border-green-200"  },
-  info:            { icon: Info,          color: "text-blue-500",   bg: "bg-blue-50   border-blue-200"   },
+  action_required: { icon: AlertCircle,   color: "text-status-warn", bg: "bg-status-warn-bg border-status-warn/30" },
+  warning:         { icon: AlertTriangle, color: "text-status-warn", bg: "bg-status-warn-bg border-status-warn/30" },
+  success:         { icon: CheckCircle2,  color: "text-status-ok",   bg: "bg-status-ok-bg border-status-ok/30"     },
+  info:            { icon: Info,          color: "text-primary",     bg: "bg-accent border-primary/30"             },
 } as const;
 
 export function NotificationsList() {
@@ -149,7 +149,7 @@ export function NotificationsList() {
                     <p className="text-sm font-medium">{n.title}</p>
                     <Badge variant="outline" className="text-[10px] py-0">{n.app_slug}</Badge>
                     {!n.is_read && (
-                      <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                      <span className="h-2 w-2 rounded-full bg-primary shrink-0" />
                     )}
                   </div>
                   {n.body && (

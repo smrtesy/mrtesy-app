@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import tailwindAnimate from "tailwindcss-animate";
+import defaultTheme from "tailwindcss/defaultTheme";
 
 const config: Config = {
   darkMode: ["class"],
@@ -10,6 +11,10 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        // גופן המערכת — Heebo (נטען ב-layout דרך next/font), עם נפילה למערכת
+        sans: ["var(--font-heebo)", ...defaultTheme.fontFamily.sans],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -43,6 +48,15 @@ const config: Config = {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
+        },
+        // סטטוסים סמנטיים — שימוש: טקסט בצבע המלא, רקע בגוון ה-bg
+        status: {
+          ok: "hsl(var(--status-ok))",
+          "ok-bg": "hsl(var(--status-ok-bg))",
+          warn: "hsl(var(--status-warn))",
+          "warn-bg": "hsl(var(--status-warn-bg))",
+          late: "hsl(var(--status-late))",
+          "late-bg": "hsl(var(--status-late-bg))",
         },
       },
       borderRadius: {

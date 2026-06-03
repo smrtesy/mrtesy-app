@@ -89,7 +89,7 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                       <ArrowLeftRight className="h-3 w-3 text-muted-foreground shrink-0" aria-label={t("outgoing")} />
                     )}
                     {th.is_history && (
-                      <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 shrink-0">
+                      <span className="text-[10px] px-1 rounded bg-status-warn-bg text-status-warn shrink-0">
                         {t("history")}
                       </span>
                     )}
@@ -106,7 +106,7 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                 <div className="flex flex-col items-end gap-0.5 shrink-0">
                   <span
                     className={`text-[10px] ${
-                      hasUnread ? "font-medium text-emerald-600" : "text-muted-foreground"
+                      hasUnread ? "font-medium text-status-ok" : "text-muted-foreground"
                     }`}
                   >
                     {formatRelative(th.last_message_at)}
@@ -114,7 +114,7 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                   <div className="flex gap-1">
                     {taskCount > 0 && (
                       <span
-                        className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                        className="inline-flex items-center gap-0.5 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-primary"
                         title={t("tasksFromChat", { count: taskCount })}
                       >
                         <CheckSquare className="h-2.5 w-2.5" />
@@ -122,7 +122,7 @@ export function ThreadList({ threads, loading, selectedChatId, onSelect, emptyLa
                       </span>
                     )}
                     {hasUnread && (
-                      <span className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">
+                      <span className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-status-ok px-1 text-[10px] font-bold text-white">
                         {unread > 99 ? "99+" : unread}
                       </span>
                     )}

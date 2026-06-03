@@ -333,7 +333,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             ref={isFocused ? focusNodeRef : undefined}
             className={
               isFocused
-                ? "ring-2 ring-amber-400 animate-pulse"
+                ? "ring-2 ring-status-warn animate-pulse"
                 : isSelected
                 ? "ring-2 ring-primary/50"
                 : undefined
@@ -348,8 +348,8 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                   className="mt-2 shrink-0 h-4 w-4 cursor-pointer"
                   aria-label={t("selectAll")}
                 />
-                <div className="mt-1 rounded-full bg-blue-100 p-2">
-                  <Bell className="h-4 w-4 text-blue-600" />
+                <div className="mt-1 rounded-full bg-accent p-2">
+                  <Bell className="h-4 w-4 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -357,7 +357,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     <SerialBadge serial={task.serial_display as string | null} />
                     <SourceLink source={source} />
                     {dueDate && (
-                      <Badge variant="outline" className="text-[10px] bg-blue-50 shrink-0">
+                      <Badge variant="outline" className="text-[10px] bg-accent shrink-0">
                         {dueDate}
                       </Badge>
                     )}
@@ -527,7 +527,7 @@ function SuggestionActions({
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 text-red-500 hover:text-red-600 hover:bg-red-50"
+          className="h-9 w-9 text-status-late hover:bg-status-late-bg"
           onClick={onFastDismiss}
           title={t("fastDismiss")}
           aria-label={t("fastDismiss")}
@@ -537,7 +537,7 @@ function SuggestionActions({
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
+          className="h-9 w-9 text-status-warn hover:bg-status-warn-bg font-semibold"
           onClick={onDismissWithReason}
           title={t("dismissWithReason")}
           aria-label={t("dismissWithReason")}
@@ -557,7 +557,7 @@ function SuggestionActions({
         <Button
           size="sm"
           variant="ghost"
-          className="h-9 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          className="h-9 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok"
           onClick={onComplete}
           title={tTasks("actions.complete")}
           aria-label={tTasks("actions.complete")}

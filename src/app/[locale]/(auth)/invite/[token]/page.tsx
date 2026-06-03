@@ -39,7 +39,7 @@ export default async function InvitePage({
   if (invite.accepted_at) {
     return (
       <div className="w-full max-w-sm space-y-6 text-center">
-        <h1 className="text-2xl font-bold text-[#1E4D8C]">smrtesy</h1>
+        <h1 className="text-2xl font-bold text-primary">smrtesy</h1>
         <p className="text-muted-foreground">{t("alreadyAccepted")}</p>
       </div>
     );
@@ -48,7 +48,7 @@ export default async function InvitePage({
   if (new Date(invite.expires_at) < new Date()) {
     return (
       <div className="w-full max-w-sm space-y-6 text-center">
-        <h1 className="text-2xl font-bold text-[#1E4D8C]">smrtesy</h1>
+        <h1 className="text-2xl font-bold text-primary">smrtesy</h1>
         <p className="text-muted-foreground">{t("expired")}</p>
       </div>
     );
@@ -65,11 +65,11 @@ export default async function InvitePage({
   return (
     <div className="w-full max-w-sm space-y-8">
       <div className="text-center space-y-1">
-        <h1 className="text-3xl font-bold text-[#1E4D8C]">smrtesy</h1>
+        <h1 className="text-3xl font-bold text-primary">smrtesy</h1>
       </div>
 
       <div className="rounded-xl border bg-card p-6 space-y-4 text-center shadow-sm">
-        <Building2 className="mx-auto h-10 w-10 text-[#1E4D8C]" />
+        <Building2 className="mx-auto h-10 w-10 text-primary" />
         <div>
           <h2 className="text-lg font-semibold">{t("title")}</h2>
           <p className="text-muted-foreground text-sm mt-1">

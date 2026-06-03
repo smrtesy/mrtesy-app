@@ -803,6 +803,8 @@ inbound messages and DO NOT apply to Drive documents.`;
 
 const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request / is still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>, not\n    replying to them. Title starts with "לעקוב מול <name>" or\n    "לוודא ש<name> חוזר על <topic>". The description must say the user\n    already sent it and is waiting for the other side's answer.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
 
+const GMAIL_SENT_TASK_RULES = `\n\n═══ SENT-EMAIL DIRECTION RULE (mandatory) ═══\nThis email was SENT BY THE USER — the From: address is the user's own.\nThe user is the SENDER, not the recipient. NEVER turn the user's own\nrequest into a to-do FOR the user.\n  • If the user ASKED the recipient to do / pay / send / transfer\n    something → the user is now WAITING ON the recipient. The next step\n    is to follow up or confirm the OTHER side acted — NOT to perform the\n    action the user requested from them. Title starts with\n    "לעקוב אחרי <נמען>" or "לוודא ש<נמען> …".\n  • If the user COMMITTED to do something themselves (אשלח / אעביר /\n    אבדוק / a time pledge) → the user owes a follow-through. Title starts\n    with the committed verb / "להשלים מול <נמען> …".\n  • If nothing is pending (closure, thank-you, pure FYI) → return [].\nDIRECTION GUARD (mandatory): money or an action the user REQUESTED from\nthe recipient flows TOWARD the user — never title it as the user\npaying / sending / transferring TO the recipient. owner_contact and any\nnamed party must be the RECIPIENT, never the user themselves.`;
+
 async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }) {
   const model = sys.summary_model;
   const truncate = sys.body_truncate_task;
@@ -813,6 +815,17 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   let context = "";
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
+  // Outgoing email (the user is the sender): tell the task builder the
+  // direction explicitly, otherwise it reads the user's own request
+  // ("Please zelle $250") as a to-do for the user and reverses it (T460).
+  // Mirror the gmail_sent / my_emails detection in preClassify (lines 165-166).
+  if (!isWhatsApp(msg)) {
+    const senderLc = (msg.sender_email || msg.sender || "").toLowerCase();
+    const myEmails = (settings.my_emails || []).map((e: string) => String(e).toLowerCase());
+    const isOutgoingEmail = msg.source_type === "gmail_sent"
+      || (msg.source_type === "gmail" && myEmails.some((e: string) => e && senderLc.includes(e)));
+    if (isOutgoingEmail) context += GMAIL_SENT_TASK_RULES;
+  }
   if (projectContext?.brief) context += `\n\nProject context (use for better extraction):\n${projectContext.brief}`;
   const contactMemory = await loadContactMemory(userId, msg);
   if (contactMemory) context += contactMemory;

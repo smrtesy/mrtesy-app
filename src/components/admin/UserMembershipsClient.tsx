@@ -195,7 +195,7 @@ export function UserMembershipsClient({ userId, locale }: { userId: string; loca
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-7 w-7 text-red-500"
+                    className="h-7 w-7 text-destructive hover:bg-destructive/10"
                     disabled={removing === m.org.id}
                     onClick={() => handleRemoveFromOrg(m.org.id, orgName)}
                   >
