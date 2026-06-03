@@ -11,7 +11,7 @@
 
 -- ── shared updated_at trigger ────────────────────────────────
 CREATE OR REPLACE FUNCTION smrtbot_touch_updated_at()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
 BEGIN
   NEW.updated_at = now();
   RETURN NEW;
