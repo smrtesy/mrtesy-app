@@ -28,7 +28,7 @@
 שלב A — smrtCRM יסוד        (אנשי קשר + תגיות + קבוצות, CRUD + RLS)         ✅ נבנה
 שלב B — smrtCRM ייבוא/קליטה  (CSV import + דה-דופ ✅ ; קליטת אירוע מהבוט — stub, תלוי smrtBot)
 שלב C — smrtCRM סגמנטים      (שאילתות סינון שמורות, חשיפה ל-Reach)          ✅ נבנה
-שלב D — הגירת נתוני botsite  (סקריפט one-time, מיזוג חוצה-בוטים)            ⬜ טרם
+שלב D — הגירת נתוני botsite  (סקריפט one-time, מיזוג חוצה-בוטים)            ✅ נבנה
 שלב E — smrtReach יסוד       (קמפיין אב + פרטי-ערוץ, קריאת קהלים מ-CRM)     ✅ נבנה
 שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)             🟡 unsubscribe+queue+tracking schema ✅ ; שליחת SES ממתינה לסודות
 שלב G — smrtReach וואטסאפ     (חיבור ל-send-service של smrtBot)             ⬜ ממתין ל-smrtBot
@@ -47,8 +47,13 @@ pagination, bulk, ייבוא CSV, דה-דופ/upsert) + יסוד smrtReach (קמ
 - שליחת מייל בפועל דרך **SES** — ממתין לסודות ב-`app_secrets` (slug `smrtreach`).
 - שליחת וואטסאפ — ממתין לחוזה ה-send-service של **smrtBot**.
 - **קליטת אנשי קשר מהבוט** (CRM-5) — subscribe stub, ממתין לשם האירוע מ-smrtBot.
-- **סקריפט הגירת botsite** (שלב D) — טרם.
 - **Cron scheduler** (שלב H) — טרם (pg_cron → route חסום).
+
+**סקריפט הגירת botsite** (שלב D) נבנה: `server/src/scripts/migrate-botsite.ts`.
+קורא JSON exports של טבלאות botsite (פקודות export מתועדות בראש הקובץ), עושה
+**מיזוג חוצה-בוטים** ב-union-find (טלפון/מייל משותף → איש קשר אחד עם תגית פרויקט
+לכל בוט-מקור), מנרמל טלפון/מייל ומריץ הכנסה ל-Supabase. כולל `--dry-run`, guard
+נגד הרצה כפולה (`--force` לעקיפה) ורמז שחזור בכשל. נבדק על fixture.
 
 ---
 
