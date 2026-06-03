@@ -16,6 +16,9 @@ interface SystemParams {
   body_truncate_classify: number;
   body_truncate_project: number;
   body_truncate_task: number;
+  // Kill-switch for per-matter WhatsApp routing (Part A). When false, WhatsApp
+  // falls back to the legacy single-slot thread_memory linking. Default true.
+  whatsapp_matter_routing: boolean;
 }
 
 const FALLBACK_PARAMS: SystemParams = {
@@ -28,6 +31,7 @@ const FALLBACK_PARAMS: SystemParams = {
   body_truncate_classify: 2000,
   body_truncate_project: 500,
   body_truncate_task: 6000,
+  whatsapp_matter_routing: true,
 };
 
 async function loadSystemParams(): Promise<SystemParams> {
@@ -43,6 +47,7 @@ async function loadSystemParams(): Promise<SystemParams> {
     body_truncate_classify: data.body_truncate_classify ?? FALLBACK_PARAMS.body_truncate_classify,
     body_truncate_project: data.body_truncate_project ?? FALLBACK_PARAMS.body_truncate_project,
     body_truncate_task: data.body_truncate_task ?? FALLBACK_PARAMS.body_truncate_task,
+    whatsapp_matter_routing: data.whatsapp_matter_routing ?? FALLBACK_PARAMS.whatsapp_matter_routing,
   };
 }
 
@@ -845,6 +850,45 @@ async function appendUpdateToTask(
   });
 }
 
+// ── WhatsApp per-matter router ────────────────────────────────────────────
+// A single WhatsApp chat (one contact) can carry several unrelated open
+// matters at once — unlike Gmail, which fractures by threadId. The legacy
+// pipeline keyed every WhatsApp message to ONE task per chat (thread_memory
+// related_task_id / source_message_id), so distinct matters collapsed into a
+// single task. This router restores per-matter granularity: given the open
+// tasks already tied to this chat, decide whether the LATEST message belongs
+// to one of them or opens a NEW matter. Only invoked when 2+ candidates exist
+// (the genuinely ambiguous case); 0/1-candidate cases are resolved cheaply by
+// the caller using analysis.newMatter without an extra model call.
+interface WhatsAppCandidate { id: string; title_he: string | null; title: string | null; description: string | null; status: string; }
+
+async function routeWhatsAppMatter(
+  msg: any,
+  candidates: WhatsAppCandidate[],
+  sys: SystemParams,
+): Promise<{ taskId: string | "NEW"; inputTokens: number; outputTokens: number }> {
+  const list = candidates
+    .map((c, i) => `${i + 1}. id=${c.id} | ${(c.title_he || c.title || "(ללא כותרת)").slice(0, 80)} — ${(c.description || "").replace(/\s+/g, " ").slice(0, 140)}`)
+    .join("\n");
+  const system = `You route an incoming WhatsApp message to the open matter it continues, or flag it as a NEW distinct matter.
+A single contact can have several unrelated open matters at once. Decide which one the LATEST message in the transcript belongs to.
+Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that matter, or {"task_id": "NEW"} if it opens a distinct matter (different action/topic) not covered by any listed task.
+Judge by the LAST message in the transcript. When genuinely unsure, prefer the most recently relevant existing matter over NEW.`;
+  const user = `Open matters for this contact:\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
+  const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
+  let taskId: string | "NEW" = "NEW";
+  try {
+    const m = result.text.match(/\{[\s\S]*\}/);
+    if (m) {
+      const parsed = JSON.parse(m[0]);
+      const picked = String(parsed.task_id ?? "").trim();
+      if (picked && picked !== "NEW" && candidates.some((c) => c.id === picked)) taskId = picked;
+      else if (picked === "NEW") taskId = "NEW";
+    }
+  } catch { /* default NEW */ }
+  return { taskId, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+}
+
 const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the outgoing-mail rule above) ═══\nThe body is a chat transcript with lines like\n  [INCOMING <timestamp>] <text>\n  [OUTGOING <timestamp>] <text>\n[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.\nClassify by the LAST message in the transcript:\n  • Last line is [INCOMING] → ACTIONABLE (the user owes a response)\n  • Last line is [OUTGOING] containing a commitment ("אחזור", "אבדוק", "אשלח",\n    "אעדכן", "תוך X זמן", a specific time/date) → ACTIONABLE\n    (the user owes a follow-through on what they promised)\n  • Last line is [OUTGOING] that asks a question or makes a request and is still\n    awaiting the other side's reply ("?", "אתם פתוחים?", "אפשר?", "מה לגבי",\n    any open ask) → ACTIONABLE (the user is waiting on the other party and\n    needs a tracker so it does not silently expire — the user is NOT the one\n    who owes a reply here)\n  • Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה") → INFORMATIONAL\n  • Conversation appears closed and resolved → INFORMATIONAL\nThe generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
 
 async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
@@ -1622,6 +1666,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
   let linkedTaskId: string | null = null;
+  // WhatsApp per-matter routing state (Part A). When routing is active and the
+  // router decides the message opens a NEW matter, we must NOT let the legacy
+  // single-slot Path 1 / sibling re-linker re-swallow it into an existing task.
+  let whatsappWantsNew = false;
   // Medium-confidence cross-source duplicate: stamped onto the task we are
   // about to create (set in Path 2.5, applied in Path 3).
   let dupSuggestionTaskId: string | null = null;
@@ -1816,6 +1864,72 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       : "meeting invite (video-call join link in body) → actionable";
   }
 
+  // ── Path 0 (WhatsApp): per-matter routing ─────────────────────────────────
+  // A WhatsApp chat can hold several unrelated open matters. All tasks for a
+  // chat share source_message_id (the one source_messages row per chat), so we
+  // can gather every open matter for this contact and route the new message to
+  // the right one — or spin off a new matter even while others stay open. This
+  // replaces the legacy single-slot Path 1 for WhatsApp (which collapsed every
+  // message onto one task). Falls back to legacy Path 1 when the flag is off.
+  const whatsappRoutingActive = sys.whatsapp_matter_routing && isWhatsApp(msg);
+  // Route both actionable and informational WhatsApp messages — informational
+  // follow-ups (e.g. "תודה, סגרנו") must still land on their matter as an
+  // update, exactly as the legacy Path 1 branch (c) did. SPAM is left alone.
+  if (whatsappRoutingActive && (classification === "actionable" || classification === "informational")) {
+    try {
+      // Reopenable + open statuses are candidates; completed/dismissed/archived
+      // matters can still be reopened by a same-matter resumption.
+      const { data: cands } = await supabase
+        .from("tasks")
+        .select("id, title_he, title, description, status")
+        .eq("user_id", msg.user_id)
+        .eq("source_message_id", msg.id)
+        .in("status", ["inbox", "in_progress", "snoozed", "pending_completion", "completed"])
+        .order("created_at", { ascending: false });
+      const candidates = (cands ?? []) as WhatsAppCandidate[];
+
+      if (candidates.length > 0) {
+        let targetId: string | "NEW";
+        if (candidates.length === 1) {
+          // Single open matter: trust the classifier's new_matter verdict
+          // (always false for informational, so those always route to it).
+          targetId = analysis.newMatter ? "NEW" : candidates[0].id;
+        } else {
+          const routed = await routeWhatsAppMatter(msg, candidates, sys);
+          totalInputTokens += routed.inputTokens;
+          totalOutputTokens += routed.outputTokens;
+          targetId = routed.taskId;
+        }
+
+        if (targetId === "NEW") {
+          if (classification === "actionable") {
+            // Spin off a fresh matter even though others are open (user's choice).
+            whatsappWantsNew = true;
+            classificationReason = `WhatsApp: new matter on existing chat (${candidates.length} open) → new task`;
+          }
+          // Informational + belongs to no open matter → nothing to track; drop
+          // through as plain informational (no task created, none updated).
+        } else {
+          const target = candidates.find((c) => c.id === targetId)!;
+          const closed = ["pending_completion", "completed"].includes(String(target.status));
+          if (closed && classification === "actionable") {
+            await appendUpdateToTask(targetId, msg, analysis, "actionable", { reopen: true });
+            classificationReason = `WhatsApp: reopened matter ${targetId} — thread resumed`;
+          } else {
+            await appendUpdateToTask(targetId, msg, analysis, classification);
+            classificationReason = `WhatsApp: routed ${classification} to matter ${targetId}`;
+          }
+          linkedTaskId = targetId;
+          classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
+        }
+      }
+      // 0 candidates → fall through: actionable creates the first matter;
+      // informational has no task and is simply recorded as informational.
+    } catch (e) {
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_wa_route", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+    }
+  }
+
   // ── Path 1: known existing task in this thread → append / reopen / spin off ─
   // Three outcomes, decided by the message's relationship to the linked task:
   //   (a) NEW distinct matter (analysis.newMatter)        → spin off a fresh
@@ -1827,7 +1941,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // Before the regression fix, every message hit (c) unconditionally, so new
   // asks (e.g. scheduling a call after the original question was answered) got
   // buried as silent updates inside a task already marked pending_completion.
-  if (memory?.related_task_id && classification !== "spam") {
+  // Skipped for WhatsApp when per-matter routing (Path 0) is active — that
+  // branch already owns the append/reopen/spin-off decision for WhatsApp.
+  if (!whatsappRoutingActive && memory?.related_task_id && classification !== "spam") {
     try {
       const { data: linkedTask } = await supabase
         .from("tasks").select("id, status")
@@ -1882,7 +1998,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   }
 
   // ── Path 2: actionable + no linked task yet → maybe link via siblings, else create ──
-  if (!linkedTaskId && classification === "actionable") {
+  // The sibling re-linker re-attaches WhatsApp messages by source_message_id
+  // (one row per chat), which would re-swallow a deliberate new matter back
+  // into an existing task. Skip it when Path 0 already routed this WhatsApp
+  // message to a NEW matter.
+  if (!linkedTaskId && classification === "actionable" && !whatsappWantsNew) {
     try {
       const sibling = await tryLinkToExistingTask(msg, msg.user_id);
       if (sibling) {
@@ -1902,7 +2022,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // reminder for an appointment already tracked from a Calendar event).
   //   high   → link to the existing task now (skip creating a duplicate)
   //   medium → create normally, but flag the suspected duplicate for the user
-  if (!linkedTaskId && classification === "actionable") {
+  // Skipped when Path 0 deliberately routed this WhatsApp message to a NEW
+  // matter — honor that decision instead of re-collapsing onto a sibling.
+  if (!linkedTaskId && classification === "actionable" && !whatsappWantsNew) {
     try {
       const dup = await findDuplicateOpenTask(msg.user_id, buildProbe(msg), sys, msg.id);
       if (dup && dup.confidence === "high") {
@@ -1992,6 +2114,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           // only applies to calendar events, which carry a reliable start time).
           const taskType = hasMeetingInvite(bodyForAI(msg)) ? "meeting" : "action";
           let firstTaskId: string | null = null;
+          const createdTaskIds: string[] = [];
           for (const task of taskResult.tasks) {
             const { data: newTask } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
@@ -2009,11 +2132,35 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             if (newTask) {
               const isFirst = !firstTaskId;
               if (isFirst) firstTaskId = newTask.id as string;
+              createdTaskIds.push(newTask.id as string);
               await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
               if (isFirst && dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
             }
           }
           if (firstTaskId) linkedTaskId = firstTaskId;
+
+          // Part B: a NEW WhatsApp matter where the user is waiting on the other
+          // party (state=pending_other_party — typically an outgoing open ask)
+          // becomes a DEFERRED follow-up, mirroring the email check_followup
+          // path: don't nag now, snooze FOLLOWUP_LEAD_HOURS (48 business hours)
+          // and let reminders-check surface it only if no reply arrives. Tasks
+          // where the user owes the reply (any other state) stay in the inbox.
+          if (whatsappRoutingActive && analysis.state === "pending_other_party" && createdTaskIds.length > 0) {
+            const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+            const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
+            await supabase.from("tasks")
+              .update({ task_type: "followup", status: "snoozed", snoozed_until: surfaceAt })
+              .in("id", createdTaskIds);
+            for (const tid of createdTaskIds) {
+              await supabase.from("task_activities").insert({
+                user_id: msg.user_id, task_id: tid,
+                activity_type: "snoozed", new_value: "snoozed",
+                note: `Follow-up scheduled for ${surfaceAt} (${FOLLOWUP_LEAD_HOURS} business hours — awaiting WhatsApp reply)`,
+                actor: "system",
+              });
+            }
+            classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (pending_other_party)`;
+          }
           if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
         }
       }
