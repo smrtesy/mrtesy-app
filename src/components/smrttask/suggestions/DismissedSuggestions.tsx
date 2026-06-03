@@ -110,8 +110,8 @@ export function DismissedSuggestions({
             <CardContent className="p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-start gap-2 flex-1 min-w-0">
-                  <div className="mt-1 rounded-full bg-red-100 p-1.5 shrink-0">
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                  <div className="mt-1 rounded-full bg-status-late-bg p-1.5 shrink-0">
+                    <Trash2 className="h-3.5 w-3.5 text-status-late" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>

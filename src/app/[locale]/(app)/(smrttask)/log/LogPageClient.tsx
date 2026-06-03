@@ -20,15 +20,17 @@ const processingBadge: Record<string, { variant: "default" | "secondary" | "outl
   processed: { variant: "outline", key: "badgeProcessed" },
 };
 
+// סטטוס = משמעות. טקסט בצבע מלא, רקע בגוון חלש (לפי מערכת העיצוב).
+// טוקני הסטטוס זהים ב-light/dark, לכן אין צורך בוריאנטי dark:.
 const classificationColors: Record<string, string> = {
-  actionable: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  user_actionable: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  actionable_followup: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  informational: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  informational_followup: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  spam: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-  skip: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
-  pending: "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+  actionable: "bg-status-ok-bg text-status-ok",
+  user_actionable: "bg-status-ok-bg text-status-ok",
+  actionable_followup: "bg-status-ok-bg text-status-ok",
+  informational: "bg-status-warn-bg text-status-warn",
+  informational_followup: "bg-status-warn-bg text-status-warn",
+  spam: "bg-status-warn-bg text-status-warn",
+  skip: "bg-status-warn-bg text-status-warn",
+  pending: "bg-status-late-bg text-status-late",
 };
 
 const sourceFilters = [
@@ -437,7 +439,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
                 {/* Row 5: error (collapsed = clamp, expanded = full) */}
                 {log.error_message && (
-                  <p className={`mt-1.5 text-[11px] text-red-500 ${isExpanded ? "" : "line-clamp-2"}`}>
+                  <p className={`mt-1.5 text-[11px] text-status-late ${isExpanded ? "" : "line-clamp-2"}`}>
                     {log.error_message}
                   </p>
                 )}
@@ -456,7 +458,7 @@ export function LogPageClient({ locale }: { locale: string }) {
                         onClick={(e) => copyDetails(e, log)}
                       >
                         {copiedId === log.id ? (
-                          <><Check className="h-3 w-3 text-green-500" /> {tLog("copied")}</>
+                          <><Check className="h-3 w-3 text-status-ok" /> {tLog("copied")}</>
                         ) : (
                           <><Copy className="h-3 w-3" /> {tLog("copyDetails")}</>
                         )}

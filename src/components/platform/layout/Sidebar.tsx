@@ -358,7 +358,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
                     <span
                       className={cn(
                         "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
-                        badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+                        badge.tone === "red" ? "bg-status-late" : "bg-primary",
                       )}
                     >
                       {badge.count > 99 ? "99+" : badge.count}
@@ -487,7 +487,7 @@ function NavItem({
           <span
             className={cn(
               "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
-              badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+              badge.tone === "red" ? "bg-status-late" : "bg-primary",
             )}
           >
             {badge.count > 99 ? "99+" : badge.count}
@@ -536,7 +536,7 @@ function MoreGrid({
                 <span
                   className={cn(
                     "absolute -top-1.5 -end-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white leading-none",
-                    badge.tone === "red" ? "bg-red-500" : "bg-blue-500",
+                    badge.tone === "red" ? "bg-status-late" : "bg-primary",
                   )}
                 >
                   {badge.count > 99 ? "99+" : badge.count}

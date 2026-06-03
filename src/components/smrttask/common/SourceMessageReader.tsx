@@ -180,7 +180,7 @@ export function SourceMessageReader({
                     sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
                     srcDoc={withBaseTarget(body)}
                     referrerPolicy="no-referrer"
-                    className="w-full rounded border bg-white"
+                    className="w-full rounded border bg-card"
                     style={{ height: iframeHeight }}
                     onLoad={(e) => {
                       // Size the frame to its content (capped) so short emails

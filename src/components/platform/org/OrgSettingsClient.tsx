@@ -21,9 +21,9 @@ const ROLE_ICONS: Record<OrgMember["role"], typeof User> = {
 };
 
 const ROLE_COLORS: Record<OrgMember["role"], string> = {
-  owner: "text-amber-600 bg-amber-50",
-  admin: "text-blue-600 bg-blue-50",
-  member: "text-gray-600 bg-gray-50",
+  owner: "text-status-warn bg-status-warn-bg",
+  admin: "text-primary bg-accent",
+  member: "text-muted-foreground bg-muted",
 };
 
 // All user-facing strings go through useTranslations now, so the component
@@ -249,7 +249,7 @@ export function OrgSettingsClient() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        className="shrink-0 h-8 w-8 text-red-500"
+                        className="shrink-0 h-8 w-8 text-destructive hover:bg-destructive/10"
                         onClick={() => handleRemove(m.user_id)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -267,7 +267,7 @@ export function OrgSettingsClient() {
         <Card>
           <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
             <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              <AlertTriangle className="h-4 w-4 text-status-warn" />
               {tOrg("errorHandlerTitle")}
             </CardTitle>
             <p className="text-xs text-muted-foreground">{tOrg("errorHandlerDesc")}</p>

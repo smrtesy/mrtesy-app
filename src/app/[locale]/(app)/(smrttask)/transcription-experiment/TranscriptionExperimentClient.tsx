@@ -253,7 +253,7 @@ function ArmStatsCard({
         </div>
       )}
       {arm.errors > 0 && (
-        <div className="text-red-600">{t("errors")}: {arm.errors}</div>
+        <div className="text-status-late">{t("errors")}: {arm.errors}</div>
       )}
     </div>
   );
@@ -388,7 +388,7 @@ function TranscriptColumn({
         </span>
       </div>
       {error ? (
-        <p className="text-xs text-red-600 whitespace-pre-wrap" dir="auto">{error}</p>
+        <p className="text-xs text-status-late whitespace-pre-wrap" dir="auto">{error}</p>
       ) : (
         <p className="text-sm whitespace-pre-wrap" dir="auto">{transcript ?? "—"}</p>
       )}

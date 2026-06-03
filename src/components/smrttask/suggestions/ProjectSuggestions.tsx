@@ -171,8 +171,8 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                   className="mt-2 shrink-0 h-4 w-4 cursor-pointer"
                   aria-label={t("selectAll")}
                 />
-                <div className="mt-1 rounded-full bg-yellow-100 p-2">
-                  <Lightbulb className="h-4 w-4 text-yellow-600" />
+                <div className="mt-1 rounded-full bg-status-warn-bg p-2">
+                  <Lightbulb className="h-4 w-4 text-status-warn" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -190,7 +190,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 gap-1 text-red-500 hover:text-red-600 hover:bg-red-50"
+                  className="h-9 gap-1 text-status-late hover:bg-status-late-bg"
                   onClick={() => handleFastDismiss(task.id)}
                   title={t("fastDismiss")}
                   aria-label={t("fastDismiss")}
@@ -200,7 +200,7 @@ export function ProjectSuggestions({ locale }: { locale: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 gap-0 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
+                  className="h-9 gap-0 text-status-warn hover:bg-status-warn-bg font-semibold"
                   onClick={() => setDismissTarget({ id: task.id, title })}
                   title={t("dismissWithReason")}
                   aria-label={t("dismissWithReason")}

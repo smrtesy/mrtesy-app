@@ -183,8 +183,8 @@ export function TaskCalendarView({ locale }: { locale: string }) {
             {noDateTasks.map((task) => (
               <Card key={task.id}>
                 <CardContent className="flex items-center gap-3 p-3">
-                  <div className="shrink-0 rounded-full bg-amber-100 p-1.5">
-                    <CheckSquare className="h-3.5 w-3.5 text-amber-700" />
+                  <div className="shrink-0 rounded-full bg-status-warn-bg p-1.5">
+                    <CheckSquare className="h-3.5 w-3.5 text-status-warn" />
                   </div>
                   <p className="flex-1 min-w-0 truncate text-sm">{task.title}</p>
                   {task.priority && (
@@ -233,13 +233,13 @@ export function TaskCalendarView({ locale }: { locale: string }) {
                       <CardContent className="flex items-center gap-3 p-3">
                         <div
                           className={`shrink-0 rounded-full p-1.5 ${
-                            item.type === "task" ? "bg-green-100" : "bg-blue-100"
+                            item.type === "task" ? "bg-status-ok-bg" : "bg-accent"
                           }`}
                         >
                           {item.type === "task" ? (
-                            <CheckSquare className="h-3.5 w-3.5 text-green-600" />
+                            <CheckSquare className="h-3.5 w-3.5 text-status-ok" />
                           ) : (
-                            <Calendar className="h-3.5 w-3.5 text-blue-600" />
+                            <Calendar className="h-3.5 w-3.5 text-primary" />
                           )}
                         </div>
                         <p className="flex-1 min-w-0 truncate text-sm">{item.title}</p>

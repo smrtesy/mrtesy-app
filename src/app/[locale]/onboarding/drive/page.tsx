@@ -22,15 +22,15 @@ export default function OnboardingStep2() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-          <FolderOpen className="h-8 w-8 text-green-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-status-ok-bg">
+          <FolderOpen className="h-8 w-8 text-status-ok" />
         </div>
         <CardTitle>{t("step2.title")}</CardTitle>
         <CardDescription>{t("step2.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center gap-3 rounded-lg border p-3">
-          <FolderOpen className="h-5 w-5 text-green-500" />
+          <FolderOpen className="h-5 w-5 text-status-ok" />
           <span className="flex-1">Google Drive</span>
           <span className="text-xs text-muted-foreground">drive.readonly</span>
         </div>
@@ -41,10 +41,10 @@ export default function OnboardingStep2() {
           {t("skip")}
         </Button>
         <div className="flex justify-center gap-2 pt-2">
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-gray-200" />
-          <div className="h-2 w-8 rounded-full bg-gray-200" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-muted" />
+          <div className="h-2 w-8 rounded-full bg-muted" />
         </div>
       </CardContent>
     </Card>

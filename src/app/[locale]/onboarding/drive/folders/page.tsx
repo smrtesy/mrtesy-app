@@ -22,8 +22,8 @@ export default function OnboardingDriveFolders() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-          <FolderOpen className="h-8 w-8 text-green-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-status-ok-bg">
+          <FolderOpen className="h-8 w-8 text-status-ok" />
         </div>
         <CardTitle>{t("title")}</CardTitle>
         <CardDescription>{t("description")}</CardDescription>
@@ -43,10 +43,10 @@ export default function OnboardingDriveFolders() {
         {/* Step indicator: this is still "Drive" (sub-step), so we
             mirror the dots from the parent Drive page (2 of 4). */}
         <div className="flex justify-center gap-2 pt-2">
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-blue-600" />
-          <div className="h-2 w-8 rounded-full bg-gray-200" />
-          <div className="h-2 w-8 rounded-full bg-gray-200" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-primary" />
+          <div className="h-2 w-8 rounded-full bg-muted" />
+          <div className="h-2 w-8 rounded-full bg-muted" />
         </div>
       </CardContent>
     </Card>

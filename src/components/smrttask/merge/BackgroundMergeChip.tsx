@@ -61,11 +61,11 @@ export function BackgroundMergeChip({ locale }: BackgroundMergeChipProps) {
     chip = (
       <button
         type="button"
-        className="flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-3 py-1.5 text-sm shadow-lg hover:bg-amber-100 dark:hover:bg-amber-950/60 transition-colors"
+        className="flex items-center gap-2 rounded-full border border-status-warn/30 bg-status-warn-bg px-3 py-1.5 text-sm shadow-lg hover:bg-status-warn-bg/80 transition-colors"
         title={t("chipRunningTooltip")}
       >
-        <Sparkles className="h-4 w-4 text-amber-600 animate-pulse" />
-        <span className="text-amber-800 dark:text-amber-200">{t("chipRunning")}</span>
+        <Sparkles className="h-4 w-4 text-status-warn animate-pulse" />
+        <span className="text-status-warn">{t("chipRunning")}</span>
       </button>
     );
   } else if (state.phase === "ready") {
@@ -76,21 +76,21 @@ export function BackgroundMergeChip({ locale }: BackgroundMergeChipProps) {
           const snap = consume();
           if (snap) setOpenSnapshot(snap);
         }}
-        className="flex items-center gap-2 rounded-full border border-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1.5 text-sm shadow-lg hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors animate-in fade-in slide-in-from-top-2"
+        className="flex items-center gap-2 rounded-full border border-status-ok/30 bg-status-ok-bg px-3 py-1.5 text-sm shadow-lg hover:bg-status-ok-bg/80 transition-colors animate-in fade-in slide-in-from-top-2"
       >
-        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-        <span className="text-emerald-800 dark:text-emerald-200 font-medium">{t("chipReady")}</span>
+        <CheckCircle2 className="h-4 w-4 text-status-ok" />
+        <span className="text-status-ok font-medium">{t("chipReady")}</span>
       </button>
     );
   } else if (state.phase === "error") {
     chip = (
-      <div className="flex items-center gap-2 rounded-full border border-red-400 bg-red-50 dark:bg-red-950/40 px-3 py-1.5 text-sm shadow-lg">
-        <AlertTriangle className="h-4 w-4 text-red-600" />
-        <span className="text-red-800 dark:text-red-200">{t("chipError")}</span>
+      <div className="flex items-center gap-2 rounded-full border border-status-late/30 bg-status-late-bg px-3 py-1.5 text-sm shadow-lg">
+        <AlertTriangle className="h-4 w-4 text-status-late" />
+        <span className="text-status-late">{t("chipError")}</span>
         <button
           type="button"
           onClick={clear}
-          className="text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100"
+          className="text-status-late hover:text-status-late/80"
           title={t("chipDismiss")}
         >
           <X className="h-3.5 w-3.5" />

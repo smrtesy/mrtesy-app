@@ -47,7 +47,7 @@ const PARTS = [
     label: "PART 0 — Style Learning",
     description: "Learn writing style from sent emails (manual only, run once)",
     icon: Zap,
-    color: "text-purple-500",
+    color: "text-muted-foreground",
     manualOnly: true,
   },
   {
@@ -55,7 +55,7 @@ const PARTS = [
     label: "PART 1 — Email + Drive + Calendar",
     description: "Collect new emails, Drive documents, and calendar events",
     icon: FileSearch,
-    color: "text-orange-500",
+    color: "text-muted-foreground",
     manualOnly: false,
   },
   // Part 2 (WhatsApp) is now event-driven via /api/webhooks/whatsapp,
@@ -66,12 +66,12 @@ const PARTS = [
 
 function statusBadge(status: string) {
   const map: Record<string, { label: string; className: string }> = {
-    running:   { label: "Running",   className: "bg-blue-100 text-blue-700 border-blue-200" },
-    completed: { label: "Completed", className: "bg-green-100 text-green-700 border-green-200" },
-    partial:   { label: "Partial",   className: "bg-yellow-100 text-yellow-700 border-yellow-200" },
-    failed:    { label: "Failed",    className: "bg-red-100 text-red-700 border-red-200" },
+    running:   { label: "Running",   className: "bg-accent text-accent-foreground border-primary" },
+    completed: { label: "Completed", className: "bg-status-ok-bg text-status-ok border-status-ok" },
+    partial:   { label: "Partial",   className: "bg-status-warn-bg text-status-warn border-status-warn" },
+    failed:    { label: "Failed",    className: "bg-status-late-bg text-status-late border-status-late" },
   };
-  const s = map[status] ?? { label: status, className: "bg-gray-100 text-gray-700" };
+  const s = map[status] ?? { label: status, className: "bg-muted text-muted-foreground" };
   return <Badge variant="outline" className={s.className}>{s.label}</Badge>;
 }
 
@@ -253,7 +253,7 @@ export default function SettingsSyncPage() {
                       {last.tasks_created ? <span>+{last.tasks_created} tasks</span> : null}
                       {last.items_processed ? <span>{last.items_processed} items</span> : null}
                       {(last.errors_count ?? 0) > 0 ? (
-                        <span className="text-red-500">{last.errors_count} errors</span>
+                        <span className="text-status-late">{last.errors_count} errors</span>
                       ) : null}
                     </div>
                   </div>
@@ -336,13 +336,13 @@ export default function SettingsSyncPage() {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     {s.status === "completed" ? (
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-status-ok" />
                     ) : s.status === "failed" ? (
-                      <XCircle className="h-4 w-4 shrink-0 text-red-500" />
+                      <XCircle className="h-4 w-4 shrink-0 text-status-late" />
                     ) : s.status === "running" ? (
-                      <RefreshCw className="h-4 w-4 shrink-0 text-blue-500 animate-spin" />
+                      <RefreshCw className="h-4 w-4 shrink-0 text-primary animate-spin" />
                     ) : (
-                      <Clock className="h-4 w-4 shrink-0 text-yellow-500" />
+                      <Clock className="h-4 w-4 shrink-0 text-status-warn" />
                     )}
                     <div className="min-w-0">
                       <p className="font-medium truncate">{s.run_title}</p>

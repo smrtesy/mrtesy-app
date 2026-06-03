@@ -325,7 +325,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
       <div
         ref={scrollRef}
         dir="ltr"
-        className="flex-1 overflow-y-auto p-3 space-y-1.5 bg-[#f0f2f5]"
+        className="flex-1 overflow-y-auto p-3 space-y-1.5 bg-muted"
       >
         {visibleMessages.length === 0 && !loading && (
           <p className="text-center text-sm text-muted-foreground py-8">{t("emptyChat")}</p>
@@ -625,7 +625,7 @@ function ComposeBox({
   return (
     <div className="border-t bg-muted/40 p-2 space-y-1.5">
       {!withinWindow && (
-        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <p className="text-[11px] bg-status-warn-bg text-status-warn border rounded px-2 py-1">
           {t("windowClosed")}
         </p>
       )}
@@ -638,12 +638,12 @@ function ComposeBox({
       {/* English polish suggestion — appears automatically ~1.2s after the
           user stops typing English text. Accept replaces; X dismisses. */}
       {suggestion && (
-        <div className="rounded border border-blue-200 bg-blue-50 p-2 space-y-1.5" dir="ltr">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium text-blue-700">
+        <div className="rounded border border-primary bg-accent p-2 space-y-1.5" dir="ltr">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium text-primary">
             <Sparkles className="h-3 w-3" />
             <span>{t("englishSuggestion")}</span>
           </div>
-          <p className="text-sm text-blue-950 whitespace-pre-wrap break-words">{suggestion}</p>
+          <p className="text-sm text-accent-foreground whitespace-pre-wrap break-words">{suggestion}</p>
           <div className="flex items-center gap-1 justify-end">
             <Button
               type="button"
@@ -672,10 +672,10 @@ function ComposeBox({
       {/* Recording / transcribing status line. Shows while either is
           active so the user knows what's happening. */}
       {(recording || transcribing) && (
-        <div className="flex items-center gap-1.5 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+        <div className="flex items-center gap-1.5 text-[11px] bg-status-ok-bg text-status-ok border rounded px-2 py-1">
           {recording && (
             <>
-              <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+              <span className="inline-block h-2 w-2 rounded-full bg-status-late animate-pulse" />
               {t("recording")}
             </>
           )}
@@ -732,7 +732,7 @@ function ComposeBox({
           nothing to fix. Only shown when there's nothing else
           competing for the slot (no in-flight check, no suggestion). */}
       {englishApproved && !checking && !suggestion && (
-        <p className="text-[10px] text-green-700 flex items-center gap-1">
+        <p className="text-[10px] text-status-ok flex items-center gap-1">
           <Check className="h-2.5 w-2.5" />
           {t("englishApproved")}
         </p>
@@ -864,12 +864,12 @@ function MessageBubble({
           dir={msgDir}
           className={`max-w-[80%] rounded-lg px-3 py-1.5 text-sm shadow-sm ${
             isOutgoing
-              ? "bg-emerald-100 text-emerald-950"
-              : "bg-white text-gray-900"
+              ? "bg-status-ok-bg text-foreground"
+              : "bg-card text-foreground"
           }`}
         >
         {message.from_name && !isOutgoing && (
-          <p className="text-[11px] font-medium text-emerald-700">{message.from_name}</p>
+          <p className="text-[11px] font-medium text-status-ok">{message.from_name}</p>
         )}
 
         {/* Reply quote — when this message is a reply to a previous one,
@@ -877,10 +877,10 @@ function MessageBubble({
             and a one-line preview of the original. */}
         {quotedMessage && (
           <div
-            className={`mb-1.5 rounded border-s-4 bg-black/[0.04] px-2 py-1 text-xs ${
+            className={`mb-1.5 rounded border-s-4 bg-muted px-2 py-1 text-xs ${
               quotedMessage.direction === "outgoing"
-                ? "border-emerald-500"
-                : "border-blue-500"
+                ? "border-status-ok"
+                : "border-primary"
             }`}
             dir={detectMessageDir(quotedMessage.body_text)}
           >
@@ -910,13 +910,13 @@ function MessageBubble({
                 <img
                   src={imageSignedUrl}
                   alt=""
-                  className="max-h-[280px] max-w-full rounded-md object-contain bg-black/5"
+                  className="max-h-[280px] max-w-full rounded-md object-contain bg-muted"
                 />
               </button>
             ) : imageLoading ? (
-              <div className="h-32 w-48 animate-pulse rounded-md bg-black/10" />
+              <div className="h-32 w-48 animate-pulse rounded-md bg-muted" />
             ) : (
-              <div className="h-32 w-48 rounded-md bg-black/10" />
+              <div className="h-32 w-48 rounded-md bg-muted" />
             )}
           </div>
         )}
@@ -936,9 +936,9 @@ function MessageBubble({
                 className="w-full max-w-xs"
               />
             ) : imageLoading ? (
-              <div className="h-10 w-56 animate-pulse rounded-full bg-black/10" />
+              <div className="h-10 w-56 animate-pulse rounded-full bg-muted" />
             ) : (
-              <div className="h-10 w-56 rounded-full bg-black/10" />
+              <div className="h-10 w-56 rounded-full bg-muted" />
             )}
           </div>
         )}
@@ -975,7 +975,7 @@ function MessageBubble({
           <button
             type="button"
             onClick={openMedia}
-            className="mt-1.5 flex items-center gap-1.5 rounded border bg-white/70 px-2 py-1 text-xs text-blue-700 hover:bg-white"
+            className="mt-1.5 flex items-center gap-1.5 rounded border bg-card px-2 py-1 text-xs text-primary hover:bg-accent"
           >
             <FileText className="h-3.5 w-3.5" />
             <span className="truncate max-w-[200px]">
@@ -1007,8 +1007,8 @@ function MessageBubble({
                   href={href}
                   className={`inline-flex items-center gap-1 self-start rounded-md border px-1.5 py-0.5 text-[10px] transition ${
                     isSuggestion
-                      ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                      : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                      ? "border-status-warn bg-status-warn-bg text-status-warn hover:bg-status-warn-bg/70"
+                      : "border-primary bg-accent text-primary hover:bg-accent/70"
                   }`}
                   title={isSuggestion ? t("openSuggestion") : t("openTask")}
                 >
@@ -1022,12 +1022,12 @@ function MessageBubble({
           </div>
         )}
 
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-gray-500">
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <span>
             {ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
           {message.is_history && (
-            <span className="rounded bg-amber-100 px-1 text-amber-700">{t("history")}</span>
+            <span className="rounded bg-status-warn-bg px-1 text-status-warn">{t("history")}</span>
           )}
           {/* WhatsApp-style delivery ticks on outgoing only.
               sent      → single grey check
@@ -1063,7 +1063,7 @@ function MessageBubble({
           way WhatsApp renders them. We aggregate by emoji and show count. */}
       {reactions.length > 0 && (
         <div className={`mt-[-2px] flex ${flexAlign}`}>
-          <div className="rounded-full border bg-white shadow-sm px-1.5 py-0.5 flex items-center gap-0.5 text-xs leading-none">
+          <div className="rounded-full border bg-card shadow-sm px-1.5 py-0.5 flex items-center gap-0.5 text-xs leading-none">
             {aggregateReactions(reactions).map(({ emoji, count }) => (
               <button
                 key={emoji}
@@ -1107,7 +1107,7 @@ function ExtractedBlock({
 }) {
   return (
     <div
-      className="mt-1.5 rounded-md border border-black/10 bg-black/[0.03] px-2 py-1.5"
+      className="mt-1.5 rounded-md border border-border bg-muted px-2 py-1.5"
       role="group"
       aria-label={label}
     >
@@ -1118,7 +1118,7 @@ function ExtractedBlock({
         {icon}
         <span className="sr-only">{label}</span>
       </div>
-      <RichMessageText text={text} className="text-[13px] text-gray-700" />
+      <RichMessageText text={text} className="text-[13px] text-foreground" />
     </div>
   );
 }
@@ -1147,18 +1147,18 @@ function DeliveryReceipt({
   t: (key: string) => string;
 }) {
   if (status === "failed") {
-    return <AlertCircle className="h-3.5 w-3.5 text-red-500" aria-label="failed" />;
+    return <AlertCircle className="h-3.5 w-3.5 text-status-late" aria-label="failed" />;
   }
   if (status === "read") {
-    return <CheckCheck className="h-3.5 w-3.5 text-blue-500" aria-label="read" />;
+    return <CheckCheck className="h-3.5 w-3.5 text-primary" aria-label="read" />;
   }
   if (status === "delivered") {
-    return <CheckCheck className="h-3.5 w-3.5 text-gray-400" aria-label="delivered" />;
+    return <CheckCheck className="h-3.5 w-3.5 text-muted-foreground" aria-label="delivered" />;
   }
   // sent or unknown.
   return (
     <span title={t("noReceiptsTooltip")}>
-      <Check className="h-3.5 w-3.5 text-gray-400" aria-label="sent" />
+      <Check className="h-3.5 w-3.5 text-muted-foreground" aria-label="sent" />
     </span>
   );
 }
@@ -1231,14 +1231,14 @@ function ReactionButton({
         <SmilePlus className="h-4 w-4 text-muted-foreground" />
       </button>
       {pickerOpen && (
-        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-10 rounded-full border bg-white shadow-lg px-1 py-1 flex gap-0.5">
+        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-10 rounded-full border bg-card shadow-lg px-1 py-1 flex gap-0.5">
           {QUICK_EMOJIS.map((e) => (
             <button
               key={e}
               type="button"
               onClick={() => onPick(e === myReaction ? "" : e)}
               className={`text-lg leading-none rounded-full w-8 h-8 flex items-center justify-center transition ${
-                e === myReaction ? "bg-emerald-100 scale-110" : "hover:bg-muted/60"
+                e === myReaction ? "bg-status-ok-bg scale-110" : "hover:bg-muted/60"
               }`}
               title={e}
             >

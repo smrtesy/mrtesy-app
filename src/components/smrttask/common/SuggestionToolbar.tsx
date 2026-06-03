@@ -129,7 +129,7 @@ export function SuggestionToolbar({
             <Button
               size="sm"
               variant="ghost"
-              className="h-9 gap-1 text-red-500 hover:text-red-600"
+              className="h-9 gap-1 text-destructive hover:bg-destructive/10"
               onClick={onBulkDismissWithReason}
             >
               <X className="h-4 w-4" />

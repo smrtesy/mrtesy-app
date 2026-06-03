@@ -56,19 +56,21 @@ interface TaskCardProps {
   extraActions?: ReactNode;
 }
 
+// דחיפות לפי הפלטה הסמנטית: דחוף=אדום, גבוה=כתום, בינוני/נמוך=אפור ניטרלי
+// (הצבע בולט רק כשדחוף).
 const priorityColors: Record<string, string> = {
-  urgent: "bg-red-500 text-white",
-  high: "bg-orange-500 text-white",
-  medium: "bg-blue-500 text-white",
-  low: "bg-gray-400 text-white",
+  urgent: "bg-status-late text-white",
+  high: "bg-status-warn text-white",
+  medium: "bg-muted-foreground text-white",
+  low: "bg-muted-foreground/40 text-white",
 };
 
 /** Small color dot matching each priority, shown in the quick-edit menu. */
 const priorityDotColors: Record<string, string> = {
-  urgent: "bg-red-500",
-  high: "bg-orange-500",
-  medium: "bg-blue-500",
-  low: "bg-gray-400",
+  urgent: "bg-status-late",
+  high: "bg-status-warn",
+  medium: "bg-muted-foreground",
+  low: "bg-muted-foreground/40",
 };
 
 const PRIORITY_ORDER = ["urgent", "high", "medium", "low"] as const;
@@ -104,8 +106,8 @@ export function TaskCard({
     <div
       className={cn(
         "rounded-lg border bg-card p-4 transition-colors hover:bg-accent/50 cursor-pointer overflow-hidden",
-        isNew && "border-s-2 border-s-blue-400/30",
-        isPendingCompletion && "border-s-4 border-s-emerald-500",
+        isNew && "border-s-2 border-s-primary/30",
+        isPendingCompletion && "border-s-4 border-s-status-ok",
         selected && "ring-2 ring-primary/50"
       )}
       onClick={() => onSelect(task)}
@@ -115,7 +117,7 @@ export function TaskCard({
         <div
           className={cn(
             "mb-2 -mx-1 -mt-1 rounded-md px-2 py-1 text-xs flex items-start gap-2",
-            isPendingCompletion ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-900",
+            isPendingCompletion ? "bg-status-ok-bg text-status-ok" : "bg-status-warn-bg text-status-warn",
           )}
         >
           <Bell className="h-3 w-3 mt-0.5 shrink-0" />
@@ -146,7 +148,7 @@ export function TaskCard({
           {task.suggested_duplicate_of && (
             <Badge
               variant="outline"
-              className="text-[10px] gap-0.5 border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+              className="text-[10px] gap-0.5 border-status-warn bg-status-warn-bg text-status-warn"
               title={t("duplicateSuggestionBadgeTitle")}
             >
               <Copy className="h-3 w-3" />
@@ -239,7 +241,7 @@ export function TaskCard({
           <Button
             variant="default"
             size="sm"
-            className="h-9 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="h-9 gap-1 bg-status-ok hover:bg-status-ok/90 text-white"
             onClick={(e) => {
               e.stopPropagation();
               onComplete(task.id);
@@ -266,7 +268,7 @@ export function TaskCard({
             <Button
               variant="ghost"
               size="icon"
-              className="ms-auto h-9 w-9 text-red-600 hover:text-red-700 hover:bg-red-50"
+              className="ms-auto h-9 w-9 text-destructive hover:bg-destructive/10"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
@@ -326,7 +328,7 @@ export function TaskCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-amber-500 hover:text-amber-600 hover:bg-amber-50"
+                className="h-10 w-10 md:h-8 md:w-8 text-status-warn hover:bg-status-warn-bg"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
                 title="הסר מהיום"
               >
@@ -336,7 +338,7 @@ export function TaskCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-10 w-10 md:h-8 md:w-8 text-orange-400 hover:text-orange-500 hover:bg-orange-50"
+                className="h-10 w-10 md:h-8 md:w-8 text-status-warn hover:bg-status-warn-bg"
                 onClick={(e) => { e.stopPropagation(); onToggleToday(task.id); }}
                 title="הוסף להיום"
               >
@@ -348,7 +350,7 @@ export function TaskCard({
             <Button
               variant="ghost"
               size="icon"
-              className="h-10 w-10 md:h-8 md:w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+              className="h-10 w-10 md:h-8 md:w-8 text-destructive hover:bg-destructive/10"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);
@@ -362,7 +364,7 @@ export function TaskCard({
         <Button
           variant="ghost"
           size="sm"
-          className="h-10 md:h-8 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          className="h-10 md:h-8 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok/90"
           onClick={(e) => {
             e.stopPropagation();
             onComplete(task.id);

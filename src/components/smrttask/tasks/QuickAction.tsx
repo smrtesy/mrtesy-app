@@ -173,7 +173,7 @@ export function QuickAction({
         <div className="flex-1 overflow-auto py-4">
           {loading && (
             <div className="flex flex-col items-center gap-3 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">{t("quickAction")}...</p>
             </div>
           )}

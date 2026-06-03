@@ -33,12 +33,12 @@ const typeIcons: Record<Fact["type"], typeof User> = {
 };
 
 const typeColors: Record<Fact["type"], string> = {
-  contact: "bg-blue-50 text-blue-700",
-  keyword: "bg-purple-50 text-purple-700",
-  timeline: "bg-orange-50 text-orange-700",
-  link: "bg-green-50 text-green-700",
-  topic: "bg-yellow-50 text-yellow-700",
-  note: "bg-gray-50 text-gray-700",
+  contact: "bg-accent text-accent-foreground",
+  keyword: "bg-muted text-muted-foreground",
+  timeline: "bg-status-warn-bg text-status-warn",
+  link: "bg-status-ok-bg text-status-ok",
+  topic: "bg-status-warn-bg text-status-warn",
+  note: "bg-muted text-muted-foreground",
 };
 
 export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: BriefFactVerifierProps) {
@@ -70,10 +70,10 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: Bri
   if (facts.length === 0) return null;
 
   return (
-    <Card className="border-blue-200 bg-blue-50/30">
+    <Card className="border-primary bg-accent/30">
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2">
-          <BookOpen className="h-4 w-4 text-blue-600" />
+          <BookOpen className="h-4 w-4 text-primary" />
           {tBrief("aiLearnedFacts", { count: facts.length })}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
@@ -86,7 +86,7 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: Bri
           const colorClass = typeColors[fact.type] ?? typeColors.note;
           const isSaving = saving === fact.id;
           return (
-            <div key={fact.id} className="flex items-center gap-2 rounded-lg border bg-background p-2.5">
+            <div key={fact.id} className="flex items-center gap-2 rounded-lg border bg-card p-2.5">
               <div className={`rounded-full p-1.5 ${colorClass}`}>
                 <Icon className="h-3.5 w-3.5" />
               </div>
@@ -100,7 +100,7 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: Bri
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                  className="h-8 w-8 text-status-late hover:bg-status-late-bg"
                   disabled={isSaving}
                   onClick={() => handleVerify(fact, false)}
                 >
@@ -109,7 +109,7 @@ export function BriefFactVerifier({ projectId, pendingFacts: initialFacts }: Bri
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-50"
+                  className="h-8 w-8 text-status-ok hover:bg-status-ok-bg"
                   disabled={isSaving}
                   onClick={() => handleVerify(fact, true)}
                 >

@@ -249,7 +249,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
               {item.created_by === "ai" && !isEditing && (
                 <span
                   title={t("aiBadge")}
-                  className="shrink-0 inline-flex items-center text-[10px] text-purple-600"
+                  className="shrink-0 inline-flex items-center text-[10px] text-muted-foreground"
                 >
                   <Sparkles className="h-3 w-3" />
                 </span>
