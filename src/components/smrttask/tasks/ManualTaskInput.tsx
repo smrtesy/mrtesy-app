@@ -30,6 +30,25 @@ interface ChecklistDraft {
   title: string;
 }
 
+// Recurrence kinds offered in the UI. They map to the compact recurrence_rule
+// the backend understands (see server/.../recurrence.ts).
+type RecurrenceKind = "none" | "daily" | "weekly" | "weekdays" | "monthly" | "yearly" | "hebrew";
+
+// Sunday-first, matching JS getDay() (0=Sun .. 6=Sat) and the BYDAY codes.
+const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
+
+function buildRecurrenceRule(kind: RecurrenceKind, weekdays: number[]): string | null {
+  switch (kind) {
+    case "none":     return null;
+    case "daily":    return "FREQ=DAILY";
+    case "weekly":   return "FREQ=WEEKLY";
+    case "weekdays": return weekdays.length ? `FREQ=WEEKLY;BYDAY=${weekdays.slice().sort().map((d) => WEEKDAY_CODES[d]).join(",")}` : null;
+    case "monthly":  return "FREQ=MONTHLY";
+    case "yearly":   return "FREQ=YEARLY";
+    case "hebrew":   return "FREQ=HEBREW_YEARLY";
+  }
+}
+
 /**
  * ManualTaskInput — create a task by hand, no AI classification.
  *
@@ -51,6 +70,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const [projectId, setProjectId] = useState("");
   const [subProjectId, setSubProjectId] = useState("");
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
+  const [recurrence, setRecurrence] = useState<RecurrenceKind>("none");
+  const [weekdays, setWeekdays] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
 
   const reset = useCallback(() => {
@@ -59,6 +82,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setChecklist([]);
     setProjectId("");
     setSubProjectId("");
+    setDueDate("");
+    setDueTime("");
+    setRecurrence("none");
+    setWeekdays([]);
     setLoading(false);
   }, []);
 
@@ -110,10 +137,37 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setChecklist((prev) => prev.filter((c) => c.key !== key));
   }
 
+  function toggleWeekday(day: number) {
+    setWeekdays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
+  }
+
+  // When the user picks a recurrence that needs a weekday set, seed it from the
+  // chosen due date so "every week" defaults to the right day out of the box.
+  function handleRecurrenceChange(kind: RecurrenceKind) {
+    setRecurrence(kind);
+    if (kind === "weekdays" && weekdays.length === 0 && dueDate) {
+      setWeekdays([new Date(`${dueDate}T00:00:00`).getDay()]);
+    }
+  }
+
   async function handleCreate() {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
       toast.error(t("titleRequired"));
+      return;
+    }
+    // A time without a date has no moment to fire on (the banner needs both).
+    if (dueTime && !dueDate) {
+      toast.error(t("timeNeedsDate"));
+      return;
+    }
+    // A recurring task needs an anchor date, and a weekday-set rule needs ≥1 day.
+    if (recurrence !== "none" && !dueDate) {
+      toast.error(t("recurrenceNeedsDate"));
+      return;
+    }
+    if (recurrence === "weekdays" && weekdays.length === 0) {
+      toast.error(t("recurrenceNeedsWeekday"));
       return;
     }
     setLoading(true);
@@ -142,6 +196,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       };
       if (checklistItems.length > 0) body.checklist = checklistItems;
       if (effectiveProjectId) body.project_id = effectiveProjectId;
+      if (dueDate) body.due_date = dueDate;
+      if (dueTime) body.due_time = dueTime;
+      const recurrenceRule = buildRecurrenceRule(recurrence, weekdays);
+      if (recurrenceRule) body.recurrence_rule = recurrenceRule;
 
       await api<{ task: unknown }>("/api/tasks", { method: "POST", body });
       toast.success(t("created"));
@@ -225,6 +283,71 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               <Plus className="h-4 w-4" />
               {t("addChecklistItem")}
             </Button>
+          </div>
+
+          {/* Due date + time */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-medium">{t("dueDateLabel")}</label>
+              <Input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                dir="ltr"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium">{t("dueTimeLabel")}</label>
+              <Input
+                type="time"
+                value={dueTime}
+                onChange={(e) => setDueTime(e.target.value)}
+                dir="ltr"
+              />
+            </div>
+          </div>
+
+          {/* Recurrence */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium">{t("recurrenceLabel")}</label>
+            <select
+              value={recurrence}
+              onChange={(e) => handleRecurrenceChange(e.target.value as RecurrenceKind)}
+              className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+              dir="auto"
+            >
+              <option value="none">{t("recurrenceNone")}</option>
+              <option value="daily">{t("recurrenceDaily")}</option>
+              <option value="weekly">{t("recurrenceWeekly")}</option>
+              <option value="weekdays">{t("recurrenceWeekdays")}</option>
+              <option value="monthly">{t("recurrenceMonthly")}</option>
+              <option value="yearly">{t("recurrenceYearly")}</option>
+              <option value="hebrew">{t("recurrenceHebrew")}</option>
+            </select>
+
+            {recurrence === "weekdays" && (
+              <div className="flex flex-wrap gap-1">
+                {WEEKDAY_CODES.map((_, day) => (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleWeekday(day)}
+                    className={`h-9 w-9 rounded-full border text-sm transition-colors ${
+                      weekdays.includes(day)
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-muted-foreground"
+                    }`}
+                    aria-pressed={weekdays.includes(day)}
+                  >
+                    {t(`weekdayShort.${day}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {recurrence === "hebrew" && (
+              <p className="text-[11px] text-muted-foreground" dir="auto">{t("recurrenceHebrewHint")}</p>
+            )}
           </div>
 
           {/* Project + sub-project */}

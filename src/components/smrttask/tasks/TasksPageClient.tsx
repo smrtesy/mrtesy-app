@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams, usePathname } from "next/navigat
 import { TaskList } from "./TaskList";
 import { TaskCalendarView } from "./TaskCalendarView";
 import { TasksViewToggle, type TaskView } from "./TasksViewToggle";
+import { UpcomingBanner } from "./UpcomingBanner";
 
 /**
  * Top-level chrome for /tasks. Owns the list/calendar view toggle and
@@ -52,6 +53,8 @@ export function TasksPageClient({ title }: { title: string }) {
 
   return (
     <div className="space-y-4">
+      <UpcomingBanner locale={locale as string} />
+
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold">{title}</h1>
         {/* View toggle sits at the LEFT edge in RTL (after the title in

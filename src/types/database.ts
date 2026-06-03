@@ -245,6 +245,8 @@ export type Database = {
           due_time: string | null
           reminder_at: string | null
           recurrence_rule: string | null
+          recurrence_parent_id: string | null
+          recurrence_until: string | null
           snoozed_until: string | null
           snooze_count: number | null
           completed_at: string | null

@@ -25,6 +25,8 @@ import {
   Bell,
   RotateCcw,
   Copy,
+  CalendarClock,
+  Repeat,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
@@ -204,9 +206,19 @@ export function TaskCard({
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
         <SourceLink source={source} stopPropagation />
         {task.due_date && (
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
+          <span className={cn(
+            "flex items-center gap-1",
+            // A meeting's date+time is the heart of the card — give it weight.
+            task.task_type === "meeting" && "rounded-full bg-status-warn-bg px-2 py-0.5 font-medium text-status-warn",
+          )}>
+            {task.task_type === "meeting" ? <CalendarClock className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
             {formatDateOnly(task.due_date, locale)}
+            {task.due_time && <span dir="ltr">{task.due_time.slice(0, 5)}</span>}
+          </span>
+        )}
+        {task.recurrence_rule && (
+          <span className="flex items-center gap-1" title={task.recurrence_rule}>
+            <Repeat className="h-3 w-3" />
           </span>
         )}
         {task.related_contact && (

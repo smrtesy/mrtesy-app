@@ -15,7 +15,35 @@
     "noSubProject": "ללא תת-פרויקט",
     "create": "צור משימה",
     "created": "המשימה נוצרה",
-    "titleRequired": "צריך כותרת למשימה"
+    "titleRequired": "צריך כותרת למשימה",
+    "dueDateLabel": "תאריך יעד",
+    "dueTimeLabel": "שעה",
+    "recurrenceLabel": "חזרה",
+    "recurrenceNone": "ללא חזרה",
+    "recurrenceDaily": "כל יום",
+    "recurrenceWeekly": "כל שבוע",
+    "recurrenceWeekdays": "ימים קבועים בשבוע",
+    "recurrenceMonthly": "כל חודש",
+    "recurrenceYearly": "כל שנה (תאריך לועזי)",
+    "recurrenceHebrew": "כל שנה (תאריך עברי)",
+    "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
+    "recurrenceNeedsDate": "כדי ליצור משימה חוזרת צריך לבחור תאריך יעד",
+    "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
+    "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
+    "weekdayShort": {
+      "0": "א",
+      "1": "ב",
+      "2": "ג",
+      "3": "ד",
+      "4": "ה",
+      "5": "ו",
+      "6": "ש"
+    }
+  },
+  "upcoming": {
+    "title": "קורה בקרוב",
+    "now": "עכשיו",
+    "inMinutes": "בעוד {min} דק'"
   },
   "emailReader": {
     "title": "המייל המקורי",

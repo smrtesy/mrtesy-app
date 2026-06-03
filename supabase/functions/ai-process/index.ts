@@ -130,11 +130,44 @@ function bodyForClassify(msg: any, limit: number): string {
   return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${head}`;
 }
 
-// Returns the most recent business day (Mon–Fri) strictly before `date`.
-function prevBusinessDay(date: Date): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() - 1);
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+// ── Business-hours math ──────────────────────────────────────────────────────
+// "Business hours" here = clock hours that fall on a business DAY. A business
+// day is Mon–Fri (Sun=0 and Sat=6 are weekend) — matching the convention this
+// file already used. Nights count; only weekends are skipped. So 48 business
+// hours = "two business days later, jumping over any weekend in between".
+//
+// Used for two product rules:
+//   * follow-up suggestions surface FOLLOWUP_LEAD_HOURS after an outgoing
+//     message that's awaiting a reply (default 48h).
+//   * meeting suggestions surface MEETING_LEAD_HOURS before the event (24h).
+const FOLLOWUP_LEAD_HOURS = 48;
+const MEETING_LEAD_HOURS = 24;
+
+function isBusinessDay(d: Date): boolean {
+  const day = d.getDay();
+  return day !== 0 && day !== 6;
+}
+
+// Advance `start` forward by `hours` business hours.
+function addBusinessHours(start: Date, hours: number): Date {
+  const d = new Date(start);
+  let remaining = hours;
+  while (remaining > 0) {
+    d.setHours(d.getHours() + 1);
+    if (isBusinessDay(d)) remaining--;
+  }
+  return d;
+}
+
+// Move `start` backward by `hours` business hours (the earliest moment that is
+// still `hours` business hours ahead of it).
+function subBusinessHours(start: Date, hours: number): Date {
+  const d = new Date(start);
+  let remaining = hours;
+  while (remaining > 0) {
+    d.setHours(d.getHours() - 1);
+    if (isBusinessDay(d)) remaining--;
+  }
   return d;
 }
 
@@ -185,9 +218,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     const now = new Date();
     const pastCutoff = new Date(now.getTime() - sys.calendar_past_days * 86_400_000);
     if (eventDate < pastCutoff) return { result: "skip", skipReason: "past_calendar_event" };
-    // All calendar events are actionable. Process starting 1 business day before the event.
-    const processFrom = prevBusinessDay(eventDate);
-    processFrom.setHours(0, 0, 0, 0);
+    // All calendar events are actionable, but a meeting should only surface as a
+    // suggestion MEETING_LEAD_HOURS (24) business hours before it starts — not
+    // days in advance. Defer until that lead window opens; the cron re-evaluates
+    // every minute, so it surfaces exactly on time.
+    const processFrom = subBusinessHours(eventDate, MEETING_LEAD_HOURS);
     if (now < processFrom) return { result: "defer", skipReason: "future_calendar_event" };
     return { result: "calendar_actionable" };
   }
@@ -208,7 +243,11 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     }
   }
 
-  if (sourceType === "whatsapp_echo") return { result: "check_followup" };
+  // whatsapp_echo rows are self-chat captures (voice memos = fresh task
+  // intentions), NOT messages sent to a third party awaiting a reply — they go
+  // through normal analysis and become tasks immediately. Only sent EMAIL is
+  // routed to the deferred 48-business-hour follow-up flow.
+  if (sourceType === "whatsapp_echo") return { result: "needs_claude" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
@@ -1613,13 +1652,76 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     return;
   }
 
+  // ── Outgoing message awaiting a reply → DEFERRED follow-up suggestion ──────
+  // The user sent an email / WhatsApp and is waiting on the other side. We do
+  // NOT surface a follow-up immediately: a suggestion only appears
+  // FOLLOWUP_LEAD_HOURS (48) business hours later, and only if no reply has
+  // arrived by then. We model this with a snoozed task — the reminders-check
+  // cron wakes it into the inbox at snoozed_until, and suppresses it there if
+  // the other party already replied.
+  if (!userForceActionable && preResult.result === "check_followup") {
+    const fu = await checkFollowup(msg, sys);
+    totalInputTokens += fu.inputTokens;
+    totalOutputTokens += fu.outputTokens;
+    const baseFields = {
+      user_id: msg.user_id, category: "ai_process", ...msgLogFields(msg),
+      pre_classification: preResult.result, processing_duration_ms: Date.now() - startTime,
+    };
+    if (!fu.isFollowup) {
+      // Outgoing message that closes a loop / needs no chasing → informational.
+      await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "informational", classification_reason: `no follow-up needed: ${fu.reason}` });
+      return;
+    }
+
+    // Don't double-create if this sent message was processed before.
+    const { data: existingFu } = await supabase
+      .from("tasks").select("id").eq("source_message_id", msg.id).eq("task_type", "followup").maybeSingle();
+    if (!existingFu) {
+      const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+      const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS);
+      const recipient = msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "";
+      const snippet = (msg.subject || (msg.body_text || "").slice(0, 60) || "הודעה שנשלחה").trim();
+      const title = `מעקב: ${snippet}`;
+      const sourceUrl = resolveSourceUrl(msg);
+      // Preserve the deep link verbatim (system-wide URL rule).
+      const description = [
+        "שלחת הודעה וממתינה לתגובה. אם לא התקבל מענה — כדאי לעשות מעקב.",
+        recipient ? `נשלח אל: ${recipient}` : null,
+        sourceUrl ? `קישור להודעה: ${sourceUrl}` : null,
+      ].filter(Boolean).join("\n");
+      const { data: newTask } = await supabase.from("tasks").insert({
+        user_id: msg.user_id, source_message_id: msg.id,
+        title, title_he: title, description,
+        task_type: "followup", priority: "medium",
+        status: "snoozed", snoozed_until: surfaceAt.toISOString(),
+        manually_verified: false,
+        related_contact_email: recipient || null,
+        source_link: sourceUrl,
+        ai_actions: [], ai_confidence: 0.7, ai_model_used: sys.classification_model,
+        updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
+      }).select("id").single();
+      if (newTask) {
+        await supabase.from("task_activities").insert({
+          user_id: msg.user_id, task_id: newTask.id,
+          activity_type: "created", new_value: "snoozed",
+          note: `Follow-up scheduled for ${surfaceAt.toISOString()} (${FOLLOWUP_LEAD_HOURS} business hours after send)`,
+          actor: "system",
+        });
+      }
+    }
+    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "actionable_followup", classification_reason: `follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours: ${fu.reason}` });
+    return;
+  }
+
   // ── Load thread memory before AI runs so the prompt has running context ───
   const tkey = threadKey(msg);
   const memory = tkey ? await loadThreadMemory(msg.user_id, tkey) : null;
 
-  // Calendar events within 1 business day are always actionable — skip Claude
-  // classification and go straight to task creation. Claude is still called for
-  // the task content itself.
+  // Calendar events inside the meeting lead window (24 business hours before
+  // the event) are always actionable — skip Claude classification and go
+  // straight to task creation. Claude is still called for the task content.
   const calendarForceActionable = !userForceActionable && preResult.result === "calendar_actionable";
   // Drive documents are never spam — skip Claude classification, but still
   // call createTasksFromMessage so Claude reads the document and builds a task.
@@ -1642,7 +1744,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       model: "",
     };
     classification = "actionable";
-    classificationReason = "calendar: 1 business day before event";
+    classificationReason = "calendar: within meeting lead window (24 business hours)";
   } else if (driveForceActionable) {
     analysis = {
       classification: "actionable",
@@ -1828,12 +1930,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         const eventTitle = msg.subject || "ארוע ביומן";
         // Use raw ISO date — toLocaleString with IANA timezones is unreliable in Deno V8.
         const description = `ארוע ביומן: ${eventTitle}`;
+        // Fire the prominent "happening soon" reminder one hour before the
+        // meeting starts. The banner keys off reminder_at (a precise instant,
+        // tz-rendered on the client), so we don't need a tz-correct due_time.
+        const reminderAt = new Date(eventDate.getTime() - 60 * 60 * 1000);
         const { data: newTask } = await supabase.from("tasks").insert({
           user_id: msg.user_id, source_message_id: msg.id,
           title: eventTitle, title_he: eventTitle,
-          description, task_type: "action", priority: "medium",
+          description, task_type: "meeting", priority: "medium",
           status: "inbox", manually_verified: false,
           due_date: dueDateStr,
+          reminder_at: reminderAt.toISOString(),
           ai_actions: [], ai_confidence: 1.0, ai_model_used: "calendar",
           suggested_duplicate_of: dupSuggestionTaskId,
           updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
@@ -1880,12 +1987,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           const firstReason = taskResult.tasks.find((t: any) => t.reason_he)?.reason_he;
           if (firstReason) classificationReason = firstReason;
           aiModel = taskResult.model;
+          // An email carrying a video-call join link is a meeting to attend.
+          // Tag it so it gets the meeting indicator (the 24h lead-window gate
+          // only applies to calendar events, which carry a reliable start time).
+          const taskType = hasMeetingInvite(bodyForAI(msg)) ? "meeting" : "action";
           let firstTaskId: string | null = null;
           for (const task of taskResult.tasks) {
             const { data: newTask } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
-              description: task.description, task_type: "action", priority: task.priority || "medium",
+              description: task.description, task_type: taskType, priority: task.priority || "medium",
               status: "inbox", manually_verified: false,
               due_date: task.due_date,
               project_id: taskResult.projectId,
