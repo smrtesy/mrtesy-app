@@ -96,12 +96,29 @@ Deno.serve(async (req) => {
     // old snoozed_until from before dismissal must NOT bounce back into inbox.
     const { data: snoozedTasks } = await supabase
       .from("tasks")
-      .select("id, user_id, title_he")
+      .select("id, user_id, title_he, task_type, source_message_id")
       .lte("snoozed_until", now)
       .not("snoozed_until", "is", null)
       .not("status", "in", "(archived,completed,dismissed)");
 
+    let suppressed = 0;
     for (const task of snoozedTasks || []) {
+      // Follow-up suggestions are only worth surfacing if the other side never
+      // replied. If a reply has arrived on the same thread since we sent the
+      // message, the loop closed itself — auto-dismiss instead of nagging.
+      if (task.task_type === "followup" && (await replyArrived(task))) {
+        await supabase.from("tasks").update({
+          snoozed_until: null,
+          status: "dismissed",
+          dismissal_reason_code: "reply_received",
+          dismissal_reason_text: "התקבלה תגובה — המעקב נסגר אוטומטית",
+          last_updated_reason: "followup_reply_received",
+          status_changed_at: now,
+          updated_at: now,
+        }).eq("id", task.id);
+        suppressed++;
+        continue;
+      }
       await supabase.from("tasks").update({
         snoozed_until: null,
         status: "inbox",
@@ -112,7 +129,8 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({
       reminders_processed: processed,
-      snoozed_woken: snoozedTasks?.length || 0,
+      snoozed_woken: (snoozedTasks?.length || 0) - suppressed,
+      followups_suppressed: suppressed,
     }), {
       headers: { "Content-Type": "application/json" },
     });
@@ -123,6 +141,72 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+// Did the other party reply on the same thread after we sent the message that
+// spawned this follow-up? Looks the sent message up via source_message_id, then
+// scans for an INBOUND message (gmail / whatsapp — not the *_sent / *_echo
+// outgoing kinds) on the same thread received after the send time.
+async function replyArrived(task: { user_id: string | null; source_message_id: string | null }): Promise<boolean> {
+  if (!task.source_message_id || !task.user_id) return false;
+  const { data: sent } = await supabase
+    .from("source_messages")
+    .select("source_type, received_at, metadata")
+    .eq("id", task.source_message_id)
+    .maybeSingle();
+  if (!sent) return false;
+
+  const sentAt = sent.received_at ?? new Date(0).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meta = (sent.metadata ?? {}) as any;
+  const threadId = meta.threadId as string | undefined;
+  const chatId = meta.chatId as string | undefined;
+
+  if (threadId) {
+    // Gmail: same thread, inbound side only. source_messages keeps one row per
+    // inbound email, so an inbound after the send time means a reply arrived.
+    const { count } = await supabase
+      .from("source_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", task.user_id)
+      .eq("source_type", "gmail")
+      .gt("received_at", sentAt)
+      .filter("metadata->>threadId", "eq", threadId);
+    return (count ?? 0) > 0;
+  }
+
+  if (chatId) {
+    // WhatsApp: source_messages keeps only ONE upserted row per chat (no
+    // direction, mutable received_at), so it can't tell us whether a real
+    // INBOUND reply arrived. The authoritative per-message log is
+    // whatsapp_messages (direction + immutable received_at per message).
+    // We're still waiting iff the latest non-reaction message in the chat is
+    // outgoing — i.e. an inbound reply exists AFTER our last outgoing message.
+    const { data: lastOut } = await supabase
+      .from("whatsapp_messages")
+      .select("received_at")
+      .eq("user_id", task.user_id)
+      .eq("chat_id", chatId)
+      .eq("direction", "outgoing")
+      .eq("is_reaction", false)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    // Nothing sent on this chat → no outgoing to wait on; surface the follow-up.
+    if (!lastOut?.received_at) return false;
+    const { count } = await supabase
+      .from("whatsapp_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", task.user_id)
+      .eq("chat_id", chatId)
+      .eq("direction", "incoming")
+      .eq("is_reaction", false)
+      .gt("received_at", lastOut.received_at);
+    return (count ?? 0) > 0;
+  }
+
+  // No thread handle to match a reply against — surface the follow-up.
+  return false;
+}
 
 function calculateNextOccurrence(currentRemindAt: string, rule: string): string {
   // Simple daily/weekly/monthly recurrence
