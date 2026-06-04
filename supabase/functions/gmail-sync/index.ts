@@ -37,10 +37,15 @@ async function notifyDisconnect(userId: string, reason: string) {
   }
 }
 
-/** Insert a warning notification for the user when a sync fails.
- *  De-duped to at most one unread alert per source per hour so a noisy
- *  failure loop doesn't flood the Notifications tab. */
-async function notifySyncError(userId: string, source: string, message: string) {
+/** Insert a notification for the user when a sync fails.
+ *  urgency="warning"  → de-duped to 1 per hour (transient errors)
+ *  urgency="error"    → de-duped to 1 per 15 min (sync blocked — must be seen quickly) */
+async function notifySyncError(
+  userId: string,
+  source: string,
+  message: string,
+  urgency: "warning" | "error" = "warning",
+) {
   const { data: membership } = await supabase
     .from("org_members")
     .select("org_id")
@@ -50,17 +55,20 @@ async function notifySyncError(userId: string, source: string, message: string) 
   if (!membership?.org_id) return;
 
   const sourceLabel = source === "gmail" ? "Gmail" : source === "gmail_sent" ? "Gmail (Sent)" : source;
-  const title = `בעיה בסינכרון ${sourceLabel}`;
+  const title = urgency === "error"
+    ? `⚠️ סינכרון ${sourceLabel} מושהה`
+    : `בעיה בסינכרון ${sourceLabel}`;
 
-  // At most one unread alert per source per hour
+  const dedupMs = urgency === "error" ? 15 * 60 * 1000 : 60 * 60 * 1000;
+
   const { data: existing } = await supabase
     .from("notifications")
     .select("id")
     .eq("user_id", userId)
-    .eq("type", "warning")
+    .eq("type", urgency)
     .eq("title", title)
     .eq("is_read", false)
-    .gt("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString())
+    .gt("created_at", new Date(Date.now() - dedupMs).toISOString())
     .limit(1)
     .maybeSingle();
   if (existing) return;
@@ -69,7 +77,7 @@ async function notifySyncError(userId: string, source: string, message: string) 
     user_id: userId,
     org_id: membership.org_id,
     app_slug: "smrttask",
-    type: "warning",
+    type: urgency,
     title,
     body: message.substring(0, 500),
     link: "/log",
@@ -264,12 +272,46 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     .single();
   setSyncState(syncState);
 
-  // Check consecutive failures
+  // Check consecutive failures — with self-healing after a 30-minute cooldown.
+  // Before this fix the function would mute itself permanently after 5 failures,
+  // causing a silent multi-hour blackout when a transient API / quota error hit
+  // at night (discovered: 2026-06-04, caused by Gmail quota from Apps Script).
   if (syncState && syncState.consecutive_failures >= 5) {
-    await notifySyncError(userId, "gmail",
-      `סינכרון Gmail נתקע — ${syncState.consecutive_failures} כשלים ברצף. בדוק את הגדרות החיבור.`
-    ).catch(() => {});
-    return { skipped: true, reason: "Too many failures — reconnect Gmail" };
+    const lastSynced = syncState.last_synced_at ? new Date(syncState.last_synced_at) : null;
+    const msSinceLastSync = lastSynced ? Date.now() - lastSynced.getTime() : Infinity;
+    const cooldownMs = 30 * 60 * 1000;
+
+    if (msSinceLastSync < cooldownMs) {
+      const minutesLeft = Math.ceil((cooldownMs - msSinceLastSync) / 60000);
+      // Log every skip so the user sees it in the sources log
+      await supabase.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "gmail_sync",
+        status: "failed",
+        error_message: `Gmail sync paused after ${syncState.consecutive_failures} consecutive failures — auto-retry in ${minutesLeft}m. Last error: ${syncState.last_error ?? "unknown"}`,
+      }).catch(() => {});
+      await notifySyncError(userId, "gmail",
+        `סינכרון Gmail הושהה — ${syncState.consecutive_failures} כשלים ברצף. ניסיון חוזר אוטומטי בעוד ${minutesLeft} דקות. שגיאה: ${syncState.last_error ?? "לא ידוע"}`,
+        "error",
+      ).catch(() => {});
+      return { skipped: true, reason: `too many failures — cooldown ${minutesLeft}m` };
+    }
+
+    // Cooldown passed — auto-reset and attempt recovery instead of staying muted forever
+    await supabase.from("sync_state")
+      .update({ consecutive_failures: 0, last_error: null })
+      .eq("user_id", userId)
+      .eq("source", "gmail");
+    await supabase.from("log_entries").insert({
+      user_id: userId,
+      level: "warning",
+      category: "gmail_sync",
+      status: "pending",
+      error_message: `Gmail sync auto-recovering after ${syncState.consecutive_failures} consecutive failures — retrying now`,
+    }).catch(() => {});
+    syncState.consecutive_failures = 0;
+    syncState.last_error = null;
   }
 
   let token: string;
@@ -302,24 +344,56 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       result = await gmailHistorySync(userId, token, checkpoint);
     } catch (e) {
       const errMsg = (e as Error).message;
-      await supabase.from("sync_state").upsert(
-        {
+
+      // 401 from the Gmail API means our cached token was rejected.
+      // Force-invalidate it and retry once before counting as a failure.
+      if (errMsg.includes(": 401")) {
+        try {
+          await supabase.from("user_credentials")
+            .update({ expires_at: new Date(0).toISOString() })
+            .eq("user_id", userId)
+            .eq("service", "gmail");
+          token = await refreshGoogleToken(userId);
+          result = await gmailHistorySync(userId, token, checkpoint);
+          // Retry succeeded — clear any stale error and continue
+          await supabase.from("sync_state")
+            .update({ last_error: null })
+            .eq("user_id", userId)
+            .eq("source", "gmail")
+            .not("last_error", "is", null);
+        } catch (retryErr) {
+          const retryMsg = (retryErr as Error).message;
+          await supabase.from("sync_state").upsert(
+            { user_id: userId, source: "gmail", last_error: retryMsg, consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1 },
+            { onConflict: "user_id,source" }
+          );
+          await supabase.from("log_entries").insert({
+            user_id: userId, level: "error", category: "gmail_sync", status: "failed",
+            error_message: `gmailHistorySync 401 retry failed: ${retryMsg}`,
+          }).catch(() => {});
+          await notifySyncError(userId, "gmail", `gmailHistorySync: ${retryMsg}`).catch(() => {});
+          return { error: retryMsg };
+        }
+      } else {
+        await supabase.from("sync_state").upsert(
+          {
+            user_id: userId,
+            source: "gmail",
+            last_error: errMsg,
+            consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+          },
+          { onConflict: "user_id,source" }
+        );
+        await supabase.from("log_entries").insert({
           user_id: userId,
-          source: "gmail",
-          last_error: errMsg,
-          consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
-        },
-        { onConflict: "user_id,source" }
-      );
-      await supabase.from("log_entries").insert({
-        user_id: userId,
-        level: "error",
-        category: "gmail_sync",
-        status: "failed",
-        error_message: `gmailHistorySync threw: ${errMsg}`,
-      }).catch(() => {});
-      await notifySyncError(userId, "gmail", `gmailHistorySync: ${errMsg}`).catch(() => {});
-      return { error: errMsg };
+          level: "error",
+          category: "gmail_sync",
+          status: "failed",
+          error_message: `gmailHistorySync threw: ${errMsg}`,
+        }).catch(() => {});
+        await notifySyncError(userId, "gmail", `gmailHistorySync: ${errMsg}`).catch(() => {});
+        return { error: errMsg };
+      }
     }
     if (result.needsReconcile) {
       // Checkpoint unusable (Gmail returned 404/400). Clear it so the NEXT run
