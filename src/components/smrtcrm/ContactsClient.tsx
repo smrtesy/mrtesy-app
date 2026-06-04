@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Plus, Search, Mail, Phone, Loader2, Upload } from "lucide-react";
+import { Plus, Search, Mail, Phone, Loader2, Upload, Trash2, Tag as TagIcon, X } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ interface Tag {
 }
 
 const ALL_TAGS = "__all__";
+const emptyForm = { first_name: "", last_name: "", phone: "", email: "" };
 
 export function ContactsClient() {
   const t = useTranslations("smrtCRM");
@@ -52,10 +53,14 @@ export function ContactsClient() {
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string>(ALL_TAGS);
 
-  const [addOpen, setAddOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", email: "" });
+  const [form, setForm] = useState(emptyForm);
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkTag, setBulkTag] = useState<string>(ALL_TAGS);
 
   const loadTags = useCallback(async () => {
     try {
@@ -77,6 +82,7 @@ export function ContactsClient() {
       );
       setContacts(contacts);
       setTotal(total);
+      setSelected(new Set());
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -88,36 +94,111 @@ export function ContactsClient() {
     loadTags();
   }, [loadTags]);
 
-  // Debounce search/filter changes into a single reload.
   useEffect(() => {
     const id = setTimeout(loadContacts, 250);
     return () => clearTimeout(id);
   }, [loadContacts]);
 
-  async function handleAdd() {
+  function openAdd() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setDialogOpen(true);
+  }
+
+  function openEdit(c: Contact) {
+    setEditingId(c.id);
+    setForm({
+      first_name: c.first_name ?? "",
+      last_name: c.last_name ?? "",
+      phone: c.phone ?? "",
+      email: c.email ?? "",
+    });
+    setDialogOpen(true);
+  }
+
+  async function handleSave() {
     if (!form.first_name.trim() && !form.phone.trim() && !form.email.trim()) {
       toast.error(t("addValidation"));
       return;
     }
     setSaving(true);
     try {
-      const { outcome } = await api<{ outcome: "created" | "merged" }>("/api/crm/contacts", {
-        method: "POST",
-        body: {
-          first_name: form.first_name.trim() || null,
-          last_name: form.last_name.trim() || null,
-          phone: form.phone.trim() || null,
-          email: form.email.trim() || null,
-        },
-      });
-      toast.success(outcome === "merged" ? t("addMerged") : t("addCreated"));
-      setForm({ first_name: "", last_name: "", phone: "", email: "" });
-      setAddOpen(false);
+      const body = {
+        first_name: form.first_name.trim() || null,
+        last_name: form.last_name.trim() || null,
+        phone: form.phone.trim() || null,
+        email: form.email.trim() || null,
+      };
+      if (editingId) {
+        await api(`/api/crm/contacts/${editingId}`, { method: "PATCH", body });
+        toast.success(t("contactUpdated"));
+      } else {
+        const { outcome } = await api<{ outcome: "created" | "merged" }>("/api/crm/contacts", {
+          method: "POST",
+          body,
+        });
+        toast.success(outcome === "merged" ? t("addMerged") : t("addCreated"));
+      }
+      setDialogOpen(false);
       loadContacts();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!editingId) return;
+    if (!window.confirm(t("deleteConfirm"))) return;
+    setSaving(true);
+    try {
+      await api(`/api/crm/contacts/${editingId}`, { method: "DELETE" });
+      toast.success(t("contactDeleted"));
+      setDialogOpen(false);
+      loadContacts();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkAddTag() {
+    if (bulkTag === ALL_TAGS || selected.size === 0) return;
+    try {
+      await api("/api/crm/contacts/bulk", {
+        method: "POST",
+        body: { action: "add_tag", contact_ids: [...selected], tag_id: bulkTag },
+      });
+      toast.success(t("bulkTagged"));
+      loadContacts();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function bulkDelete() {
+    if (selected.size === 0) return;
+    if (!window.confirm(t("bulkDeleteConfirm"))) return;
+    try {
+      await api("/api/crm/contacts/bulk", {
+        method: "POST",
+        body: { action: "delete", contact_ids: [...selected] },
+      });
+      toast.success(t("contactDeleted"));
+      loadContacts();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -159,14 +240,44 @@ export function ContactsClient() {
             <Upload className="h-4 w-4" />
             {t("importCsv")}
           </Button>
-          <Button onClick={() => setAddOpen(true)} className="gap-2">
+          <Button onClick={openAdd} className="gap-2">
             <Plus className="h-4 w-4" />
             {t("addContact")}
           </Button>
         </div>
       </div>
 
-      <p className="text-sm text-muted-foreground">{t("totalCount", { count: total })}</p>
+      {/* Bulk action bar */}
+      {selected.size > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-accent/40 px-3 py-2">
+          <span className="text-sm font-medium">{t("selectedCount", { count: selected.size })}</span>
+          <Select value={bulkTag} onValueChange={setBulkTag}>
+            <SelectTrigger className="h-8 w-44">
+              <SelectValue placeholder={t("filterByTag")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_TAGS}>{t("chooseTag")}</SelectItem>
+              {tags.map((tag) => (
+                <SelectItem key={tag.id} value={tag.id}>{tag.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={bulkAddTag} disabled={bulkTag === ALL_TAGS} className="gap-1">
+            <TagIcon className="h-4 w-4" />
+            {t("bulkAddTag")}
+          </Button>
+          <Button size="sm" variant="outline" onClick={bulkDelete} className="gap-1 text-status-late">
+            <Trash2 className="h-4 w-4" />
+            {t("bulkDelete")}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} className="gap-1 ms-auto">
+            <X className="h-4 w-4" />
+            {t("clearSelection")}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">{t("totalCount", { count: total })}</p>
+      )}
 
       {/* List */}
       {loading ? (
@@ -180,35 +291,48 @@ export function ContactsClient() {
       ) : (
         <ul className="divide-y rounded-lg border">
           {contacts.map((c) => (
-            <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium">{displayName(c)}</p>
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
-                  {c.phone && (
-                    <span className="inline-flex items-center gap-1">
-                      <Phone className="h-3.5 w-3.5" />
-                      {c.phone}
-                    </span>
-                  )}
-                  {c.email && (
-                    <span className="inline-flex items-center gap-1">
-                      <Mail className="h-3.5 w-3.5" />
-                      {c.email}
-                    </span>
-                  )}
+            <li key={c.id} className="flex items-center gap-3 px-4 py-3">
+              <input
+                type="checkbox"
+                checked={selected.has(c.id)}
+                onChange={() => toggleSelect(c.id)}
+                aria-label={t("select")}
+                className="h-4 w-4 shrink-0 accent-primary"
+              />
+              <button
+                type="button"
+                onClick={() => openEdit(c)}
+                className="flex min-w-0 flex-1 items-center justify-between gap-3 text-start"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{displayName(c)}</p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
+                    {c.phone && (
+                      <span className="inline-flex items-center gap-1">
+                        <Phone className="h-3.5 w-3.5" />
+                        {c.phone}
+                      </span>
+                    )}
+                    {c.email && (
+                      <span className="inline-flex items-center gap-1">
+                        <Mail className="h-3.5 w-3.5" />
+                        {c.email}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <Badge variant="secondary">{t(`source.${c.source}` as Parameters<typeof t>[0])}</Badge>
+                <Badge variant="secondary">{t(`source.${c.source}` as Parameters<typeof t>[0])}</Badge>
+              </button>
             </li>
           ))}
         </ul>
       )}
 
-      {/* Add dialog */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      {/* Add / edit dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("addContact")}</DialogTitle>
+            <DialogTitle>{editingId ? t("editContact") : t("addContact")}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -235,14 +359,22 @@ export function ContactsClient() {
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             />
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={saving}>
-              {t("cancel")}
-            </Button>
-            <Button onClick={handleAdd} disabled={saving} className="gap-2">
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              {t("save")}
-            </Button>
+          <DialogFooter className="sm:justify-between">
+            {editingId ? (
+              <Button variant="ghost" onClick={handleDelete} disabled={saving} className="gap-1 text-status-late">
+                <Trash2 className="h-4 w-4" />
+                {t("deleteContact")}
+              </Button>
+            ) : <span />}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+                {t("cancel")}
+              </Button>
+              <Button onClick={handleSave} disabled={saving} className="gap-2">
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {t("save")}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
