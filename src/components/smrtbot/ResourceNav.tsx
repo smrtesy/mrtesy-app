@@ -34,7 +34,7 @@ export function ResourceNav({ botId, active }: { botId: string; active?: string 
           {label(r)}
         </Link>
       ))}
-      {(["stats", "logs", "settings"] as const).map((r) => (
+      {(["stats", "logs", "publish", "settings"] as const).map((r) => (
         <Link
           key={r}
           href={`/${locale}/bots/${botId}/${r}`}
@@ -43,7 +43,7 @@ export function ResourceNav({ botId, active }: { botId: string; active?: string 
             active === r ? "bg-accent text-accent-foreground" : "text-muted-foreground",
           )}
         >
-          {r === "stats" ? t("statsTitle") : r === "logs" ? t("logsTitle") : t("settingsTitle")}
+          {r === "stats" ? t("statsTitle") : r === "logs" ? t("logsTitle") : r === "publish" ? t("publishTitle") : t("settingsTitle")}
         </Link>
       ))}
     </div>
