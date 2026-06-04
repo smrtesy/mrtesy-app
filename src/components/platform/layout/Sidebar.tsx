@@ -20,6 +20,8 @@ import {
   BookOpen,
   Sparkles,
   ListPlus,
+  CalendarRange,
+  Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -56,12 +58,18 @@ const smrtBotItems = [
   { key: "bots", href: "/bots", icon: MessageCircle },
 ] as const;
 
+const smrtPlanItems = [
+  { key: "planBoard",      href: "/plan",            icon: CalendarRange },
+  { key: "planRepository", href: "/plan/repository", icon: Archive       },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
   const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const hasSmrtBot = enabledApps.includes("smrtbot");
+  const hasSmrtPlan = enabledApps.includes("smrtplan");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -291,6 +299,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             <>
               <AppSectionHeader app={APPS.smrtbot} />
               {smrtBotItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtPlan && (
+            <>
+              <AppSectionHeader app={APPS.smrtplan} />
+              {smrtPlanItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { SmrtTaskIcon } from "@/components/icons/SmrtTaskIcon";
 import { SmrtVoiceIcon } from "@/components/icons/SmrtVoiceIcon";
 import { SmrtBotIcon } from "@/components/icons/SmrtBotIcon";
+import { SmrtPlanIcon } from "@/components/icons/SmrtPlanIcon";
 
 /**
  * The built-in admin section cards an app exposes on its
@@ -53,6 +54,13 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtBotIcon,
     guideHref: "/bots/guide",
     settingsHref: "/settings/apps/smrtbot",
+  },
+  smrtplan: {
+    slug: "smrtplan",
+    word: "Plan",
+    Icon: SmrtPlanIcon,
+    guideHref: "/plan/guide",
+    settingsHref: "/settings/apps/smrtplan",
   },
 };
 

@@ -1,0 +1,34 @@
+-- ============================================================
+-- smrtPlan — pg_cron schedule for the engine (DEPLOY-TIME TEMPLATE)
+-- ============================================================
+-- The smrtPlan engine runs in the Railway server (Node/TS — testable, type
+-- checked, reads smrtplan_blocked_days for the Hebrew calendar). Dependency
+-- release (computation ב) happens synchronously through the platform event bus
+-- on task.completed; this cron only drives the DAILY full refresh
+-- (backward scheduling א + critical path ה + health ד), mirroring how the
+-- smrtBot job routes are scheduled (model ג3).
+--
+-- Deploy-dependent: replace <RAILWAY_URL> with the server's public base URL and
+-- <SMRTPLAN_INTERNAL_SECRET> with the shared secret (Express checks it), then
+-- run this against the project. NOT applied automatically (hence .template).
+--
+-- Requires pg_cron + pg_net (already enabled on Smrtesy). Times are UTC.
+
+CREATE OR REPLACE FUNCTION smrtplan_schedule(job_name text, sched text, route text)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM cron.unschedule(job_name) WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = job_name);
+  PERFORM cron.schedule(job_name, sched, format($q$
+    SELECT net.http_post(
+      url     := '%s/api/plan/jobs/%s',
+      headers := jsonb_build_object('Content-Type','application/json','x-smrtplan-secret','%s'),
+      body    := '{}'::jsonb
+    );
+  $q$, '<RAILWAY_URL>', route, '<SMRTPLAN_INTERNAL_SECRET>'));
+END$$;
+
+-- Daily 02:00 UTC: recompute every plan's schedule, critical path and health.
+SELECT smrtplan_schedule('smrtplan-refresh', '0 2 * * *', 'refresh');
+
+-- To remove all smrtPlan cron jobs:
+--   SELECT cron.unschedule(jobname) FROM cron.job WHERE jobname LIKE 'smrtplan-%';

@@ -100,4 +100,58 @@ export interface Task {
   suggested_duplicate_of: string | null;
   /** Embedded via Supabase left-join on suggested_duplicate_of. */
   suggested_duplicate?: { id: string; title: string; title_he: string | null; serial_display: string } | null;
+
+  // ── smrtPlan layer (migration 20260604000100) ──────────────────────────────
+  /** The plan this task belongs to (smrtPlan). Mutually exclusive with project_id in practice. */
+  plan_id?: string | null;
+  /** Parent task — this is a sub-task (a unit of work in the engine). */
+  parent_task_id?: string | null;
+  /** Engine: estimated duration in working days. */
+  duration_days?: number | null;
+  /** Engine: forward-pass earliest start (date). */
+  earliest_start?: string | null;
+  /** Engine: backward-pass latest start the plan deadline allows (date). */
+  latest_start?: string | null;
+  /** Engine: backward-pass latest finish the plan deadline allows (date). */
+  latest_finish?: string | null;
+  /** Engine: on the critical path (slack = 0). */
+  is_critical?: boolean | null;
+  /** Assignment model: assigned tasks are 'accepted' immediately; peer offers are 'proposed'. */
+  assignment_status?: "proposed" | "accepted" | "declined" | null;
+  proposed_by?: string | null;
+  proposed_at?: string | null;
+  accepted_at?: string | null;
+  /** Worker asked for this assigned task to be removed (escalation, not a decline). */
+  deletion_requested?: boolean | null;
+  /** Private (owner-only) vs organizational. Default true so existing tasks stay private. */
+  is_private?: boolean | null;
+  /**
+   * "What's needed to start" — the inbound task→task dependencies, resolved by the
+   * backend from smrtplan_dependencies. Each entry is a provider task this task waits on.
+   */
+  needs?: TaskNeed[];
+  /** Where this task hands off when completed (the dependent tasks waiting on it). */
+  handoff?: TaskHandoff[];
+}
+
+/** One "what's needed to start" input, resolved from smrtplan_dependencies (task→task). */
+export interface TaskNeed {
+  /** The dependency row id (for satisfying / removing). */
+  dependency_id: string;
+  /** The provider task id (null when the requirement is external, e.g. a Drive file). */
+  task_id: string | null;
+  title: string;
+  /** Whoever owns the provider (assignee display name / source). */
+  source?: string | null;
+  /** true once the provider task is complete (the input "arrived"). */
+  satisfied: boolean;
+  /** External material link (entity_links requires), when not a task. */
+  url?: string | null;
+}
+
+/** One downstream task that this task feeds when completed. */
+export interface TaskHandoff {
+  dependency_id: string;
+  task_id: string;
+  title: string;
 }

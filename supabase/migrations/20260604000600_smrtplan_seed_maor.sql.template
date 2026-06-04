@@ -1,0 +1,106 @@
+-- ============================================================
+-- smrtPlan — Maor general plan seed (DEPLOY-TIME TEMPLATE)
+-- ============================================================
+-- The first real plan to load (build-spec §6 / maor-general-plan.md): the four
+-- groups, the lanes, and a worked dependency chain to exercise the engine. This
+-- is org-specific DATA (not schema), so it is a .template — replace the two
+-- placeholders and run it against the project once, for Maor's org:
+--
+--   <ORG_ID>          → Maor's organization id
+--   <OWNER_USER_ID>   → chanoch's auth.users id (created_by / owner)
+--
+-- Re-runnable guard: skips entirely if any smrtPlan plan already exists for the
+-- org, so an accidental second run won't duplicate the board.
+
+DO $$
+DECLARE
+  v_org   uuid := '<ORG_ID>';
+  v_owner uuid := '<OWNER_USER_ID>';
+
+  -- plan ids
+  p_video    uuid := gen_random_uuid();  -- effort: מערכת AI · כלי וידאו (engine demo)
+  p_design   uuid := gen_random_uuid();  -- effort: עיצוב (מוסיא)
+  p_br       uuid := gen_random_uuid();  -- stream: בית רבינו
+  p_biling   uuid := gen_random_uuid();  -- stream: זרם דו-לשוני
+  p_mkt      uuid := gen_random_uuid();  -- effort: מרקטינג
+  p_audio    uuid := gen_random_uuid();  -- effort (side): אודיו אנגלית — repository idea
+
+  -- task ids (video tool chain)
+  t_research uuid := gen_random_uuid();  -- מחקר ראשוני
+  t_course   uuid := gen_random_uuid();  -- מעבר על הקורס
+  t_fullres  uuid := gen_random_uuid();  -- מחקר מלא
+  t_videoplan uuid := gen_random_uuid(); -- בניית תוכנית הוידאו
+  t_chars    uuid := gen_random_uuid();  -- עיצוב הדמויות (in design plan, needs videoplan)
+
+  -- stream scaffolding ids
+  s1 uuid; s2 uuid; s3 uuid; s4 uuid; s5 uuid; s6 uuid; s7 uuid;
+  e1 uuid := gen_random_uuid(); e2 uuid := gen_random_uuid(); e3 uuid := gen_random_uuid();
+BEGIN
+  IF EXISTS (SELECT 1 FROM smrtplan_plans WHERE org_id = v_org) THEN
+    RAISE NOTICE 'smrtPlan seed skipped — org already has plans';
+    RETURN;
+  END IF;
+
+  -- ── Plans (board lanes) ───────────────────────────────────
+  INSERT INTO smrtplan_plans (id, org_id, title_he, title_en, goal, kind, group_label, start_date, end_date, color, created_by, owner_user_id) VALUES
+    (p_design, v_org, 'עיצוב', 'Design', 'כל חומרי העיצוב לפני חופשת המעצבת', 'effort', 'כללי / תשתית', '2026-06-01', '2026-06-15', '#D85A30', v_owner, v_owner),
+    (p_video,  v_org, 'מערכת AI · כלי וידאו', 'AI system · video tool', 'הכלי המלא — מוכן לטקסט', 'effort', 'כללי / תשתית', '2026-06-25', '2026-07-30', '#15805F', v_owner, v_owner),
+    (p_mkt,    v_org, 'מרקטינג', 'Marketing', 'קמפיין מעבר לקהילה (קל→חזק)', 'effort', 'רבי לילדים', '2026-06-11', '2026-08-20', '#185FA5', v_owner, v_owner),
+    (p_br,     v_org, 'בית רבינו', 'Beis Rabbeinu', '6 פרקים בסטייל ישן — חיץ לתקופה', 'stream', 'רבי לילדים', '2026-07-09', '2026-08-13', '#7F77DD', v_owner, v_owner),
+    (p_biling, v_org, 'זרם דו-לשוני', 'Bilingual stream', 'הפעלה שוטפת — פרק אחד, עברית + אנגלית', 'stream', 'כללי / תשתית', '2026-08-20', '2026-09-11', '#0F6E56', v_owner, v_owner);
+
+  -- A repository idea (no start_date) — exercises the repository view.
+  INSERT INTO smrtplan_plans (id, org_id, title_he, title_en, goal, kind, group_label, stage, created_by, owner_user_id) VALUES
+    (p_audio, v_org, 'אודיו אנגלית', 'English audio', 'יעד-תוצאה: 10 סיפורים לפני השקה', 'effort', 'צדדי', 'shaping', v_owner, v_owner);
+
+  -- ── Video tool chain (effort) — tasks + dependencies for the engine ──
+  -- 1+2 parallel → 3 (full research) → 4 (video plan). Plan 4 then feeds
+  -- "design characters" (in the design plan) — the critical handoff before 6/15.
+  INSERT INTO tasks (id, organization_id, user_id, plan_id, title, title_he, status, is_private, assignment_status, duration_days, created_at) VALUES
+    (t_research,  v_org, v_owner, p_video, 'Initial research',  'מחקר ראשוני כללי', 'inbox', false, 'accepted', 3, now() - interval '5 min'),
+    (t_course,    v_org, v_owner, p_video, 'Review the course', 'מעבר על הקורס',     'inbox', false, 'accepted', 3, now() - interval '4 min'),
+    (t_fullres,   v_org, v_owner, p_video, 'Full research',     'מחקר מלא',          'inbox', false, 'accepted', 4, now() - interval '3 min'),
+    (t_videoplan, v_org, v_owner, p_video, 'Build the video plan', 'בניית תוכנית הוידאו', 'inbox', false, 'accepted', 4, now() - interval '2 min');
+
+  INSERT INTO tasks (id, organization_id, user_id, plan_id, title, title_he, status, is_private, assignment_status, duration_days, due_date, created_at) VALUES
+    (t_chars, v_org, v_owner, p_design, 'Design the characters', 'עיצוב הדמויות', 'inbox', false, 'accepted', 5, '2026-06-15', now() - interval '1 min');
+
+  -- Dependencies: from = consumer (needs), to = provider.
+  INSERT INTO smrtplan_dependencies (org_id, from_type, from_id, to_type, to_id) VALUES
+    (v_org, 'task', t_fullres,   'task', t_research),    -- full research needs initial research
+    (v_org, 'task', t_fullres,   'task', t_course),      -- full research needs course review
+    (v_org, 'task', t_videoplan, 'task', t_fullres),     -- video plan needs full research
+    (v_org, 'task', t_chars,     'task', t_videoplan);   -- characters need the video plan
+
+  -- ── Beis Rabbeinu stream — stages + episodes + matrix cells ──
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'תוכן',    'Content',   1) RETURNING id INTO s1;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'תסריט',   'Script',    2) RETURNING id INTO s2;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'נקודות',  'Notes',     3) RETURNING id INTO s3;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'הקלטות',  'Recording', 4) RETURNING id INTO s4;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'תרגום',   'Translate', 5) RETURNING id INTO s5;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'עריכה',   'Editing',   6) RETURNING id INTO s6;
+  INSERT INTO smrtplan_stages (id, org_id, plan_id, name_he, name_en, sequence) VALUES
+    (gen_random_uuid(), v_org, p_br, 'ניהול',   'Management',7) RETURNING id INTO s7;
+
+  INSERT INTO smrtplan_episodes (id, org_id, plan_id, name_he, name_en, family, due_date, sequence) VALUES
+    (e1, v_org, p_br, 'בית רבינו 1', 'Beis Rabbeinu 1', 'שמולביץ',  '2026-07-09', 1),
+    (e2, v_org, p_br, 'בית רבינו 2', 'Beis Rabbeinu 2', 'משינסקי', '2026-07-16', 2),
+    (e3, v_org, p_br, 'בית רבינו 3', 'Beis Rabbeinu 3', 'שניאורי', '2026-07-23', 3);
+
+  -- Matrix cells (episode 1 mostly done, 2 in progress, 3 early) — mirrors the prototype.
+  INSERT INTO smrtplan_episode_stage_status (org_id, episode_id, stage_id, status) VALUES
+    (v_org, e1, s1, 'done'), (v_org, e1, s2, 'done'), (v_org, e1, s3, 'done'),
+    (v_org, e1, s4, 'done'), (v_org, e1, s5, 'done'), (v_org, e1, s6, 'prog'), (v_org, e1, s7, 'todo'),
+    (v_org, e2, s1, 'done'), (v_org, e2, s2, 'done'), (v_org, e2, s3, 'prog'),
+    (v_org, e2, s4, 'todo'), (v_org, e2, s5, 'todo'), (v_org, e2, s6, 'todo'), (v_org, e2, s7, 'todo'),
+    (v_org, e3, s1, 'done'), (v_org, e3, s2, 'prog'), (v_org, e3, s3, 'todo'),
+    (v_org, e3, s4, 'todo'), (v_org, e3, s5, 'todo'), (v_org, e3, s6, 'todo'), (v_org, e3, s7, 'todo');
+
+  RAISE NOTICE 'smrtPlan Maor seed loaded for org %', v_org;
+END$$;
