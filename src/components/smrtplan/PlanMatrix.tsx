@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanStageRow, PlanEpisode, EpisodeStageStatus, CellStatus } from "@/types/plan";
@@ -23,17 +24,66 @@ export function PlanMatrix({
   locale,
   canEdit,
   today,
+  onChanged,
 }: {
   plan: Plan;
   locale: string;
   canEdit: boolean;
   today: Date;
+  onChanged?: () => void;
 }) {
   const t = useTranslations("smrtPlan");
+  const te = useTranslations("smrtPlan.edit");
   const [stages, setStages] = useState<PlanStageRow[]>([]);
   const [episodes, setEpisodes] = useState<PlanEpisode[]>([]);
   const [cells, setCells] = useState<Record<string, EpisodeStageStatus>>({});
   const [loading, setLoading] = useState(true);
+
+  async function refetch() {
+    const data = await api<{
+      stages: PlanStageRow[];
+      episodes: PlanEpisode[];
+      cells: Record<string, EpisodeStageStatus>;
+    }>(`/api/plans/${plan.id}/matrix`);
+    setStages(data.stages ?? []);
+    setEpisodes(data.episodes ?? []);
+    setCells(data.cells ?? {});
+    onChanged?.();
+  }
+
+  async function run(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      await refetch();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  const addStage = () => {
+    const name = prompt(te("addStage"));
+    if (name) run(() => api(`/api/plans/${plan.id}/stages`, { method: "POST", body: { name_he: name, sequence: stages.length + 1 } }));
+  };
+  const addEpisode = () => {
+    const name = prompt(te("addEpisode"));
+    if (name) run(() => api(`/api/plans/${plan.id}/episodes`, { method: "POST", body: { name_he: name, sequence: episodes.length + 1 } }));
+  };
+  const renameStage = (s: PlanStageRow) => {
+    const name = prompt(te("name"), s.name_he);
+    if (name != null) run(() => api(`/api/plan-stages/${s.id}`, { method: "PATCH", body: { name_he: name } }));
+  };
+  const delStage = (s: PlanStageRow) => {
+    if (confirm(te("confirmDelete"))) run(() => api(`/api/plan-stages/${s.id}`, { method: "DELETE" }));
+  };
+  const editEpisode = (ep: PlanEpisode) => {
+    const name = prompt(te("name"), ep.name_he);
+    if (name == null) return;
+    const due = prompt(te("due"), ep.due_date ?? "");
+    run(() => api(`/api/plan-episodes/${ep.id}`, { method: "PATCH", body: { name_he: name, due_date: due || null } }));
+  };
+  const delEpisode = (ep: PlanEpisode) => {
+    if (confirm(te("confirmDelete"))) run(() => api(`/api/plan-episodes/${ep.id}`, { method: "DELETE" }));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -96,6 +146,17 @@ export function PlanMatrix({
       </h2>
       <p className="mb-3 mt-0.5 text-[12.5px] text-muted-foreground">{t("matrix.sub")}</p>
 
+      {canEdit && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          <button onClick={addEpisode} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+            <Plus className="h-3.5 w-3.5" /> {te("addEpisode")}
+          </button>
+          <button onClick={addStage} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+            <Plus className="h-3.5 w-3.5" /> {te("addStage")}
+          </button>
+        </div>
+      )}
+
       {stages.length === 0 || episodes.length === 0 ? (
         <p className="py-6 text-center text-[12.5px] italic text-muted-foreground">{t("matrix.empty")}</p>
       ) : (
@@ -109,6 +170,16 @@ export function PlanMatrix({
                 {stages.map((s) => (
                   <th key={s.id} className="border bg-secondary/60 p-1.5 text-[11px] font-bold">
                     {stageName(s, locale)}
+                    {canEdit && (
+                      <span className="mt-0.5 flex items-center justify-center gap-1">
+                        <button onClick={() => renameStage(s)} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button onClick={() => delStage(s)} className="text-muted-foreground hover:text-status-late" title={te("delete")}>
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
                   </th>
                 ))}
                 <th className="border bg-secondary/60 p-1.5 text-[11px] font-bold">{t("matrix.stage")}</th>
@@ -122,7 +193,19 @@ export function PlanMatrix({
                 return (
                   <tr key={ep.id}>
                     <td className="border bg-secondary/30 p-1.5 text-start font-bold">
-                      {epName(ep, locale)}
+                      <span className="flex items-center gap-1">
+                        <span className="flex-1">{epName(ep, locale)}</span>
+                        {canEdit && (
+                          <>
+                            <button onClick={() => editEpisode(ep)} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button onClick={() => delEpisode(ep)} className="text-muted-foreground hover:text-status-late" title={te("delete")}>
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                      </span>
                       <small className="block font-normal text-[10px] text-muted-foreground">
                         {ep.family ? `${ep.family} · ` : ""}
                         {ep.due_date ? gregShort(parseISO(ep.due_date)) : ""}

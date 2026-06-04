@@ -26,7 +26,60 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
-import { computePlanSchedule } from "./engine";
+import { computeOrgSchedule } from "./engine";
+
+const AT_RISK_DAYS = 3;
+const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
+
+/** Per-plan health from the engine fields vs the real today (build-spec ד). */
+function planHealthFromTasks(
+  plan: Row,
+  tasksByPlan: Map<string, Row[]>,
+  todayISO: string,
+): "waiting" | "on_track" | "at_risk" | "late" | "stream" {
+  const start = plan.start_date as string | null;
+  if (start && todayISO < start) return "waiting";
+  if (plan.kind === "stream") return "stream";
+  const tasks = tasksByPlan.get(plan.id as string) ?? [];
+  const open = tasks.filter((t) => !DONE_STATUSES.has(t.status as string));
+  // late: an open task is past its latest_finish (engine) / due_date (interim).
+  for (const t of open) {
+    const lf = (t.latest_finish as string | null) ?? (t.due_date as string | null);
+    if (lf && lf < todayISO) return "late";
+  }
+  // at_risk: an open, not-started task whose latest_start is within N days.
+  const horizon = addDaysISO(todayISO, AT_RISK_DAYS);
+  for (const t of open) {
+    if (t.status !== "inbox") continue;
+    const ls = (t.latest_start as string | null) ?? (t.due_date as string | null);
+    if (ls && ls >= todayISO && ls <= horizon) return "at_risk";
+  }
+  return "on_track";
+}
+
+function addDaysISO(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Attach engine-based health to a list of plans. */
+async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
+  if (plans.length === 0) return plans;
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("plan_id, status, latest_finish, latest_start, due_date")
+    .eq("organization_id", orgId)
+    .not("plan_id", "is", null);
+  const byPlan = new Map<string, Row[]>();
+  for (const t of asRows(taskRows)) {
+    const pid = t.plan_id as string;
+    if (!byPlan.has(pid)) byPlan.set(pid, []);
+    byPlan.get(pid)!.push(t);
+  }
+  const todayISO = new Date().toISOString().slice(0, 10);
+  return plans.map((p) => ({ ...p, health: planHealthFromTasks(p, byPlan, todayISO) }));
+}
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtplan"));
@@ -39,6 +92,19 @@ router.use(requireAuth, requireOrg, requireApp("smrtplan"));
 type Row = Record<string, unknown>;
 function asRows(d: unknown): Row[] {
   return (Array.isArray(d) ? d : []) as Row[];
+}
+
+/**
+ * Re-run the scheduling engine after a mutation that changes the graph
+ * (dependencies, durations, deadlines, task add/remove). Best-effort: the
+ * mutation already succeeded, so a recompute hiccup must not fail the request.
+ */
+async function autoRecompute(orgId: string): Promise<void> {
+  try {
+    await computeOrgSchedule(orgId);
+  } catch (e) {
+    console.error("[smrtplan] auto-recompute failed:", e);
+  }
 }
 
 // ── full/lite access ─────────────────────────────────────────────────────────
@@ -140,7 +206,22 @@ router.get("/plans/board", async (req: Request, res: Response) => {
     .order("group_label", { ascending: true })
     .order("start_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ plans: await withProgress(req.org!.id, asRows(data)) });
+  res.json({ plans: await withHealth(req.org!.id, await withProgress(req.org!.id, asRows(data))) });
+});
+
+router.get("/plans/milestones", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .eq("org_id", req.org!.id)
+    .order("milestone_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ milestones: data ?? [] });
+});
+
+router.post("/plans/recompute", requireFull, async (req: Request, res: Response) => {
+  const summary = await computeOrgSchedule(req.org!.id);
+  res.json(summary);
 });
 
 router.get("/plans/repository", async (req: Request, res: Response) => {
@@ -203,6 +284,8 @@ router.patch("/plans/:id", requireFull, async (req: Request, res: Response) => {
     .select(PLAN_FIELDS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  // Date / horizon changes shift the whole schedule.
+  await autoRecompute(req.org!.id);
   res.json({ plan: data });
 });
 
@@ -386,6 +469,7 @@ router.post("/plan-dependencies", requireFull, async (req: Request, res: Respons
     .select("id, from_type, from_id, to_type, to_id, satisfied")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.status(201).json({ dependency: data });
 });
 
@@ -396,6 +480,7 @@ router.delete("/plan-dependencies/:id", requireFull, async (req: Request, res: R
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ ok: true });
 });
 
@@ -410,8 +495,174 @@ router.post("/plans/:id/recompute", requireFull, async (req: Request, res: Respo
     .eq("id", req.params.id)
     .maybeSingle();
   if (!plan) return res.status(404).json({ error: "plan not found" });
-  const summary = await computePlanSchedule(req.params.id);
+  // Dependencies cross plans, so recompute the whole org graph.
+  const summary = await computeOrgSchedule(req.org!.id);
   res.json(summary);
+});
+
+// ── milestones (create / edit / delete) ──────────────────────────────────────
+
+router.post("/plans/milestones", requireFull, async (req: Request, res: Response) => {
+  const { milestone_date, label_he, label_en, color, plan_id } = req.body ?? {};
+  if (!milestone_date || !label_he) {
+    return res.status(400).json({ error: "milestone_date and label_he are required" });
+  }
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .insert({
+      org_id: req.org!.id,
+      plan_id: plan_id ?? null,
+      milestone_date,
+      label_he,
+      label_en: label_en ?? null,
+      color: color ?? null,
+      created_by: req.user!.id,
+    })
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ milestone: data });
+});
+
+router.patch("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["milestone_date", "label_he", "label_en", "color", "plan_id"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ milestone: data });
+});
+
+router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_milestones")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ── plan tasks (create / edit / delete) ───────────────────────────────────────
+
+router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
+  const { title, title_he, due_date, duration_days, parent_task_id } = req.body ?? {};
+  if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
+  const { data, error } = await db
+    .from("tasks")
+    .insert({
+      organization_id: req.org!.id,
+      user_id: req.user!.id,
+      plan_id: req.params.id,
+      title: title ?? title_he,
+      title_he: title_he ?? null,
+      status: "inbox",
+      is_private: false,
+      assignment_status: "accepted",
+      due_date: due_date ?? null,
+      duration_days: duration_days ?? null,
+      parent_task_id: parent_task_id ?? null,
+    })
+    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
+  res.status(201).json({ task: data });
+});
+
+const PLAN_TASK_WRITABLE = new Set([
+  "title", "title_he", "due_date", "duration_days", "status",
+  "assigned_to_user_id", "parent_task_id",
+]);
+
+router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (PLAN_TASK_WRITABLE.has(k)) patch[k] = v;
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  // Scope to a task that actually belongs to a plan in this org.
+  const { data, error } = await db
+    .from("tasks")
+    .update(patch)
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
+  res.json({ task: data });
+});
+
+router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("tasks")
+    .delete()
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null);
+  if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
+  res.json({ ok: true });
+});
+
+// ── stages / episodes (edit / delete) ─────────────────────────────────────────
+
+router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name_he", "name_en", "sequence", "required_role"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_stages")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, name_he, name_en, sequence, required_role")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ stage: data });
+});
+
+router.delete("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_stages").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+router.patch("/plan-episodes/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name_he", "name_en", "family", "due_date", "sequence"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_episodes")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, name_he, name_en, family, due_date, sequence")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ episode: data });
+});
+
+router.delete("/plan-episodes/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_episodes").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
 });
 
 export default router;
