@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { CheckCircle2, X, Search, XCircle, Combine } from "lucide-react";
 
 interface SuggestionToolbarProps {
@@ -21,7 +22,7 @@ interface SuggestionToolbarProps {
    *  own tab. */
   onBulkMerge?: () => void;
   /** When true, skip rendering the built-in search input — the caller is
-   *  rendering its own search (e.g. the shared SmartSearch component). */
+   *  rendering its own search (e.g. the shared CombinedSearch component). */
   hideSearch?: boolean;
 }
 
@@ -44,7 +45,7 @@ export function SuggestionToolbar({
 
   return (
     <div className="space-y-2 pb-1">
-      {/* Search input — omitted when the caller renders its own (SmartSearch). */}
+      {/* Search input — omitted when the caller renders its own (CombinedSearch). */}
       {!hideSearch && (
         <div className="relative">
           <Search className="absolute top-1/2 -translate-y-1/2 start-2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -56,14 +57,14 @@ export function SuggestionToolbar({
             dir="auto"
           />
           {searchQuery && (
-            <button
-              type="button"
+            <IconButton
+              label={t("clearSelection")}
+              color="neutral"
               onClick={() => onSearchChange("")}
-              className="absolute top-1/2 -translate-y-1/2 end-2 text-muted-foreground hover:text-foreground"
-              aria-label={t("clearSelection")}
+              className="absolute top-1/2 -translate-y-1/2 end-2 h-7 w-7 md:h-7 md:w-7"
             >
-              <XCircle className="h-4 w-4" />
-            </button>
+              <XCircle />
+            </IconButton>
           )}
         </div>
       )}
@@ -129,7 +130,7 @@ export function SuggestionToolbar({
             <Button
               size="sm"
               variant="ghost"
-              className="h-9 gap-1 text-red-500 hover:text-red-600"
+              className="h-9 gap-1 text-destructive hover:bg-destructive/10"
               onClick={onBulkDismissWithReason}
             >
               <X className="h-4 w-4" />

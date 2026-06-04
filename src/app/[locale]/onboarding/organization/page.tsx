@@ -141,8 +141,8 @@ export default function OnboardingOrganizationStep() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
-          <Building2 className="h-8 w-8 text-blue-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent">
+          <Building2 className="h-8 w-8 text-primary" />
         </div>
         <CardTitle>{tOrg("title")}</CardTitle>
         <CardDescription>{tOrg("description")}</CardDescription>
@@ -177,8 +177,8 @@ export default function OnboardingOrganizationStep() {
             />
             <div className="w-6 shrink-0 flex justify-center">
               {slugStatus === "checking" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-              {slugStatus === "available" && <CheckCircle2 className="h-4 w-4 text-green-500" />}
-              {(slugStatus === "taken" || slugStatus === "invalid") && <XCircle className="h-4 w-4 text-red-500" />}
+              {slugStatus === "available" && <CheckCircle2 className="h-4 w-4 text-status-ok" />}
+              {(slugStatus === "taken" || slugStatus === "invalid") && <XCircle className="h-4 w-4 text-status-late" />}
             </div>
           </div>
           {appDomain && slug && (
@@ -187,13 +187,13 @@ export default function OnboardingOrganizationStep() {
             </p>
           )}
           {slugStatus === "taken" && (
-            <p className="text-[11px] text-red-500">{tOrg("slugTaken")}</p>
+            <p className="text-[11px] text-status-late">{tOrg("slugTaken")}</p>
           )}
           {slugStatus === "invalid" && (
-            <p className="text-[11px] text-red-500">{tOrg("slugInvalid")}</p>
+            <p className="text-[11px] text-status-late">{tOrg("slugInvalid")}</p>
           )}
           {slugStatus === "available" && (
-            <p className="text-[11px] text-green-600">{tOrg("slugAvailable")}</p>
+            <p className="text-[11px] text-status-ok">{tOrg("slugAvailable")}</p>
           )}
         </div>
 
@@ -207,11 +207,11 @@ export default function OnboardingOrganizationStep() {
         </Button>
 
         <div className="flex justify-center gap-2 pt-2">
-          <div className="h-2 w-6 rounded-full bg-blue-600" />
-          <div className="h-2 w-6 rounded-full bg-gray-200" />
-          <div className="h-2 w-6 rounded-full bg-gray-200" />
-          <div className="h-2 w-6 rounded-full bg-gray-200" />
-          <div className="h-2 w-6 rounded-full bg-gray-200" />
+          <div className="h-2 w-6 rounded-full bg-primary" />
+          <div className="h-2 w-6 rounded-full bg-muted" />
+          <div className="h-2 w-6 rounded-full bg-muted" />
+          <div className="h-2 w-6 rounded-full bg-muted" />
+          <div className="h-2 w-6 rounded-full bg-muted" />
         </div>
       </CardContent>
     </Card>

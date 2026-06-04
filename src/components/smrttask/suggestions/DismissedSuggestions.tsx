@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Trash2, Undo2 } from "lucide-react";
@@ -110,8 +110,8 @@ export function DismissedSuggestions({
             <CardContent className="p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-start gap-2 flex-1 min-w-0">
-                  <div className="mt-1 rounded-full bg-red-100 p-1.5 shrink-0">
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                  <div className="mt-1 rounded-full bg-status-late-bg p-1.5 shrink-0">
+                    <Trash2 className="h-3.5 w-3.5 text-status-late" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>
@@ -138,16 +138,13 @@ export function DismissedSuggestions({
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-primary hover:bg-primary/10"
+                  <IconButton
+                    label={t("restoreToInbox")}
+                    color="primary"
                     onClick={() => handleRestore(row.id)}
-                    title={t("restoreToInbox")}
-                    aria-label={t("restoreToInbox")}
                   >
-                    <Undo2 className="h-4 w-4" />
-                  </Button>
+                    <Undo2 />
+                  </IconButton>
                 </div>
               </div>
             </CardContent>

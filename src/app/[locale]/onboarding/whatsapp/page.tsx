@@ -6,14 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MessageCircle, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-// The webhook URL is platform-fixed; we only expose it here so the user
-// can paste it straight into DualHook's "Webhook Override" field.
-const WEBHOOK_URL = `${BACKEND_URL}/api/webhooks/whatsapp`;
+// NOTE: the WhatsApp webhook is served by THIS Next.js app (its own origin),
+// NOT by the Express API backend — so its public URL is derived from the app
+// origin below (webhookUrl), never from NEXT_PUBLIC_BACKEND_URL.
 
 export default function OnboardingWhatsApp() {
   const t = useTranslations("onboarding");
@@ -34,6 +34,15 @@ export default function OnboardingWhatsApp() {
   const [verifyToken, setVerifyToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // The webhook URL the user pastes into Meta points at THIS app's origin
+  // (the Vercel deployment that serves /api/webhooks/whatsapp). Resolved
+  // client-side to stay SSR-safe; NEXT_PUBLIC_APP_URL wins when set.
+  const [webhookUrl, setWebhookUrl] = useState("");
+  useEffect(() => {
+    const base = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    setWebhookUrl(`${base}/api/webhooks/whatsapp`);
+  }, []);
 
   function copyToClipboard(key: string, value: string) {
     navigator.clipboard.writeText(value).then(
@@ -88,8 +97,8 @@ export default function OnboardingWhatsApp() {
   return (
     <Card>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-          <MessageCircle className="h-8 w-8 text-emerald-600" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-status-ok-bg">
+          <MessageCircle className="h-8 w-8 text-status-ok" />
         </div>
         <CardTitle>{tWa("title")}</CardTitle>
         <CardDescription>{tWa("description")}</CardDescription>
@@ -107,9 +116,9 @@ export default function OnboardingWhatsApp() {
         </div>
 
         {/* DualHook setup */}
-        <div className="rounded-lg border bg-amber-50 border-amber-200 p-3 text-xs space-y-2" dir={isHe ? "rtl" : "ltr"}>
-          <p className="font-medium text-amber-900">{tWa("dualhookSetup")}</p>
-          <ol className="list-decimal list-inside space-y-1 text-amber-800">
+        <div className="rounded-lg border bg-status-warn-bg border-status-warn/30 p-3 text-xs space-y-2" dir={isHe ? "rtl" : "ltr"}>
+          <p className="font-medium text-status-warn">{tWa("dualhookSetup")}</p>
+          <ol className="list-decimal list-inside space-y-1 text-status-warn">
             <li>{tWa("dualhookStep1")}</li>
             <li>{tWa("dualhookStep2")}</li>
             <li>{tWa("dualhookStep3")}</li>
@@ -120,15 +129,15 @@ export default function OnboardingWhatsApp() {
         <div className="space-y-1.5">
           <label className="text-sm font-medium">{tWa("webhookUrlLabel")}</label>
           <div className="flex gap-2">
-            <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
+            <Input value={webhookUrl} readOnly dir="ltr" className="font-mono text-xs" />
             <Button
               type="button"
               variant="outline"
               size="icon"
-              onClick={() => copyToClipboard("url", WEBHOOK_URL)}
+              onClick={() => copyToClipboard("url", webhookUrl)}
               aria-label={tWa("copyToClipboard")}
             >
-              {copiedKey === "url" ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              {copiedKey === "url" ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
         </div>
@@ -239,7 +248,7 @@ export default function OnboardingWhatsApp() {
         {/* Progress dots */}
         <div className="flex justify-center gap-2 pt-2">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className={`h-2 w-8 rounded-full ${i < 3 ? "bg-blue-600" : "bg-muted"}`} />
+            <div key={i} className={`h-2 w-8 rounded-full ${i < 3 ? "bg-primary" : "bg-muted"}`} />
           ))}
         </div>
       </CardContent>

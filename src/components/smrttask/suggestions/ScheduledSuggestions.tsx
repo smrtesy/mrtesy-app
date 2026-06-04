@@ -171,8 +171,8 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-start gap-2 flex-1 min-w-0">
-                        <div className="mt-1 rounded-full bg-amber-100 p-1.5 shrink-0">
-                          <Clock className="h-3.5 w-3.5 text-amber-600" />
+                        <div className="mt-1 rounded-full bg-status-warn-bg p-1.5 shrink-0">
+                          <Clock className="h-3.5 w-3.5 text-status-warn" />
                         </div>
                         <div className="min-w-0 flex-1">
                           <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>
@@ -205,7 +205,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                          className="h-9 w-9 text-status-warn hover:bg-status-warn-bg"
                           onClick={() => handleUnsnooze(task.id)}
                           title={t("unsnooze")}
                           aria-label={t("unsnooze")}
@@ -268,7 +268,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9 text-red-500"
+                          className="h-9 w-9 text-status-late"
                           onClick={() => handleDelete(reminder.id as string)}
                         >
                           <Trash2 className="h-4 w-4" />

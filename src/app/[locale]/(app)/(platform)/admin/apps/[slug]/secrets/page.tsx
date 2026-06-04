@@ -42,9 +42,6 @@ interface SecretsResponse {
   connections: WhatsAppConnection[];
 }
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-const WEBHOOK_URL = `${BACKEND_URL}/api/webhooks/whatsapp`;
-
 export default function AdminAppSecretsPage() {
   const t = useTranslations("adminSecrets");
   const { locale, slug } = useParams<{ locale: string; slug: string }>();
@@ -53,8 +50,17 @@ export default function AdminAppSecretsPage() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
+  // The WhatsApp webhook is served by THIS Next.js app (its own origin), not
+  // the Express API backend — so its public URL comes from the app origin,
+  // never NEXT_PUBLIC_BACKEND_URL. Resolved client-side to stay SSR-safe.
+  const [webhookUrl, setWebhookUrl] = useState("");
+  useEffect(() => {
+    const base = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    setWebhookUrl(`${base}/api/webhooks/whatsapp`);
+  }, []);
+
   function copyWebhook() {
-    navigator.clipboard.writeText(WEBHOOK_URL).then(
+    navigator.clipboard.writeText(webhookUrl).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -119,7 +125,7 @@ export default function AdminAppSecretsPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2">
-                  <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
+                  <Input value={webhookUrl} readOnly dir="ltr" className="font-mono text-xs" />
                   <Button
                     type="button"
                     variant="outline"
@@ -127,7 +133,7 @@ export default function AdminAppSecretsPage() {
                     onClick={copyWebhook}
                     aria-label={t("copy")}
                   >
-                    {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                    {copied ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
                   </Button>
                 </div>
               </CardContent>
@@ -228,11 +234,11 @@ function PlatformRow({
             </Badge>
           )}
           {secret.is_set ? (
-            <Badge variant="default" className="text-[10px] bg-green-500/80">
+            <Badge variant="default" className="text-[10px] bg-status-ok text-white">
               {t("isSet")}
             </Badge>
           ) : (
-            <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
+            <Badge variant="outline" className="text-[10px] text-status-warn border-status-warn">
               {t("notSet")}
             </Badge>
           )}
@@ -440,8 +446,8 @@ function SecretChip({ label, set }: { label: string; set: boolean }) {
       variant="outline"
       className={`text-[10px] ${
         set
-          ? "border-green-300 text-green-700"
-          : "border-amber-300 text-amber-600"
+          ? "border-status-ok text-status-ok"
+          : "border-status-warn text-status-warn"
       }`}
     >
       {label}: {set ? t("isSet") : t("notSet")}

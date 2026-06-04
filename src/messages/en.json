@@ -15,7 +15,35 @@
     "noSubProject": "No sub-project",
     "create": "Create task",
     "created": "Task created",
-    "titleRequired": "A task title is required"
+    "titleRequired": "A task title is required",
+    "dueDateLabel": "Due date",
+    "dueTimeLabel": "Time",
+    "recurrenceLabel": "Repeat",
+    "recurrenceNone": "No repeat",
+    "recurrenceDaily": "Every day",
+    "recurrenceWeekly": "Every week",
+    "recurrenceWeekdays": "Set weekdays",
+    "recurrenceMonthly": "Every month",
+    "recurrenceYearly": "Every year (Gregorian)",
+    "recurrenceHebrew": "Every year (Hebrew date)",
+    "recurrenceHebrewHint": "Repeats on the Hebrew date of the due date (e.g. every Tu BiShvat).",
+    "recurrenceNeedsDate": "A recurring task needs a due date",
+    "recurrenceNeedsWeekday": "Pick at least one weekday",
+    "timeNeedsDate": "A time needs a due date too",
+    "weekdayShort": {
+      "0": "Su",
+      "1": "Mo",
+      "2": "Tu",
+      "3": "We",
+      "4": "Th",
+      "5": "Fr",
+      "6": "Sa"
+    }
+  },
+  "upcoming": {
+    "title": "Happening soon",
+    "now": "now",
+    "inMinutes": "in {min} min"
   },
   "emailReader": {
     "title": "Original email",
@@ -224,6 +252,8 @@
       "deleted": "Task deleted",
       "quickAction": "Quick Action",
       "aiChat": "Chat with AI",
+      "addToToday": "Add to today",
+      "removeFromToday": "Remove from today",
       "searchDocs": "Search Documents",
       "gmailDraft": "Gmail Draft",
       "openInWhatsapp": "Open in WhatsApp",
@@ -312,6 +342,9 @@
     "search": {
       "placeholder": "Search tasks, T<#>, or source G/S/W/E/D/C<#>...",
       "includeArchive": "Include archive",
+      "groupSuggestions": "Suggestions",
+      "groupTasks": "Tasks",
+      "noResults": "No results",
       "naturalLanguage": "What about the bank?"
     },
     "smartInput": {
@@ -889,7 +922,37 @@
     "cost": "Cost",
     "duration": "Duration",
     "reason": "Reason",
-    "details": "Details"
+    "details": "Details",
+    "searchPlaceholder": "Search the log…",
+    "searchClear": "Clear search",
+    "searchNoResults": "No matching entries",
+    "openTask": "Open task",
+    "addCorrection": "Correction",
+    "addCorrectionTitle": "Record a correction with an explanation"
+  },
+  "corrections": {
+    "title": "Record a correction",
+    "changeLabel": "Change",
+    "scopeLabel": "Who does this apply to?",
+    "scopePersonal": "Just me",
+    "scopePersonalDesc": "A personal rule for my account",
+    "scopeGeneral": "All users",
+    "scopeGeneralDesc": "A general rule for the prompt/rules",
+    "noteLabel": "Explanation",
+    "notePlaceholder": "Explain the fix — why the classification was wrong and what the right behavior is…",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Correction saved",
+    "exportButton": "Export corrections",
+    "exportTitle": "Export corrections as a comprehensive JSON file",
+    "exportPendingLabel": "{count} new corrections to export",
+    "exportNew": "Export new",
+    "exportNewGeneral": "Export new — all users ({count})",
+    "exportNewPersonal": "Export new — just me ({count})",
+    "exportAll": "Export everything (including already exported)",
+    "exported": "Exported {count} corrections",
+    "nothingToExport": "Nothing new to export"
   },
   "calendarPage": {
     "noTitle": "(No title)",

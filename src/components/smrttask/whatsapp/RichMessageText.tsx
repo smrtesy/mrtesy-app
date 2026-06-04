@@ -41,7 +41,7 @@ export function RichMessageText({ text, className }: Props) {
           <pre
             key={idx}
             dir="ltr"
-            className="my-1 overflow-x-auto rounded bg-black/[0.06] px-2 py-1.5 font-mono text-[12px]"
+            className="my-1 overflow-x-auto rounded bg-muted px-2 py-1.5 font-mono text-[12px]"
           >
             <code>{seg.content}</code>
           </pre>
@@ -123,7 +123,7 @@ function renderInline(line: string): ReactNode {
       re: URL_RE,
       build: (m) => (
         <a key={`m${key++}`} href={m[1]} target="_blank" rel="noopener noreferrer"
-           dir="ltr" className="text-blue-600 underline break-all">
+           dir="ltr" className="text-primary underline break-all">
           {m[1]}
         </a>
       ),
@@ -131,7 +131,7 @@ function renderInline(line: string): ReactNode {
     {
       re: INLINE_CODE_RE,
       build: (m) => (
-        <code key={`m${key++}`} dir="ltr" className="rounded bg-black/[0.06] px-1 font-mono text-[12px]">
+        <code key={`m${key++}`} dir="ltr" className="rounded bg-muted px-1 font-mono text-[12px]">
           {m[1]}
         </code>
       ),

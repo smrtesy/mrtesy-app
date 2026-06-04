@@ -23,10 +23,10 @@ interface ConnectionStatus {
 }
 
 const connections = [
-  { key: "gmail" as keyof ConnectionStatus, label: "Gmail", icon: Mail, color: "text-red-500" },
-  { key: "drive" as keyof ConnectionStatus, label: "Google Drive", icon: FolderOpen, color: "text-green-500" },
-  { key: "calendar" as keyof ConnectionStatus, label: "Calendar", icon: Calendar, color: "text-blue-500" },
-  { key: "whatsapp" as keyof ConnectionStatus, label: "WhatsApp", icon: MessageCircle, color: "text-emerald-500" },
+  { key: "gmail" as keyof ConnectionStatus, label: "Gmail", icon: Mail, color: "text-status-late" },
+  { key: "drive" as keyof ConnectionStatus, label: "Google Drive", icon: FolderOpen, color: "text-status-ok" },
+  { key: "calendar" as keyof ConnectionStatus, label: "Calendar", icon: Calendar, color: "text-primary" },
+  { key: "whatsapp" as keyof ConnectionStatus, label: "WhatsApp", icon: MessageCircle, color: "text-status-ok" },
 ] as const;
 
 export function AccountClient() {
@@ -157,7 +157,7 @@ export function AccountClient() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {connected ? (
-                      <Badge variant="default" className="gap-1 bg-green-500">
+                      <Badge variant="default" className="gap-1 bg-status-ok text-white">
                         <CheckCircle2 className="h-3 w-3" />
                         {tSettings("connected")}
                       </Badge>

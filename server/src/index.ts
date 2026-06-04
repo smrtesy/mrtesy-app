@@ -25,7 +25,6 @@ import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
-import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
 
@@ -127,15 +126,10 @@ app.get("/api/version", (_req, res) => {
   });
 });
 
-// Public webhook FIRST — mounted at app level, before any auth-guarded
-// routers. Several sub-routers downstream (admin/users, admin/orgs,
-// admin/apps, smrttask/tasks, etc.) open with
-// `router.use(requireAuth, ...)` at root, which Express runs for EVERY
-// path that enters that router — including /api/webhooks/whatsapp. Even
-// after we put the webhook first inside smrttaskRouter, adminRouter is
-// still mounted earlier and was 401'ing the request. Mounting the webhook
-// at the app level gets it picked up before anything else.
-app.use("/api", whatsappWebhookRouter);
+// NOTE: the WhatsApp inbound webhook is no longer served here. It moved to
+// the Vercel Next.js route src/app/api/webhooks/whatsapp/route.ts (for uptime
+// — a Railway dyno restart no longer drops incoming messages). Meta delivers
+// directly to that route; this Express server only serves the API.
 
 // smrtVoice webhook is also unauthenticated — voice-engine signs it with HMAC,
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).

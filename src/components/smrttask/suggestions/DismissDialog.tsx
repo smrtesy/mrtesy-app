@@ -234,7 +234,7 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
               autoFocus
             />
             {!proposing && !subjectKeyword.trim() && (
-              <p className="text-[11px] text-amber-600">
+              <p className="text-[11px] text-status-warn">
                 {t("reasonSenderTypeKeywordRequired")}
               </p>
             )}

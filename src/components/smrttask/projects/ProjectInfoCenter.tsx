@@ -51,9 +51,9 @@ const TYPE_ICON = {
 } as const;
 
 const TYPE_COLOR = {
-  suggestion: "text-amber-500",
-  task: "text-blue-500",
-  info: "text-green-600",
+  suggestion: "text-status-warn",
+  task: "text-primary",
+  info: "text-status-ok",
 } as const;
 
 // What the save sheet is currently doing.

@@ -21,7 +21,7 @@ import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/M
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
-import { SmartSearch } from "@/components/smrttask/tasks/SmartSearch";
+import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import type { Task } from "@/types/task";
 
@@ -47,10 +47,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
-  // searchResults: null = no active search, [] = search returned nothing,
-  // otherwise the SmartSearch matches scoped to this list (inbox + unverified).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
   const mergeJob = useMergeJob();
@@ -161,13 +157,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [focusId, loading, suggestions, pathname, router, searchParams]);
 
-  // When SmartSearch is active, displayed rows come from it. Otherwise we show
-  // the regularly-fetched suggestion list. SmartSearch is scoped to the same
-  // filter as fetchSuggestions (status=inbox, manually_verified=false,
-  // source_message_id NOT NULL) via its refineQuery prop below, so the two
-  // sources are interchangeable from a row-shape perspective.
-  const displayed = searchResults ?? suggestions;
-
   function toggleSelect(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -178,7 +167,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   function selectAllFiltered() {
-    setSelected(new Set(displayed.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
+    setSelected(new Set(suggestions.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
   }
 
   function clearSelection() { setSelected(new Set()); }
@@ -261,44 +250,23 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
-  if (loading) {
-    return (
-      <div className="space-y-3">
-        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
-      </div>
-    );
-  }
-
-  if (suggestions.length === 0) {
-    return (
-      <div className="py-12 text-center text-muted-foreground">
-        <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
-        <p>{t("noSuggestions")}</p>
-      </div>
-    );
-  }
-
-  return (
+  // The suggestion list itself. The unified search (CombinedSearch) wraps this
+  // and takes over the view whenever a query is active; the list shows when
+  // there's no active search.
+  const body = loading ? (
     <div className="space-y-3">
-      {/* Server-side search, same UX as the Tasks page.
-          The query is scoped to the suggestion filter (inbox + unverified +
-          has source_message) and pulls the same joined columns as
-          fetchSuggestions so search results render identically to the
-          un-searched list. */}
-      <SmartSearch
-        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
-        selectClause="*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)"
-        refineQuery={(q) => q
-          .eq("status", "inbox")
-          .eq("manually_verified", false)
-          .not("source_message_id", "is", null)
-        }
-        hideArchiveToggle
-      />
-
+      {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
+    </div>
+  ) : suggestions.length === 0 ? (
+    <div className="py-12 text-center text-muted-foreground">
+      <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
+      <p>{t("noSuggestions")}</p>
+    </div>
+  ) : (
+    <div className="space-y-3">
       <SuggestionToolbar
         total={totalCount || suggestions.length}
-        filtered={displayed.length}
+        filtered={suggestions.length}
         selectedCount={selected.size}
         searchQuery=""
         onSearchChange={() => {}}
@@ -310,13 +278,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         hideSearch
       />
 
-      {displayed.length === 0 && (
-        <div className="py-8 text-center text-muted-foreground text-sm">
-          {t("noSuggestions")}
-        </div>
-      )}
-
-      {displayed.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
+      {suggestions.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
         const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
         const title = locale === "he" && task.title_he ? task.title_he : task.title;
         // YYYY-MM-DD parsed via new Date() lands at UTC midnight and shifts back a
@@ -333,7 +295,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             ref={isFocused ? focusNodeRef : undefined}
             className={
               isFocused
-                ? "ring-2 ring-amber-400 animate-pulse"
+                ? "ring-2 ring-status-warn animate-pulse"
                 : isSelected
                 ? "ring-2 ring-primary/50"
                 : undefined
@@ -348,8 +310,8 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                   className="mt-2 shrink-0 h-4 w-4 cursor-pointer"
                   aria-label={t("selectAll")}
                 />
-                <div className="mt-1 rounded-full bg-blue-100 p-2">
-                  <Bell className="h-4 w-4 text-blue-600" />
+                <div className="mt-1 rounded-full bg-accent p-2">
+                  <Bell className="h-4 w-4 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -357,7 +319,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     <SerialBadge serial={task.serial_display as string | null} />
                     <SourceLink source={source} />
                     {dueDate && (
-                      <Badge variant="outline" className="text-[10px] bg-blue-50 shrink-0">
+                      <Badge variant="outline" className="text-[10px] bg-accent shrink-0">
                         {dueDate}
                       </Badge>
                     )}
@@ -403,6 +365,14 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           </Card>
         );
       })}
+    </div>
+  );
+
+  return (
+    <>
+      <CombinedSearch locale={locale} onUpdate={() => { fetchSuggestions(); onUpdate?.(); }}>
+        {body}
+      </CombinedSearch>
 
       <DismissDialog
         taskId={dismissTarget?.id ?? null}
@@ -453,7 +423,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           onUpdate?.();
         }}
       />
-    </div>
+    </>
   );
 }
 
@@ -527,7 +497,7 @@ function SuggestionActions({
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 text-red-500 hover:text-red-600 hover:bg-red-50"
+          className="h-9 w-9 text-status-late hover:bg-status-late-bg"
           onClick={onFastDismiss}
           title={t("fastDismiss")}
           aria-label={t("fastDismiss")}
@@ -537,7 +507,7 @@ function SuggestionActions({
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 text-orange-500 hover:text-orange-600 hover:bg-orange-50 font-semibold"
+          className="h-9 w-9 text-status-warn hover:bg-status-warn-bg font-semibold"
           onClick={onDismissWithReason}
           title={t("dismissWithReason")}
           aria-label={t("dismissWithReason")}
@@ -557,7 +527,7 @@ function SuggestionActions({
         <Button
           size="sm"
           variant="ghost"
-          className="h-9 gap-1 text-green-600/40 hover:text-white hover:bg-green-600 active:bg-green-700"
+          className="h-9 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok"
           onClick={onComplete}
           title={tTasks("actions.complete")}
           aria-label={tTasks("actions.complete")}
