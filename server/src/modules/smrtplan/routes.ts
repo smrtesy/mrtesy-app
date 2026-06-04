@@ -673,4 +673,47 @@ router.delete("/plan-episodes/:id", requireFull, async (req: Request, res: Respo
   res.json({ ok: true });
 });
 
+// ── worker capacity (decisions ה.11) ──────────────────────────────────────────
+
+router.get("/plan/capacity", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_capacity")
+    .select("user_id, work_days, hours_per_day")
+    .eq("org_id", req.org!.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ capacity: data ?? [] });
+});
+
+router.put("/plan/capacity/:userId", requireFull, async (req: Request, res: Response) => {
+  const { work_days, hours_per_day } = req.body ?? {};
+  if (!Array.isArray(work_days) || typeof hours_per_day !== "number") {
+    return res.status(400).json({ error: "work_days (array) and hours_per_day (number) are required" });
+  }
+  // Confirm the target user is a member of this org before storing capacity.
+  const { data: member } = await db
+    .from("org_members")
+    .select("user_id")
+    .eq("org_id", req.org!.id)
+    .eq("user_id", req.params.userId)
+    .maybeSingle();
+  if (!member) return res.status(404).json({ error: "user is not a member of this org" });
+
+  const { data, error } = await db
+    .from("smrtplan_capacity")
+    .upsert(
+      {
+        org_id: req.org!.id,
+        user_id: req.params.userId,
+        work_days,
+        hours_per_day,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "org_id,user_id" },
+    )
+    .select("user_id, work_days, hours_per_day")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ capacity: data });
+});
+
 export default router;

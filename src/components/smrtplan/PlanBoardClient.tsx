@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
@@ -12,6 +12,7 @@ import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
+import { CapacityEditor } from "./CapacityEditor";
 
 const DAY_MS = 86_400_000;
 /** Pixels per day on the timeline. The track is wider than the viewport, so the
@@ -65,6 +66,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
+  const [capacityOpen, setCapacityOpen] = useState(false);
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
@@ -139,6 +141,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const todayOff = daysBetween(t0, today);
   const todayInView = todayOff >= 0 && todayOff <= totalDays;
   const trackWidth = totalDays * DAY_PX;
+  // translateX is PHYSICAL (doesn't mirror in RTL), so center a date-anchored
+  // element direction-aware: shift left in LTR, right in RTL, to sit over its x.
+  const centerTx = locale === "he" ? "translateX(50%)" : "translateX(-50%)";
 
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
@@ -219,6 +224,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
             </ControlButton>
+            <ControlButton onClick={() => setCapacityOpen(true)}>
+              <Users className="h-3.5 w-3.5" /> {t("capacity.button")}
+            </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
               {recomputing ? t("recomputing") : t("recompute")}
@@ -294,9 +302,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     return (
                       <div key={m.id}>
                         <div
-                          className="absolute top-1 -translate-x-1/2 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
+                          className="absolute top-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
                           style={{
                             insetInlineStart: x,
+                            transform: centerTx,
                             color: lineColor(m),
                             background: "hsl(var(--card))",
                             border: `1px solid ${lineColor(m)}`,
@@ -307,8 +316,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         </div>
                         {/* stem anchoring the pill to the exact date */}
                         <div
-                          className="absolute bottom-0 h-2 w-0.5 -translate-x-1/2"
-                          style={{ insetInlineStart: x, background: lineColor(m) }}
+                          className="absolute bottom-0 h-2 w-0"
+                          style={{ insetInlineStart: x, borderInlineStart: `2px solid ${lineColor(m)}` }}
                         />
                       </div>
                     );
@@ -327,18 +336,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
                   </div>
                 ))}
-                {/* milestone date markers — a solid colored bar pinpointing the date */}
+                {/* milestone date markers — a solid colored bar pinpointing the date.
+                    Anchored by borderInlineStart at x (same as the stem & row lines)
+                    so the whole column lines up exactly in both RTL and LTR. */}
                 {milestones.map((m) => (
                   <div
                     key={m.id}
-                    className="absolute inset-y-0 z-[3] w-0.5 opacity-70"
-                    style={{ insetInlineStart: pxOf(offsetOf(m.milestone_date)), background: lineColor(m) }}
+                    className="absolute inset-y-0 z-[3] w-0 opacity-70"
+                    style={{ insetInlineStart: pxOf(offsetOf(m.milestone_date)), borderInlineStart: `2px solid ${lineColor(m)}` }}
                   />
                 ))}
                 {todayInView && (
                   <div
-                    className="absolute inset-y-0 z-[5] w-0.5 bg-foreground/40"
-                    style={{ insetInlineStart: pxOf(todayOff) }}
+                    className="absolute inset-y-0 z-[5] w-0"
+                    style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "2px solid hsl(var(--foreground) / 0.4)" }}
                   />
                 )}
               </div>
@@ -392,18 +403,18 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
                           <div
                             key={m.id}
-                            className="pointer-events-none absolute inset-y-0 z-[4] border-e border-dashed opacity-40"
+                            className="pointer-events-none absolute inset-y-0 z-[4] w-0 opacity-40"
                             style={{
                               insetInlineStart: pxOf(offsetOf(m.milestone_date)),
-                              borderColor: lineColor(m),
+                              borderInlineStart: `2px dashed ${lineColor(m)}`,
                             }}
                           />
                         ))}
                         {/* today line — semi-transparent so the bar label underneath stays readable */}
                         {todayInView && (
                           <div
-                            className="pointer-events-none absolute inset-y-0 z-[5] w-px bg-foreground/30"
-                            style={{ insetInlineStart: pxOf(todayOff) }}
+                            className="pointer-events-none absolute inset-y-0 z-[5] w-0"
+                            style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "1px solid hsl(var(--foreground) / 0.3)" }}
                           />
                         )}
                       </button>
@@ -443,6 +454,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onClose={() => setMilestonesOpen(false)}
         onChanged={load}
       />
+      <CapacityEditor open={capacityOpen} onClose={() => setCapacityOpen(false)} />
     </div>
   );
 }

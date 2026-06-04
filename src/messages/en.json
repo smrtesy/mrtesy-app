@@ -1875,6 +1875,23 @@
       "assignee": "Assignee",
       "unassigned": "Unassigned",
       "owner": "Owner"
+    },
+    "capacity": {
+      "button": "Team & availability",
+      "title": "Team availability",
+      "hint": "Set each workers work days and hours/day — to estimate how many days a task needs.",
+      "hoursPerDay": "Hours/day",
+      "days": [
+        "Su",
+        "Mo",
+        "Tu",
+        "We",
+        "Th",
+        "Fr",
+        "Sa"
+      ],
+      "save": "Save",
+      "saved": "Saved"
     }
   }
 }
