@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
-import { Plus, Loader2, Mail, MessageCircle, Layers } from "lucide-react";
+import { useTranslations, useLocale } from "next-intl";
+import Link from "next/link";
+import { Plus, Loader2, Mail, MessageCircle, Layers, ChevronLeft } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -42,6 +43,7 @@ const ALL_CONTACTS = "__all__";
 
 export function CampaignsClient() {
   const t = useTranslations("smrtReach");
+  const locale = useLocale();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -135,14 +137,22 @@ export function CampaignsClient() {
       ) : (
         <ul className="divide-y rounded-lg border">
           {campaigns.map((c) => (
-            <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="text-muted-foreground">
-                  <ChannelIcon channel={c.channel} />
-                </span>
-                <span className="truncate font-medium">{c.name}</span>
-              </div>
-              <Badge variant="secondary">{t(`status.${c.status}` as Parameters<typeof t>[0])}</Badge>
+            <li key={c.id}>
+              <Link
+                href={`/${locale}/reach/campaigns/${c.id}`}
+                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-accent"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-muted-foreground">
+                    <ChannelIcon channel={c.channel} />
+                  </span>
+                  <span className="truncate font-medium">{c.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary">{t(`status.${c.status}` as Parameters<typeof t>[0])}</Badge>
+                  <ChevronLeft className="h-4 w-4 text-muted-foreground rtl:rotate-0 ltr:rotate-180" />
+                </div>
+              </Link>
             </li>
           ))}
         </ul>
