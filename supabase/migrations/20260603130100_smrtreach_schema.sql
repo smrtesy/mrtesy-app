@@ -177,12 +177,13 @@ CREATE INDEX IF NOT EXISTS smrtreach_logs_campaign_idx ON smrtreach_logs(campaig
 
 
 -- ─── updated_at triggers ─────────────────────────────────────
-CREATE OR REPLACE FUNCTION smrtreach_set_updated_at() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION smrtreach_set_updated_at() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = '' AS $$
 BEGIN
   NEW.updated_at = now();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER smrtreach_campaigns_updated_at BEFORE UPDATE ON smrtreach_campaigns
   FOR EACH ROW EXECUTE FUNCTION smrtreach_set_updated_at();
