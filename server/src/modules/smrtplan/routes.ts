@@ -26,7 +26,60 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
-import { computePlanSchedule } from "./engine";
+import { computeOrgSchedule } from "./engine";
+
+const AT_RISK_DAYS = 3;
+const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
+
+/** Per-plan health from the engine fields vs the real today (build-spec ד). */
+function planHealthFromTasks(
+  plan: Row,
+  tasksByPlan: Map<string, Row[]>,
+  todayISO: string,
+): "waiting" | "on_track" | "at_risk" | "late" | "stream" {
+  const start = plan.start_date as string | null;
+  if (start && todayISO < start) return "waiting";
+  if (plan.kind === "stream") return "stream";
+  const tasks = tasksByPlan.get(plan.id as string) ?? [];
+  const open = tasks.filter((t) => !DONE_STATUSES.has(t.status as string));
+  // late: an open task is past its latest_finish (engine) / due_date (interim).
+  for (const t of open) {
+    const lf = (t.latest_finish as string | null) ?? (t.due_date as string | null);
+    if (lf && lf < todayISO) return "late";
+  }
+  // at_risk: an open, not-started task whose latest_start is within N days.
+  const horizon = addDaysISO(todayISO, AT_RISK_DAYS);
+  for (const t of open) {
+    if (t.status !== "inbox") continue;
+    const ls = (t.latest_start as string | null) ?? (t.due_date as string | null);
+    if (ls && ls >= todayISO && ls <= horizon) return "at_risk";
+  }
+  return "on_track";
+}
+
+function addDaysISO(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Attach engine-based health to a list of plans. */
+async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
+  if (plans.length === 0) return plans;
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("plan_id, status, latest_finish, latest_start, due_date")
+    .eq("organization_id", orgId)
+    .not("plan_id", "is", null);
+  const byPlan = new Map<string, Row[]>();
+  for (const t of asRows(taskRows)) {
+    const pid = t.plan_id as string;
+    if (!byPlan.has(pid)) byPlan.set(pid, []);
+    byPlan.get(pid)!.push(t);
+  }
+  const todayISO = new Date().toISOString().slice(0, 10);
+  return plans.map((p) => ({ ...p, health: planHealthFromTasks(p, byPlan, todayISO) }));
+}
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtplan"));
@@ -140,7 +193,22 @@ router.get("/plans/board", async (req: Request, res: Response) => {
     .order("group_label", { ascending: true })
     .order("start_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ plans: await withProgress(req.org!.id, asRows(data)) });
+  res.json({ plans: await withHealth(req.org!.id, await withProgress(req.org!.id, asRows(data))) });
+});
+
+router.get("/plans/milestones", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .eq("org_id", req.org!.id)
+    .order("milestone_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ milestones: data ?? [] });
+});
+
+router.post("/plans/recompute", requireFull, async (req: Request, res: Response) => {
+  const summary = await computeOrgSchedule(req.org!.id);
+  res.json(summary);
 });
 
 router.get("/plans/repository", async (req: Request, res: Response) => {
@@ -410,7 +478,8 @@ router.post("/plans/:id/recompute", requireFull, async (req: Request, res: Respo
     .eq("id", req.params.id)
     .maybeSingle();
   if (!plan) return res.status(404).json({ error: "plan not found" });
-  const summary = await computePlanSchedule(req.params.id);
+  // Dependencies cross plans, so recompute the whole org graph.
+  const summary = await computeOrgSchedule(req.org!.id);
   res.json(summary);
 });
 

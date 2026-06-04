@@ -103,5 +103,16 @@ export interface StreamMatrix {
   cells: Record<string, EpisodeStageStatus>;
 }
 
+/** A significant date marked on the board (designer leaves, go-live, …). */
+export interface PlanMilestone {
+  id: string;
+  /** null = global (crosses all rows); otherwise tied to one plan row. */
+  plan_id: string | null;
+  milestone_date: string;
+  label_he: string;
+  label_en: string | null;
+  color: string | null;
+}
+
 /** Access level for the current user in smrtPlan (full = creator, lite = consumer). */
 export type PlanAccessLevel = "full" | "lite";

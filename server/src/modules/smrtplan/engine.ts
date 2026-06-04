@@ -104,6 +104,7 @@ export function addWorkingDays(d: Date, n: number, blocked: Set<string>): Date {
 
 interface EngineTask {
   id: string;
+  plan_id: string | null;
   parent_task_id: string | null;
   duration_days: number | null;
   status: string;
@@ -121,40 +122,54 @@ interface EngineTask {
 // ── computation א + ה: backward scheduling + critical path ───────────────────
 
 /**
- * Recompute the schedule for one plan: backward pass (latest_*), forward pass
- * (earliest_*), critical-path flag, and equal time-splitting for un-estimated
- * sub-tasks. Writes the engine fields back to `tasks`.
+ * Recompute the schedule for an ENTIRE ORG (all tasks across all its plans):
+ * backward pass (latest_*), forward pass (earliest_*), critical-path flag, and
+ * equal time-splitting for un-estimated sub-tasks. Writes the engine fields back
+ * to `tasks`.
  *
- * Returns a small summary for logging / API responses.
+ * Org-wide on purpose: dependencies cross plans (Maor's flagship case — the
+ * video plan must FINISH so "design the characters" in the DESIGN plan can start
+ * before 6/15). Each task's deadline horizon is ITS OWN plan's end_date, but a
+ * cross-plan successor can pull that earlier through the dependency graph.
  */
-export async function computePlanSchedule(planId: string): Promise<{
-  plan_id: string;
+export async function computeOrgSchedule(orgId: string): Promise<{
+  org_id: string;
   scheduled: number;
   critical: number;
 }> {
-  const { data: plan, error: planErr } = await db
-    .from("smrtplan_plans")
-    .select("id, org_id, start_date, end_date")
-    .eq("id", planId)
-    .maybeSingle();
-  if (planErr || !plan) {
-    return { plan_id: planId, scheduled: 0, critical: 0 };
-  }
-  const orgId = plan.org_id as string;
   const blocked = await loadBlockedDates(orgId);
+
+  const { data: planRows } = await db
+    .from("smrtplan_plans")
+    .select("id, start_date, end_date")
+    .eq("org_id", orgId);
+  if (!planRows || planRows.length === 0) return { org_id: orgId, scheduled: 0, critical: 0 };
+
+  const planStartOf = new Map<string, Date | null>();
+  const planEndOf = new Map<string, Date | null>();
+  for (const p of planRows) {
+    planStartOf.set(p.id as string, p.start_date ? parseISO(p.start_date as string) : null);
+    planEndOf.set(p.id as string, p.end_date ? parseISO(p.end_date as string) : null);
+  }
+  // Global fallback horizon: the latest plan end, else 30 days out.
+  const allEnds = [...planEndOf.values()].filter(Boolean) as Date[];
+  const globalHorizon =
+    allEnds.length > 0 ? new Date(Math.max(...allEnds.map((d) => d.getTime()))) : addDays(new Date(), 30);
 
   const { data: taskRows, error: taskErr } = await db
     .from("tasks")
-    .select("id, parent_task_id, duration_days, status, created_at")
-    .eq("plan_id", planId);
+    .select("id, plan_id, parent_task_id, duration_days, status, created_at")
+    .eq("organization_id", orgId)
+    .not("plan_id", "is", null);
   if (taskErr || !taskRows || taskRows.length === 0) {
-    return { plan_id: planId, scheduled: 0, critical: 0 };
+    return { org_id: orgId, scheduled: 0, critical: 0 };
   }
 
   const tasks = new Map<string, EngineTask>();
   for (const r of taskRows) {
     tasks.set(r.id as string, {
       id: r.id as string,
+      plan_id: (r.plan_id as string | null) ?? null,
       parent_task_id: (r.parent_task_id as string | null) ?? null,
       duration_days: (r.duration_days as number | null) ?? null,
       status: (r.status as string) ?? "inbox",
@@ -164,16 +179,16 @@ export async function computePlanSchedule(planId: string): Promise<{
     });
   }
 
-  // Dependency edges among these tasks: from (consumer/needs) → to (provider).
-  // For scheduling we want precedence provider→consumer, i.e. successor(to)=from.
+  // Dependency edges: from (consumer/needs) → to (provider). For scheduling we
+  // want precedence provider→consumer, i.e. successor(to)=from. All org task
+  // edges, so cross-plan links are honoured.
   const ids = [...tasks.keys()];
-  const successors = new Map<string, string[]>(); // provider -> [consumers]
-  const predecessors = new Map<string, string[]>(); // consumer -> [providers]
+  const successors = new Map<string, string[]>();
+  const predecessors = new Map<string, string[]>();
   for (const id of ids) {
     successors.set(id, []);
     predecessors.set(id, []);
   }
-
   const { data: deps } = await db
     .from("smrtplan_dependencies")
     .select("from_id, to_id, from_type, to_type")
@@ -188,9 +203,8 @@ export async function computePlanSchedule(planId: string): Promise<{
     predecessors.get(consumer)!.push(provider);
   }
 
-  // Implicit sequential chain among sibling sub-tasks that have NO explicit
-  // dependencies — so they get a staggered schedule rather than one shared
-  // deadline (engine §2 חלוקת זמן). Order by created_at within each parent.
+  // Implicit sequential chain among sibling sub-tasks with NO explicit deps,
+  // so they get a staggered schedule rather than one shared deadline.
   const childrenByParent = new Map<string, EngineTask[]>();
   for (const t of tasks.values()) {
     if (!t.parent_task_id) continue;
@@ -204,17 +218,13 @@ export async function computePlanSchedule(planId: string): Promise<{
     if (anyExplicit) continue;
     const ordered = [...children].sort((a, b) => a.created_at.localeCompare(b.created_at));
     for (let i = 1; i < ordered.length; i++) {
-      const prev = ordered[i - 1].id;
-      const cur = ordered[i].id;
-      successors.get(prev)!.push(cur);
-      predecessors.get(cur)!.push(prev);
+      successors.get(ordered[i - 1].id)!.push(ordered[i].id);
+      predecessors.get(ordered[i].id)!.push(ordered[i - 1].id);
     }
   }
 
-  // Durations: explicit wins; otherwise equal-split a parent's window across its
-  // un-estimated children; otherwise the default estimate.
-  const planStart = plan.start_date ? parseISO(plan.start_date as string) : null;
-  const planEnd = plan.end_date ? parseISO(plan.end_date as string) : null;
+  // Durations: explicit wins; else equal-split a parent's plan window across its
+  // un-estimated children; else the default estimate.
   for (const t of tasks.values()) {
     if (t.duration_days && t.duration_days > 0) {
       t.duration = t.duration_days;
@@ -223,47 +233,42 @@ export async function computePlanSchedule(planId: string): Promise<{
       t.durationEstimated = true;
     }
   }
-  // Equal split: a parent with un-estimated children and a known window.
-  if (planStart && planEnd) {
-    for (const [, children] of childrenByParent) {
-      const unestimated = children.filter((c) => c.durationEstimated);
-      if (unestimated.length === 0) continue;
-      const totalWorking = countWorkingDays(planStart, planEnd, blocked);
-      const each = Math.max(1, Math.floor(totalWorking / children.length));
-      for (const c of unestimated) c.duration = each;
-    }
+  for (const [parentId, children] of childrenByParent) {
+    const unestimated = children.filter((c) => c.durationEstimated);
+    if (unestimated.length === 0) continue;
+    const parent = tasks.get(parentId);
+    const ps = parent ? planStartOf.get(parent.plan_id ?? "") ?? null : null;
+    const pe = parent ? planEndOf.get(parent.plan_id ?? "") ?? null : null;
+    if (!ps || !pe) continue;
+    const each = Math.max(1, Math.floor(countWorkingDays(ps, pe, blocked) / children.length));
+    for (const c of unestimated) c.duration = each;
   }
 
-  // Backward pass over the DAG. Process in reverse-topological order (a task is
-  // ready once all its successors are scheduled).
+  const horizonOf = (t: EngineTask): Date => planEndOf.get(t.plan_id ?? "") ?? globalHorizon;
+  const floorOf = (t: EngineTask): Date => planStartOf.get(t.plan_id ?? "") ?? new Date();
+
+  // Backward pass (reverse-topological): a task is scheduled once its successors are.
   const order = topoOrder(ids, predecessors, successors);
-  const horizon = planEnd ?? addDays(new Date(), 30);
   for (let i = order.length - 1; i >= 0; i--) {
     const t = tasks.get(order[i])!;
-    const succ = successors.get(t.id)!;
-    let lf = rollBack(horizon, blocked);
-    for (const sId of succ) {
+    let lf = rollBack(horizonOf(t), blocked);
+    for (const sId of successors.get(t.id)!) {
       const s = tasks.get(sId)!;
-      // A provider must FINISH the working day BEFORE its consumer starts —
-      // symmetric with the forward pass (earliest_start = provider finish + 1
-      // working day). Without the −1 every provider gains a phantom day of
-      // slack and genuinely-critical tasks fail the slack ≤ 0 test below.
+      // Provider must FINISH the working day BEFORE its consumer starts.
       if (s.latest_start) {
         const before = subtractWorkingDays(s.latest_start, 1, blocked);
         if (before < lf) lf = before;
       }
     }
-    t.latest_finish = lf; // already a working day (rollBack / subtractWorkingDays)
+    t.latest_finish = lf;
     t.latest_start = subtractWorkingDays(t.latest_finish, Math.max(0, t.duration - 1), blocked);
   }
 
-  // Forward pass. Process in topological order.
-  const floor = planStart ? rollForward(planStart, blocked) : rollForward(new Date(), blocked);
+  // Forward pass (topological).
   for (const id of order) {
     const t = tasks.get(id)!;
-    const pred = predecessors.get(t.id)!;
-    let es = floor;
-    for (const pId of pred) {
+    let es = rollForward(floorOf(t), blocked);
+    for (const pId of predecessors.get(t.id)!) {
       const p = tasks.get(pId)!;
       if (p.earliest_finish) {
         const after = addWorkingDays(p.earliest_finish, 1, blocked);
@@ -274,8 +279,7 @@ export async function computePlanSchedule(planId: string): Promise<{
     t.earliest_finish = addWorkingDays(t.earliest_start, Math.max(0, t.duration - 1), blocked);
   }
 
-  // Critical path: slack = latest_start − earliest_start (in calendar days).
-  // slack ≤ 0 ⇒ critical (no room before a delay pushes the finish).
+  // Critical path: slack = latest_start − earliest_start; slack ≤ 0 ⇒ critical.
   let criticalCount = 0;
   for (const t of tasks.values()) {
     const slackDays =
@@ -286,7 +290,7 @@ export async function computePlanSchedule(planId: string): Promise<{
     if (t.is_critical) criticalCount++;
   }
 
-  // Persist the engine fields.
+  // Persist.
   let scheduled = 0;
   for (const t of tasks.values()) {
     const { error: upErr } = await db
@@ -302,7 +306,22 @@ export async function computePlanSchedule(planId: string): Promise<{
     if (!upErr) scheduled++;
   }
 
-  return { plan_id: planId, scheduled, critical: criticalCount };
+  return { org_id: orgId, scheduled, critical: criticalCount };
+}
+
+/** Per-plan entry point — resolves the org and recomputes org-wide (deps cross plans). */
+export async function computePlanSchedule(planId: string): Promise<{
+  org_id: string;
+  scheduled: number;
+  critical: number;
+}> {
+  const { data: plan } = await db
+    .from("smrtplan_plans")
+    .select("org_id")
+    .eq("id", planId)
+    .maybeSingle();
+  if (!plan) return { org_id: "", scheduled: 0, critical: 0 };
+  return computeOrgSchedule(plan.org_id as string);
 }
 
 function countWorkingDays(from: Date, to: Date, blocked: Set<string>): number {
@@ -426,29 +445,20 @@ async function openNextStage(orgId: string, episodeId: string, stageId: string):
     .eq("status", "todo");
 }
 
-/** Recompute every plan in an org (daily refresh). */
-export async function refreshOrg(orgId: string): Promise<{ plans: number; scheduled: number }> {
-  const { data: plans } = await db
-    .from("smrtplan_plans")
-    .select("id")
-    .eq("org_id", orgId)
-    .not("start_date", "is", null);
-  let scheduled = 0;
-  for (const p of plans ?? []) {
-    const r = await computePlanSchedule(p.id as string);
-    scheduled += r.scheduled;
-  }
-  return { plans: (plans ?? []).length, scheduled };
+/** Recompute an org's whole schedule (daily refresh / on-demand). */
+export async function refreshOrg(orgId: string): Promise<{ scheduled: number; critical: number }> {
+  const r = await computeOrgSchedule(orgId);
+  return { scheduled: r.scheduled, critical: r.critical };
 }
 
-/** Recompute all plans across all orgs (cron entry point). */
-export async function refreshAll(): Promise<{ orgs: number; plans: number }> {
-  const { data: orgs } = await db.from("smrtplan_plans").select("org_id").not("start_date", "is", null);
+/** Recompute every org that has plans (cron entry point). */
+export async function refreshAll(): Promise<{ orgs: number; scheduled: number }> {
+  const { data: orgs } = await db.from("smrtplan_plans").select("org_id");
   const uniqueOrgs = [...new Set((orgs ?? []).map((o) => o.org_id as string))];
-  let plans = 0;
+  let scheduled = 0;
   for (const orgId of uniqueOrgs) {
-    const r = await refreshOrg(orgId);
-    plans += r.plans;
+    const r = await computeOrgSchedule(orgId);
+    scheduled += r.scheduled;
   }
-  return { orgs: uniqueOrgs.length, plans };
+  return { orgs: uniqueOrgs.length, scheduled };
 }

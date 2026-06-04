@@ -1774,7 +1774,8 @@
       "emptyHint": "Plans with a start date will appear here on the timeline",
       "goal": "Goal",
       "period": "Range",
-      "owner": "Owner"
+      "owner": "Owner",
+      "milestones": "Milestones"
     },
     "matrix": {
       "title": "Stream matrix",
