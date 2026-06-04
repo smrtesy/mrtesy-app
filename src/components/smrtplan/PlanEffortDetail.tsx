@@ -12,13 +12,19 @@ import { parseISO, gregShort, hebDate, countdownText, urgencyFor } from "@/lib/s
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "is_critical" | "assigned_to_user_id"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+}
+interface Estimate {
+  id: string;
+  name: string;
+  description: string | null;
+  hours: number;
 }
 function memberName(m: Member): string {
   return m.name || m.email || m.user_id.slice(0, 6);
@@ -60,6 +66,7 @@ export function PlanEffortDetail({
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<PlanTask[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -76,13 +83,15 @@ export function PlanEffortDetail({
     setLoading(true);
     (async () => {
       try {
-        const [data, mem] = await Promise.all([
+        const [data, mem, est] = await Promise.all([
           api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`),
           api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
+          api<{ estimates: Estimate[] }>("/api/plan/estimates").catch(() => ({ estimates: [] as Estimate[] })),
         ]);
         if (!alive) return;
         setTasks(data.tasks ?? []);
         setMembers(mem.members ?? []);
+        setEstimates(est.estimates ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -145,6 +154,7 @@ export function PlanEffortDetail({
                 task={task}
                 otherTasks={tasks.filter((x) => x.id !== task.id)}
                 members={members}
+                estimates={estimates}
                 te={te}
                 onClose={() => setEditingId(null)}
                 onChanged={afterMutation}
@@ -276,7 +286,7 @@ function NewTaskRow({
 }) {
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
-  const [dur, setDur] = useState("");
+  const [hours, setHours] = useState("");
   const [busy, setBusy] = useState(false);
   async function save() {
     if (!title.trim()) return;
@@ -284,7 +294,7 @@ function NewTaskRow({
     try {
       await api(`/api/plans/${planId}/tasks`, {
         method: "POST",
-        body: { title_he: title.trim(), due_date: due || null, duration_days: dur ? Number(dur) : null },
+        body: { title_he: title.trim(), due_date: due || null, estimated_hours: hours ? Number(hours) : null },
       });
       onDone();
     } catch (e) {
@@ -298,8 +308,8 @@ function NewTaskRow({
       <input className={`${fieldCls} flex-1`} placeholder={te("taskTitle")} value={title}
         onChange={(e) => setTitle(e.target.value)} dir="rtl" autoFocus />
       <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
-      <input type="number" min={1} className={`${fieldCls} w-20`} placeholder={te("duration")} value={dur}
-        onChange={(e) => setDur(e.target.value)} />
+      <input type="number" min={0} step={0.5} className={`${fieldCls} w-28`} placeholder={te("estimatedHours")} value={hours}
+        onChange={(e) => setHours(e.target.value)} />
       <button onClick={save} disabled={busy || !title.trim()}
         className="rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:opacity-50">
         {te("save")}
@@ -312,6 +322,7 @@ function EditTaskRow({
   task,
   otherTasks,
   members,
+  estimates,
   te,
   onClose,
   onChanged,
@@ -319,13 +330,16 @@ function EditTaskRow({
   task: PlanTask;
   otherTasks: PlanTask[];
   members: Member[];
+  estimates: Estimate[];
   te: ReturnType<typeof useTranslations>;
   onClose: () => void;
   onChanged: () => void;
 }) {
   const [title, setTitle] = useState(task.title_he || task.title);
   const [due, setDue] = useState(task.due_date ?? "");
-  const [dur, setDur] = useState(task.duration_days != null ? String(task.duration_days) : "");
+  // dur is the MANUAL override only — blank means "let the engine compute it".
+  const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
+  const [hours, setHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   const [provider, setProvider] = useState("");
@@ -340,7 +354,10 @@ function EditTaskRow({
           title_he: title.trim(),
           title: title.trim(),
           due_date: due || null,
+          // a filled manual duration pins it; otherwise the engine owns it.
           duration_days: dur ? Number(dur) : null,
+          duration_manual: !!dur,
+          estimated_hours: hours ? Number(hours) : null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -393,8 +410,6 @@ function EditTaskRow({
       <div className="flex flex-wrap items-center gap-2">
         <input className={`${fieldCls} flex-1`} value={title} onChange={(e) => setTitle(e.target.value)} dir="rtl" />
         <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
-        <input type="number" min={1} className={`${fieldCls} w-16`} placeholder={te("duration")} value={dur}
-          onChange={(e) => setDur(e.target.value)} />
         <select className={fieldCls} value={status} onChange={(e) => setStatus(e.target.value as PlanTask["status"])}>
           <option value="inbox">{te("statusInbox")}</option>
           <option value="in_progress">{te("statusInProgress")}</option>
@@ -406,6 +421,31 @@ function EditTaskRow({
             <option key={m.user_id} value={m.user_id}>{memberName(m)}</option>
           ))}
         </select>
+      </div>
+
+      {/* effort estimate → duration */}
+      <div className="flex flex-wrap items-center gap-2">
+        {estimates.length > 0 && (
+          <select
+            className={fieldCls}
+            value=""
+            onChange={(e) => {
+              const est = estimates.find((x) => x.id === e.target.value);
+              if (est) setHours(String(est.hours));
+            }}
+            title={te("fromCatalog")}
+          >
+            <option value="">{te("fromCatalog")}</option>
+            {estimates.map((est) => (
+              <option key={est.id} value={est.id}>{est.name} · {est.hours}h</option>
+            ))}
+          </select>
+        )}
+        <input type="number" min={0} step={0.5} className={`${fieldCls} w-28`} placeholder={te("estimatedHours")}
+          value={hours} onChange={(e) => setHours(e.target.value)} title={te("estimatedHours")} />
+        <input type="number" min={1} className={`${fieldCls} w-32`} placeholder={te("manualDuration")}
+          value={dur} onChange={(e) => setDur(e.target.value)} title={te("manualDuration")} />
+        <span className="text-[11px] italic text-muted-foreground">{!dur && hours ? te("autoDuration") : ""}</span>
       </div>
 
       {/* needs editor */}

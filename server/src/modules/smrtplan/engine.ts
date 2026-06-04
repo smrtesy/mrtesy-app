@@ -25,6 +25,8 @@ import { db } from "../../db";
 const DAY_MS = 86_400_000;
 /** Default estimate when a (sub-)task has no duration set, in working days. */
 const DEFAULT_DURATION_DAYS = 2;
+/** Org-wide fallback hours/day when an assignee has no capacity row (or none). */
+const ORG_DEFAULT_HOURS_PER_DAY = 8;
 /** "at risk" threshold — kept in sync with the smrtplan_task_health view. */
 export const AT_RISK_DAYS = 3;
 
@@ -55,6 +57,24 @@ export async function loadBlockedDates(orgId: string): Promise<Set<string>> {
   }
   for (const row of data ?? []) blocked.add(row.blocked_date as string);
   return blocked;
+}
+
+/** Load each org member's hours/day capacity (user_id → hours_per_day). */
+export async function loadCapacity(orgId: string): Promise<Map<string, number>> {
+  const cap = new Map<string, number>();
+  const { data, error } = await db
+    .from("smrtplan_capacity")
+    .select("user_id, hours_per_day")
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[smrtplan.engine] loadCapacity:", error.message);
+    return cap;
+  }
+  for (const row of data ?? []) {
+    const h = Number(row.hours_per_day);
+    if (h > 0) cap.set(row.user_id as string, h);
+  }
+  return cap;
 }
 
 /** A working day = not Saturday and not in the blocked set. */
@@ -107,6 +127,9 @@ interface EngineTask {
   plan_id: string | null;
   parent_task_id: string | null;
   duration_days: number | null;
+  duration_manual: boolean;
+  estimated_hours: number | null;
+  assigned_to_user_id: string | null;
   status: string;
   created_at: string;
   // computed
@@ -138,6 +161,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   critical: number;
 }> {
   const blocked = await loadBlockedDates(orgId);
+  const capacity = await loadCapacity(orgId);
 
   const { data: planRows } = await db
     .from("smrtplan_plans")
@@ -158,7 +182,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
 
   const { data: taskRows, error: taskErr } = await db
     .from("tasks")
-    .select("id, plan_id, parent_task_id, duration_days, status, created_at")
+    .select("id, plan_id, parent_task_id, duration_days, duration_manual, estimated_hours, assigned_to_user_id, status, created_at")
     .eq("organization_id", orgId)
     .not("plan_id", "is", null);
   if (taskErr || !taskRows || taskRows.length === 0) {
@@ -172,6 +196,9 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       plan_id: (r.plan_id as string | null) ?? null,
       parent_task_id: (r.parent_task_id as string | null) ?? null,
       duration_days: (r.duration_days as number | null) ?? null,
+      duration_manual: (r.duration_manual as boolean | null) ?? false,
+      estimated_hours: (r.estimated_hours as number | null) ?? null,
+      assigned_to_user_id: (r.assigned_to_user_id as string | null) ?? null,
       status: (r.status as string) ?? "inbox",
       created_at: (r.created_at as string) ?? new Date().toISOString(),
       duration: 0,
@@ -223,18 +250,30 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     }
   }
 
-  // Durations: explicit wins; else equal-split a parent's plan window across its
-  // un-estimated children; else the default estimate.
+  // Duration fallback ladder (most specific → most general):
+  //   1. manual duration_days pin (human overrides)
+  //   2. estimated_hours ÷ assignee capacity (or org default 8h/day)
+  //   3. equal-split a parent's plan window across un-estimated children (below)
+  //   4. default estimate
   for (const t of tasks.values()) {
-    if (t.duration_days && t.duration_days > 0) {
+    if (t.duration_manual && t.duration_days && t.duration_days > 0) {
       t.duration = t.duration_days;
+    } else if (t.estimated_hours && t.estimated_hours > 0) {
+      const hpd =
+        (t.assigned_to_user_id && capacity.get(t.assigned_to_user_id)) || ORG_DEFAULT_HOURS_PER_DAY;
+      t.duration = Math.max(1, Math.ceil(t.estimated_hours / hpd));
+      t.durationEstimated = true; // derived, not hand-confirmed
     } else {
       t.duration = DEFAULT_DURATION_DAYS;
       t.durationEstimated = true;
     }
   }
   for (const [parentId, children] of childrenByParent) {
-    const unestimated = children.filter((c) => c.durationEstimated);
+    // Only children with neither a manual pin nor an hours estimate get
+    // equal-split; hours-derived durations are kept.
+    const unestimated = children.filter(
+      (c) => !(c.duration_manual && c.duration_days) && !(c.estimated_hours && c.estimated_hours > 0),
+    );
     if (unestimated.length === 0) continue;
     const parent = tasks.get(parentId);
     const ps = parent ? planStartOf.get(parent.plan_id ?? "") ?? null : null;

@@ -1874,7 +1874,11 @@
       "statusDone": "Done",
       "assignee": "Assignee",
       "unassigned": "Unassigned",
-      "owner": "Owner"
+      "owner": "Owner",
+      "estimatedHours": "Estimated hours",
+      "fromCatalog": "Pick from catalog…",
+      "manualDuration": "Manual duration (days)",
+      "autoDuration": "Auto duration from hours/capacity"
     },
     "capacity": {
       "button": "Team & availability",
