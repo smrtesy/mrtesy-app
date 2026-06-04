@@ -102,6 +102,7 @@ const CRUD: CrudOpts[] = [
   {
     resource: "feedback",
     table: "smrtbot_feedback",
+    required: ["phone", "message"],
     updatable: ["phone", "message", "status", "admin_note"],
   },
   {

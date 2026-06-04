@@ -5,7 +5,7 @@
  * onboarding state machine, daily missions, multi-level trivia (daily limit),
  * diamonds rewards, leaderboard, share/referral, settings + reminders, and the
  * raffle engine. Wired into the engine via handleGameAction / handleGameText
- * and into cron via sendScheduledReminders / sendFomoReminders / executeRaffle.
+ * and into cron via sendScheduledReminders / executeRaffle.
  *
  * Behavioural verification pending (needs a test bot). Compiles clean and
  * mirrors the botsite flows 1:1.
@@ -568,8 +568,7 @@ async function evaluateTriviaAnswer(c: Ctx, missionId: string, answerNum: string
     return btns(c, await getMsg(c.bot, c.env, "TRIVIA_ALREADY_ANSWERED"), [{ id: "game_trivia", title: "שאלה נוספת 🧠" }]);
   }
   const triviaId = missionId.replace("TRIVIA_", "");
-  const { data: row } = await db.from("smrtbot_trivia").select("*").eq("bot_id", c.bot.id).eq("legacy_id", Number(triviaId)).maybeSingle();
-  const q = row ?? (await db.from("smrtbot_trivia").select("*").eq("bot_id", c.bot.id).eq("id", triviaId).maybeSingle()).data;
+  const { data: q } = await db.from("smrtbot_trivia").select("*").eq("bot_id", c.bot.id).eq("id", triviaId).maybeSingle();
   if (!q) return txt(c, await getMsg(c.bot, c.env, "TRIVIA_NOT_FOUND"));
   const reward = triviaReward(q.level as string);
   const isCorrect = String(answerNum) === String(q.correct_option);
@@ -594,7 +593,7 @@ async function evaluateTriviaAnswer(c: Ctx, missionId: string, answerNum: string
   } else {
     const opts = [q.option_1, q.option_2, q.option_3];
     const idx = (q.correct_option as number) - 1;
-    const correctText = `${["א", "ב", "ג"][idx]}. ${opts[idx]}`;
+    const correctText = `${["א", "ב", "ג"][idx]}. ${opts[idx] ?? ""}`;
     await btns(c, await getMsg(c.bot, c.env, "TRIVIA_WRONG_ANSWER", { correctText, source: sourceText, dailyDone: dailyDoneMsg }), tailButtons);
   }
 }

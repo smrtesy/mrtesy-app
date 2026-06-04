@@ -26,7 +26,7 @@ import {
   type ReplyButton,
 } from "./wa";
 import { reportError, errInfo } from "./report-error";
-import { handleGameAction, handleGameText } from "./game";
+import { handleGameAction, handleGameText, processReferral } from "./game";
 
 export interface BotRow {
   id: string;
@@ -325,11 +325,26 @@ export async function handleInbound(
   }
 
   try {
+    // First-contact detection (for referral credit + new-user welcome).
+    const { data: existingUser } = await db
+      .from("smrtbot_wa_users")
+      .select("id")
+      .eq("bot_id", bot.id)
+      .eq("phone", phone)
+      .maybeSingle();
+    const existed = !!existingUser;
+
     await touchUser(orgId, bot, phone, message.name ?? null);
     await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
 
     const state = await getState(bot.id, phone);
     const text = (message.text ?? "").trim();
+
+    // Referral credit on first contact via a share deep link ("...הגעתי דרך <phone>").
+    if (!existed && text) {
+      const m = text.match(/דרך\s+(\d{6,})/);
+      if (m && m[1] !== phone) await processReferral(bot, env, phone, m[1]);
+    }
 
     // 1. Mid-flow text input (game onboarding / profile edit / reminder time).
     if (text && state.expectedInput) {
@@ -351,13 +366,13 @@ export async function handleInbound(
       }
     }
 
-    // 4. Free text with no match → FAQ search.
-    if (text) {
+    // 4. Existing user's free text with no match → FAQ search.
+    if (text && existed) {
       await handleFreeText(creds, orgId, bot, env, phone, text);
       return;
     }
 
-    // 5. Anything else → root menu so the user is never stuck.
+    // 5. New users / empty input → root menu so they land on the welcome.
     const root = findRootNode(nodes);
     if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
   } catch (e) {
