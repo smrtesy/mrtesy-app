@@ -23,6 +23,7 @@ import { emitEvent, notifyError } from "../../lib/platform";
 
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef, Channel } from "./audience-service";
+import { enqueueCampaignEmail, processEmailQueue } from "./send-service";
 
 const router = Router();
 
@@ -290,6 +291,140 @@ router.delete("/reach/templates/:id", async (req: Request, res: Response) => {
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// ============================================================
+// SENDERS (managed verified sender addresses — Reach email is not locked to one)
+// ============================================================
+
+router.get("/reach/senders", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtreach_senders")
+    .select("*")
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ senders: data ?? [] });
+});
+
+router.post("/reach/senders", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return res.status(400).json({ error: "a valid email is required" });
+  }
+  const { data, error } = await db
+    .from("smrtreach_senders")
+    .insert({
+      org_id: orgId,
+      created_by: req.user!.id,
+      email,
+      label: req.body?.label?.trim() || null,
+      reply_to: req.body?.reply_to?.trim()?.toLowerCase() || null,
+    })
+    .select("*")
+    .single();
+  if (error) {
+    await notifyError(orgId, "smrtreach", { title: "Failed to add sender", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json({ sender: data });
+});
+
+router.delete("/reach/senders/:id", async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtreach_senders")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ============================================================
+// SETTINGS (region-by-language map — app-managed)
+// ============================================================
+
+router.get("/reach/settings", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { data, error } = await db
+    .from("smrtreach_settings")
+    .select("*")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  // Surface defaults even before a row exists, so the UI always has something.
+  res.json({
+    settings: data ?? {
+      org_id: orgId,
+      default_region: "us-east-1",
+      region_by_language: { en: "us-east-1", he: "il-central-1" },
+    },
+  });
+});
+
+router.put("/reach/settings", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const row: Record<string, unknown> = { org_id: orgId };
+  if (req.body?.default_region !== undefined) row.default_region = String(req.body.default_region);
+  if (req.body?.region_by_language !== undefined) row.region_by_language = req.body.region_by_language;
+  const { data, error } = await db
+    .from("smrtreach_settings")
+    .upsert(row, { onConflict: "org_id" })
+    .select("*")
+    .single();
+  if (error) {
+    await notifyError(orgId, "smrtreach", { title: "Failed to save settings", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  res.json({ settings: data });
+});
+
+// ============================================================
+// SEND / QUEUE
+// ============================================================
+
+// Resolve recipients, enqueue them, and process a first batch immediately so
+// the user sees sending start. The rest of the queue is drained by repeated
+// calls to /reach/queue/process (pg_cron will call it; see build plan §H).
+router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  try {
+    const queued = await enqueueCampaignEmail(orgId, req.params.id);
+    if (queued === 0) return res.json({ queued: 0, sent: 0, failed: 0, remaining: 0 });
+    const result = await processEmailQueue(orgId, 50);
+    res.json({ queued, ...result });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtreach", { title: "Failed to send campaign", body: msg });
+    res.status(400).json({ error: msg });
+  }
+});
+
+// Drain a bounded batch of the pending email queue (cron target).
+router.post("/reach/queue/process", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const limit = Math.min(Number(req.body?.limit) || 100, 500);
+  try {
+    const result = await processEmailQueue(orgId, limit);
+    res.json(result);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtreach", { title: "Queue processing failed", body: msg });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// Campaign stats (sent/failed/open/click counts).
+router.get("/reach/campaigns/:id/stats", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const [{ count: sent }, { count: failed }, { count: opens }, { count: clicks }] = await Promise.all([
+    db.from("smrtreach_logs").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("status", "sent"),
+    db.from("smrtreach_logs").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("status", "failed"),
+    db.from("smrtreach_tracking").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("event", "open"),
+    db.from("smrtreach_tracking").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("event", "click"),
+  ]);
+  res.json({ sent: sent ?? 0, failed: failed ?? 0, opens: opens ?? 0, clicks: clicks ?? 0 });
 });
 
 export default router;

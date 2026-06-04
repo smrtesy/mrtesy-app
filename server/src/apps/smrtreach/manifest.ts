@@ -52,6 +52,8 @@ export const manifest: AppManifest = {
       "smrtreach_queue",
       "smrtreach_tracking",
       "smrtreach_logs",
+      "smrtreach_senders",
+      "smrtreach_settings",
     ],
   },
 

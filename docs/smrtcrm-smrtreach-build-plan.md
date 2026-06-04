@@ -30,7 +30,7 @@
 שלב C — smrtCRM סגמנטים      (שאילתות סינון שמורות, חשיפה ל-Reach)          ✅ נבנה
 שלב D — הגירת נתוני botsite  (סקריפט one-time, מיזוג חוצה-בוטים)            ✅ נבנה
 שלב E — smrtReach יסוד       (קמפיין אב + פרטי-ערוץ, קריאת קהלים מ-CRM)     ✅ נבנה
-שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)             🟡 unsubscribe+queue+tracking schema ✅ ; שליחת SES ממתינה לסודות
+שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)             ✅ נבנה (שליחת SES חיה; קורא מפתחות מ-app_secrets)
 שלב G — smrtReach וואטסאפ     (חיבור ל-send-service של smrtBot)             ⬜ ממתין ל-smrtBot
 שלב H — Cron + scheduler      (pg_cron → route חסום)                        ⬜ טרם
 ```
@@ -44,7 +44,11 @@ pagination, bulk, ייבוא CSV, דה-דופ/upsert) + יסוד smrtReach (קמ
 שתי האפליקציות מחוברות מלא (manifest/registry/sidebar/i18n he+en), build נקי.
 
 **נותר (תלוי חוץ או היקף):**
-- שליחת מייל בפועל דרך **SES** — ממתין לסודות ב-`app_secrets` (slug `smrtreach`).
+- **שליחת מייל SES — נבנתה.** הקוד קורא `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
+  מ-`app_secrets` (slug `smrtreach`) בזמן ריצה. נותר רק שהמפעיל ימלא את שני הסודות
+  במסך ה-admin (region וכתובות שולח מנוהלים מתוך האפליקציה — `smrtreach_settings`
+  + `smrtreach_senders`). region לפי שפה: en→us-east-1, he→il-central-1 (ניתן לעריכה).
+  לפני חיבור pg_cron: להחליף את בחירת התור ל-atomic claim (מתועד בקוד).
 - שליחת וואטסאפ — ממתין לחוזה ה-send-service של **smrtBot**.
 - **קליטת אנשי קשר מהבוט** (CRM-5) — subscribe stub, ממתין לשם האירוע מ-smrtBot.
 - **Cron scheduler** (שלב H) — טרם (pg_cron → route חסום).
