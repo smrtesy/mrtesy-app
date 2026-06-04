@@ -1,0 +1,201 @@
+/**
+ * smrtBot — WhatsApp transport (Meta Cloud API).
+ *
+ * Owns the outbound send stack: credential resolution per env, a per-number
+ * throttle, and retry on rate-limit / 5xx. This is the seam smrtReach calls
+ * for broadcast campaigns (see send-service.ts) — no other module talks to
+ * Meta directly.
+ *
+ * Ported from botsite/src/modules/wa.js.
+ */
+
+const META_API_VERSION = "v23.0";
+const MIN_GAP_MS = 500; // minimum gap between messages on the same number
+const MAX_RETRIES = 3;
+
+export type BotEnv = "test" | "live";
+
+/** Minimal shape of a smrtbot_bots row needed to send. */
+export interface BotCreds {
+  test_wa_phone_number_id?: string | null;
+  test_wa_access_token?: string | null;
+  live_wa_phone_number_id?: string | null;
+  live_wa_access_token?: string | null;
+  wa_phone_number_id?: string | null;
+  wa_access_token?: string | null;
+}
+
+export interface ResolvedCreds {
+  phoneNumberId: string;
+  accessToken: string;
+}
+
+/** Resolve the phone_number_id + access_token for a bot in a given env,
+ *  falling back to the legacy single-env credentials. */
+export function resolveCreds(bot: BotCreds, env: BotEnv): ResolvedCreds | null {
+  const phoneNumberId =
+    (env === "live" ? bot.live_wa_phone_number_id : bot.test_wa_phone_number_id) ||
+    bot.wa_phone_number_id ||
+    null;
+  const accessToken =
+    (env === "live" ? bot.live_wa_access_token : bot.test_wa_access_token) ||
+    bot.wa_access_token ||
+    null;
+  if (!phoneNumberId || !accessToken) return null;
+  return { phoneNumberId, accessToken };
+}
+
+// Per-number throttle: timestamp of the last send keyed by phone_number_id.
+const lastSentAt = new Map<string, number>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export class WhatsAppSendError extends Error {
+  constructor(message: string, readonly status: number, readonly detail?: unknown) {
+    super(message);
+    this.name = "WhatsAppSendError";
+  }
+}
+
+/** Low-level send of a fully-formed Meta message payload (without `to`). */
+async function send(
+  creds: ResolvedCreds,
+  to: string,
+  message: Record<string, unknown>,
+): Promise<{ wa_message_id: string | null }> {
+  // Throttle per number.
+  const prev = lastSentAt.get(creds.phoneNumberId) ?? 0;
+  const wait = MIN_GAP_MS - (Date.now() - prev);
+  if (wait > 0) await sleep(wait);
+  lastSentAt.set(creds.phoneNumberId, Date.now());
+
+  const url = `https://graph.facebook.com/${META_API_VERSION}/${creds.phoneNumberId}/messages`;
+  const body = JSON.stringify({ messaging_product: "whatsapp", to, ...message });
+
+  let lastErr: WhatsAppSendError | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${creds.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body,
+    });
+
+    if (resp.ok) {
+      const json = (await resp.json().catch(() => ({}))) as {
+        messages?: { id?: string }[];
+      };
+      return { wa_message_id: json.messages?.[0]?.id ?? null };
+    }
+
+    const status = resp.status;
+    const detail = await resp.text().catch(() => "");
+    lastErr = new WhatsAppSendError(`Meta API ${status}`, status, detail);
+
+    // Retry on rate-limit (429) and transient server errors (5xx).
+    const retryable = status === 429 || status >= 500;
+    if (!retryable || attempt === MAX_RETRIES) break;
+    await sleep(1000 * Math.pow(2, attempt)); // 1s, 2s, 4s
+  }
+  throw lastErr ?? new WhatsAppSendError("Unknown send failure", 0);
+}
+
+export function sendText(creds: ResolvedCreds, to: string, text: string) {
+  return send(creds, to, { type: "text", text: { body: text, preview_url: true } });
+}
+
+export interface ReplyButton {
+  id: string;
+  title: string;
+}
+
+export function sendButtons(
+  creds: ResolvedCreds,
+  to: string,
+  bodyText: string,
+  buttons: ReplyButton[],
+) {
+  return send(creds, to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: bodyText },
+      action: {
+        buttons: buttons.slice(0, 3).map((b) => ({
+          type: "reply",
+          reply: { id: b.id, title: b.title.slice(0, 20) },
+        })),
+      },
+    },
+  });
+}
+
+export interface ListRow {
+  id: string;
+  title: string;
+  description?: string;
+}
+
+export function sendList(
+  creds: ResolvedCreds,
+  to: string,
+  bodyText: string,
+  buttonLabel: string,
+  rows: ListRow[],
+  sectionTitle = "",
+) {
+  return send(creds, to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: bodyText },
+      action: {
+        button: buttonLabel.slice(0, 20),
+        sections: [
+          {
+            title: sectionTitle.slice(0, 24),
+            rows: rows.slice(0, 10).map((r) => ({
+              id: r.id,
+              title: r.title.slice(0, 24),
+              ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+            })),
+          },
+        ],
+      },
+    },
+  });
+}
+
+export function sendImage(
+  creds: ResolvedCreds,
+  to: string,
+  imageUrl: string,
+  caption?: string,
+) {
+  return send(creds, to, {
+    type: "image",
+    image: { link: imageUrl, ...(caption ? { caption } : {}) },
+  });
+}
+
+/** Send an approved Meta template (used by smrtReach broadcasts). */
+export function sendTemplate(
+  creds: ResolvedCreds,
+  to: string,
+  templateName: string,
+  languageCode: string,
+  components?: unknown[],
+) {
+  return send(creds, to, {
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      ...(components ? { components } : {}),
+    },
+  });
+}

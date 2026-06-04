@@ -1,0 +1,36 @@
+-- ============================================================
+-- smrtBot — pg_cron schedules (DEPLOY-TIME TEMPLATE)
+-- ============================================================
+-- These schedule the bounded job routes on the Railway server (cron model ג3).
+-- They are deploy-dependent: replace <RAILWAY_URL> with the smrtBot server's
+-- public base URL and <SMRTBOT_INTERNAL_SECRET> with the shared secret, then
+-- run this against the project. NOT applied automatically (hence .template) —
+-- scheduling jobs against a placeholder URL would create broken cron entries.
+--
+-- Requires the pg_cron and pg_net extensions (both already enabled on Smrtesy).
+-- Times are UTC. Israel is UTC+2/+3, so adjust the daily hours per DST as needed.
+
+-- helper to (re)create a job that POSTs to a smrtBot job route
+-- usage: SELECT smrtbot_schedule('smrtbot-retention', '0 3 * * *', 'retention');
+CREATE OR REPLACE FUNCTION smrtbot_schedule(job_name text, sched text, route text)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM cron.unschedule(job_name) WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = job_name);
+  PERFORM cron.schedule(job_name, sched, format($q$
+    SELECT net.http_post(
+      url     := '%s/api/bot/jobs/%s',
+      headers := jsonb_build_object('Content-Type','application/json','x-smrtbot-secret','%s'),
+      body    := '{}'::jsonb
+    );
+  $q$, '<RAILWAY_URL>', route, '<SMRTBOT_INTERNAL_SECRET>'));
+END$$;
+
+-- Schedules:
+SELECT smrtbot_schedule('smrtbot-scheduled',      '* * * * *',  'scheduled');      -- every minute: inactivity messages
+SELECT smrtbot_schedule('smrtbot-retention',      '0 3 * * *',  'retention');      -- daily 03:00 UTC: purge old logs
+SELECT smrtbot_schedule('smrtbot-missions-reset', '0 3 * * *',  'missions-reset'); -- daily: clear completed_items
+SELECT smrtbot_schedule('smrtbot-reminders',      '0 * * * *',  'reminders');      -- hourly: game reminders (2ד)
+SELECT smrtbot_schedule('smrtbot-raffle',         '0 16 * * *', 'raffle');         -- daily 18:00 Israel: raffle draw (2ד)
+
+-- To remove all smrtBot cron jobs:
+--   SELECT cron.unschedule(jobname) FROM cron.job WHERE jobname LIKE 'smrtbot-%';

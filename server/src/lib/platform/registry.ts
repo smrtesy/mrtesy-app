@@ -3,6 +3,7 @@ import { manifest as smrttaskManifest } from "../../apps/smrttask/manifest";
 import { manifest as smrtvoiceManifest } from "../../apps/smrtvoice/manifest";
 import { manifest as smrtcrmManifest } from "../../apps/smrtcrm/manifest";
 import { manifest as smrtreachManifest } from "../../apps/smrtreach/manifest";
+import { manifest as smrtbotManifest } from "../../apps/smrtbot/manifest";
 
 /**
  * All app manifests registered here.
@@ -13,4 +14,5 @@ export const APP_REGISTRY: AppManifest[] = [
   smrtvoiceManifest,
   smrtcrmManifest,
   smrtreachManifest,
+  smrtbotManifest,
 ];

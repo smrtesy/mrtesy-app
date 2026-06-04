@@ -42,9 +42,6 @@ interface SecretsResponse {
   connections: WhatsAppConnection[];
 }
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
-const WEBHOOK_URL = `${BACKEND_URL}/api/webhooks/whatsapp`;
-
 export default function AdminAppSecretsPage() {
   const t = useTranslations("adminSecrets");
   const { locale, slug } = useParams<{ locale: string; slug: string }>();
@@ -53,8 +50,17 @@ export default function AdminAppSecretsPage() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
+  // The WhatsApp webhook is served by THIS Next.js app (its own origin), not
+  // the Express API backend — so its public URL comes from the app origin,
+  // never NEXT_PUBLIC_BACKEND_URL. Resolved client-side to stay SSR-safe.
+  const [webhookUrl, setWebhookUrl] = useState("");
+  useEffect(() => {
+    const base = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    setWebhookUrl(`${base}/api/webhooks/whatsapp`);
+  }, []);
+
   function copyWebhook() {
-    navigator.clipboard.writeText(WEBHOOK_URL).then(
+    navigator.clipboard.writeText(webhookUrl).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -119,7 +125,7 @@ export default function AdminAppSecretsPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2">
-                  <Input value={WEBHOOK_URL} readOnly dir="ltr" className="font-mono text-xs" />
+                  <Input value={webhookUrl} readOnly dir="ltr" className="font-mono text-xs" />
                   <Button
                     type="button"
                     variant="outline"

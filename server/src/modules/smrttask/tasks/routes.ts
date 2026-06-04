@@ -24,6 +24,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
+import { nextOccurrence, isValidRecurrenceRule } from "./recurrence";
 
 const router = Router();
 
@@ -37,6 +38,8 @@ const UPDATABLE_FIELDS = new Set([
   "related_contact_email", "related_contact_phone",
   "project_id", "project_confidence", "assigned_to_user_id",
   "manually_verified", "source_link",
+  // Scheduling: task kind, a precise reminder instant, and recurrence.
+  "task_type", "reminder_at", "recurrence_rule", "recurrence_until",
   // Restore-from-dismissed clears these alongside status=inbox
   "dismissal_reason_code", "dismissal_reason_text",
   // JSON content fields — client sends the whole array after read-modify-write
@@ -52,6 +55,7 @@ const UPDATABLE_FIELDS = new Set([
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
+const TASK_TYPES = ["action", "project_suggestion", "brief_review", "followup", "meeting"];
 
 /** Validate the shape of a checklist array coming from a client PATCH.
  *  Required: { id: string, title: string, done: boolean }.
@@ -143,6 +147,13 @@ function pickUpdates(body: Record<string, unknown>) {
   }
   if (updates.priority && !PRIORITIES.includes(updates.priority as string)) {
     throw new Error(`invalid priority: ${updates.priority}`);
+  }
+  if (updates.task_type && !TASK_TYPES.includes(updates.task_type as string)) {
+    throw new Error(`invalid task_type: ${updates.task_type}`);
+  }
+  if (updates.recurrence_rule !== undefined && updates.recurrence_rule !== null
+      && !isValidRecurrenceRule(updates.recurrence_rule)) {
+    throw new Error(`invalid recurrence_rule: ${updates.recurrence_rule}`);
   }
   if (updates.checklist !== undefined) {
     validateChecklist(updates.checklist);
@@ -324,7 +335,7 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
     .update({ status: "archived", completed_at: now, status_changed_at: now })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, status, completed_at")
+    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, project_id, tags, checklist")
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
@@ -333,7 +344,53 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
     completed_at: data.completed_at,
   });
 
-  res.json({ task: data });
+  // Recurring task → spawn the next instance. We anchor the next date on this
+  // instance's due_date (falling back to today), so a daily task completed late
+  // still advances by one day from its scheduled date.
+  let nextTask = null;
+  if (data.recurrence_rule) {
+    const today = now.slice(0, 10);
+    const base = (data.due_date as string | null) ?? today;
+    // Floor on today so a task completed late still advances to a future date.
+    const next = nextOccurrence(data.recurrence_rule as string, base, today);
+    const stop = data.recurrence_until as string | null;
+    if (next && (!stop || next <= stop)) {
+      // Carry the reminder offset forward: keep the same gap between due_date
+      // and reminder_at on the new instance (e.g. "1h before").
+      let nextReminder: string | null = null;
+      if (data.reminder_at && data.due_date) {
+        const offsetMs = new Date(data.reminder_at as string).getTime() - new Date(`${data.due_date}T00:00:00.000Z`).getTime();
+        nextReminder = new Date(new Date(`${next}T00:00:00.000Z`).getTime() + offsetMs).toISOString();
+      }
+      // Reset checklist completion on the fresh instance.
+      const checklist = Array.isArray(data.checklist)
+        ? (data.checklist as Record<string, unknown>[]).map((c) => ({ ...c, done: false, completed_at: null }))
+        : data.checklist;
+      const { data: created, error: recErr } = await db
+        .from("tasks")
+        .insert({
+          user_id: req.user!.id,
+          organization_id: req.org!.id,
+          title: data.title, title_he: data.title_he, description: data.description,
+          priority: data.priority, task_type: data.task_type ?? "action",
+          status: "inbox", manually_verified: true,
+          due_date: next, due_time: data.due_time,
+          reminder_at: nextReminder,
+          recurrence_rule: data.recurrence_rule,
+          recurrence_until: data.recurrence_until,
+          recurrence_parent_id: (data.recurrence_parent_id as string | null) ?? data.id,
+          project_id: data.project_id, tags: data.tags, checklist,
+        })
+        .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)")
+        .single();
+      // Best-effort: completion already succeeded. Surface the error in logs but
+      // don't fail the request — the user can recreate the next instance by hand.
+      if (recErr) console.error(`[tasks/complete] failed to spawn next recurrence for ${data.id}: ${recErr.message}`);
+      nextTask = created;
+    }
+  }
+
+  res.json({ task: data, next_task: nextTask });
 });
 
 /** POST /tasks/:id/snooze */

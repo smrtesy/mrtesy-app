@@ -25,10 +25,10 @@ import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
-import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
+import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -128,15 +128,10 @@ app.get("/api/version", (_req, res) => {
   });
 });
 
-// Public webhook FIRST — mounted at app level, before any auth-guarded
-// routers. Several sub-routers downstream (admin/users, admin/orgs,
-// admin/apps, smrttask/tasks, etc.) open with
-// `router.use(requireAuth, ...)` at root, which Express runs for EVERY
-// path that enters that router — including /api/webhooks/whatsapp. Even
-// after we put the webhook first inside smrttaskRouter, adminRouter is
-// still mounted earlier and was 401'ing the request. Mounting the webhook
-// at the app level gets it picked up before anything else.
-app.use("/api", whatsappWebhookRouter);
+// NOTE: the WhatsApp inbound webhook is no longer served here. It moved to
+// the Vercel Next.js route src/app/api/webhooks/whatsapp/route.ts (for uptime
+// — a Railway dyno restart no longer drops incoming messages). Meta delivers
+// directly to that route; this Express server only serves the API.
 
 // smrtVoice webhook is also unauthenticated — voice-engine signs it with HMAC,
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).
@@ -151,12 +146,18 @@ app.use("/api", smrtreachPublicRouter);
 // smrtCRM public inbound ingest is token-authenticated (no JWT), so before auth.
 app.use("/api", smrtcrmIngestRouter);
 
+// smrtBot internal inbound + cron job routes — shared-secret guarded (the
+// Vercel webhook / pg_cron call them), so they come BEFORE the auth guards.
+app.use(smrtbotInternalRouter);
+app.use(smrtbotJobsRouter);
+
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
 app.use("/api", smrtreachRouter);
+app.use("/api", smrtbotRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

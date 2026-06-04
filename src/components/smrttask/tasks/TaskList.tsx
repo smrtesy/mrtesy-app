@@ -24,7 +24,7 @@ import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskCard } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
-import { SmartSearch } from "./SmartSearch";
+import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
 import { SnoozeDialog } from "./SnoozeDialog";
@@ -121,7 +121,6 @@ export function TaskList({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [searchResults, setSearchResults] = useState<Task[] | null>(null);
   const [allSort, setAllSort] = useState<AllSort>("priority");
 
   // Restore the user's last "All" sort choice (client-only; avoids SSR
@@ -284,7 +283,6 @@ export function TaskList({ locale }: { locale: string }) {
       list.map((t) => (t.id === taskId ? { ...t, priority: p } : t));
     setTodayTasks(apply);
     setAllTasks(apply);
-    setSearchResults((prev) => (prev ? apply(prev) : prev));
     setSelectedTask((prev) => (prev && prev.id === taskId ? { ...prev, priority: p } : prev));
     try {
       await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { priority } });
@@ -404,14 +402,12 @@ export function TaskList({ locale }: { locale: string }) {
           return (b.created_at ?? "").localeCompare(a.created_at ?? "");
         })
       : allTasks;
-  const displayAll = searchResults !== null ? searchResults : sortedAll;
+  const displayAll = sortedAll;
 
   return (
+    <>
+    <CombinedSearch locale={locale} onUpdate={fetchTasks}>
     <div className="space-y-6">
-      <SmartSearch
-        onResults={(results) => setSearchResults(results.length > 0 ? results : null)}
-      />
-
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 rounded-lg" />)}
@@ -465,7 +461,7 @@ export function TaskList({ locale }: { locale: string }) {
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                 הכל
               </h2>
-              {searchResults === null && (
+              {(
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -560,6 +556,8 @@ export function TaskList({ locale }: { locale: string }) {
           </section>
         </>
       )}
+    </div>
+    </CombinedSearch>
 
       <TaskDetail
         task={selectedTask}
@@ -596,6 +594,6 @@ export function TaskList({ locale }: { locale: string }) {
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
       />
-    </div>
+    </>
   );
 }

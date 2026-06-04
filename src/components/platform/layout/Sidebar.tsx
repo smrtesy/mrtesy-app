@@ -61,6 +61,10 @@ const smrtReachItems = [
   { key: "reach", href: "/reach", icon: Send },
 ] as const;
 
+const smrtBotItems = [
+  { key: "bots", href: "/bots", icon: MessageCircle },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
@@ -68,6 +72,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const hasSmrtCrm = enabledApps.includes("smrtcrm");
   const hasSmrtReach = enabledApps.includes("smrtreach");
+  const hasSmrtBot = enabledApps.includes("smrtbot");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -307,6 +312,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             <>
               <AppSectionHeader app={APPS.smrtreach} />
               {smrtReachItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtBot && (
+            <>
+              <AppSectionHeader app={APPS.smrtbot} />
+              {smrtBotItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

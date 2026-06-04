@@ -9,25 +9,19 @@ import tasksRouter from "./tasks/routes";
 import tasksMergeRouter from "./tasks/merge";
 import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
+import correctionsRouter from "./corrections/routes";
 import actionsRouter from "./routes/actions";
 import knowledgeRouter from "./routes/knowledge";
 import syncRouter from "./routes/sync";
-import whatsappWebhookRouter from "./routes/whatsapp-webhook";
 import whatsappViewRouter from "./routes/whatsapp-view";
 import routerRouter from "./routes/router";
 import transcriptionExperimentRouter from "./routes/transcription-experiment";
 
 const router = Router();
 
-// PUBLIC webhook FIRST — tasks/projects/reminders below register
-// `router.use(requireAuth, requireOrg, requireApp("smrttask"))` at their
-// top, and because they mount at root (no path), Express runs that auth
-// middleware for ANY path that enters smrttaskRouter — including
-// /webhooks/whatsapp. Meta's GET handshake carries no Authorization, so
-// it would get a 401 from the *wrong* router before reaching ours.
-// Putting the unauthenticated webhook first means the request is matched
-// and 200'd before the auth-guarded routers ever see it.
-router.use(whatsappWebhookRouter);
+// NOTE: the WhatsApp inbound webhook moved to the Vercel Next.js route
+// (src/app/api/webhooks/whatsapp/route.ts). Meta delivers there directly, so
+// it is no longer mounted in this Express module.
 
 router.use(tasksRouter);
 router.use(tasksMergeRouter);
@@ -35,6 +29,7 @@ router.use(routerRouter);
 router.use(transcriptionExperimentRouter);
 router.use(projectsRouter);
 router.use(remindersRouter);
+router.use(correctionsRouter);
 router.use("/actions", actionsRouter);
 router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);

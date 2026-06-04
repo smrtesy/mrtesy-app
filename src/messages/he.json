@@ -15,7 +15,35 @@
     "noSubProject": "ללא תת-פרויקט",
     "create": "צור משימה",
     "created": "המשימה נוצרה",
-    "titleRequired": "צריך כותרת למשימה"
+    "titleRequired": "צריך כותרת למשימה",
+    "dueDateLabel": "תאריך יעד",
+    "dueTimeLabel": "שעה",
+    "recurrenceLabel": "חזרה",
+    "recurrenceNone": "ללא חזרה",
+    "recurrenceDaily": "כל יום",
+    "recurrenceWeekly": "כל שבוע",
+    "recurrenceWeekdays": "ימים קבועים בשבוע",
+    "recurrenceMonthly": "כל חודש",
+    "recurrenceYearly": "כל שנה (תאריך לועזי)",
+    "recurrenceHebrew": "כל שנה (תאריך עברי)",
+    "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
+    "recurrenceNeedsDate": "כדי ליצור משימה חוזרת צריך לבחור תאריך יעד",
+    "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
+    "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
+    "weekdayShort": {
+      "0": "א",
+      "1": "ב",
+      "2": "ג",
+      "3": "ד",
+      "4": "ה",
+      "5": "ו",
+      "6": "ש"
+    }
+  },
+  "upcoming": {
+    "title": "קורה בקרוב",
+    "now": "עכשיו",
+    "inMinutes": "בעוד {min} דק'"
   },
   "emailReader": {
     "title": "המייל המקורי",
@@ -72,6 +100,8 @@
     "sectionVoice": "smrtVoice",
     "crm": "אנשי קשר",
     "reach": "דיוור",
+    "bots": "בוטים",
+    "sectionBot": "smrtBot",
     "more": "עוד"
   },
   "account": {
@@ -314,6 +344,9 @@
     "search": {
       "placeholder": "חפש משימות, T<מס׳>, או מקור G/S/W/E/D/C<מס׳>...",
       "includeArchive": "כלול ארכיון",
+      "groupSuggestions": "הצעות",
+      "groupTasks": "משימות",
+      "noResults": "לא נמצאו תוצאות",
       "naturalLanguage": "מה עם הבנק?"
     },
     "smartInput": {
@@ -891,7 +924,37 @@
     "cost": "עלות",
     "duration": "משך",
     "reason": "סיבה",
-    "details": "פרטים נוספים"
+    "details": "פרטים נוספים",
+    "searchPlaceholder": "חיפוש בלוג…",
+    "searchClear": "נקה חיפוש",
+    "searchNoResults": "אין פריטים תואמים",
+    "openTask": "פתח משימה",
+    "addCorrection": "תיקון",
+    "addCorrectionTitle": "רישום תיקון עם הסבר"
+  },
+  "corrections": {
+    "title": "רישום תיקון",
+    "changeLabel": "שינוי",
+    "scopeLabel": "למי זה רלוונטי?",
+    "scopePersonal": "רק לי",
+    "scopePersonalDesc": "כלל אישי לחשבון שלי",
+    "scopeGeneral": "לכל המשתמשים",
+    "scopeGeneralDesc": "כלל כללי לפרומפט/לכללים",
+    "noteLabel": "הסבר",
+    "notePlaceholder": "הסבר את התיקון — למה הסיווג היה שגוי ומה ההתנהגות הנכונה…",
+    "cancel": "ביטול",
+    "save": "שמירה",
+    "saving": "שומר…",
+    "saved": "התיקון נשמר",
+    "exportButton": "ייצוא תיקונים",
+    "exportTitle": "ייצוא התיקונים כקובץ JSON מקיף",
+    "exportPendingLabel": "{count} תיקונים חדשים לייצוא",
+    "exportNew": "ייצוא חדשים",
+    "exportNewGeneral": "ייצוא חדשים — לכל המשתמשים ({count})",
+    "exportNewPersonal": "ייצוא חדשים — רק לי ({count})",
+    "exportAll": "ייצוא הכל (כולל שכבר יוצאו)",
+    "exported": "יוצאו {count} תיקונים",
+    "nothingToExport": "אין חדש לייצא"
   },
   "calendarPage": {
     "noTitle": "(ללא כותרת)",
@@ -1367,6 +1430,50 @@
       "point1": "כל איש קשר מקבל תגית של הפרויקט שממנו הגיע — מי שמגיע מכמה מקורות מקבל כמה תגיות.",
       "point2": "המערכת מזהה כפילויות לפי טלפון ואימייל וממזגת אוטומטית, כך שלא נוצרות רשומות כפולות.",
       "point3": "אפשר לחפש, לסנן לפי תגית ולייבא רשימות — והקהלים שנבנים כאן זמינים ל-smrtReach לדיוור."
+    }
+  },
+  "smrtBot": {
+    "appName": "smrtBot",
+    "navSection": "smrtBot",
+    "title": "בוטים",
+    "subtitle": "ניהול הבוטים שלך בוואטסאפ",
+    "emptyState": "אין עדיין בוטים — הוסף בוט כדי להתחיל.",
+    "active": "פעיל",
+    "inactive": "כבוי",
+    "addBot": "הוספת בוט",
+    "create": "צור",
+    "created": "הבוט נוצר",
+    "updated": "נשמר",
+    "save": "שמירה",
+    "editBot": "עריכת בוט",
+    "fieldName": "שם",
+    "fieldSlug": "מזהה (slug)",
+    "slugHint": "אותיות קטנות, ספרות ומקפים — משמש בכתובת ה-webhook.",
+    "tabBasic": "כללי",
+    "tabLive": "לייב (וואטסאפ)",
+    "tabTest": "טסט (וואטסאפ)",
+    "f_name": "שם",
+    "f_slug": "מזהה (slug)",
+    "f_initials": "ראשי תיבות",
+    "f_timezone": "אזור זמן",
+    "f_admin_phones": "טלפוני מנהלים",
+    "f_live_wa_phone_number_id": "Phone number ID",
+    "f_live_wa_access_token": "Access token",
+    "f_live_verify_token": "Verify token",
+    "f_live_phone_display": "טלפון לתצוגה",
+    "f_test_wa_phone_number_id": "Phone number ID",
+    "f_test_wa_access_token": "Access token",
+    "f_test_verify_token": "Verify token",
+    "f_test_phone_display": "טלפון לתצוגה",
+    "addItem": "הוספה",
+    "editItem": "עריכה",
+    "noItems": "אין כאן עדיין כלום",
+    "confirmDelete": "למחוק את הפריט?",
+    "res_menu": "תפריט", "res_messages": "הודעות", "res_missions": "משימות", "res_trivia": "טריוויה", "res_knowledge": "שאלות נפוצות", "res_holidays": "חגים", "res_auto-messages": "הודעות אוטומטיות", "res_scheduled": "מתוזמנות", "res_coupons": "קופונים", "res_raffles": "הגרלות", "res_children": "שחקנים", "res_questions": "שאלות", "res_feedback": "משוב",
+    "f_node_key": "מזהה צומת", "f_body_text": "תוכן", "f_type": "סוג", "f_parent_key": "צומת אב", "f_action": "פעולה", "f_image_url": "קישור תמונה", "f_sort_order": "סדר", "f_env": "סביבה", "f_active": "פעיל", "f_msg_key": "מזהה הודעה", "f_text": "טקסט", "f_category": "קטגוריה", "f_mission_id": "מזהה משימה", "f_content": "תוכן", "f_reward_diamonds": "תגמול 💎", "f_success_message": "הודעת הצלחה", "f_video_id": "וידאו", "f_level": "רמה", "f_question": "שאלה", "f_option_1": "אפשרות 1", "f_option_2": "אפשרות 2", "f_option_3": "אפשרות 3", "f_correct_option": "תשובה נכונה", "f_source": "מקור", "f_question_pattern": "תבנית שאלה", "f_keywords": "מילות מפתח", "f_answer": "תשובה", "f_holiday_name": "חג", "f_holiday_group": "קבוצה", "f_hebrew_date": "תאריך עברי", "f_start_date": "תאריך התחלה", "f_end_date": "תאריך סיום", "f_display_emoji": "אימוג'י", "f_msg_type": "סוג", "f_wait_time": "המתנה", "f_unit": "יחידה", "f_media_url": "קישור מדיה", "f_inactivity_minutes": "חוסר פעילות (דק')", "f_send_after_minutes": "שליחה אחרי (דק')", "f_coupon_code": "קוד קופון", "f_description": "תיאור", "f_status": "סטטוס", "f_raffle_type": "סוג הגרלה", "f_raffle_date": "תאריך", "f_notes": "הערות", "f_child_id": "מזהה ילד", "f_child_name": "שם", "f_phone": "טלפון", "f_diamonds": "יהלומים", "f_reminder_time": "שעת תזכורת", "f_active_reminders": "תזכורות פעילות", "f_message_text": "הודעה", "f_admin_reply": "תשובה", "f_needs_human": "דורש אדם", "f_admin_note": "הערה", "f_title": "כותרת", "f_label": "תווית", "f_title_he": "כותרת (עב')",
+    "guide": {
+      "title": "מדריך smrtBot",
+      "intro": "smrtBot מריץ את בוטי השיחה שלך בוואטסאפ — תפריט, משחק, שאלות נפוצות ווידאו — שהוגרו לתוך smrtesy."
     }
   },
   "smrtVoice": {
