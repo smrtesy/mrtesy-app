@@ -1334,7 +1334,7 @@
     "sendConfirm": "לשלוח את הקמפיין לכל הנמענים?",
     "sendStarted": "השליחה החלה — {queued} בתור, {sent} נשלחו",
     "campaignNotFound": "הקמפיין לא נמצא",
-    "whatsappPending": "שליחת וואטסאפ תתחבר כשנבנה smrtBot.",
+    "whatsappPending": "קמפיין וואטסאפ נשלח דרך smrtBot (בוט + תבנית). עריכה מסך זה — בקרוב.",
     "statSent": "נשלחו",
     "statFailed": "נכשלו",
     "statOpens": "פתיחות",

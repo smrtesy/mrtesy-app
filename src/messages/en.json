@@ -1334,7 +1334,7 @@
     "sendConfirm": "Send this campaign to all recipients?",
     "sendStarted": "Sending started — {queued} queued, {sent} sent",
     "campaignNotFound": "Campaign not found",
-    "whatsappPending": "WhatsApp sending will connect once smrtBot is built.",
+    "whatsappPending": "WhatsApp campaigns send via smrtBot (bot + template). On-screen editing — coming soon.",
     "statSent": "Sent",
     "statFailed": "Failed",
     "statOpens": "Opens",

@@ -8,10 +8,10 @@
  * currently equal — including sending. The two-role structure is ready to
  * restrict later without a migration.
  *
- * Live dispatch (SES email + WhatsApp via smrtBot send-service) is a pending
- * integration: SES secrets go in app_secrets (slug "smrtreach") and the
- * WhatsApp contract closes when smrtBot is built. Until then "send" builds the
- * queue and marks the campaign, but no external dispatch happens.
+ * Live dispatch: email via SES (creds in app_secrets, slug "smrtreach") and
+ * WhatsApp via smrtBot's send-service (shared secret). "send" resolves the
+ * audience, queues recipients and processes a first batch; the rest is drained
+ * by the cron route.
  */
 
 import { Router } from "express";
@@ -24,6 +24,7 @@ import { emitEvent, notifyError } from "../../lib/platform";
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef, Channel } from "./audience-service";
 import { enqueueCampaignEmail, processEmailQueue } from "./send-service";
+import { enqueueCampaignWhatsapp, processWhatsappQueue } from "./wa-send-service";
 
 const router = Router();
 
@@ -389,11 +390,25 @@ router.put("/reach/settings", async (req: Request, res: Response) => {
 // calls to /reach/queue/process (pg_cron will call it; see build plan §H).
 router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
+  const { data: campaign } = await db
+    .from("smrtreach_campaigns").select("channel").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (!campaign) return res.status(404).json({ error: "campaign not found" });
+  const channel = campaign.channel as Channel;
+
   try {
-    const queued = await enqueueCampaignEmail(orgId, req.params.id);
-    if (queued === 0) return res.json({ queued: 0, sent: 0, failed: 0, remaining: 0 });
-    const result = await processEmailQueue(orgId, 50);
-    res.json({ queued, ...result });
+    let queued = 0;
+    const totals = { sent: 0, failed: 0 };
+    if (channel === "email" || channel === "both") {
+      const q = await enqueueCampaignEmail(orgId, req.params.id);
+      queued += q;
+      if (q > 0) { const r = await processEmailQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+    }
+    if (channel === "whatsapp" || channel === "both") {
+      const q = await enqueueCampaignWhatsapp(orgId, req.params.id);
+      queued += q;
+      if (q > 0) { const r = await processWhatsappQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+    }
+    res.json({ queued, ...totals });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await notifyError(orgId, "smrtreach", { title: "Failed to send campaign", body: msg });
@@ -401,13 +416,14 @@ router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => 
   }
 });
 
-// Drain a bounded batch of the pending email queue (cron target).
+// Drain a bounded batch of the pending queue, both channels (cron target).
 router.post("/reach/queue/process", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const limit = Math.min(Number(req.body?.limit) || 100, 500);
   try {
-    const result = await processEmailQueue(orgId, limit);
-    res.json(result);
+    const email = await processEmailQueue(orgId, limit);
+    const whatsapp = await processWhatsappQueue(orgId, limit);
+    res.json({ email, whatsapp });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await notifyError(orgId, "smrtreach", { title: "Queue processing failed", body: msg });

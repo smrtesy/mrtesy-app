@@ -38,6 +38,7 @@ export async function reapStuckSending(orgId: string, olderThanMinutes = 15): Pr
     .from("smrtreach_queue")
     .select("id, attempts")
     .eq("org_id", orgId)
+    .eq("channel", "email")
     .eq("status", "sending")
     .lt("claimed_at", cutoff);
   if (error) {

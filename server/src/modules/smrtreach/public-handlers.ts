@@ -19,6 +19,7 @@ import type { Request, Response } from "express";
 import { db } from "../../db";
 import { emitEvent } from "../../lib/platform";
 import { processEmailQueue, reapStuckSending } from "./send-service";
+import { processWhatsappQueue, reapStuckWhatsapp } from "./wa-send-service";
 
 const router = Router();
 
@@ -156,13 +157,12 @@ router.post("/reach/cron/process-queue", async (req: Request, res: Response) => 
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // Orgs with email rows still in flight. Includes 'sending' so the reaper can
-  // reach campaigns whose rows are ALL orphaned (no 'pending' left). (Distinct-
-  // by-scan: queue volume per tick is bounded; a dedicated RPC would be tighter.)
+  // Orgs with rows still in flight (either channel). Includes 'sending' so the
+  // reaper can reach campaigns whose rows are ALL orphaned (no 'pending' left).
+  // (Distinct-by-scan: queue volume per tick is bounded; an RPC would be tighter.)
   const { data: rows, error } = await db
     .from("smrtreach_queue")
     .select("org_id")
-    .eq("channel", "email")
     .in("status", ["pending", "sending"])
     .limit(5000);
   if (error) return res.status(500).json({ error: error.message });
@@ -174,9 +174,11 @@ router.post("/reach/cron/process-queue", async (req: Request, res: Response) => 
   for (const orgId of orgIds) {
     try {
       reaped += await reapStuckSending(orgId);
-      const r = await processEmailQueue(orgId, 200);
-      sent += r.sent;
-      failed += r.failed;
+      reaped += await reapStuckWhatsapp(orgId);
+      const e1 = await processEmailQueue(orgId, 200);
+      const w1 = await processWhatsappQueue(orgId, 200);
+      sent += e1.sent + w1.sent;
+      failed += e1.failed + w1.failed;
     } catch (e) {
       console.error("[smrtreach.cron] org", orgId, e instanceof Error ? e.message : e);
     }

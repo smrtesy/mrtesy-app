@@ -15,13 +15,14 @@ export const manifest: AppManifest = {
     "import.completed",
   ],
 
-  // smrtCRM ingests bot contacts via an event from smrtBot (CRM-5). The
-  // exact event name is finalized when smrtBot is built; wire it here then.
-  //
-  // It also owns email preferences (CRM-6): when smrtReach's public
-  // unsubscribe page emits contact.unsubscribed, CRM flips the flag on its
-  // own table — Reach never writes smrtCRM directly.
+  // Cross-app event ingest:
+  // - smrtBot emits contact.observed when a wa_user interacts (CRM-5) → upsert
+  //   the contact + tag it with the bot's project tag.
+  // - smrtReach emits contact.unsubscribed from its public unsubscribe page
+  //   (CRM-6) → CRM flips email_unsubscribed on its own table. Neither app
+  //   writes smrtCRM tables directly — the event is the seam.
   subscribes: [
+    { event: "contact.observed", source: "smrtbot", handler: "handlers/onBotContact" },
     { event: "contact.unsubscribed", source: "smrtreach", handler: "handlers/onUnsubscribe" },
   ],
 
@@ -36,7 +37,9 @@ export const manifest: AppManifest = {
   },
 
   entities: {
-    reads: [],
+    // Reads the source bot's name (for the project tag) when ingesting
+    // contact.observed — declarative cross-app read, via the org-scoped client.
+    reads: ["smrtbot_bots"],
     writes: [
       "smrtcrm_contacts",
       "smrtcrm_tags",
