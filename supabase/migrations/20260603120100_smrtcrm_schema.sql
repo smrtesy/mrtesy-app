@@ -182,12 +182,13 @@ CREATE POLICY "smrtcrm_api_connections_org_members" ON smrtcrm_api_connections
 
 -- ─── updated_at triggers ─────────────────────────────────────
 -- Reuse the platform's shared trigger function if present; otherwise create one.
-CREATE OR REPLACE FUNCTION smrtcrm_set_updated_at() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION smrtcrm_set_updated_at() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = '' AS $$
 BEGIN
   NEW.updated_at = now();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER smrtcrm_contacts_updated_at BEFORE UPDATE ON smrtcrm_contacts
   FOR EACH ROW EXECUTE FUNCTION smrtcrm_set_updated_at();
