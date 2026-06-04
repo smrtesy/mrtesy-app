@@ -37,10 +37,15 @@ async function notifyDisconnect(userId: string, reason: string) {
   }
 }
 
-/** Insert a warning notification for the user when a sync fails.
- *  De-duped to at most one unread alert per source per hour so a noisy
- *  failure loop doesn't flood the Notifications tab. */
-async function notifySyncError(userId: string, source: string, message: string) {
+/** Insert a notification for the user when a sync fails.
+ *  urgency="warning"  → de-duped to 1 per hour (transient errors)
+ *  urgency="error"    → de-duped to 1 per 15 min (sync blocked — must be seen quickly) */
+async function notifySyncError(
+  userId: string,
+  source: string,
+  message: string,
+  urgency: "warning" | "error" = "warning",
+) {
   const { data: membership } = await supabase
     .from("org_members")
     .select("org_id")
@@ -50,17 +55,20 @@ async function notifySyncError(userId: string, source: string, message: string) 
   if (!membership?.org_id) return;
 
   const sourceLabel = source === "gmail" ? "Gmail" : source === "gmail_sent" ? "Gmail (Sent)" : source;
-  const title = `בעיה בסינכרון ${sourceLabel}`;
+  const title = urgency === "error"
+    ? `⚠️ סינכרון ${sourceLabel} מושהה`
+    : `בעיה בסינכרון ${sourceLabel}`;
 
-  // At most one unread alert per source per hour
+  const dedupMs = urgency === "error" ? 15 * 60 * 1000 : 60 * 60 * 1000;
+
   const { data: existing } = await supabase
     .from("notifications")
     .select("id")
     .eq("user_id", userId)
-    .eq("type", "warning")
+    .eq("type", urgency)
     .eq("title", title)
     .eq("is_read", false)
-    .gt("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString())
+    .gt("created_at", new Date(Date.now() - dedupMs).toISOString())
     .limit(1)
     .maybeSingle();
   if (existing) return;
@@ -69,7 +77,7 @@ async function notifySyncError(userId: string, source: string, message: string) 
     user_id: userId,
     org_id: membership.org_id,
     app_slug: "smrttask",
-    type: "warning",
+    type: urgency,
     title,
     body: message.substring(0, 500),
     link: "/log",
@@ -284,7 +292,8 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
         error_message: `Gmail sync paused after ${syncState.consecutive_failures} consecutive failures — auto-retry in ${minutesLeft}m. Last error: ${syncState.last_error ?? "unknown"}`,
       }).catch(() => {});
       await notifySyncError(userId, "gmail",
-        `סינכרון Gmail הושהה — ${syncState.consecutive_failures} כשלים ברצף. ניסיון חוזר אוטומטי בעוד ${minutesLeft} דקות. שגיאה: ${syncState.last_error ?? "לא ידוע"}`
+        `סינכרון Gmail הושהה — ${syncState.consecutive_failures} כשלים ברצף. ניסיון חוזר אוטומטי בעוד ${minutesLeft} דקות. שגיאה: ${syncState.last_error ?? "לא ידוע"}`,
+        "error",
       ).catch(() => {});
       return { skipped: true, reason: `too many failures — cooldown ${minutesLeft}m` };
     }
