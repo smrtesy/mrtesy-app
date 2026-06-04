@@ -19,9 +19,10 @@ async function notifyDisconnect(userId: string, reason: string) {
 
   await supabase.from("log_entries").insert({
     user_id: userId,
+    level: "error",
     category: "gmail_sync",
     status: "failed",
-    error_message: `Gmail disconnected — ${reason}. User must reconnect in Settings.`,
+    error_message: `Gmail disconnected — ${reason}. User must reconnect in Settings → Connections.`,
   }).catch(() => {});
 
   if (membership?.org_id) {
@@ -29,9 +30,9 @@ async function notifyDisconnect(userId: string, reason: string) {
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "warning",
-      title: "Gmail disconnected",
-      body: `Gmail connection was lost (${reason}). Please reconnect in Settings → Connections.`,
+      type: "error",
+      title: "Gmail מנותק",
+      body: `חיבור Gmail נותק (${reason}). יש להתחבר מחדש בהגדרות → חיבורים.`,
       link: "/settings",
     }).catch(() => {});
   }
