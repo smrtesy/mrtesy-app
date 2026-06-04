@@ -32,23 +32,27 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
   const [editing, setEditing] = useState<Row | null>(null);
   const [form, setForm] = useState<Record<string, string | boolean>>({});
   const [saving, setSaving] = useState(false);
+  const [env, setEnv] = useState<"test" | "live">("live");
 
   const base = `/api/bot/${botId}/${config.resource}`;
 
   const load = useCallback(async () => {
+    setRows(null);
     try {
-      const res = await api<Record<string, Row[]>>(base);
+      const url = config.hasEnv ? `${base}?env=${env}` : base;
+      const res = await api<Record<string, Row[]>>(url);
       setRows(res[config.resource] ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     }
-  }, [base, config.resource]);
+  }, [base, config.resource, config.hasEnv, env]);
 
   useEffect(() => { load(); }, [load]);
 
   function openNew() {
     const init: Record<string, string | boolean> = {};
     for (const f of config.fields) init[f.key] = f.type === "bool" ? true : "";
+    if (config.hasEnv) init.env = env; // default new items to the active env tab
     setForm(init);
     setEditing(null);
     setOpen(true);
@@ -102,14 +106,30 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
 
   return (
     <div className="space-y-4">
-      {!config.readOnlyCreate && (
-        <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        {config.hasEnv ? (
+          <div className="inline-flex rounded-md border border-border p-0.5">
+            {(["test", "live"] as const).map((e) => (
+              <button
+                key={e}
+                onClick={() => setEnv(e)}
+                className={
+                  "rounded px-3 py-1 text-sm " +
+                  (env === e ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")
+                }
+              >
+                {t(e === "live" ? "envLive" : "envTest")}
+              </button>
+            ))}
+          </div>
+        ) : <span />}
+        {!config.readOnlyCreate && (
           <Button onClick={openNew}>
             <Plus className="me-2 h-4 w-4" />
             {t("addItem")}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
       {rows === null ? (
         <p className="text-sm text-muted-foreground">…</p>

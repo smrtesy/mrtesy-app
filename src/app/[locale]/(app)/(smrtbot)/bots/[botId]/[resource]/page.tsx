@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { RESOURCES } from "@/components/smrtbot/resourceConfigs";
 import { ResourceManager } from "@/components/smrtbot/ResourceManager";
 import { ResourceNav } from "@/components/smrtbot/ResourceNav";
+import { MenuView } from "@/components/smrtbot/MenuView";
 
 export default async function BotResourcePage({
   params,
@@ -17,7 +18,11 @@ export default async function BotResourcePage({
   return (
     <div className="space-y-4 p-6">
       <ResourceNav botId={botId} active={resource} />
-      <ResourceManager botId={botId} config={config} />
+      {resource === "menu" ? (
+        <MenuView botId={botId} />
+      ) : (
+        <ResourceManager botId={botId} config={config} />
+      )}
     </div>
   );
 }

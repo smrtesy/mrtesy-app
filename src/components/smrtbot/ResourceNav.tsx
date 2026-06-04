@@ -34,6 +34,18 @@ export function ResourceNav({ botId, active }: { botId: string; active?: string 
           {label(r)}
         </Link>
       ))}
+      {(["stats", "logs", "settings"] as const).map((r) => (
+        <Link
+          key={r}
+          href={`/${locale}/bots/${botId}/${r}`}
+          className={cn(
+            "rounded-md px-3 py-1.5 text-sm hover:bg-muted",
+            active === r ? "bg-accent text-accent-foreground" : "text-muted-foreground",
+          )}
+        >
+          {r === "stats" ? t("statsTitle") : r === "logs" ? t("logsTitle") : t("settingsTitle")}
+        </Link>
+      ))}
     </div>
   );
 }

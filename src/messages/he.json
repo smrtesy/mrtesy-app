@@ -1469,6 +1469,13 @@
     "editItem": "עריכה",
     "noItems": "אין כאן עדיין כלום",
     "confirmDelete": "למחוק את הפריט?",
+    "envLive": "לייב", "envTest": "טסט",
+    "statsTitle": "סטטיסטיקה", "statUsers": "משתמשים", "statMessages": "הודעות", "statGame": "משחק",
+    "statTotal": "סה\"כ", "statActive24h": "פעילים 24ש'", "statActive7d": "פעילים 7 ימים", "statActive30d": "פעילים 30 יום",
+    "statLast24h": "24ש' אחרונות", "statLast7d": "7 ימים אחרונים", "statQuestionsPending": "שאלות פתוחות", "statLeaderboard": "לוח תוצאות",
+    "settingsTitle": "הגדרות", "settingsAddNew": "הוספת הגדרה",
+    "viewDiagram": "תרשים", "viewTable": "טבלה", "menuDiagramHint": "גרירה להזזה · גלילה לזום · אדום = קישור שבור",
+    "logsTitle": "לוגים", "logsAll": "הכל", "logsIn": "נכנס", "logsOut": "יוצא", "logsErrorsOnly": "שגיאות בלבד", "logsTime": "זמן", "logsDir": "כיוון",
     "res_menu": "תפריט", "res_messages": "הודעות", "res_missions": "משימות", "res_trivia": "טריוויה", "res_knowledge": "שאלות נפוצות", "res_holidays": "חגים", "res_auto-messages": "הודעות אוטומטיות", "res_scheduled": "מתוזמנות", "res_coupons": "קופונים", "res_raffles": "הגרלות", "res_children": "שחקנים", "res_questions": "שאלות", "res_feedback": "משוב",
     "f_node_key": "מזהה צומת", "f_body_text": "תוכן", "f_type": "סוג", "f_parent_key": "צומת אב", "f_action": "פעולה", "f_image_url": "קישור תמונה", "f_sort_order": "סדר", "f_env": "סביבה", "f_active": "פעיל", "f_msg_key": "מזהה הודעה", "f_text": "טקסט", "f_category": "קטגוריה", "f_mission_id": "מזהה משימה", "f_content": "תוכן", "f_reward_diamonds": "תגמול 💎", "f_success_message": "הודעת הצלחה", "f_video_id": "וידאו", "f_level": "רמה", "f_question": "שאלה", "f_option_1": "אפשרות 1", "f_option_2": "אפשרות 2", "f_option_3": "אפשרות 3", "f_correct_option": "תשובה נכונה", "f_source": "מקור", "f_question_pattern": "תבנית שאלה", "f_keywords": "מילות מפתח", "f_answer": "תשובה", "f_holiday_name": "חג", "f_holiday_group": "קבוצה", "f_hebrew_date": "תאריך עברי", "f_start_date": "תאריך התחלה", "f_end_date": "תאריך סיום", "f_display_emoji": "אימוג'י", "f_msg_type": "סוג", "f_wait_time": "המתנה", "f_unit": "יחידה", "f_media_url": "קישור מדיה", "f_inactivity_minutes": "חוסר פעילות (דק')", "f_send_after_minutes": "שליחה אחרי (דק')", "f_coupon_code": "קוד קופון", "f_description": "תיאור", "f_status": "סטטוס", "f_raffle_type": "סוג הגרלה", "f_raffle_date": "תאריך", "f_notes": "הערות", "f_child_id": "מזהה ילד", "f_child_name": "שם", "f_phone": "טלפון", "f_diamonds": "יהלומים", "f_reminder_time": "שעת תזכורת", "f_active_reminders": "תזכורות פעילות", "f_message_text": "הודעה", "f_admin_reply": "תשובה", "f_needs_human": "דורש אדם", "f_admin_note": "הערה", "f_title": "כותרת", "f_label": "תווית", "f_title_he": "כותרת (עב')",
     "guide": {
