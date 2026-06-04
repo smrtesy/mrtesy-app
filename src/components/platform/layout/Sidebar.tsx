@@ -20,6 +20,7 @@ import {
   BookOpen,
   Sparkles,
   ListPlus,
+  Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,14 @@ const smrtVoiceItems = [
   { key: "voiceCharacters", href: "/voice/characters", icon: Users  },
 ] as const;
 
+const smrtCrmItems = [
+  { key: "crm", href: "/crm", icon: Users },
+] as const;
+
+const smrtReachItems = [
+  { key: "reach", href: "/reach", icon: Send },
+] as const;
+
 const smrtBotItems = [
   { key: "bots", href: "/bots", icon: MessageCircle },
 ] as const;
@@ -61,6 +70,8 @@ type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
   const hasSmrtVoice = enabledApps.includes("smrtvoice");
+  const hasSmrtCrm = enabledApps.includes("smrtcrm");
+  const hasSmrtReach = enabledApps.includes("smrtreach");
   const hasSmrtBot = enabledApps.includes("smrtbot");
   const t = useTranslations("nav");
   const pathname = usePathname();
@@ -281,6 +292,26 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             <>
               <AppSectionHeader app={APPS.smrtvoice} />
               {smrtVoiceItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtCrm && (
+            <>
+              <AppSectionHeader app={APPS.smrtcrm} />
+              {smrtCrmItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtReach && (
+            <>
+              <AppSectionHeader app={APPS.smrtreach} />
+              {smrtReachItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

@@ -1,6 +1,8 @@
 import type { ComponentType } from "react";
 import { SmrtTaskIcon } from "@/components/icons/SmrtTaskIcon";
 import { SmrtVoiceIcon } from "@/components/icons/SmrtVoiceIcon";
+import { SmrtCRMIcon } from "@/components/icons/SmrtCRMIcon";
+import { SmrtReachIcon } from "@/components/icons/SmrtReachIcon";
 import { SmrtBotIcon } from "@/components/icons/SmrtBotIcon";
 
 /**
@@ -47,6 +49,20 @@ export const APPS: Record<string, AppDef> = {
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
   },
+  smrtcrm: {
+    slug: "smrtcrm",
+    word: "CRM",
+    Icon: SmrtCRMIcon,
+    guideHref: "/crm/guide",
+    settingsHref: "/settings/apps/smrtcrm",
+  },
+  smrtreach: {
+    slug: "smrtreach",
+    word: "Reach",
+    Icon: SmrtReachIcon,
+    guideHref: "/reach/guide",
+    settingsHref: "/settings/apps/smrtreach",
+  },
   smrtbot: {
     slug: "smrtbot",
     word: "Bot",
@@ -75,6 +91,8 @@ export function getApp(slug: string): AppDef | undefined {
 const ADMIN_SECTIONS: Record<string, AdminSectionKey[]> = {
   smrttask: ["services", "prompts", "secrets", "parameters", "documents"],
   smrtvoice: ["secrets", "documents"],
+  smrtcrm: ["documents"],
+  smrtreach: ["secrets", "documents"],
   smrtbot: ["secrets", "documents"],
   smrtplan: ["documents"],
 };
