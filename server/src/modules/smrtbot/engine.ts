@@ -26,11 +26,14 @@ import {
   type ReplyButton,
 } from "./wa";
 import { reportError, errInfo } from "./report-error";
+import { handleGameAction, handleGameText } from "./game";
 
 export interface BotRow {
   id: string;
   org_id: string;
   slug: string;
+  public_phone_number?: string | null;
+  live_phone_display?: string | null;
   wa_phone_number_id?: string | null;
   wa_access_token?: string | null;
   test_wa_phone_number_id?: string | null;
@@ -325,27 +328,36 @@ export async function handleInbound(
     await touchUser(orgId, bot, phone, message.name ?? null);
     await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
 
-    const nodes = await loadNodes(orgId, bot.id, env);
+    const state = await getState(bot.id, phone);
+    const text = (message.text ?? "").trim();
 
-    // Interactive reply → route to the node identified by the button/list id.
-    if (message.buttonId) {
-      const routed = await routeNode(creds, orgId, bot, env, phone, message.buttonId, nodes);
-      if (routed) return;
+    // 1. Mid-flow text input (game onboarding / profile edit / reminder time).
+    if (text && state.expectedInput) {
+      await handleGameText(bot, env, phone, text, state);
+      return;
     }
 
-    // Plain text: if it matches a node_key, route; otherwise FAQ search.
-    const text = (message.text ?? "").trim();
-    if (text) {
-      const asNode = nodes.find((n) => n.node_key === text);
-      if (asNode) {
-        await routeNode(creds, orgId, bot, env, phone, text, nodes);
+    // 2. Game action (button id or a text that maps to a game action).
+    const action = message.buttonId ?? text;
+    if (action && (await handleGameAction(bot, env, phone, action))) return;
+
+    // 3. Menu-tree node by key (button id or text equal to a node_key).
+    const nodes = await loadNodes(orgId, bot.id, env);
+    if (action) {
+      const node = nodes.find((n) => n.node_key === action);
+      if (node) {
+        await routeNode(creds, orgId, bot, env, phone, action, nodes);
         return;
       }
+    }
+
+    // 4. Free text with no match → FAQ search.
+    if (text) {
       await handleFreeText(creds, orgId, bot, env, phone, text);
       return;
     }
 
-    // Anything else → show the root menu so the user is never stuck.
+    // 5. Anything else → root menu so the user is never stuck.
     const root = findRootNode(nodes);
     if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
   } catch (e) {

@@ -20,6 +20,7 @@ import type { Request, Response } from "express";
 import { db } from "../../db";
 import { resolveCreds, sendText, type BotEnv, type BotCreds } from "./wa";
 import { reportError, errInfo } from "./report-error";
+import { sendScheduledReminders, executeRaffle, type GameBot } from "./game";
 
 const router = Router();
 const LOG_RETENTION_DAYS = 90;
@@ -132,13 +133,53 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
   res.json({ ok: true, sent });
 });
 
-// ── game reminders + raffle draw — extension points (need game.js port) ─────
+const BOT_SELECT =
+  "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token";
+
+// ── game daily reminders (hourly): match children whose reminder_time == now ─
 router.post("/api/bot/jobs/reminders", async (_req: Request, res: Response) => {
-  res.json({ ok: true, note: "reminders job — implemented with the game port (2ד)" });
+  const { data: bots, error } = await db.from("smrtbot_bots").select(BOT_SELECT).eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+  const ilHour = Number(
+    new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: "Asia/Jerusalem" }).format(new Date()),
+  );
+  const hourLabel = `${ilHour}:00`;
+  let sent = 0;
+  for (const bot of (bots as GameBot[]) ?? []) {
+    try {
+      sent += await sendScheduledReminders(bot, "live", hourLabel);
+    } catch (e) {
+      const { message, stack } = errInfo(e);
+      await reportError(bot.org_id, { area: "cron", title: "Game reminders failed", message, botId: bot.id, stack });
+    }
+  }
+  res.json({ ok: true, hour: hourLabel, sent });
 });
 
+// ── daily raffle draw: run today's pending raffles per bot ──────────────────
 router.post("/api/bot/jobs/raffle", async (_req: Request, res: Response) => {
-  res.json({ ok: true, note: "raffle draw job — implemented with the game port (2ד)" });
+  const { data: bots, error } = await db.from("smrtbot_bots").select(BOT_SELECT).eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+  const today = new Date().toISOString().slice(0, 10);
+  let drawn = 0;
+  for (const bot of (bots as GameBot[]) ?? []) {
+    const { data: raffles } = await db
+      .from("smrtbot_raffles")
+      .select("raffle_type")
+      .eq("bot_id", bot.id)
+      .eq("raffle_date", today)
+      .eq("status", "Pending");
+    for (const r of (raffles ?? []) as { raffle_type: string }[]) {
+      try {
+        const winner = await executeRaffle(bot, "live", r.raffle_type);
+        if (winner) drawn++;
+      } catch (e) {
+        const { message, stack } = errInfo(e);
+        await reportError(bot.org_id, { area: "cron", title: "Raffle draw failed", message, botId: bot.id, stack, details: { raffle_type: r.raffle_type } });
+      }
+    }
+  }
+  res.json({ ok: true, drawn });
 });
 
 export default router;
