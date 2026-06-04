@@ -49,6 +49,27 @@ function unsubscribeFooter(orgId: string, contactId: string): string {
     `<a href="${url}">להסרה מרשימת התפוצה</a></p>`;
 }
 
+/** 1x1 open-tracking pixel (Reach-3: open tracking is built-in). */
+function openPixel(campaignId: string, contactId: string): string {
+  if (!PUBLIC_BASE_URL) return "";
+  const url = `${PUBLIC_BASE_URL}/api/reach/track/open?c=${encodeURIComponent(campaignId)}&u=${encodeURIComponent(contactId)}`;
+  return `<img src="${url}" width="1" height="1" alt="" style="display:none">`;
+}
+
+/**
+ * Rewrite http(s) links to route through the click tracker, which 302-redirects
+ * to the ORIGINAL deep URL (preserved verbatim as the `url` param) — honoring
+ * the platform's "preserve deep links" rule while recording the click.
+ */
+function wrapLinks(html: string, campaignId: string, contactId: string): string {
+  if (!PUBLIC_BASE_URL) return html;
+  return html.replace(/href="(https?:\/\/[^"]+)"/gi, (_m, target: string) => {
+    const tracked = `${PUBLIC_BASE_URL}/api/reach/track/click?c=${encodeURIComponent(campaignId)}` +
+      `&u=${encodeURIComponent(contactId)}&url=${encodeURIComponent(target)}`;
+    return `href="${tracked}"`;
+  });
+}
+
 /**
  * Resolve recipients for a campaign's email channel and enqueue them.
  * @returns the number of rows queued.
@@ -128,22 +149,34 @@ interface ProcessResult {
  * repeatedly (pg_cron will). Per-campaign detail/region are cached within the
  * call. When a campaign's queue is fully drained, its status flips to done.
  *
- * NOTE (pre-cron): row selection → mark-sending is not an atomic claim, so two
- * concurrent processors could pick the same pending rows and double-send. The
- * enqueue guard (campaign must not be 'sending'/'done') prevents the practical
- * manual-trigger case; before wiring pg_cron, switch to a claim:
- *   update({status:'sending'}).eq('status','pending').in('id', ids).select()
- * and only send the rows the claim returns.
+ * Concurrency-safe: rows are claimed via a conditional UPDATE (status pending →
+ * sending) and only the claimed rows are sent, so overlapping runs (e.g. the
+ * /send immediate batch racing a cron tick) never double-send.
  */
 export async function processEmailQueue(orgId: string, limit = 100): Promise<ProcessResult> {
-  const { data: pending, error } = await db
+  // 1. Pick candidate ids, then atomically CLAIM them: the conditional update
+  //    only flips rows still 'pending', so two concurrent processors never
+  //    claim the same row (whoever commits first wins; the other's
+  //    .eq('status','pending') no longer matches). We send only claimed rows.
+  const { data: candidates, error: candErr } = await db
     .from("smrtreach_queue")
-    .select("id, campaign_id, contact_id, to_address")
+    .select("id")
     .eq("org_id", orgId)
     .eq("channel", "email")
     .eq("status", "pending")
     .order("created_at", { ascending: true })
     .limit(limit);
+  if (candErr) throw new Error(candErr.message);
+  if (!candidates || candidates.length === 0) return { sent: 0, failed: 0, remaining: 0 };
+
+  const candidateIds = candidates.map((r) => r.id as string);
+  const { data: pending, error } = await db
+    .from("smrtreach_queue")
+    .update({ status: "sending", attempts: 1 })
+    .eq("org_id", orgId)
+    .eq("status", "pending")
+    .in("id", candidateIds)
+    .select("id, campaign_id, contact_id, to_address");
   if (error) throw new Error(error.message);
   if (!pending || pending.length === 0) return { sent: 0, failed: 0, remaining: 0 };
 
@@ -194,10 +227,13 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       phone: (contact?.phone as string) ?? "",
     };
 
+    const campaignId = row.campaign_id as string;
+    const contactId = (row.contact_id as string) ?? "";
     const subject = render(detail.subject, vars);
-    const html = render(detail.html, vars) + unsubscribeFooter(orgId, (row.contact_id as string) ?? "");
-
-    await db.from("smrtreach_queue").update({ status: "sending", attempts: 1 }).eq("id", row.id);
+    const html =
+      wrapLinks(render(detail.html, vars), campaignId, contactId) +
+      unsubscribeFooter(orgId, contactId) +
+      openPixel(campaignId, contactId);
 
     try {
       const { messageId } = await sendEmail({

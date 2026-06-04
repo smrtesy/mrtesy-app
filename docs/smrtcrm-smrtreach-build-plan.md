@@ -32,7 +32,7 @@
 שלב E — smrtReach יסוד       (קמפיין אב + פרטי-ערוץ, קריאת קהלים מ-CRM)     ✅ נבנה
 שלב F — smrtReach מייל        (SES, תור, tracking, unsubscribe)             ✅ נבנה (שליחת SES חיה; קורא מפתחות מ-app_secrets)
 שלב G — smrtReach וואטסאפ     (חיבור ל-send-service של smrtBot)             ⬜ ממתין ל-smrtBot
-שלב H — Cron + scheduler      (pg_cron → route חסום)                        ⬜ טרם
+שלב H — Cron + scheduler      (pg_cron → route חסום)                        ✅ נבנה (endpoint + מיגרציה; מילוי Vault ע"י המפעיל)
 ```
 
 CRM (A–D) חייב להסתיים לפני Reach (E–G), כי Reach קורא קהלים מ-CRM.
@@ -42,6 +42,12 @@ CRM (A–D) חייב להסתיים לפני Reach (E–G), כי Reach קורא 
 pagination, bulk, ייבוא CSV, דה-דופ/upsert) + יסוד smrtReach (קמפיינים, פתרון קהל
 מ-CRM, תבניות, תצוגת נמענים, עמוד unsubscribe ציבורי שכותב חזרה ל-CRM דרך אירוע).
 שתי האפליקציות מחוברות מלא (manifest/registry/sidebar/i18n he+en), build נקי.
+
+**נבנה גם:** מעקב פתיחה/קליקים (פיקסל + עטיפת לינקים ששומרת את ה-deep URL),
+webhook ל-bounce/complaint מ-SES (SNS → tracking + unsubscribe), atomic-claim
+בתור (בטוח לריצה מקבילה), ו-endpoint cron מאובטח ב-`x-cron-secret` + מיגרציית
+pg_cron (תבנית ללא סוד; המפעיל ממלא Vault). **follow-up ידוע:** reaper לשורות
+שנתקעות ב-`sending` אחרי קריסה (לאפס ל-`pending` אחרי N דקות) — לא חוסם.
 
 **נותר (תלוי חוץ או היקף):**
 - **שליחת מייל SES — נבנתה.** הקוד קורא `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`

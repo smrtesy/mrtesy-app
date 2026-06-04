@@ -19,3 +19,4 @@ router.use(smrtreachRoutes);
 
 export default router;
 export { default as unsubscribeRouter } from "./unsubscribe-handler";
+export { default as publicRouter } from "./public-handlers";
