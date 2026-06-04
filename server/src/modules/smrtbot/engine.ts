@@ -25,6 +25,7 @@ import {
   type ResolvedCreds,
   type ReplyButton,
 } from "./wa";
+import { reportError, errInfo } from "./report-error";
 
 export interface BotRow {
   id: string;
@@ -306,38 +307,56 @@ export async function handleInbound(
   env: BotEnv,
   message: InboundMessage,
 ): Promise<void> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) {
-    console.error(`[smrtbot/engine] no ${env} credentials for bot ${bot.slug}`);
-    return;
-  }
   const orgId = bot.org_id;
   const phone = message.from;
-
-  await touchUser(orgId, bot, phone, message.name ?? null);
-  await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
-
-  const nodes = await loadNodes(orgId, bot.id, env);
-
-  // Interactive reply → route to the node identified by the button/list id.
-  if (message.buttonId) {
-    const routed = await routeNode(creds, orgId, bot, env, phone, message.buttonId, nodes);
-    if (routed) return;
-  }
-
-  // Plain text: if it matches a node_key, route; otherwise FAQ search.
-  const text = (message.text ?? "").trim();
-  if (text) {
-    const asNode = nodes.find((n) => n.node_key === text);
-    if (asNode) {
-      await routeNode(creds, orgId, bot, env, phone, text, nodes);
-      return;
-    }
-    await handleFreeText(creds, orgId, bot, env, phone, text);
+  const creds = resolveCreds(bot, env);
+  if (!creds) {
+    await reportError(orgId, {
+      area: "engine",
+      title: `Missing ${env} WhatsApp credentials`,
+      message: `Bot "${bot.slug}" has no ${env} phone_number_id/access_token, so it cannot reply.`,
+      botId: bot.id,
+      details: { bot: bot.slug, env },
+    });
     return;
   }
 
-  // Anything else → show the root menu so the user is never stuck.
-  const root = findRootNode(nodes);
-  if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+  try {
+    await touchUser(orgId, bot, phone, message.name ?? null);
+    await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
+
+    const nodes = await loadNodes(orgId, bot.id, env);
+
+    // Interactive reply → route to the node identified by the button/list id.
+    if (message.buttonId) {
+      const routed = await routeNode(creds, orgId, bot, env, phone, message.buttonId, nodes);
+      if (routed) return;
+    }
+
+    // Plain text: if it matches a node_key, route; otherwise FAQ search.
+    const text = (message.text ?? "").trim();
+    if (text) {
+      const asNode = nodes.find((n) => n.node_key === text);
+      if (asNode) {
+        await routeNode(creds, orgId, bot, env, phone, text, nodes);
+        return;
+      }
+      await handleFreeText(creds, orgId, bot, env, phone, text);
+      return;
+    }
+
+    // Anything else → show the root menu so the user is never stuck.
+    const root = findRootNode(nodes);
+    if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+  } catch (e) {
+    const { message: msg, stack } = errInfo(e);
+    await reportError(orgId, {
+      area: "engine",
+      title: `Conversation failed for bot ${bot.slug}`,
+      message: msg,
+      botId: bot.id,
+      stack,
+      details: { bot: bot.slug, env, phone, inbound: message },
+    });
+  }
 }

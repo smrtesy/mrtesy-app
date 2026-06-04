@@ -15,6 +15,7 @@ import type { Request, Response } from "express";
 
 import { db } from "../../db";
 import { handleInbound, type BotRow, type InboundMessage } from "./engine";
+import { reportError, errInfo } from "./report-error";
 import type { BotEnv } from "./wa";
 
 const router = Router();
@@ -52,7 +53,15 @@ router.post("/api/bot/internal/inbound", async (req: Request, res: Response) => 
   try {
     await handleInbound(bot as BotRow, env === "test" ? "test" : "live", message);
   } catch (e) {
-    console.error("[smrtbot/internal] engine error", e instanceof Error ? e.message : String(e));
+    const { message: msg, stack } = errInfo(e);
+    await reportError((bot as BotRow).org_id, {
+      area: "engine",
+      title: "Inbound handler crashed",
+      message: msg,
+      botId: (bot as BotRow).id,
+      stack,
+      details: { inbound: message },
+    });
   }
 });
 

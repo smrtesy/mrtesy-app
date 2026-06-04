@@ -19,6 +19,7 @@ import type { Request, Response } from "express";
 
 import { db } from "../../db";
 import { resolveCreds, sendText, type BotEnv, type BotCreds } from "./wa";
+import { reportError, errInfo } from "./report-error";
 
 const router = Router();
 const LOG_RETENTION_DAYS = 90;
@@ -115,7 +116,15 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
         if (logErr) console.error("[smrtbot/jobs] scheduled log", logErr.message);
         sent++;
       } catch (e) {
-        console.error("[smrtbot/jobs] scheduled send", e instanceof Error ? e.message : String(e));
+        const { message: msg, stack } = errInfo(e);
+        await reportError(cfg.org_id, {
+          area: "cron",
+          title: "Scheduled message send failed",
+          message: msg,
+          botId: cfg.bot_id,
+          stack,
+          details: { config_id: cfg.id, phone: u.phone, env: cfg.env },
+        });
       }
       if (sent >= SCHEDULED_MAX_PER_RUN) break;
     }
