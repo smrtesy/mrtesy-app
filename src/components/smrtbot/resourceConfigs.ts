@@ -24,6 +24,9 @@ export interface ResourceConfig {
   hasEnv?: boolean;
   /** Hide the "Add" button (read-mostly resources populated by the bot). */
   readOnlyCreate?: boolean;
+  /** Extra per-row POST actions, e.g. send-reply / promote-to-FAQ. POSTs to
+   *  /api/bot/:botId/<resource>/:id/<key> and reloads. */
+  rowActions?: { key: string }[];
 }
 
 const ENV: FieldDef = { key: "env", type: "select", options: ["test", "live"] };
@@ -184,6 +187,7 @@ export const RESOURCES: Record<string, ResourceConfig> = {
     resource: "questions",
     columns: ["phone", "message_text", "status"],
     readOnlyCreate: true,
+    rowActions: [{ key: "reply" }, { key: "promote" }],
     fields: [
       { key: "status", type: "select", options: ["pending", "answered", "ignored"] },
       { key: "admin_reply", type: "textarea" },
