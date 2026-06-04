@@ -1871,7 +1871,10 @@
       "none": "—",
       "statusInbox": "Open",
       "statusInProgress": "In progress",
-      "statusDone": "Done"
+      "statusDone": "Done",
+      "assignee": "Assignee",
+      "unassigned": "Unassigned",
+      "owner": "Owner"
     }
   }
 }

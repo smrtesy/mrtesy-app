@@ -1870,7 +1870,10 @@
       "none": "—",
       "statusInbox": "פתוח",
       "statusInProgress": "בתהליך",
-      "statusDone": "הושלם"
+      "statusDone": "הושלם",
+      "assignee": "אחראי",
+      "unassigned": "לא משויך",
+      "owner": "בעלים"
     }
   }
 }

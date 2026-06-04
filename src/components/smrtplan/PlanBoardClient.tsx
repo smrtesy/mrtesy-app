@@ -95,6 +95,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     };
   }, [load]);
 
+  // Let the board use the full main width (and grow with the window) instead of
+  // the global 896px reading cap — see globals.css [data-content-wide].
+  useEffect(() => {
+    document.body.setAttribute("data-content-wide", "true");
+    return () => document.body.removeAttribute("data-content-wide");
+  }, []);
+
   async function recompute() {
     setRecomputing(true);
     try {
@@ -230,7 +237,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* fixed label column (stays while the timeline scrolls) */}
           <div className="w-[168px] flex-shrink-0 border-e">
             {milestones.length > 0 && (
-              <div className="flex h-7 items-center border-b bg-secondary/40 px-3 text-[11px] font-medium text-muted-foreground">
+              <div className="flex h-8 items-center border-b bg-secondary/40 px-3 text-[11px] font-medium text-muted-foreground">
                 {t("board.milestones")}
               </div>
             )}
@@ -278,24 +285,34 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
             <div style={{ width: trackWidth }}>
-              {/* milestone label lane — pills live here so they never stack on the rows */}
+              {/* milestone label lane — pills centered on their date, each on a
+                  short stem so it's clear exactly when it happens (no stacking). */}
               {milestones.length > 0 && (
-                <div className="relative h-7 border-b bg-secondary/40">
-                  {milestones.map((m) => (
-                    <div
-                      key={m.id}
-                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
-                      style={{
-                        insetInlineStart: pxOf(offsetOf(m.milestone_date)),
-                        color: lineColor(m),
-                        background: "hsl(var(--card))",
-                        border: `1px solid ${lineColor(m)}`,
-                      }}
-                      title={mLabel(m)}
-                    >
-                      {mLabel(m)}
-                    </div>
-                  ))}
+                <div className="relative h-8 border-b bg-secondary/40">
+                  {milestones.map((m) => {
+                    const x = pxOf(offsetOf(m.milestone_date));
+                    return (
+                      <div key={m.id}>
+                        <div
+                          className="absolute top-1 -translate-x-1/2 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
+                          style={{
+                            insetInlineStart: x,
+                            color: lineColor(m),
+                            background: "hsl(var(--card))",
+                            border: `1px solid ${lineColor(m)}`,
+                          }}
+                          title={mLabel(m)}
+                        >
+                          {mLabel(m)}
+                        </div>
+                        {/* stem anchoring the pill to the exact date */}
+                        <div
+                          className="absolute bottom-0 h-2 w-0.5 -translate-x-1/2"
+                          style={{ insetInlineStart: x, background: lineColor(m) }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {/* week strip */}
@@ -310,9 +327,17 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
                   </div>
                 ))}
+                {/* milestone date markers — a solid colored bar pinpointing the date */}
+                {milestones.map((m) => (
+                  <div
+                    key={m.id}
+                    className="absolute inset-y-0 z-[3] w-0.5 opacity-70"
+                    style={{ insetInlineStart: pxOf(offsetOf(m.milestone_date)), background: lineColor(m) }}
+                  />
+                ))}
                 {todayInView && (
                   <div
-                    className="absolute inset-y-0 z-[5] w-0.5 bg-foreground"
+                    className="absolute inset-y-0 z-[5] w-0.5 bg-foreground/40"
                     style={{ insetInlineStart: pxOf(todayOff) }}
                   />
                 )}
@@ -367,17 +392,17 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
                           <div
                             key={m.id}
-                            className="pointer-events-none absolute inset-y-0 z-[4] border-e border-dashed"
+                            className="pointer-events-none absolute inset-y-0 z-[4] border-e border-dashed opacity-40"
                             style={{
                               insetInlineStart: pxOf(offsetOf(m.milestone_date)),
                               borderColor: lineColor(m),
                             }}
                           />
                         ))}
-                        {/* today line */}
+                        {/* today line — semi-transparent so the bar label underneath stays readable */}
                         {todayInView && (
                           <div
-                            className="absolute inset-y-0 z-[5] w-px bg-foreground/70"
+                            className="pointer-events-none absolute inset-y-0 z-[5] w-px bg-foreground/30"
                             style={{ insetInlineStart: pxOf(todayOff) }}
                           />
                         )}
