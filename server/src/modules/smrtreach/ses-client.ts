@@ -51,9 +51,13 @@ export function resetSesClients(): void {
   clientCache.clear();
 }
 
+// Hard ceiling on a single send so a hung SES call can never outlive the
+// queue reaper's window (15 min) and cause a reaped row to double-send.
+const SEND_TIMEOUT_MS = 30_000;
+
 export async function sendEmail(p: SendEmailParams): Promise<{ messageId: string }> {
   const client = await getClient(p.region);
-  const res = await client.send(
+  const send = client.send(
     new SendEmailCommand({
       Source: p.from,
       Destination: { ToAddresses: [p.to] },
@@ -64,5 +68,14 @@ export async function sendEmail(p: SendEmailParams): Promise<{ messageId: string
       ReplyToAddresses: p.replyTo ? [p.replyTo] : undefined,
     }),
   );
-  return { messageId: res.MessageId ?? "" };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("SES send timed out")), SEND_TIMEOUT_MS);
+  });
+  try {
+    const res = await Promise.race([send, timeout]);
+    return { messageId: res.MessageId ?? "" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

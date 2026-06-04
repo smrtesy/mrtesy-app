@@ -13,3 +13,4 @@ const router = Router();
 router.use(smrtcrmRoutes);
 
 export default router;
+export { default as ingestRouter } from "./ingest-handler";

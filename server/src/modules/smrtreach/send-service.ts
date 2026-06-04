@@ -22,6 +22,47 @@ import { sendEmail, SesNotConfiguredError } from "./ses-client";
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
+const MAX_SEND_ATTEMPTS = 3;
+
+/**
+ * Reset rows orphaned in 'sending' (process crashed/timed out after claiming but
+ * before the terminal status write) back to 'pending' so the next pass retries —
+ * incrementing attempts, and failing rows that have exhausted the cap so a
+ * poison row can never loop forever.
+ * @returns the number of rows requeued.
+ */
+export async function reapStuckSending(orgId: string, olderThanMinutes = 15): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  // NULL claimed_at (pre-migration rows) is skipped by `lt` — safe default.
+  const { data: stuck, error } = await db
+    .from("smrtreach_queue")
+    .select("id, attempts")
+    .eq("org_id", orgId)
+    .eq("status", "sending")
+    .lt("claimed_at", cutoff);
+  if (error) {
+    console.error("[smrtreach.reap]", orgId, error.message);
+    return 0;
+  }
+  if (!stuck || stuck.length === 0) return 0;
+
+  let requeued = 0;
+  for (const row of stuck) {
+    const attempts = (row.attempts as number) ?? 0;
+    if (attempts + 1 >= MAX_SEND_ATTEMPTS) {
+      await db.from("smrtreach_queue")
+        .update({ status: "failed", error: "exceeded max send attempts", attempts: attempts + 1 })
+        .eq("id", row.id);
+    } else {
+      await db.from("smrtreach_queue")
+        .update({ status: "pending", claimed_at: null, attempts: attempts + 1 })
+        .eq("id", row.id);
+      requeued++;
+    }
+  }
+  return requeued;
+}
+
 /** Resolve the SES region for a content language from the org's settings. */
 export async function resolveRegion(orgId: string, language: string): Promise<string> {
   const { data } = await db
@@ -170,9 +211,11 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
   if (!candidates || candidates.length === 0) return { sent: 0, failed: 0, remaining: 0 };
 
   const candidateIds = candidates.map((r) => r.id as string);
+  // Claim sets status + claimed_at only — attempts is owned by the reaper, which
+  // increments it on each requeue and fails the row past a cap (no infinite loop).
   const { data: pending, error } = await db
     .from("smrtreach_queue")
-    .update({ status: "sending", attempts: 1 })
+    .update({ status: "sending", claimed_at: new Date().toISOString() })
     .eq("org_id", orgId)
     .eq("status", "pending")
     .in("id", candidateIds)

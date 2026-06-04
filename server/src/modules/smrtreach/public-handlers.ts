@@ -18,7 +18,7 @@ import { Router, text } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
 import { emitEvent } from "../../lib/platform";
-import { processEmailQueue } from "./send-service";
+import { processEmailQueue, reapStuckSending } from "./send-service";
 
 const router = Router();
 
@@ -156,21 +156,24 @@ router.post("/reach/cron/process-queue", async (req: Request, res: Response) => 
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // Orgs with pending email rows. (Distinct-by-scan: queue volume per tick is
-  // bounded; for very large fan-out a dedicated RPC would be tighter.)
+  // Orgs with email rows still in flight. Includes 'sending' so the reaper can
+  // reach campaigns whose rows are ALL orphaned (no 'pending' left). (Distinct-
+  // by-scan: queue volume per tick is bounded; a dedicated RPC would be tighter.)
   const { data: rows, error } = await db
     .from("smrtreach_queue")
     .select("org_id")
     .eq("channel", "email")
-    .eq("status", "pending")
+    .in("status", ["pending", "sending"])
     .limit(5000);
   if (error) return res.status(500).json({ error: error.message });
 
   const orgIds = [...new Set((rows ?? []).map((r) => r.org_id as string))];
   let sent = 0;
   let failed = 0;
+  let reaped = 0;
   for (const orgId of orgIds) {
     try {
+      reaped += await reapStuckSending(orgId);
       const r = await processEmailQueue(orgId, 200);
       sent += r.sent;
       failed += r.failed;
@@ -178,7 +181,7 @@ router.post("/reach/cron/process-queue", async (req: Request, res: Response) => 
       console.error("[smrtreach.cron] org", orgId, e instanceof Error ? e.message : e);
     }
   }
-  res.json({ orgs: orgIds.length, sent, failed });
+  res.json({ orgs: orgIds.length, sent, failed, reaped });
 });
 
 export default router;

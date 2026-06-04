@@ -12,6 +12,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomBytes } from "node:crypto";
 
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
@@ -409,6 +410,60 @@ router.post("/crm/import", async (req: Request, res: Response) => {
 
   await emitEvent(orgId, "smrtcrm", "import.completed", "import", orgId, { created, merged, skipped });
   res.json({ created, merged, skipped, errors });
+});
+
+// ============================================================
+// API CONNECTIONS (CRM-1: inbound API; contacts are auto-tagged)
+// ============================================================
+
+router.get("/crm/connections", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtcrm_api_connections")
+    .select("*")
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ connections: data ?? [] });
+});
+
+router.post("/crm/connections", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  // Optional tag to auto-apply; if a tag name is given, ensure it exists.
+  let tagId: string | null = null;
+  if (typeof req.body?.tag_name === "string" && req.body.tag_name.trim()) {
+    try {
+      tagId = await ensureTag(orgId, req.body.tag_name.trim(), { kind: "source", createdBy: req.user!.id });
+    } catch (e) {
+      return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  } else if (typeof req.body?.tag_id === "string") {
+    tagId = req.body.tag_id;
+  }
+
+  const token = randomBytes(24).toString("hex");
+  const { data, error } = await db
+    .from("smrtcrm_api_connections")
+    .insert({ org_id: orgId, created_by: req.user!.id, name, tag_id: tagId, token })
+    .select("*")
+    .single();
+  if (error) {
+    await notifyError(orgId, "smrtcrm", { title: "Failed to create connection", body: error.message });
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json({ connection: data });
+});
+
+router.delete("/crm/connections/:id", async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtcrm_api_connections")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
 });
 
 export default router;

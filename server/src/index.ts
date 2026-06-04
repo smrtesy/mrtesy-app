@@ -27,7 +27,7 @@ import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
 import whatsappWebhookRouter from "./modules/smrttask/routes/whatsapp-webhook";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
-import smrtcrmRouter from "./modules/smrtcrm";
+import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 
 const app = express();
@@ -147,6 +147,9 @@ app.use(smrtvoiceWebhookRouter);
 // must come BEFORE the auth-guarded smrtReach router.
 app.use("/api", smrtreachUnsubscribeRouter);
 app.use("/api", smrtreachPublicRouter);
+
+// smrtCRM public inbound ingest is token-authenticated (no JWT), so before auth.
+app.use("/api", smrtcrmIngestRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
