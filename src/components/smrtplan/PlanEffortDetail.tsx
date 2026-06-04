@@ -220,6 +220,25 @@ function TaskRow({
             </span>
           )}
         </span>
+        {task.duration_days != null && (
+          <span
+            className="whitespace-nowrap rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title={
+              task.duration_manual
+                ? t("edit.durManual")
+                : task.estimated_hours
+                  ? `${task.estimated_hours}${t("edit.hoursUnit")}`
+                  : t("edit.durEstimated")
+            }
+          >
+            {task.duration_days} {t("edit.daysUnit")} ·{" "}
+            {task.duration_manual
+              ? t("edit.durManual")
+              : task.estimated_hours
+                ? `~${task.estimated_hours}${t("edit.hoursUnit")}`
+                : t("edit.durEstimated")}
+          </span>
+        )}
         {assignee && (
           <span className="whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-foreground">
             {assignee}

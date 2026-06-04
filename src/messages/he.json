@@ -1877,7 +1877,11 @@
       "estimatedHours": "שעות מוערכות",
       "fromCatalog": "בחר מהקטלוג…",
       "manualDuration": "משך ידני (ימים)",
-      "autoDuration": "משך אוטומטי לפי שעות/קיבולת"
+      "autoDuration": "משך אוטומטי לפי שעות/קיבולת",
+      "daysUnit": "ימים",
+      "hoursUnit": "ש׳",
+      "durManual": "ידני",
+      "durEstimated": "משוער"
     },
     "capacity": {
       "button": "צוות וזמינות",
