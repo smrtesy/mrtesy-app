@@ -28,10 +28,16 @@ import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp } from "../../middleware";
 import { computeOrgSchedule } from "./engine";
 
-const AT_RISK_DAYS = 3;
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
-/** Per-plan health from the engine fields vs the real today (build-spec ד). */
+/**
+ * Per-plan health, duration-weighted (fix #1). A subtask's weight is its
+ * duration; "expected" progress accrues that weight once the day it is supposed
+ * to finish (latest_finish / due_date) has passed — not a naive linear ramp.
+ *   actual ≥ expected         → on track
+ *   actual <  expected        → behind  (at_risk)
+ *   any open task past its finish → late (a hard miss outranks "behind")
+ */
 function planHealthFromTasks(
   plan: Row,
   tasksByPlan: Map<string, Row[]>,
@@ -40,35 +46,37 @@ function planHealthFromTasks(
   const start = plan.start_date as string | null;
   if (start && todayISO < start) return "waiting";
   if (plan.kind === "stream") return "stream";
+
   const tasks = tasksByPlan.get(plan.id as string) ?? [];
-  const open = tasks.filter((t) => !DONE_STATUSES.has(t.status as string));
-  // late: an open task is past its latest_finish (engine) / due_date (interim).
-  for (const t of open) {
-    const lf = (t.latest_finish as string | null) ?? (t.due_date as string | null);
-    if (lf && lf < todayISO) return "late";
+  if (tasks.length === 0) return "on_track";
+
+  const weight = (t: Row) => Math.max(1, (t.duration_days as number | null) ?? 1);
+  const finishOf = (t: Row) => (t.latest_finish as string | null) ?? (t.due_date as string | null);
+
+  let total = 0;
+  let done = 0;
+  let expected = 0;
+  let hardLate = false;
+  for (const t of tasks) {
+    const w = weight(t);
+    total += w;
+    const isDone = DONE_STATUSES.has(t.status as string);
+    if (isDone) done += w;
+    const finish = finishOf(t);
+    if (finish && finish <= todayISO) expected += w; // its day to be done has arrived
+    if (!isDone && finish && finish < todayISO) hardLate = true;
   }
-  // at_risk: an open, not-started task whose latest_start is within N days.
-  const horizon = addDaysISO(todayISO, AT_RISK_DAYS);
-  for (const t of open) {
-    if (t.status !== "inbox") continue;
-    const ls = (t.latest_start as string | null) ?? (t.due_date as string | null);
-    if (ls && ls >= todayISO && ls <= horizon) return "at_risk";
-  }
+  if (hardLate) return "late";
+  if (total > 0 && done / total + 0.001 < expected / total) return "at_risk"; // behind schedule
   return "on_track";
 }
 
-function addDaysISO(iso: string, n: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + n));
-  return dt.toISOString().slice(0, 10);
-}
-
-/** Attach engine-based health to a list of plans. */
+/** Attach duration-weighted health to a list of plans. */
 async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
   if (plans.length === 0) return plans;
   const { data: taskRows } = await db
     .from("tasks")
-    .select("plan_id, status, latest_finish, latest_start, due_date")
+    .select("plan_id, status, latest_finish, latest_start, due_date, duration_days")
     .eq("organization_id", orgId)
     .not("plan_id", "is", null);
   const byPlan = new Map<string, Row[]>();
