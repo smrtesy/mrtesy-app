@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Plus, Search, Mail, Phone, Loader2 } from "lucide-react";
+import { Plus, Search, Mail, Phone, Loader2, Upload } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
+import { CsvImportDialog } from "@/components/smrtcrm/CsvImportDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +53,7 @@ export function ContactsClient() {
   const [tagFilter, setTagFilter] = useState<string>(ALL_TAGS);
 
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", email: "" });
 
@@ -152,10 +154,16 @@ export function ContactsClient() {
             </SelectContent>
           </Select>
         </div>
-        <Button onClick={() => setAddOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          {t("addContact")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setImportOpen(true)} variant="outline" className="gap-2">
+            <Upload className="h-4 w-4" />
+            {t("importCsv")}
+          </Button>
+          <Button onClick={() => setAddOpen(true)} className="gap-2">
+            <Plus className="h-4 w-4" />
+            {t("addContact")}
+          </Button>
+        </div>
       </div>
 
       <p className="text-sm text-muted-foreground">{t("totalCount", { count: total })}</p>
@@ -238,6 +246,13 @@ export function ContactsClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CsvImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        tags={tags}
+        onImported={() => { loadContacts(); loadTags(); }}
+      />
     </div>
   );
 }
