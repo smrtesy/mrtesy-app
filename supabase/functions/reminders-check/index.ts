@@ -175,12 +175,13 @@ async function replyArrived(task: { user_id: string | null; source_message_id: s
   }
 
   if (chatId) {
-    // WhatsApp: source_messages keeps only ONE upserted row per chat (no
-    // direction, mutable received_at), so it can't tell us whether a real
-    // INBOUND reply arrived. The authoritative per-message log is
-    // whatsapp_messages (direction + immutable received_at per message).
-    // We're still waiting iff the latest non-reaction message in the chat is
-    // outgoing — i.e. an inbound reply exists AFTER our last outgoing message.
+    // WhatsApp: the authoritative per-message log is whatsapp_messages
+    // (real direction + immutable received_at per message). The source_messages
+    // burst rows carry the transcript for classification but aren't the
+    // per-message ledger, so we answer "did a reply arrive?" straight from
+    // whatsapp_messages. We're still waiting iff the latest non-reaction message
+    // in the chat is outgoing — i.e. no inbound reply exists AFTER our last
+    // outgoing message.
     const { data: lastOut } = await supabase
       .from("whatsapp_messages")
       .select("received_at")

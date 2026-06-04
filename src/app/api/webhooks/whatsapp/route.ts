@@ -1313,7 +1313,7 @@ async function refreshSourceMessageThread(
 ): Promise<void> {
   const { data: msgs, error } = await db
     .from("whatsapp_messages")
-    .select("direction, body_text, received_at, from_phone, from_name, to_phone, is_history")
+    .select("wamid, direction, body_text, received_at, from_phone, from_name, to_phone, is_history")
     .eq("user_id", userId)
     .eq("chat_id", chatId)
     .order("received_at", { ascending: false })
@@ -1417,22 +1417,62 @@ async function refreshSourceMessageThread(
     .filter(Boolean)
     .join("\n");
 
-  // For SELF-CHAT we deliberately mark the thread-level row as already
-  // classified so the deep classifier doesn't pull it in. The thread row
-  // exists only as a context object (kept for the WhatsApp view + future
-  // debugging); the *actual* task creation runs off the per-message
-  // source_messages we emit below. Without this skip, a self-chat with
-  // 8 voice-memo "משימה ל..." entries would still be summarised as a
-  // single classifier decision and 7 of the 8 voice memos would be lost
-  // — which is the exact bug this whole code path fixes.
-  const threadProcessingStatus = isSelfChat ? "classified" : "pending";
-  const threadClassification = isSelfChat ? "self_chat_thread_skip" : null;
+  if (isSelfChat) {
+    // SELF-CHAT: the thread-level row is marked already-classified so the deep
+    // classifier never pulls it in — it exists only as a context object (kept
+    // for the WhatsApp view + debugging). The *actual* task creation runs off
+    // the per-message whatsapp_echo rows emitted below. Without this skip, a
+    // self-chat with 8 voice-memo "משימה ל..." entries would be summarised as a
+    // single classifier decision and 7 of the 8 voice memos would be lost.
+    const { error: upsertErr } = await db.from("source_messages").upsert(
+      {
+        user_id: userId,
+        source_type: "whatsapp",
+        source_id: `wa:${chatId}`,
+        sender: chatName,
+        sender_email: null,
+        subject: chatName,
+        body_text: String(last.body_text ?? "").slice(0, 1000),
+        raw_content: rawContent.slice(0, 3000),
+        received_at: last.received_at,
+        source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
+        reply_to_context: fromPhone,
+        processing_status: "classified",
+        ai_classification: "self_chat_thread_skip",
+        metadata: { chatId, chatName, fromPhone, isGroup, isSelfChat },
+      },
+      { onConflict: "user_id,source_type,source_id" },
+    );
+    if (upsertErr) throw new Error(upsertErr.message);
+
+    // Emit one source_message per OUTGOING voice memo — each its own classifier
+    // candidate (8 "משימה ל..." memos → 8 tasks, not one swallowing seven).
+    await emitSelfChatPerMessageSourceRows(db, userId, chatId, chatName, fromPhone);
+    return;
+  }
+
+  // ── NON-self chat: one IMMUTABLE source_message per burst ────────────────
+  // Keyed by the latest message's wamid (wa:<chatId>:<wamid>) instead of one
+  // overwritten wa:<chatId> row. This fixes three things at once:
+  //   • classification is anchored to a stable, frozen row (no re-guessing the
+  //     thread state on every reprocess → no flip-flopping),
+  //   • nothing is overwritten, so every burst keeps its own record + log entry
+  //     (multi-burst threads no longer go silent after the first),
+  //   • the burst is the unit, with the full transcript in raw_content for
+  //     context — the matter router still decides one-vs-many matters by CONTENT.
+  // The classifier-vs-deferral axis is driven by the REAL latest direction
+  // (lastDirection), stamped here from whatsapp_messages.direction — not a
+  // guessed state. We ignoreDuplicates so a webhook re-delivery of the same
+  // latest message doesn't reset a row the pipeline already classified.
+  const latestWamid = String(last.wamid ?? "");
+  if (!latestWamid) return; // no stable key → nothing to anchor; skip safely
+  const burstSourceId = `wa:${chatId}:${latestWamid}`;
 
   const { error: upsertErr } = await db.from("source_messages").upsert(
     {
       user_id: userId,
       source_type: "whatsapp",
-      source_id: `wa:${chatId}`,
+      source_id: burstSourceId,
       sender: chatName,
       sender_email: null,
       subject: chatName,
@@ -1441,25 +1481,44 @@ async function refreshSourceMessageThread(
       received_at: last.received_at,
       source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
       reply_to_context: fromPhone,
-      processing_status: threadProcessingStatus,
-      ai_classification: threadClassification,
-      metadata: { chatId, chatName, fromPhone, isGroup, isSelfChat },
+      processing_status: "pending",
+      ai_classification: null,
+      metadata: { chatId, chatName, fromPhone, isGroup, isSelfChat, lastDirection: last.direction, lastWamid: latestWamid },
     },
-    { onConflict: "user_id,source_type,source_id" },
+    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
   );
-
   if (upsertErr) throw new Error(upsertErr.message);
 
-  // ── Self-chat: emit one source_message per OUTGOING voice memo ─────────
-  // Each is its own classifier candidate, so 8 "משימה ל..." voice memos
-  // produce 8 tasks instead of one classification that swallows seven of
-  // them. We dedupe on (user_id, source_type='whatsapp_echo', source_id),
-  // where source_id is wa:<chatId>:<wamid> — a stable per-message key
-  // from the WhatsApp Cloud API. Ignore-duplicates so re-runs after the
-  // user sends a new message don't reset processing_status on rows the
-  // pipeline has already classified.
-  if (isSelfChat) {
-    await emitSelfChatPerMessageSourceRows(db, userId, chatId, chatName, fromPhone);
+  // Supersede any EARLIER burst row for this chat that hasn't been classified
+  // yet: while the chat is still active, only the newest burst (which carries
+  // the full transcript) should reach the classifier. We touch rows that are
+  // still pending AND not currently being processed (processing_lock_at is
+  // null), at-or-before this burst's timestamp, and excluding the row we just
+  // wrote (neq source_id) — so already-classified history stays immutable and
+  // the surviving burst is never superseded by itself. `lte` (not `lt`) matters:
+  // two distinct-wamid bursts can share the same received_at to the second
+  // (rapid delivery / history backfill); with `lt` neither would supersede the
+  // other and BOTH would classify. This is how a still-typing burst coalesces
+  // into one classification instead of N.
+  //
+  // Known bounded race: if the cron has already LOCKED an older burst row when a
+  // new one arrives, we skip it (lock guard) so its in-flight classification is
+  // not clobbered — meaning that older burst and this newer one can both
+  // classify. The chatId sibling linker (Path 0 matter router) absorbs this by
+  // routing the second pass onto the first's matter, so the user sees one task,
+  // not two; at worst a duplicate update entry.
+  const { error: supersedeErr } = await db
+    .from("source_messages")
+    .update({ processing_status: "processed", ai_classification: "superseded", processed_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("source_type", "whatsapp")
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null)
+    .filter("metadata->>chatId", "eq", chatId)
+    .lte("received_at", String(last.received_at))
+    .neq("source_id", burstSourceId);
+  if (supersedeErr) {
+    console.error("[whatsapp burst supersede]:", supersedeErr.message);
   }
 }
 

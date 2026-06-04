@@ -19,6 +19,16 @@ interface SystemParams {
   // Kill-switch for per-matter WhatsApp routing (Part A). When false, WhatsApp
   // falls back to the legacy single-slot thread_memory linking. Default true.
   whatsapp_matter_routing: boolean;
+  // Debounce window (seconds) for WhatsApp burst coalescing. A WhatsApp burst
+  // row is only eligible for classification once its chat has been quiet for
+  // this long, so rapid follow-up messages are gathered into one classification
+  // pass instead of each spawning duplicate work. The webhook stamps the burst
+  // row's received_at = latest message time; while messages keep arriving that
+  // timestamp advances, so the row keeps re-arming until the chat settles. This
+  // is a TIMING mechanism only — it never decides matter boundaries (the
+  // content-based matter router owns that). Default 90s (cron ticks every ~60s,
+  // so the effective settle window is ~90–150s).
+  whatsapp_debounce_seconds: number;
 }
 
 const FALLBACK_PARAMS: SystemParams = {
@@ -32,6 +42,7 @@ const FALLBACK_PARAMS: SystemParams = {
   body_truncate_project: 500,
   body_truncate_task: 6000,
   whatsapp_matter_routing: true,
+  whatsapp_debounce_seconds: 90,
 };
 
 async function loadSystemParams(): Promise<SystemParams> {
@@ -48,6 +59,7 @@ async function loadSystemParams(): Promise<SystemParams> {
     body_truncate_project: data.body_truncate_project ?? FALLBACK_PARAMS.body_truncate_project,
     body_truncate_task: data.body_truncate_task ?? FALLBACK_PARAMS.body_truncate_task,
     whatsapp_matter_routing: data.whatsapp_matter_routing ?? FALLBACK_PARAMS.whatsapp_matter_routing,
+    whatsapp_debounce_seconds: data.whatsapp_debounce_seconds ?? FALLBACK_PARAMS.whatsapp_debounce_seconds,
   };
 }
 
@@ -786,15 +798,15 @@ async function appendUpdateToTask(
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
 
-  // Dedup guard: skip ONLY if we already appended an update for this
-  // exact source_message id at this exact received_at. For email/Gmail
-  // the row never changes after insert, so id alone is enough. For
-  // WhatsApp the webhook upserts ONE row per chat (source_id=wa:<chatId>)
-  // and rewrites it whenever a new message arrives — same row id, new
-  // content, new received_at. Dedupping by id alone made T284 (and
-  // every other multi-burst WhatsApp thread) stop receiving updates
-  // after the first one, because the second processing pass landed on
-  // the same source_message_id and returned silently.
+  // Dedup guard: skip ONLY if we already appended an update for this exact
+  // source_message id at this exact received_at. WhatsApp burst rows and Gmail
+  // message rows are both immutable per-record now, so the id is already a
+  // stable per-message key; the received_at pair is kept as a belt-and-braces
+  // guard against the same row being re-processed within a run. (Historically,
+  // WhatsApp upserted ONE overwritten row per chat — same id, new received_at —
+  // which is why the pair, not the id alone, is the dedup key: T284 and every
+  // other multi-burst thread went silent after the first update when dedupping
+  // by id alone.)
   //
   // Legacy update entries (created before source_received_at was added
   // to the shape) have id-only and are treated as non-dupes here so we
@@ -1363,10 +1375,47 @@ async function tagGmailReview(msg: any, classification: string): Promise<void> {
   }
 }
 
+// Every source_messages.id for a WhatsApp chat. Burst rows are now immutable
+// and per-burst (source_id=wa:<chatId>:<wamid>), so a chat's tasks no longer
+// share one source_message_id — they fan out across burst rows the same way
+// Gmail's fan out across a thread's message rows. We therefore link by the
+// chat (metadata.chatId) sibling set, mirroring the Gmail threadId path below.
+async function whatsappChatSiblingIds(userId: string, chatId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("source_messages")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source_type", "whatsapp")
+    .filter("metadata->>chatId", "eq", chatId);
+  // Don't swallow the error: an empty result here makes the caller spin off a
+  // NEW task instead of linking to the chat's open matter, so a transient query
+  // failure would silently fragment a thread. Log it; the caller still degrades
+  // to [] (self-heals on the next burst).
+  if (error) {
+    await supabase.from("log_entries").insert({ user_id: userId, level: "warning", category: "ai_process_wa_siblings", status: "failed", error_message: `whatsappChatSiblingIds(${chatId}): ${error.message}` });
+    return [];
+  }
+  return (data ?? []).map((r: any) => r.id as string);
+}
+
 async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: string; updates: any[] } | null> {
-  // WhatsApp: same source_message_id (one row per chat) → existing task
-  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+  // Self-chat voice memos (whatsapp_echo): each is an independent new intention
+  // (threadKey returns null for them), so we only re-link to a task born from
+  // THIS exact row — never to a sibling memo's task.
+  if (msg.source_type === "whatsapp_echo") {
     const { data: openTask, error: taskErr } = await supabase.from("tasks").select("id, updates").eq("user_id", userId).in("status", ["inbox", "in_progress"]).eq("source_message_id", msg.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (taskErr || !openTask) return null;
+    return { id: openTask.id as string, updates: Array.isArray(openTask.updates) ? openTask.updates : [] };
+  }
+
+  // WhatsApp (non self-chat): link by chat sibling set — any open task born from
+  // an earlier burst row in the same chat.
+  if (msg.source_type === "whatsapp") {
+    const chatId = msg.metadata?.chatId as string | undefined;
+    if (!chatId) return null;
+    const sibIds = await whatsappChatSiblingIds(userId, chatId);
+    if (sibIds.length === 0) return null;
+    const { data: openTask, error: taskErr } = await supabase.from("tasks").select("id, updates").eq("user_id", userId).in("status", ["inbox", "in_progress"]).in("source_message_id", sibIds).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (taskErr || !openTask) return null;
     return { id: openTask.id as string, updates: Array.isArray(openTask.updates) ? openTask.updates : [] };
   }
@@ -1951,12 +2000,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   }
 
   // ── Path 0 (WhatsApp): per-matter routing ─────────────────────────────────
-  // A WhatsApp chat can hold several unrelated open matters. All tasks for a
-  // chat share source_message_id (the one source_messages row per chat), so we
-  // can gather every open matter for this contact and route the new message to
-  // the right one — or spin off a new matter even while others stay open. This
-  // replaces the legacy single-slot Path 1 for WhatsApp (which collapsed every
-  // message onto one task). Falls back to legacy Path 1 when the flag is off.
+  // A WhatsApp chat can hold several unrelated open matters. Burst rows are now
+  // immutable and per-burst (wa:<chatId>:<wamid>), so a chat's tasks fan out
+  // across those rows — we gather every open matter via the chat's sibling set
+  // (whatsappChatSiblingIds) and route the new message to the right one, or spin
+  // off a new matter even while others stay open. This replaces the legacy
+  // single-slot Path 1 for WhatsApp (which collapsed every message onto one
+  // task). Falls back to legacy Path 1 when the flag is off.
   const whatsappRoutingActive = sys.whatsapp_matter_routing && isWhatsApp(msg);
   // Route both actionable and informational WhatsApp messages — informational
   // follow-ups (e.g. "תודה, סגרנו") must still land on their matter as an
@@ -1964,15 +2014,29 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   if (whatsappRoutingActive && (classification === "actionable" || classification === "informational")) {
     try {
       // Reopenable + open statuses are candidates; completed/dismissed/archived
-      // matters can still be reopened by a same-matter resumption.
-      const { data: cands } = await supabase
-        .from("tasks")
-        .select("id, title_he, title, description, status")
-        .eq("user_id", msg.user_id)
-        .eq("source_message_id", msg.id)
-        .in("status", ["inbox", "in_progress", "snoozed", "pending_completion", "completed"])
-        .order("created_at", { ascending: false });
-      const candidates = (cands ?? []) as WhatsAppCandidate[];
+      // matters can still be reopened by a same-matter resumption. Burst rows are
+      // per-burst now, so gather every task born from ANY burst row in this chat
+      // (the sibling set) — not just this row's id, which would miss every prior
+      // matter and re-create a duplicate task on each new burst.
+      // whatsapp_echo (self-chat memos) are independent intentions, NOT part of
+      // a multi-matter chat — each routes only to a task born from its OWN row
+      // (preserving the per-memo behavior). Only real two-party `whatsapp` burst
+      // rows fan out across the chat's sibling set.
+      const chatId = msg.metadata?.chatId as string | undefined;
+      const sibIds = msg.source_type === "whatsapp_echo"
+        ? [msg.id]
+        : (chatId ? await whatsappChatSiblingIds(msg.user_id, chatId) : []);
+      let candidates: WhatsAppCandidate[] = [];
+      if (sibIds.length > 0) {
+        const { data: cands } = await supabase
+          .from("tasks")
+          .select("id, title_he, title, description, status")
+          .eq("user_id", msg.user_id)
+          .in("source_message_id", sibIds)
+          .in("status", ["inbox", "in_progress", "snoozed", "pending_completion", "completed"])
+          .order("created_at", { ascending: false });
+        candidates = (cands ?? []) as WhatsAppCandidate[];
+      }
 
       if (candidates.length > 0) {
         let targetId: string | "NEW";
@@ -2225,13 +2289,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           }
           if (firstTaskId) linkedTaskId = firstTaskId;
 
-          // Part B: a NEW WhatsApp matter where the user is waiting on the other
-          // party (state=pending_other_party — typically an outgoing open ask)
-          // becomes a DEFERRED follow-up, mirroring the email check_followup
-          // path: don't nag now, snooze FOLLOWUP_LEAD_HOURS (48 business hours)
-          // and let reminders-check surface it only if no reply arrives. Tasks
-          // where the user owes the reply (any other state) stay in the inbox.
-          if (whatsappRoutingActive && analysis.state === "pending_other_party" && createdTaskIds.length > 0) {
+          // Part B: a NEW WhatsApp matter whose LAST message is the user's own
+          // outgoing one becomes a DEFERRED follow-up, mirroring the email
+          // check_followup path: don't nag now, snooze FOLLOWUP_LEAD_HOURS (48
+          // business hours) and let reminders-check surface it only if no reply
+          // arrives. The deferral is driven by the REAL message direction
+          // (metadata.lastDirection, stamped by the webhook from
+          // whatsapp_messages.direction) — not by the classifier's GUESSED
+          // thread state, which was unstable and re-derived on every reprocess.
+          // Last message incoming → the user owes the reply → stays in the inbox.
+          const lastDirectionOutgoing = (msg.metadata?.lastDirection as string | undefined) === "outgoing";
+          if (whatsappRoutingActive && lastDirectionOutgoing && createdTaskIds.length > 0) {
             const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
             const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
             // Destructure { error }: an RLS denial / FK error here would otherwise
@@ -2251,7 +2319,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                 });
                 if (actErr) await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_wa_followup", status: "failed", ...msgLogFields(msg), error_message: `defer activity insert failed: ${actErr.message}` });
               }
-              classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (pending_other_party)`;
+              classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (last message outgoing)`;
             }
           }
           if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
@@ -2457,11 +2525,21 @@ Deno.serve(async (req) => {
       const withinBudget = await checkDailyBudget(userId, settings.daily_ai_budget_usd || 10.0);
       if (!withinBudget) continue;
 
+      // WhatsApp debounce: a `whatsapp` burst row is only eligible once its chat
+      // has been quiet for whatsapp_debounce_seconds. The webhook stamps the burst
+      // row's received_at = latest message time and supersedes any earlier pending
+      // burst row in the chat, so while messages keep arriving the surviving row's
+      // received_at stays recent and it is held back here until the chat settles —
+      // coalescing rapid follow-ups into ONE classification pass. Self-chat
+      // `whatsapp_echo` memos are deliberate one-offs and are NOT debounced.
+      const whatsappReadyBefore = new Date(Date.now() - sys.whatsapp_debounce_seconds * 1000).toISOString();
       let allMessages: any[] = [];
       for (const st of SOURCE_PRIORITY) {
         if (allMessages.length >= sys.batch_size) break;
         const remaining = sys.batch_size - allMessages.length;
-        const { data: msgs } = await supabase.from("source_messages").select("*").eq("user_id", userId).eq("processing_status", "pending").eq("source_type", st).is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER).order("received_at", { ascending: true }).limit(remaining);
+        let q = supabase.from("source_messages").select("*").eq("user_id", userId).eq("processing_status", "pending").eq("source_type", st).is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER);
+        if (st === "whatsapp") q = q.lte("received_at", whatsappReadyBefore);
+        const { data: msgs } = await q.order("received_at", { ascending: true }).limit(remaining);
         if (msgs && msgs.length > 0) allMessages = allMessages.concat(msgs);
       }
 
