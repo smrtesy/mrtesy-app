@@ -12,7 +12,7 @@ import Link from "next/link";
 interface Notification {
   id: string;
   app_slug: string;
-  type: "info" | "warning" | "success" | "action_required";
+  type: "info" | "warning" | "success" | "action_required" | "error";
   title: string;
   body: string | null;
   link: string | null;
@@ -22,10 +22,11 @@ interface Notification {
 }
 
 const TYPE_CONFIG = {
-  action_required: { icon: AlertCircle,   color: "text-status-warn", bg: "bg-status-warn-bg border-status-warn/30" },
-  warning:         { icon: AlertTriangle, color: "text-status-warn", bg: "bg-status-warn-bg border-status-warn/30" },
-  success:         { icon: CheckCircle2,  color: "text-status-ok",   bg: "bg-status-ok-bg border-status-ok/30"     },
-  info:            { icon: Info,          color: "text-primary",     bg: "bg-accent border-primary/30"             },
+  error:           { icon: AlertCircle,   color: "text-destructive",  bg: "bg-destructive/10 border-destructive/30" },
+  action_required: { icon: AlertCircle,   color: "text-status-warn",  bg: "bg-status-warn-bg border-status-warn/30" },
+  warning:         { icon: AlertTriangle, color: "text-status-warn",  bg: "bg-status-warn-bg border-status-warn/30" },
+  success:         { icon: CheckCircle2,  color: "text-status-ok",    bg: "bg-status-ok-bg border-status-ok/30"     },
+  info:            { icon: Info,          color: "text-primary",      bg: "bg-accent border-primary/30"             },
 } as const;
 
 export function NotificationsList() {
