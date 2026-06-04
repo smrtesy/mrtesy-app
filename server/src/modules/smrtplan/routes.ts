@@ -94,6 +94,19 @@ function asRows(d: unknown): Row[] {
   return (Array.isArray(d) ? d : []) as Row[];
 }
 
+/**
+ * Re-run the scheduling engine after a mutation that changes the graph
+ * (dependencies, durations, deadlines, task add/remove). Best-effort: the
+ * mutation already succeeded, so a recompute hiccup must not fail the request.
+ */
+async function autoRecompute(orgId: string): Promise<void> {
+  try {
+    await computeOrgSchedule(orgId);
+  } catch (e) {
+    console.error("[smrtplan] auto-recompute failed:", e);
+  }
+}
+
 // ── full/lite access ─────────────────────────────────────────────────────────
 
 let smrtplanAppId: string | null = null;
@@ -271,6 +284,8 @@ router.patch("/plans/:id", requireFull, async (req: Request, res: Response) => {
     .select(PLAN_FIELDS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  // Date / horizon changes shift the whole schedule.
+  await autoRecompute(req.org!.id);
   res.json({ plan: data });
 });
 
@@ -454,6 +469,7 @@ router.post("/plan-dependencies", requireFull, async (req: Request, res: Respons
     .select("id, from_type, from_id, to_type, to_id, satisfied")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.status(201).json({ dependency: data });
 });
 
@@ -464,6 +480,7 @@ router.delete("/plan-dependencies/:id", requireFull, async (req: Request, res: R
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ ok: true });
 });
 
@@ -557,6 +574,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
     .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.status(201).json({ task: data });
 });
 
@@ -581,6 +599,7 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ task: data });
 });
 
@@ -592,6 +611,7 @@ router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response
     .eq("id", req.params.id)
     .not("plan_id", "is", null);
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ ok: true });
 });
 
