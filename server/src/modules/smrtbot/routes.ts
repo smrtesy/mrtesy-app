@@ -11,6 +11,7 @@ import { requireAuth, requireOrg, requireApp } from "../../middleware";
 import botsRouter from "./routes/bots";
 import contentRouter from "./routes/content";
 import statsRouter from "./routes/stats";
+import qaRouter from "./routes/qa";
 
 const router = Router();
 
@@ -24,5 +25,6 @@ router.get("/bot/health", (req: Request, res: Response) => {
 router.use(botsRouter);
 router.use(contentRouter);
 router.use(statsRouter);
+router.use(qaRouter);
 
 export default router;

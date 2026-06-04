@@ -102,6 +102,16 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
     }
   }
 
+  async function runAction(row: Row, key: string) {
+    try {
+      await api(`${base}/${row.id}/${key}`, { method: "POST" });
+      toast.success(t("updated"));
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
 
   return (
@@ -157,6 +167,11 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
                     </td>
                   ))}
                   <td className="whitespace-nowrap px-3 py-2 text-end">
+                    {config.rowActions?.map((a) => (
+                      <Button key={a.key} variant="outline" size="sm" className="me-1" onClick={() => runAction(row, a.key)}>
+                        {t(`act_${a.key}`)}
+                      </Button>
+                    ))}
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(row)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>

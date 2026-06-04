@@ -27,6 +27,7 @@ import {
 } from "./wa";
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
+import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
 
 export interface BotRow {
   id: string;
@@ -207,32 +208,33 @@ async function routeNode(
 ): Promise<boolean> {
   const node = nodes.find((n) => n.node_key === nodeKey);
   if (!node) return false;
-  // Special routes (game/video/etc.) — extension point (next port step).
-  if (node.action) {
-    return handleSpecial(creds, orgId, bot, env, phone, node, nodes);
-  }
-  await sendMenuNode(creds, orgId, bot.id, env, phone, node);
-  await setState(bot.id, phone, { lastNode: nodeKey });
-  return true;
-}
 
-/**
- * Game / video / special-route handler — extension point.
- * botsite handleSpecialRoute + game.js (diamonds, missions, trivia, raffles,
- * birthdays, reminders, video lists) layer in here. Until ported, an unknown
- * action falls back to the main menu so the user is never stuck.
- */
-async function handleSpecial(
-  creds: ResolvedCreds,
-  orgId: string,
-  bot: BotRow,
-  env: BotEnv,
-  phone: string,
-  _node: MenuNode,
-  nodes: MenuNode[],
-): Promise<boolean> {
-  const root = findRootNode(nodes);
-  if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+  // Dispatch by node type (mirrors botsite routeNode switch).
+  if (node.type === "action") {
+    const act = node.action || node.node_key;
+    if (act === "nav_home") {
+      const root = findRootNode(nodes);
+      if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+      return true;
+    }
+    if (act === "nav_back") {
+      const s = await getState(bot.id, phone);
+      const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? findRootNode(nodes);
+      if (back) await sendMenuNode(creds, orgId, bot.id, env, phone, back);
+      return true;
+    }
+    if (await handleVideoAction(bot, env, phone, act)) return true;
+    // Unknown action → render the node as a menu so the user isn't stuck.
+    await sendMenuNode(creds, orgId, bot.id, env, phone, node);
+    return true;
+  }
+  if (node.type === "video_list" || node.type === "text") {
+    await handleVideoNode(bot, env, phone, node);
+    return true;
+  }
+  // menu (default)
+  await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey });
+  await sendMenuNode(creds, orgId, bot.id, env, phone, node);
   return true;
 }
 
@@ -346,9 +348,10 @@ export async function handleInbound(
       if (m && m[1] !== phone) await processReferral(bot, env, phone, m[1]);
     }
 
-    // 1. Mid-flow text input (game onboarding / profile edit / reminder time).
+    // 1. Mid-flow text input (game onboarding / profile edit / reminder / search).
     if (text && state.expectedInput) {
-      await handleGameText(bot, env, phone, text, state);
+      if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text);
+      else await handleGameText(bot, env, phone, text, state);
       return;
     }
 
@@ -356,8 +359,24 @@ export async function handleInbound(
     const action = message.buttonId ?? text;
     if (action && (await handleGameAction(bot, env, phone, action))) return;
 
-    // 3. Menu-tree node by key (button id or text equal to a node_key).
     const nodes = await loadNodes(orgId, bot.id, env);
+
+    // 2b. Navigation + video/holiday/search actions sent as raw button ids.
+    if (action) {
+      if (action === "nav_home") {
+        const root = findRootNode(nodes);
+        if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+        return;
+      }
+      if (action === "nav_back") {
+        const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? findRootNode(nodes);
+        if (back) await sendMenuNode(creds, orgId, bot.id, env, phone, back);
+        return;
+      }
+      if (await handleVideoAction(bot, env, phone, action)) return;
+    }
+
+    // 3. Menu-tree node by key (button id or text equal to a node_key).
     if (action) {
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
