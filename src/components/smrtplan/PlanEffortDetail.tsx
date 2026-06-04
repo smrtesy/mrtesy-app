@@ -12,8 +12,17 @@ import { parseISO, gregShort, hebDate, countdownText, urgencyFor } from "@/lib/s
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "is_critical"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "is_critical" | "assigned_to_user_id"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
+
+interface Member {
+  user_id: string;
+  email: string | null;
+  name: string | null;
+}
+function memberName(m: Member): string {
+  return m.name || m.email || m.user_id.slice(0, 6);
+}
 
 function taskTitle(t: PlanTask, locale: string) {
   return locale === "en" ? t.title : t.title_he || t.title;
@@ -50,9 +59,12 @@ export function PlanEffortDetail({
   const t = useTranslations("smrtPlan");
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<PlanTask[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+
+  const memberMap = new Map(members.map((m) => [m.user_id, memberName(m)]));
 
   const refetch = useCallback(async () => {
     const data = await api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`);
@@ -64,8 +76,13 @@ export function PlanEffortDetail({
     setLoading(true);
     (async () => {
       try {
-        const data = await api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`);
-        if (alive) setTasks(data.tasks ?? []);
+        const [data, mem] = await Promise.all([
+          api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`),
+          api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
+        ]);
+        if (!alive) return;
+        setTasks(data.tasks ?? []);
+        setMembers(mem.members ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -127,6 +144,7 @@ export function PlanEffortDetail({
                 key={task.id}
                 task={task}
                 otherTasks={tasks.filter((x) => x.id !== task.id)}
+                members={members}
                 te={te}
                 onClose={() => setEditingId(null)}
                 onChanged={afterMutation}
@@ -139,6 +157,7 @@ export function PlanEffortDetail({
                 today={today}
                 t={t}
                 canEdit={canEdit}
+                assignee={task.assigned_to_user_id ? memberMap.get(task.assigned_to_user_id) ?? null : null}
                 onEdit={() => setEditingId(task.id)}
               />
             ),
@@ -155,6 +174,7 @@ function TaskRow({
   today,
   t,
   canEdit,
+  assignee,
   onEdit,
 }: {
   task: PlanTask;
@@ -162,6 +182,7 @@ function TaskRow({
   today: Date;
   t: ReturnType<typeof useTranslations>;
   canEdit: boolean;
+  assignee: string | null;
   onEdit: () => void;
 }) {
   const zone = zoneOf(task);
@@ -189,6 +210,11 @@ function TaskRow({
             </span>
           )}
         </span>
+        {assignee && (
+          <span className="whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-foreground">
+            {assignee}
+          </span>
+        )}
         {due && zone !== "done" && (
           <span
             className={cn(
@@ -285,12 +311,14 @@ function NewTaskRow({
 function EditTaskRow({
   task,
   otherTasks,
+  members,
   te,
   onClose,
   onChanged,
 }: {
   task: PlanTask;
   otherTasks: PlanTask[];
+  members: Member[];
   te: ReturnType<typeof useTranslations>;
   onClose: () => void;
   onChanged: () => void;
@@ -299,6 +327,7 @@ function EditTaskRow({
   const [due, setDue] = useState(task.due_date ?? "");
   const [dur, setDur] = useState(task.duration_days != null ? String(task.duration_days) : "");
   const [status, setStatus] = useState(task.status);
+  const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   const [provider, setProvider] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -313,6 +342,7 @@ function EditTaskRow({
           due_date: due || null,
           duration_days: dur ? Number(dur) : null,
           status,
+          assigned_to_user_id: assignee || null,
         },
       });
       onClose();
@@ -369,6 +399,12 @@ function EditTaskRow({
           <option value="inbox">{te("statusInbox")}</option>
           <option value="in_progress">{te("statusInProgress")}</option>
           <option value="archived">{te("statusDone")}</option>
+        </select>
+        <select className={fieldCls} value={assignee} onChange={(e) => setAssignee(e.target.value)} title={te("assignee")}>
+          <option value="">{te("unassigned")}</option>
+          {members.map((m) => (
+            <option key={m.user_id} value={m.user_id}>{memberName(m)}</option>
+          ))}
         </select>
       </div>
 

@@ -130,3 +130,12 @@ body[data-chat-fullscreen="true"] main[data-sidebar-main] > div {
   margin: 0 !important;
   padding: 0 !important;
 }
+
+/* Wide-content mode — set by PlanBoardClient via `data-content-wide` on <body>.
+   Drops the inner wrapper's 896px cap so the (scrollable) board fills the whole
+   main area and grows as the window widens, with only a small side gutter. */
+body[data-content-wide="true"] main[data-sidebar-main] > div {
+  max-width: none !important;
+  padding-inline: 0.75rem !important;
+}
+

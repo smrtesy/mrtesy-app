@@ -40,6 +40,7 @@ export function PlanEditDialog({
 }) {
   const t = useTranslations("smrtPlan");
   const te = useTranslations("smrtPlan.edit");
+  const [members, setMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
   const [form, setForm] = useState({
     title_he: "",
     title_en: "",
@@ -50,6 +51,7 @@ export function PlanEditDialog({
     stage: "active" as PlanStage,
     start_date: "",
     end_date: "",
+    owner_user_id: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -65,7 +67,11 @@ export function PlanEditDialog({
       stage: plan?.stage ?? "active",
       start_date: plan?.start_date ?? "",
       end_date: plan?.end_date ?? "",
+      owner_user_id: plan?.owner_user_id ?? "",
     });
+    api<{ members: typeof members }>("/api/org/members")
+      .then((r) => setMembers(r.members ?? []))
+      .catch(() => setMembers([]));
   }, [open, plan]);
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
@@ -88,6 +94,7 @@ export function PlanEditDialog({
       stage: form.stage,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
+      owner_user_id: form.owner_user_id || null,
     };
     try {
       if (plan?.id) {
@@ -159,13 +166,23 @@ export function PlanEditDialog({
             </Field>
           </div>
 
-          <Field label={te("stageField")}>
-            <select className={fieldCls} value={form.stage} onChange={(e) => set("stage", e.target.value as PlanStage)}>
-              <option value="idea">{t("repository.stage.idea")}</option>
-              <option value="shaping">{t("repository.stage.shaping")}</option>
-              <option value="active">{t("repository.stage.active")}</option>
-            </select>
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={te("stageField")}>
+              <select className={fieldCls} value={form.stage} onChange={(e) => set("stage", e.target.value as PlanStage)}>
+                <option value="idea">{t("repository.stage.idea")}</option>
+                <option value="shaping">{t("repository.stage.shaping")}</option>
+                <option value="active">{t("repository.stage.active")}</option>
+              </select>
+            </Field>
+            <Field label={te("owner")}>
+              <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
+                <option value="">{te("unassigned")}</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id.slice(0, 6)}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
 
           <Field label={te("color")}>
             <div className="flex flex-wrap items-center gap-2">

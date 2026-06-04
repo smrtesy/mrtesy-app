@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users, Clock } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
@@ -12,6 +12,8 @@ import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
+import { CapacityEditor } from "./CapacityEditor";
+import { EstimatesEditor } from "./EstimatesEditor";
 
 const DAY_MS = 86_400_000;
 /** Pixels per day on the timeline. The track is wider than the viewport, so the
@@ -65,6 +67,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
+  const [capacityOpen, setCapacityOpen] = useState(false);
+  const [estimatesOpen, setEstimatesOpen] = useState(false);
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
@@ -94,6 +98,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       alive = false;
     };
   }, [load]);
+
+  // Let the board use the full main width (and grow with the window) instead of
+  // the global 896px reading cap — see globals.css [data-content-wide].
+  useEffect(() => {
+    document.body.setAttribute("data-content-wide", "true");
+    return () => document.body.removeAttribute("data-content-wide");
+  }, []);
 
   async function recompute() {
     setRecomputing(true);
@@ -132,6 +143,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const todayOff = daysBetween(t0, today);
   const todayInView = todayOff >= 0 && todayOff <= totalDays;
   const trackWidth = totalDays * DAY_PX;
+  // translateX is PHYSICAL (doesn't mirror in RTL), so center a date-anchored
+  // element direction-aware: shift left in LTR, right in RTL, to sit over its x.
+  const centerTx = locale === "he" ? "translateX(50%)" : "translateX(-50%)";
 
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
@@ -212,6 +226,12 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
             </ControlButton>
+            <ControlButton onClick={() => setCapacityOpen(true)}>
+              <Users className="h-3.5 w-3.5" /> {t("capacity.button")}
+            </ControlButton>
+            <ControlButton onClick={() => setEstimatesOpen(true)}>
+              <Clock className="h-3.5 w-3.5" /> {t("estimates.button")}
+            </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
               {recomputing ? t("recomputing") : t("recompute")}
@@ -230,7 +250,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* fixed label column (stays while the timeline scrolls) */}
           <div className="w-[168px] flex-shrink-0 border-e">
             {milestones.length > 0 && (
-              <div className="flex h-7 items-center border-b bg-secondary/40 px-3 text-[11px] font-medium text-muted-foreground">
+              <div className="flex h-8 items-center border-b bg-secondary/40 px-3 text-[11px] font-medium text-muted-foreground">
                 {t("board.milestones")}
               </div>
             )}
@@ -278,24 +298,35 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
             <div style={{ width: trackWidth }}>
-              {/* milestone label lane — pills live here so they never stack on the rows */}
+              {/* milestone label lane — pills centered on their date, each on a
+                  short stem so it's clear exactly when it happens (no stacking). */}
               {milestones.length > 0 && (
-                <div className="relative h-7 border-b bg-secondary/40">
-                  {milestones.map((m) => (
-                    <div
-                      key={m.id}
-                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
-                      style={{
-                        insetInlineStart: pxOf(offsetOf(m.milestone_date)),
-                        color: lineColor(m),
-                        background: "hsl(var(--card))",
-                        border: `1px solid ${lineColor(m)}`,
-                      }}
-                      title={mLabel(m)}
-                    >
-                      {mLabel(m)}
-                    </div>
-                  ))}
+                <div className="relative h-8 border-b bg-secondary/40">
+                  {milestones.map((m) => {
+                    const x = pxOf(offsetOf(m.milestone_date));
+                    return (
+                      <div key={m.id}>
+                        <div
+                          className="absolute top-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
+                          style={{
+                            insetInlineStart: x,
+                            transform: centerTx,
+                            color: lineColor(m),
+                            background: "hsl(var(--card))",
+                            border: `1px solid ${lineColor(m)}`,
+                          }}
+                          title={mLabel(m)}
+                        >
+                          {mLabel(m)}
+                        </div>
+                        {/* stem anchoring the pill to the exact date */}
+                        <div
+                          className="absolute bottom-0 h-2 w-0"
+                          style={{ insetInlineStart: x, borderInlineStart: `2px solid ${lineColor(m)}` }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {/* week strip */}
@@ -310,10 +341,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
                   </div>
                 ))}
+                {/* milestone date markers — a solid colored bar pinpointing the date.
+                    Anchored by borderInlineStart at x (same as the stem & row lines)
+                    so the whole column lines up exactly in both RTL and LTR. */}
+                {milestones.map((m) => (
+                  <div
+                    key={m.id}
+                    className="absolute inset-y-0 z-[3] w-0 opacity-70"
+                    style={{ insetInlineStart: pxOf(offsetOf(m.milestone_date)), borderInlineStart: `2px solid ${lineColor(m)}` }}
+                  />
+                ))}
                 {todayInView && (
                   <div
-                    className="absolute inset-y-0 z-[5] w-0.5 bg-foreground"
-                    style={{ insetInlineStart: pxOf(todayOff) }}
+                    className="absolute inset-y-0 z-[5] w-0"
+                    style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "2px solid hsl(var(--foreground) / 0.4)" }}
                   />
                 )}
               </div>
@@ -367,18 +408,18 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
                           <div
                             key={m.id}
-                            className="pointer-events-none absolute inset-y-0 z-[4] border-e border-dashed"
+                            className="pointer-events-none absolute inset-y-0 z-[4] w-0 opacity-40"
                             style={{
                               insetInlineStart: pxOf(offsetOf(m.milestone_date)),
-                              borderColor: lineColor(m),
+                              borderInlineStart: `2px dashed ${lineColor(m)}`,
                             }}
                           />
                         ))}
-                        {/* today line */}
+                        {/* today line — semi-transparent so the bar label underneath stays readable */}
                         {todayInView && (
                           <div
-                            className="absolute inset-y-0 z-[5] w-px bg-foreground/70"
-                            style={{ insetInlineStart: pxOf(todayOff) }}
+                            className="pointer-events-none absolute inset-y-0 z-[5] w-0"
+                            style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "1px solid hsl(var(--foreground) / 0.3)" }}
                           />
                         )}
                       </button>
@@ -418,6 +459,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onClose={() => setMilestonesOpen(false)}
         onChanged={load}
       />
+      <CapacityEditor open={capacityOpen} onClose={() => setCapacityOpen(false)} />
+      <EstimatesEditor open={estimatesOpen} onClose={() => setEstimatesOpen(false)} />
     </div>
   );
 }
