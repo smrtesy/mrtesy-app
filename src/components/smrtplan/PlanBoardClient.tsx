@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Users } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users, Clock } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
@@ -13,6 +13,7 @@ import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { CapacityEditor } from "./CapacityEditor";
+import { EstimatesEditor } from "./EstimatesEditor";
 
 const DAY_MS = 86_400_000;
 /** Pixels per day on the timeline. The track is wider than the viewport, so the
@@ -67,6 +68,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [capacityOpen, setCapacityOpen] = useState(false);
+  const [estimatesOpen, setEstimatesOpen] = useState(false);
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
@@ -226,6 +228,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </ControlButton>
             <ControlButton onClick={() => setCapacityOpen(true)}>
               <Users className="h-3.5 w-3.5" /> {t("capacity.button")}
+            </ControlButton>
+            <ControlButton onClick={() => setEstimatesOpen(true)}>
+              <Clock className="h-3.5 w-3.5" /> {t("estimates.button")}
             </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
@@ -455,6 +460,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onChanged={load}
       />
       <CapacityEditor open={capacityOpen} onClose={() => setCapacityOpen(false)} />
+      <EstimatesEditor open={estimatesOpen} onClose={() => setEstimatesOpen(false)} />
     </div>
   );
 }

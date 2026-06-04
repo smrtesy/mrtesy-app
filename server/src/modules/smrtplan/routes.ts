@@ -716,4 +716,59 @@ router.put("/plan/capacity/:userId", requireFull, async (req: Request, res: Resp
   res.json({ capacity: data });
 });
 
+// ── task hour estimates catalog ───────────────────────────────────────────────
+
+router.get("/plan/estimates", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_estimates")
+    .select("id, name, description, hours")
+    .eq("org_id", req.org!.id)
+    .order("name", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ estimates: data ?? [] });
+});
+
+router.post("/plan/estimates", requireFull, async (req: Request, res: Response) => {
+  const { name, description, hours } = req.body ?? {};
+  if (!name || typeof name !== "string") return res.status(400).json({ error: "name is required" });
+  const { data, error } = await db
+    .from("smrtplan_estimates")
+    .insert({
+      org_id: req.org!.id,
+      name: name.trim(),
+      description: description ?? null,
+      hours: typeof hours === "number" ? hours : 0,
+      created_by: req.user!.id,
+    })
+    .select("id, name, description, hours")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ estimate: data });
+});
+
+router.patch("/plan/estimates/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name", "description", "hours"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  patch.updated_at = new Date().toISOString();
+  const { data, error } = await db
+    .from("smrtplan_estimates")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, name, description, hours")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ estimate: data });
+});
+
+router.delete("/plan/estimates/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_estimates").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 export default router;

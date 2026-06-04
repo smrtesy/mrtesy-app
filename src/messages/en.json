@@ -1892,6 +1892,16 @@
       ],
       "save": "Save",
       "saved": "Saved"
+    },
+    "estimates": {
+      "button": "Hour estimates",
+      "title": "Task hour estimates",
+      "hint": "A catalog of task types and their estimated hours. The description helps the AI match the right task. Refined over time.",
+      "name": "Task name",
+      "description": "Description (optional)",
+      "hours": "Hours",
+      "add": "Add row",
+      "empty": "No estimates yet"
     }
   }
 }
