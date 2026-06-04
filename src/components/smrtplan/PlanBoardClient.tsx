@@ -11,8 +11,12 @@ import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 
 const DAY_MS = 86_400_000;
+/** Pixels per day on the timeline. The track is wider than the viewport, so the
+ *  chart scrolls horizontally to reveal future dates (instead of squeezing the
+ *  whole span into view). */
+const DAY_PX = 16;
 
-type Health = "on_track" | "at_risk" | "late" | "stream";
+type Health = "waiting" | "on_track" | "at_risk" | "late" | "stream";
 
 function planTitle(p: Plan, locale: string): string {
   return locale === "en" ? p.title_en || p.title_he : p.title_he;
@@ -20,6 +24,8 @@ function planTitle(p: Plan, locale: string): string {
 
 /** Path-free interim health, computed against the chosen "today" (like the prototype). */
 function computeHealth(p: Plan, today: Date): Health {
+  // A plan that hasn't started yet (start date still in the future) is "waiting".
+  if (p.start_date && today < parseISO(p.start_date)) return "waiting";
   if (p.kind === "stream") return "stream";
   if (!p.start_date || !p.end_date) return "on_track";
   const s = parseISO(p.start_date);
@@ -35,6 +41,7 @@ function computeHealth(p: Plan, today: Date): Health {
 }
 
 const healthColor: Record<Health, string> = {
+  waiting: "hsl(var(--muted-foreground))",
   on_track: "hsl(var(--status-ok))",
   at_risk: "hsl(var(--status-warn))",
   late: "hsl(var(--status-late))",
@@ -94,9 +101,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   }, [t0, totalDays]);
 
   const dateAt = (off: number) => new Date(t0.getTime() + off * DAY_MS);
-  const pct = (off: number) => (off / totalDays) * 100;
+  const pxOf = (off: number) => off * DAY_PX;
   const offsetOf = (iso: string) => daysBetween(t0, parseISO(iso));
   const today = dateAt(todayOffset);
+  const trackWidth = totalDays * DAY_PX;
 
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
@@ -157,6 +165,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {gregShort(today)} · {hebDate(today)}
         </span>
         <div className="flex flex-wrap gap-3 text-[12px] text-muted-foreground">
+          <LegendDot color="hsl(var(--muted-foreground))" label={t("legend.waiting")} />
           <LegendDot color="hsl(var(--status-ok))" label={t("legend.onTrack")} />
           <LegendDot color="hsl(var(--status-warn))" label={t("legend.atRisk")} />
           <LegendDot color="hsl(var(--status-late))" label={t("legend.late")} />
@@ -169,109 +178,128 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           <p className="mt-1 text-[12.5px] text-muted-foreground">{t("board.emptyHint")}</p>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
-          {/* timeline header */}
-          <div className="flex border-b bg-secondary/60">
-            <div className="w-[150px] flex-shrink-0 border-e px-3 py-2 text-[12px] font-bold text-muted-foreground">
+        <div className="flex overflow-hidden rounded-xl border bg-card">
+          {/* fixed label column (stays while the timeline scrolls) */}
+          <div className="w-[168px] flex-shrink-0 border-e">
+            <div className="flex h-12 items-center border-b bg-secondary/60 px-3 text-[12px] font-bold text-muted-foreground">
               {t("title")}
             </div>
-            <div className="relative h-12 flex-1">
-              {weeks.map((o) => (
-                <div
-                  key={o}
-                  className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e text-center"
-                  style={{ insetInlineStart: `${pct(o)}%`, width: `${(7 / totalDays) * 100}%` }}
-                >
-                  <span className="text-[10.5px] font-medium">{gregShort(dateAt(o))}</span>
-                  <span className="text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
+            {groups.map(([label, rows]) => (
+              <div key={label}>
+                <div className="flex h-[30px] items-center bg-secondary px-3 text-[12px] font-bold text-foreground/80">
+                  {label}
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* groups + rows */}
-          {groups.map(([label, rows]) => (
-            <div key={label}>
-              <div className="bg-secondary px-3 py-1.5 text-[12px] font-bold text-foreground/80">
-                {label}
-              </div>
-              {rows.map((p) => {
-                const h = computeHealth(p, today);
-                const s = p.start_date ? offsetOf(p.start_date) : 0;
-                const e = p.end_date ? offsetOf(p.end_date) : s + 7;
-                const span = Math.max(1, e - s);
-                const progress = p.effective_progress ?? p.progress ?? 0;
-                const isStream = p.kind === "stream";
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => setSelectedId(p.id)}
-                    className={cn(
-                      "flex w-full border-b text-start transition-colors hover:bg-accent/40",
-                      selectedId === p.id && "bg-accent/60",
-                    )}
-                  >
-                    <div className="flex w-[150px] flex-shrink-0 flex-col gap-1 border-e px-3 py-2">
-                      <span className="flex items-center gap-1.5 break-words text-[13px] font-bold">
-                        {planTitle(p, locale)}
-                        {isStream && (
-                          <span className="rounded bg-accent px-1.5 py-px text-[9px] font-bold text-accent-foreground">
-                            {t("tags.stream")}
-                          </span>
-                        )}
+                {rows.map((p) => {
+                  const h = computeHealth(p, today);
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setSelectedId(p.id)}
+                      className={cn(
+                        "flex h-[52px] w-full flex-col justify-center gap-1 overflow-hidden border-b px-3 text-start transition-colors hover:bg-accent/40",
+                        selectedId === p.id && "bg-accent/60",
+                      )}
+                    >
+                      <span className="flex items-center gap-1.5 text-[13px] font-bold" title={planTitle(p, locale)}>
+                        <span className="truncate">{planTitle(p, locale)}</span>
                         {p.is_critical && (
-                          <span className="rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
+                          <span className="shrink-0 rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
                             {t("tags.critical")}
                           </span>
                         )}
                       </span>
                       <span
-                        className="inline-flex items-center gap-1 text-[10.5px] font-medium"
+                        className="inline-flex items-center gap-1 whitespace-nowrap text-[10.5px] font-medium"
                         style={{ color: healthColor[h] }}
                       >
                         <span className="h-2 w-2 rounded-full" style={{ background: healthColor[h] }} />
                         {t(`health.${h}`)}
                       </span>
-                    </div>
-                    <div className="relative h-[52px] flex-1">
-                      <div
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          {/* scrollable timeline */}
+          <div className="flex-1 overflow-x-auto">
+            <div style={{ width: trackWidth }}>
+              {/* week strip */}
+              <div className="relative h-12 border-b bg-secondary/60">
+                {weeks.map((o) => (
+                  <div
+                    key={o}
+                    className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e"
+                    style={{ insetInlineStart: pxOf(o), width: 7 * DAY_PX }}
+                  >
+                    <span className="whitespace-nowrap text-[10.5px] font-medium">{gregShort(dateAt(o))}</span>
+                    <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
+                  </div>
+                ))}
+                <div
+                  className="absolute inset-y-0 z-[5] w-0.5 bg-foreground"
+                  style={{ insetInlineStart: pxOf(todayOffset) }}
+                />
+              </div>
+
+              {groups.map(([label, rows]) => (
+                <div key={label}>
+                  <div className="h-[30px] border-b bg-secondary" />
+                  {rows.map((p) => {
+                    const s = p.start_date ? offsetOf(p.start_date) : 0;
+                    const e = p.end_date ? offsetOf(p.end_date) : s + 7;
+                    const span = Math.max(1, e - s);
+                    const progress = p.effective_progress ?? p.progress ?? 0;
+                    const isStream = p.kind === "stream";
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedId(p.id)}
                         className={cn(
-                          "absolute top-2.5 h-8 overflow-hidden rounded-md border",
-                          isStream && "border-dashed",
+                          "relative block h-[52px] w-full border-b transition-colors hover:bg-accent/30",
+                          selectedId === p.id && "bg-accent/40",
                         )}
-                        style={{
-                          insetInlineStart: `${pct(s)}%`,
-                          width: `${pct(span)}%`,
-                          background: (p.color || "#534AB7") + "1f",
-                          borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
-                        }}
                       >
-                        {!isStream && (
-                          <div
-                            className="absolute inset-y-0 start-0 h-full"
-                            style={{ width: `${progress * 100}%`, background: (p.color || "#534AB7") + "44" }}
-                          />
-                        )}
-                      </div>
-                      <div
-                        className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
-                        style={{ insetInlineStart: `${pct(s)}%`, color: p.color || "#534AB7" }}
-                      >
-                        {isStream
-                          ? p.goal || ""
-                          : `${p.goal || ""}${p.goal ? "  ·  " : ""}${Math.round(progress * 100)}%`}
-                      </div>
-                      {/* today line */}
-                      <div
-                        className="absolute inset-y-0 z-[5] w-px bg-foreground"
-                        style={{ insetInlineStart: `${pct(todayOffset)}%` }}
-                      />
-                    </div>
-                  </button>
-                );
-              })}
+                        <div
+                          className={cn(
+                            "absolute top-2.5 h-8 overflow-hidden rounded-md border",
+                            isStream && "border-dashed",
+                          )}
+                          style={{
+                            insetInlineStart: pxOf(s),
+                            width: pxOf(span),
+                            background: (p.color || "#534AB7") + "1f",
+                            borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
+                          }}
+                        >
+                          {!isStream && (
+                            <div
+                              className="absolute inset-y-0 start-0 h-full"
+                              style={{ width: `${progress * 100}%`, background: (p.color || "#534AB7") + "44" }}
+                            />
+                          )}
+                        </div>
+                        <div
+                          className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
+                          style={{ insetInlineStart: pxOf(s), color: p.color || "#534AB7" }}
+                        >
+                          {isStream
+                            ? p.goal || ""
+                            : `${p.goal || ""}${p.goal ? "  ·  " : ""}${Math.round(progress * 100)}%`}
+                        </div>
+                        {/* today line */}
+                        <div
+                          className="absolute inset-y-0 z-[5] w-px bg-foreground/70"
+                          style={{ insetInlineStart: pxOf(todayOffset) }}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       )}
 

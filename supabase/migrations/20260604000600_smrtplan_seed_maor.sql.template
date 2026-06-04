@@ -47,7 +47,7 @@ BEGIN
     (p_video,  v_org, 'מערכת AI · כלי וידאו', 'AI system · video tool', 'הכלי המלא — מוכן לטקסט', 'effort', 'כללי / תשתית', '2026-06-25', '2026-07-30', '#15805F', v_owner, v_owner),
     (p_mkt,    v_org, 'מרקטינג', 'Marketing', 'קמפיין מעבר לקהילה (קל→חזק)', 'effort', 'רבי לילדים', '2026-06-11', '2026-08-20', '#185FA5', v_owner, v_owner),
     (p_br,     v_org, 'בית רבינו', 'Beis Rabbeinu', '6 פרקים בסטייל ישן — חיץ לתקופה', 'stream', 'רבי לילדים', '2026-07-09', '2026-08-13', '#7F77DD', v_owner, v_owner),
-    (p_biling, v_org, 'זרם דו-לשוני', 'Bilingual stream', 'הפעלה שוטפת — פרק אחד, עברית + אנגלית', 'stream', 'כללי / תשתית', '2026-08-20', '2026-09-11', '#0F6E56', v_owner, v_owner);
+    (p_biling, v_org, 'פורמט וידאו חדש', 'New video format', 'הפעלה שוטפת — פרק אחד, עברית + אנגלית', 'stream', 'כללי / תשתית', '2026-08-20', '2026-09-11', '#0F6E56', v_owner, v_owner);
 
   -- A repository idea (no start_date) — exercises the repository view.
   INSERT INTO smrtplan_plans (id, org_id, title_he, title_en, goal, kind, group_label, stage, created_by, owner_user_id) VALUES
