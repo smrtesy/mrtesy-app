@@ -483,4 +483,166 @@ router.post("/plans/:id/recompute", requireFull, async (req: Request, res: Respo
   res.json(summary);
 });
 
+// ── milestones (create / edit / delete) ──────────────────────────────────────
+
+router.post("/plans/milestones", requireFull, async (req: Request, res: Response) => {
+  const { milestone_date, label_he, label_en, color, plan_id } = req.body ?? {};
+  if (!milestone_date || !label_he) {
+    return res.status(400).json({ error: "milestone_date and label_he are required" });
+  }
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .insert({
+      org_id: req.org!.id,
+      plan_id: plan_id ?? null,
+      milestone_date,
+      label_he,
+      label_en: label_en ?? null,
+      color: color ?? null,
+      created_by: req.user!.id,
+    })
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ milestone: data });
+});
+
+router.patch("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["milestone_date", "label_he", "label_en", "color", "plan_id"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ milestone: data });
+});
+
+router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_milestones")
+    .delete()
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ── plan tasks (create / edit / delete) ───────────────────────────────────────
+
+router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
+  const { title, title_he, due_date, duration_days, parent_task_id } = req.body ?? {};
+  if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
+  const { data, error } = await db
+    .from("tasks")
+    .insert({
+      organization_id: req.org!.id,
+      user_id: req.user!.id,
+      plan_id: req.params.id,
+      title: title ?? title_he,
+      title_he: title_he ?? null,
+      status: "inbox",
+      is_private: false,
+      assignment_status: "accepted",
+      due_date: due_date ?? null,
+      duration_days: duration_days ?? null,
+      parent_task_id: parent_task_id ?? null,
+    })
+    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ task: data });
+});
+
+const PLAN_TASK_WRITABLE = new Set([
+  "title", "title_he", "due_date", "duration_days", "status",
+  "assigned_to_user_id", "parent_task_id",
+]);
+
+router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (PLAN_TASK_WRITABLE.has(k)) patch[k] = v;
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  // Scope to a task that actually belongs to a plan in this org.
+  const { data, error } = await db
+    .from("tasks")
+    .update(patch)
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ task: data });
+});
+
+router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("tasks")
+    .delete()
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ── stages / episodes (edit / delete) ─────────────────────────────────────────
+
+router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name_he", "name_en", "sequence", "required_role"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_stages")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, name_he, name_en, sequence, required_role")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ stage: data });
+});
+
+router.delete("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_stages").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+router.patch("/plan-episodes/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name_he", "name_en", "family", "due_date", "sequence"]) {
+    if (k in (req.body ?? {})) patch[k] = req.body[k];
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_episodes")
+    .update(patch)
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, plan_id, name_he, name_en, family, due_date, sequence")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ episode: data });
+});
+
+router.delete("/plan-episodes/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("smrtplan_episodes").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 export default router;
