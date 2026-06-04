@@ -71,9 +71,10 @@ const FILTERS: Record<string, { main: string; subs: string[] }> = {
 };
 
 async function allVideos(bot: BotRow): Promise<VideoRow[]> {
-  const { data } = await db.from("smrtbot_videos")
+  const { data, error } = await db.from("smrtbot_videos")
     .select("vd_id, video_name, video_link, full_url, display_link, main_category, sub_category, rebbe, holidays, icon, search_text")
     .eq("org_id", bot.org_id).eq("active", true);
+  if (error) console.error("[smrtbot/videos] allVideos", error.message);
   return (data as VideoRow[]) ?? [];
 }
 

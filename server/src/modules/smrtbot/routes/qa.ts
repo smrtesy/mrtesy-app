@@ -65,6 +65,7 @@ router.post("/bot/:botId/questions/:id/promote", requireBotAccess("botId"), asyn
   if (qErr) return res.status(500).json({ error: qErr.message });
   if (!q) return res.status(404).json({ error: "question not found" });
   if (!q.admin_reply) return res.status(400).json({ error: "answer the question before promoting it" });
+  if (!q.message_text) return res.status(400).json({ error: "question has no text to promote" });
 
   const { error: insErr } = await db.from("smrtbot_knowledge_base").insert({
     org_id: orgId, bot_id: botId,

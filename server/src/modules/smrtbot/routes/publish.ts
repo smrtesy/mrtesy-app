@@ -64,11 +64,24 @@ router.post("/bot/:botId/publish", requireBotAccess("botId"), async (req: Reques
       .order("version", { ascending: false }).limit(1).maybeSingle();
     const version = ((last?.version as number) ?? 0) + 1;
 
+    // Snapshot ALL live tables BEFORE any mutation — this is both the archive
+    // (for rollback) and the recovery point if a promote fails mid-way.
     const snap: Record<string, Row[]> = {};
-    for (const table of ENV_TABLES) {
-      snap[table] = await snapshot(table, orgId, botId, "live"); // archive current live
-      const testRows = await snapshot(table, orgId, botId, "test");
-      await replaceEnv(table, orgId, botId, "live", testRows); // promote test → live
+    for (const table of ENV_TABLES) snap[table] = await snapshot(table, orgId, botId, "live");
+
+    // Promote test → live. supabase-js has no multi-statement transaction, so
+    // on any failure we restore the full pre-publish live snapshot rather than
+    // leave a table deleted-but-not-repopulated.
+    try {
+      for (const table of ENV_TABLES) {
+        const testRows = await snapshot(table, orgId, botId, "test");
+        await replaceEnv(table, orgId, botId, "live", testRows);
+      }
+    } catch (promoteErr) {
+      for (const table of ENV_TABLES) {
+        try { await replaceEnv(table, orgId, botId, "live", snap[table]); } catch { /* best-effort restore */ }
+      }
+      throw promoteErr;
     }
 
     const { error: insErr } = await db.from("smrtbot_publish_batches").insert({
@@ -108,8 +121,16 @@ router.post("/bot/:botId/publish/:id/rollback", requireBotAccess("botId"), async
     if (error) throw new Error(error.message);
     if (!batch) return res.status(404).json({ error: "batch not found" });
     const snap = (batch.changes_json as Record<string, Row[]>) ?? {};
-    for (const table of ENV_TABLES) {
-      await replaceEnv(table, orgId, botId, "live", snap[table] ?? []);
+    // Recovery point: capture current live before overwriting it.
+    const current: Record<string, Row[]> = {};
+    for (const table of ENV_TABLES) current[table] = await snapshot(table, orgId, botId, "live");
+    try {
+      for (const table of ENV_TABLES) await replaceEnv(table, orgId, botId, "live", snap[table] ?? []);
+    } catch (rbErr) {
+      for (const table of ENV_TABLES) {
+        try { await replaceEnv(table, orgId, botId, "live", current[table]); } catch { /* best-effort restore */ }
+      }
+      throw rbErr;
     }
     res.json({ ok: true });
   } catch (e) {
