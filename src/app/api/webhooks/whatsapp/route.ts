@@ -6,10 +6,10 @@
  * tier (same as Pro) makes a Railway dyno restart no longer drop incoming
  * messages.
  *
- * Behavior parity with server/src/modules/smrttask/routes/whatsapp-webhook.ts —
- * this is essentially the same code, retargeted at NextRequest/NextResponse
- * and using `createAdminSupabaseClient()` instead of the long-lived
- * service-role client from the Express server.
+ * This is the SOLE WhatsApp webhook handler — Meta delivers here directly. The
+ * old Express copy (server/src/modules/smrttask/routes/whatsapp-webhook.ts) was
+ * removed; this route uses `createAdminSupabaseClient()` instead of the
+ * long-lived service-role client the Express server held.
  *
  * Flow per POST:
  *   1. Read the raw body for HMAC verification.
