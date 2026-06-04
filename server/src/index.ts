@@ -26,6 +26,8 @@ import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
 import smrttaskRouter from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
+import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
+import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
 
@@ -136,6 +138,15 @@ app.get("/api/version", (_req, res) => {
 // so it must come BEFORE the auth-guarded routers (same reasoning as above).
 app.use(smrtvoiceWebhookRouter);
 
+// smrtReach public endpoints are unauthenticated (recipients clicking links,
+// SES/SNS, and the secret-guarded cron caller aren't logged-in users), so they
+// must come BEFORE the auth-guarded smrtReach router.
+app.use("/api", smrtreachUnsubscribeRouter);
+app.use("/api", smrtreachPublicRouter);
+
+// smrtCRM public inbound ingest is token-authenticated (no JWT), so before auth.
+app.use("/api", smrtcrmIngestRouter);
+
 // smrtBot internal inbound + cron job routes — shared-secret guarded (the
 // Vercel webhook / pg_cron call them), so they come BEFORE the auth guards.
 app.use(smrtbotInternalRouter);
@@ -149,6 +160,8 @@ app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
+app.use("/api", smrtcrmRouter);
+app.use("/api", smrtreachRouter);
 app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
 app.use("/api/quick-action", quickActionRouter);
