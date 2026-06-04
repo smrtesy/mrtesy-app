@@ -244,9 +244,16 @@ export async function computePlanSchedule(planId: string): Promise<{
     let lf = rollBack(horizon, blocked);
     for (const sId of succ) {
       const s = tasks.get(sId)!;
-      if (s.latest_start && s.latest_start < lf) lf = s.latest_start;
+      // A provider must FINISH the working day BEFORE its consumer starts —
+      // symmetric with the forward pass (earliest_start = provider finish + 1
+      // working day). Without the −1 every provider gains a phantom day of
+      // slack and genuinely-critical tasks fail the slack ≤ 0 test below.
+      if (s.latest_start) {
+        const before = subtractWorkingDays(s.latest_start, 1, blocked);
+        if (before < lf) lf = before;
+      }
     }
-    t.latest_finish = rollBack(lf, blocked);
+    t.latest_finish = lf; // already a working day (rollBack / subtractWorkingDays)
     t.latest_start = subtractWorkingDays(t.latest_finish, Math.max(0, t.duration - 1), blocked);
   }
 

@@ -31,7 +31,7 @@ export interface Task {
   title_he: string | null;
   description: string | null;
   priority: "urgent" | "high" | "medium" | "low";
-  status: "inbox" | "in_progress" | "snoozed" | "archived" | "completed" | "pending_completion";
+  status: "inbox" | "in_progress" | "snoozed" | "archived" | "completed" | "pending_completion" | "dismissed";
   has_unread_update?: boolean | null;
   completion_signal_detected?: boolean | null;
   completion_signal_reason?: string | null;

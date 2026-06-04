@@ -21,7 +21,10 @@ function taskTitle(t: PlanTask, locale: string) {
 
 /** Ready when every "need" is satisfied; blocked when some input is still waiting. */
 function zoneOf(t: PlanTask): "done" | "blocked" | "ready" {
-  if (t.status === "archived" || t.status === "completed") return "done";
+  // Match the SQL health/progress views: archived, completed AND dismissed are done.
+  if (t.status === "archived" || t.status === "completed" || t.status === "dismissed") {
+    return "done";
+  }
   if ((t.needs ?? []).some((n) => !n.satisfied)) return "blocked";
   return "ready";
 }
