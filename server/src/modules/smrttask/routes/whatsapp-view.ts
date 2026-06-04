@@ -56,7 +56,12 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
     const sm = (t as unknown as { source_messages?: { source_id?: string } | { source_id?: string }[] }).source_messages;
     const sourceId = Array.isArray(sm) ? sm[0]?.source_id : sm?.source_id;
     if (!sourceId?.startsWith("wa:")) continue;
-    const chatId = sourceId.slice("wa:".length);
+    // source_id is wa:<chatId> (legacy / self-chat context row) or
+    // wa:<chatId>:<wamid> (per-burst rows). The chatId is the segment between
+    // the "wa:" prefix and the next colon; take the whole tail when there is no
+    // wamid suffix.
+    const sepIdx = sourceId.indexOf(":", 3); // skip "wa:" prefix
+    const chatId = sepIdx > 0 ? sourceId.slice(3, sepIdx) : sourceId.slice(3);
     tasksByChat.set(chatId, (tasksByChat.get(chatId) ?? 0) + 1);
   }
 
@@ -222,44 +227,41 @@ router.patch("/whatsapp/threads/:chat_id/name", ...gate, async (req: Request, re
   // the stale override forever. Best-effort: a stale name is cosmetic,
   // not a correctness issue, so we log + continue on error.
   try {
-    const { data: existing } = await db
+    let display = next;
+    if (!display) {
+      // Fall back to from_name on the latest incoming message — same
+      // priority order refreshSourceMessageThread() uses on a new
+      // inbound webhook.
+      const { data: fallbackRow } = await db
+        .from("whatsapp_messages")
+        .select("from_name, from_phone")
+        .eq("user_id", req.user!.id)
+        .eq("chat_id", chat_id)
+        .eq("direction", "incoming")
+        .order("received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      display =
+        (fallbackRow?.from_name as string | null)?.trim() ||
+        (fallbackRow?.from_phone as string | null) ||
+        chat_id;
+    }
+    // A chat now fans out across many immutable burst rows
+    // (wa:<chatId>:<wamid>), so update the display name on ALL of the chat's
+    // source_messages — matched by metadata.chatId, format-independent. This
+    // updates `sender`/`subject` (what the classifier actually reads); the
+    // chatName written into future burst rows is resolved from
+    // whatsapp_chat_state.custom_name by refreshSourceMessageThread(). A
+    // per-row metadata JSON merge isn't expressible in one bulk update, so we
+    // leave metadata.chatName on existing rows — cosmetic and self-heals on the
+    // next burst. Best-effort: a stale name is cosmetic, not a correctness bug.
+    const { error: updateErr } = await db
       .from("source_messages")
-      .select("id, metadata")
+      .update({ sender: display, subject: display })
       .eq("user_id", req.user!.id)
       .eq("source_type", "whatsapp")
-      .eq("source_id", `wa:${chat_id}`)
-      .maybeSingle();
-    if (existing) {
-      let display = next;
-      if (!display) {
-        // Fall back to from_name on the latest incoming message — same
-        // priority order refreshSourceMessageThread() uses on a new
-        // inbound webhook.
-        const { data: fallbackRow } = await db
-          .from("whatsapp_messages")
-          .select("from_name, from_phone")
-          .eq("user_id", req.user!.id)
-          .eq("chat_id", chat_id)
-          .eq("direction", "incoming")
-          .order("received_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        display =
-          (fallbackRow?.from_name as string | null)?.trim() ||
-          (fallbackRow?.from_phone as string | null) ||
-          chat_id;
-      }
-      const prevMeta = (existing.metadata as Record<string, unknown> | null) ?? {};
-      const { error: updateErr } = await db
-        .from("source_messages")
-        .update({
-          sender: display,
-          subject: display,
-          metadata: { ...prevMeta, chatName: display, customName: next },
-        })
-        .eq("id", existing.id);
-      if (updateErr) console.warn("[whatsapp] rename: source_messages update:", updateErr.message);
-    }
+      .filter("metadata->>chatId", "eq", chat_id);
+    if (updateErr) console.warn("[whatsapp] rename: source_messages update:", updateErr.message);
   } catch (e) {
     console.warn("[whatsapp] rename: source_messages refresh failed:", e);
   }
@@ -291,9 +293,10 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
 
   // Tasks created from this chat. Two source-message shapes can produce
   // tasks for the SAME chat:
-  //   1. Legacy thread-level rows: source_type='whatsapp',
-  //      source_id='wa:<chatId>' — one row per chat, one classification per
-  //      reprocess. Still used for regular (non self-chat) threads.
+  //   1. WhatsApp burst rows: source_type='whatsapp', source_id='wa:<chatId>'
+  //      (legacy single-row threads) or 'wa:<chatId>:<wamid>' (current
+  //      immutable per-burst rows). We match these by metadata.chatId so the
+  //      query is independent of the source_id format and covers both shapes.
   //   2. Per-message rows: source_type='whatsapp_echo',
   //      source_id='wa:<chatId>:<wamid>' — one row per outgoing voice memo
   //      in a self-chat thread. Each gets its own classification.
@@ -303,10 +306,10 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
     db
       .from("tasks")
       .select(
-        "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(id, source_id, source_type, user_id)",
+        "id, title, title_he, status, priority, manually_verified, created_at, due_date, source_messages!inner(id, source_id, source_type, user_id, metadata)",
       )
       .eq("source_messages.source_type", "whatsapp")
-      .eq("source_messages.source_id", `wa:${chatId}`)
+      .eq("source_messages.metadata->>chatId", chatId)
       .eq("source_messages.user_id", req.user!.id)
       .order("created_at", { ascending: true })
       .limit(500),
@@ -573,11 +576,19 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
         conversationLines,
       ].join("\n");
 
+      // One IMMUTABLE source_message per burst, keyed by the sent message's
+      // wamid (wa:<chatId>:<wamid>) — mirrors refreshSourceMessageThread() in
+      // the webhook so the send path and the inbound path stay consistent. The
+      // message we just sent is OUTGOING, stamped as lastDirection so the
+      // pipeline defers it as a follow-up (driven by real direction, not a
+      // guessed thread state). ignoreDuplicates so the webhook echo of the same
+      // wamid is a no-op.
+      const burstSourceId = `wa:${chatId}:${wamid}`;
       await db.from("source_messages").upsert(
         {
           user_id: req.user!.id,
           source_type: "whatsapp",
-          source_id: `wa:${chatId}`,
+          source_id: burstSourceId,
           sender: chatName,
           subject: chatName,
           body_text: text.trim().slice(0, 1000),
@@ -586,10 +597,24 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
           source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
           reply_to_context: fromPhone,
           processing_status: "pending",
-          metadata: { chatId, chatName, fromPhone, isGroup: false },
+          metadata: { chatId, chatName, fromPhone, isGroup: false, lastDirection: "outgoing", lastWamid: wamid },
         },
-        { onConflict: "user_id,source_type,source_id" },
+        { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
       );
+      // Supersede any earlier still-pending, unlocked burst row for this chat so
+      // only the newest burst reaches the classifier (coalescing). `lte` (not
+      // `lt`) plus the neq guard mirrors refreshSourceMessageThread(): two bursts
+      // that share a received_at to the second must not both survive as pending.
+      await db
+        .from("source_messages")
+        .update({ processing_status: "processed", ai_classification: "superseded", processed_at: nowIso })
+        .eq("user_id", req.user!.id)
+        .eq("source_type", "whatsapp")
+        .eq("processing_status", "pending")
+        .is("processing_lock_at", null)
+        .filter("metadata->>chatId", "eq", chatId)
+        .lte("received_at", nowIso)
+        .neq("source_id", burstSourceId);
     }
   } catch (e) {
     console.warn("[whatsapp-send] source_messages refresh failed:", e);
