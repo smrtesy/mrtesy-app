@@ -141,10 +141,22 @@ function extractMeetingBlock(body: string): string | null {
 // join URL verbatim (system-wide deep-link rule).
 function bodyForClassify(msg: any, limit: number): string {
   const full = bodyForAI(msg);
-  const head = full.substring(0, limit);
+  const isWa = msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo";
+  // WhatsApp transcripts run oldest→newest and the prompt reasons about the
+  // LAST line, so the decision-relevant messages sit at the BOTTOM. Head-
+  // truncating drops exactly them — a long thread of old OCR/audio blocks once
+  // pushed the latest "please do X" past the cap, so it got mis-filed as
+  // informational. Keep the TAIL for WhatsApp; keep the HEAD for email (the
+  // latest reply is on top, quoted history below).
+  const clipped =
+    full.length <= limit
+      ? full
+      : isWa
+        ? "…\n" + full.slice(full.length - limit)
+        : full.substring(0, limit);
   const meeting = extractMeetingBlock(full);
-  if (!meeting) return head;
-  return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${head}`;
+  if (!meeting) return clipped;
+  return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${clipped}`;
 }
 
 // ── Business-hours math ──────────────────────────────────────────────────────
@@ -378,6 +390,11 @@ interface ThreadAnalysis {
   classification: "actionable" | "informational" | "spam";
   reason: string;
   newSummary: string;
+  // The task's CURRENT next action as of this message (≤80 chars), used to
+  // refresh a tracked task's title when the matter advances — so the title
+  // stops showing the original (already-done) ask. Empty when unchanged.
+  // Optional so the many fallback ThreadAnalysis literals don't all need it.
+  newTitle?: string;
   state: "open" | "pending_user_action" | "pending_other_party" | "resolved";
   completionSignal: boolean;
   completionReason: string;
@@ -469,7 +486,8 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
 {
   "classification": "ACTIONABLE" | "INFORMATIONAL" | "SPAM",
   "reason_he": "short Hebrew explanation",
-  "new_summary": "Hebrew, ≤ 400 chars. Incorporates this new message into the running thread context. State the current open question and who owes the next step.",
+  "new_title_he": "Hebrew, ≤ 80 chars. The matter's CURRENT next action as of THIS message — what the user must do NEXT — NOT the original ask if that step is already done. Example: the original task was 'להגיש את טופס תוכנית התזונה'; once the user submitted it and the reply says a screening call is coming, the title becomes 'לעקוב אחרי שיחת הסינון ולשאול על דיור וחשמל'. Return an empty string ONLY when the next action is unchanged from the existing title.",
+  "new_summary": "Hebrew, ≤ 400 chars. LEAD with the current open question and who owes the next step RIGHT NOW. Do NOT open by recapping steps the user already completed (e.g. don't start with 'נרשם'/'שילם'/'שלח') — reference prior history only briefly and only if it clarifies the current state.",
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
   "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string",
@@ -771,6 +789,7 @@ when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
     classification,
     reason: String(parsed.reason_he ?? ""),
     newSummary: String(parsed.new_summary ?? "").slice(0, 400),
+    newTitle: String(parsed.new_title_he ?? "").slice(0, 80),
     state,
     completionSignal: Boolean(parsed.completion),
     completionReason: String(parsed.completion_reason_he ?? ""),
@@ -793,7 +812,7 @@ async function appendUpdateToTask(
 ) {
   const { data: existing } = await supabase
     .from("tasks")
-    .select("updates")
+    .select("updates, status, title_he")
     .eq("id", taskId)
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
@@ -849,6 +868,17 @@ async function appendUpdateToTask(
     updateFields.description = analysis.newSummary;
   }
 
+  // Refresh the title to the matter's CURRENT next action when the analyzer
+  // produced one that actually differs from what's stored — otherwise the title
+  // stays frozen on the original (already-done) ask while the description moves
+  // on (real case: task still titled "להגיש את הטופס" long after it was
+  // submitted). Skip when empty or unchanged so we don't churn titles/activity.
+  const freshTitle = analysis.newTitle?.trim();
+  if (freshTitle && freshTitle.length > 0 && freshTitle !== (existing?.title_he ?? "").trim()) {
+    updateFields.title_he = freshTitle;
+    updateFields.title = freshTitle;
+  }
+
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
@@ -860,6 +890,14 @@ async function appendUpdateToTask(
     updateFields.status = "pending_completion";
     updateFields.completion_signal_detected = true;
     updateFields.completion_signal_reason = analysis.completionReason;
+  } else if (classification === "actionable" && existing?.status === "snoozed") {
+    // An actionable follow-up landed on a snoozed matter. Snooze means "remind
+    // me later" — a fresh actionable turn IS that later, so resurface the task
+    // instead of leaving the update buried where the user can't see it (real
+    // case: a substantive reply with a link folded silently into a snoozed
+    // task). Informational follow-ups ("תודה") deliberately do NOT resurface.
+    updateFields.status = "in_progress";
+    updateFields.snoozed_until = null;
   }
 
   await supabase.from("tasks").update(updateFields).eq("id", taskId);

@@ -1395,14 +1395,33 @@ async function refreshSourceMessageThread(
     ) || chatId;
   const isGroup = !/^\d+$/.test(chatId) || chatId.length > 15;
 
-  const conversationLines = ordered
-    .map((m) => {
-      const ts = String(m.received_at ?? "").slice(0, 16);
-      const dir = String(m.direction ?? "incoming").toUpperCase();
-      const text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
-      return `[${dir} ${ts}] ${text}`;
-    })
-    .join("\n");
+  // Build the transcript favouring the MOST RECENT messages. raw_content is
+  // capped below (3000) and re-capped downstream by body_truncate_classify, and
+  // the classifier reasons about the LAST line — so a long tail of huge old OCR
+  // / audio-transcript blocks must never push the freshest messages out (real
+  // case: a Drive-folder OCR + audio-transcript history blew the budget and the
+  // latest "please do X" was truncated away → mis-filed as informational).
+  // Clamp each message, then keep the newest lines that fit the budget.
+  const MAX_MSG_CHARS = 600;
+  const CONVO_BUDGET = 2600;
+  const allLines = ordered.map((m) => {
+    const ts = String(m.received_at ?? "").slice(0, 16);
+    const dir = String(m.direction ?? "incoming").toUpperCase();
+    let text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
+    if (text.length > MAX_MSG_CHARS) text = text.slice(0, MAX_MSG_CHARS) + " …";
+    return `[${dir} ${ts}] ${text}`;
+  });
+  const keptLines: string[] = [];
+  let convoUsed = 0;
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    convoUsed += allLines[i].length + 1;
+    if (convoUsed > CONVO_BUDGET && keptLines.length > 0) break;
+    keptLines.unshift(allLines[i]);
+  }
+  if (keptLines.length < allLines.length) {
+    keptLines.unshift(`[… ${allLines.length - keptLines.length} הודעות קודמות הושמטו …]`);
+  }
+  const conversationLines = keptLines.join("\n");
 
   const rawContent = [
     `Chat: ${chatName}`,
