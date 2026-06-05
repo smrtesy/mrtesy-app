@@ -1489,6 +1489,40 @@ async function refreshSourceMessageThread(
   );
   if (upsertErr) throw new Error(upsertErr.message);
 
+  // ── Late-media transcript enrichment (race fix) ──────────────────────────
+  // A slow-to-ingest message — an image whose Gemini OCR took ~15s, or an audio
+  // memo still being transcribed — lands in whatsapp_messages AFTER a faster
+  // text reply that arrived right behind it. Its chat-time (received_at) is
+  // EARLIER, so it never becomes `last` and never anchors its own burst, while
+  // the faster text already created + froze this burst. The upsert above then
+  // hits the SAME wamid key and ignoreDuplicates no-ops it — so the freshly
+  // rebuilt transcript (which, on this pass, DOES include the late media) is
+  // thrown away, and the classifier grades a transcript with the screenshot /
+  // OCR missing (real case: a Zelle "payment sent $137" screenshot dropped, so
+  // the payment task stayed open). Fix: when the burst row still exists as
+  // PENDING and is not currently being processed, refresh its transcript in
+  // place from the now-complete message set.
+  //
+  // The update is scoped to pending + unlocked rows so the original immutability
+  // guarantee still holds — an already-classified or in-flight burst is never
+  // reset by a webhook re-delivery, which is exactly what ignoreDuplicates was
+  // added to prevent. A redundant rewrite on the just-inserted row is harmless
+  // (identical content, status stays pending).
+  const { error: refreshErr } = await db
+    .from("source_messages")
+    .update({
+      body_text: String(last.body_text ?? "").slice(0, 1000),
+      raw_content: rawContent.slice(0, 3000),
+      received_at: last.received_at,
+      metadata: { chatId, chatName, fromPhone, isGroup, isSelfChat, lastDirection: last.direction, lastWamid: latestWamid },
+    })
+    .eq("user_id", userId)
+    .eq("source_type", "whatsapp")
+    .eq("source_id", burstSourceId)
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null);
+  if (refreshErr) throw new Error(refreshErr.message);
+
   // Supersede any EARLIER burst row for this chat that hasn't been classified
   // yet: while the chat is still active, only the newest burst (which carries
   // the full transcript) should reach the classifier. We touch rows that are
