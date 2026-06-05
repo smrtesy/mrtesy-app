@@ -14,6 +14,7 @@ interface MyTask {
   title: string;
   title_he: string | null;
   status: string;
+  assigned_to_user_id: string | null;
   due_date: string | null;
   latest_finish: string | null;
   is_critical: boolean | null;
@@ -155,6 +156,11 @@ export function MyTasksClient({ locale }: { locale: string }) {
                               </span>
                             )}
                           </span>
+                          {!tk.assigned_to_user_id && z.key !== "done" && (
+                            <span className="whitespace-nowrap rounded bg-secondary px-2 py-0.5 text-[10.5px] text-muted-foreground">
+                              {t("edit.unassigned")}
+                            </span>
+                          )}
                           {planLabel(tk) && (
                             <span className="whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[10.5px] text-accent-foreground">
                               {planLabel(tk)}

@@ -394,6 +394,9 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
 router.get("/plan/my-tasks", async (req: Request, res: Response) => {
+  // Mine = assigned to me, OR unassigned tasks I created (an unassigned plan
+  // task still belongs to its owner — it shouldn't fall through the cracks).
+  const uid = req.user!.id;
   const { data, error } = await db
     .from("tasks")
     .select(
@@ -401,8 +404,8 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
         "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id",
     )
     .eq("organization_id", req.org!.id)
-    .eq("assigned_to_user_id", req.user!.id)
     .not("plan_id", "is", null)
+    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`)
     .order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
 
