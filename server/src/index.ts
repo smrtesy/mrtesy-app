@@ -4,7 +4,7 @@ dotenv.config({ override: true }); // .env always wins over shell environment
 // ── Startup env diagnostics (visible in Railway logs) ────────────────────────
 const REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
 const presentEnv = REQUIRED_ENV.map((k) => `${k}=${process.env[k] ? "✓" : "✗ MISSING"}`);
-const optionalEnv = ["ANTHROPIC_API_KEY", "FRONTEND_URL", "PORT", "NODE_ENV"]
+const optionalEnv = ["ANTHROPIC_API_KEY", "FRONTEND_URL", "PORT", "NODE_ENV", "RESEND_API_KEY", "RESEND_FROM_EMAIL"]
   .map((k) => `${k}=${process.env[k] ? "✓" : "—"}`);
 console.log("[startup] required env:", presentEnv.join(", "));
 console.log("[startup] optional env:", optionalEnv.join(", "));
