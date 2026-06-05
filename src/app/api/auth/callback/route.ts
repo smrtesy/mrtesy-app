@@ -48,45 +48,38 @@ async function redirectUser(
     return NextResponse.redirect(`${origin}${redirectPath}`);
   }
 
-  // Brand-new user (no user_settings row). Allowed in only if they were invited
-  // OR an admin already added them to an org — membership is itself proof of
-  // authorization. Without the membership check, a user an owner/admin added
-  // directly via org settings (which creates an org_members row but no pending
-  // invite) gets wrongly treated as uninvited and bounced on every login.
+  // Apply any pending invites for this user atomically — joins each org and
+  // grants the per-user apps the inviter chose. SECURITY DEFINER fn, because the
+  // web session can't INSERT org_members under RLS. Tolerate its absence so a
+  // pre-migration deploy still lets existing users log in.
+  const { error: rpcErr } = await supabase.rpc("accept_my_invites");
+  if (rpcErr) console.error("[auth/callback] accept_my_invites failed:", rpcErr.message);
+
+  // Membership is authorization: a user is allowed in if they belong to any org
+  // — via an invite just accepted above, or added directly by an admin.
+  const { data: membership, error: membershipErr } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", user.id)
+    .limit(1)
+    .maybeSingle();
+
+  // Fail safe: if the membership lookup itself errored we can't tell whether the
+  // user is a legitimate member — bounce to a retryable system error rather than
+  // wrongly telling a real member "no invite".
+  if (membershipErr) {
+    console.error("[auth/callback] membership lookup failed:", membershipErr.message);
+    await supabase.auth.signOut();
+    return NextResponse.redirect(`${origin}/he/login?error=system_error`);
+  }
+
+  // Brand-new user (no user_settings row): allowed in only if they belong to an org.
   if (!settings) {
-    const { data: invites } = await supabase
-      .from("org_invites")
-      .select("id, org_id, role")
-      .eq("email", user.email?.toLowerCase() ?? "")
-      .is("accepted_at", null)
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const invite = invites?.[0] ?? null;
-
-    const { data: existingMembership, error: membershipErr } = await supabase
-      .from("org_members")
-      .select("org_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-
-    // Fail safe: if the membership lookup itself errored we can't tell whether
-    // the user is a legitimate member — bounce to a retryable system error
-    // rather than wrongly telling a real member "no invite".
-    if (membershipErr) {
-      console.error("[auth/callback] membership lookup failed:", membershipErr.message);
-      await supabase.auth.signOut();
-      return NextResponse.redirect(`${origin}/he/login?error=system_error`);
-    }
-
-    if (!invite && !existingMembership) {
+    if (!membership) {
       await supabase.auth.signOut();
       return NextResponse.redirect(`${origin}/he/login?error=no_invite`);
     }
 
-    // Provision settings for the new user.
     const { error: settingsErr } = await supabase
       .from("user_settings")
       .insert({ user_id: user.id, preferred_language: "he" });
@@ -96,63 +89,11 @@ async function redirectUser(
       return NextResponse.redirect(`${origin}/he/login?error=system_error`);
     }
 
-    // If they arrived via an invite, join that org and mark the invite accepted.
-    // (A directly-added member already has their org_members row.)
-    if (invite) {
-      const { error: memberErr } = await supabase
-        .from("org_members")
-        .insert({ org_id: invite.org_id, user_id: user.id, role: invite.role, invited_by: null });
-      if (memberErr && memberErr.code !== "23505") {
-        // 23505 = duplicate key: user was already added to this org manually, treat as success
-        console.error("[auth/callback] org_members insert failed:", memberErr.message);
-        await supabase.auth.signOut();
-        return NextResponse.redirect(`${origin}/he/login?error=system_error`);
-      }
-
-      const { error: acceptErr } = await supabase
-        .from("org_invites")
-        .update({ accepted_at: new Date().toISOString() })
-        .eq("id", invite.id);
-      if (acceptErr) console.warn("[auth/callback] invite accept failed:", acceptErr.message);
-    }
-
     return NextResponse.redirect(`${origin}/${locale}/onboarding`);
-  }
-
-  // Existing user: check for a pending invite (they may be joining a new org).
-  const { data: pendingInvites } = await supabase
-    .from("org_invites")
-    .select("id, org_id, role")
-    .eq("email", user.email?.toLowerCase() ?? "")
-    .is("accepted_at", null)
-    .gt("expires_at", new Date().toISOString())
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  const pendingInvite = pendingInvites?.[0] ?? null;
-
-  if (pendingInvite) {
-    const { error: memberErr } = await supabase
-      .from("org_members")
-      .insert({ org_id: pendingInvite.org_id, user_id: user.id, role: pendingInvite.role, invited_by: null });
-    if (memberErr && memberErr.code !== "23505") {
-      console.error("[auth/callback] org_members insert (existing user) failed:", memberErr.message);
-    }
-    const { error: acceptErr } = await supabase
-      .from("org_invites")
-      .update({ accepted_at: new Date().toISOString() })
-      .eq("id", pendingInvite.id);
-    if (acceptErr) console.warn("[auth/callback] invite accept (existing user) failed:", acceptErr.message);
   }
 
   // Existing user but onboarding not finished.
   if (!settings.onboarding_completed) {
-    const { data: membership } = await supabase
-      .from("org_members")
-      .select("org_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
     const target = membership ? "onboarding" : "onboarding/organization";
     return NextResponse.redirect(`${origin}/${locale}/${target}`);
   }

@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { Sidebar } from "@/components/platform/layout/Sidebar";
+import { getEnabledAppsForUserInOrg } from "@/lib/apps/server";
 
 export default async function AppLayout({
   children,
@@ -48,36 +49,23 @@ export default async function AppLayout({
     }
   }
 
-  // Check which apps the active org has enabled
+  // Which apps to show in the sidebar. Owners/admins/super-admins see every app
+  // the org has enabled; regular members see only the apps granted to them.
   let enabledApps: string[] = [];
   if (user) {
     const cookieStore = await cookies();
-    const activeOrgId = cookieStore.get("smrt_org_id")?.value;
-
-    async function fetchEnabledApps(orgId: string): Promise<string[]> {
-      const { data } = await supabase
-        .from("app_memberships")
-        .select("apps(slug)")
-        .eq("org_id", orgId);
-      return (data ?? []).map((r) => {
-        const app = Array.isArray(r.apps) ? r.apps[0] : r.apps;
-        return (app as { slug?: string } | null)?.slug ?? "";
-      }).filter(Boolean);
-    }
-
-    if (activeOrgId) {
-      enabledApps = await fetchEnabledApps(activeOrgId);
-    } else {
-      // No active org (e.g. super-admin on app.smrtesy.com) — check first org
+    let orgId = cookieStore.get("smrt_org_id")?.value;
+    if (!orgId) {
+      // No active org (e.g. super-admin on app.smrtesy.com) — fall back to first org
       const { data: memberships } = await supabase
         .from("org_members")
         .select("org_id")
         .eq("user_id", user.id)
         .limit(1);
-      const firstOrgId = memberships?.[0]?.org_id;
-      if (firstOrgId) {
-        enabledApps = await fetchEnabledApps(firstOrgId);
-      }
+      orgId = memberships?.[0]?.org_id;
+    }
+    if (orgId) {
+      enabledApps = await getEnabledAppsForUserInOrg(supabase, user.id, orgId, isAdmin);
     }
   }
 

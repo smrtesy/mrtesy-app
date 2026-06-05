@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle } from "lucide-react";
+import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X } from "lucide-react";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
+import { useOrgInvites } from "@/lib/api/use-org-invites";
+import { useOrgApps } from "@/lib/api/use-org-apps";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -34,6 +36,8 @@ export function OrgSettingsClient() {
   const locale = useLocale();
   const { active, refresh: refreshOrgs } = useActiveOrg();
   const { members, loading, refresh: refreshMembers } = useOrgMembers();
+  const { invites, refresh: refreshInvites } = useOrgInvites();
+  const { enabledApps: orgApps } = useOrgApps();
 
   const [orgName, setOrgName] = useState("");
   const [orgNameHe, setOrgNameHe] = useState("");
@@ -43,7 +47,9 @@ export function OrgSettingsClient() {
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<OrgMember["role"]>("member");
+  const [inviteApps, setInviteApps] = useState<string[]>([]);
   const [inviting, setInviting] = useState(false);
+  const [editingAppsFor, setEditingAppsFor] = useState<string | null>(null);
 
   // Populate inputs when active org loads or switches
   useEffect(() => {
@@ -62,6 +68,8 @@ export function OrgSettingsClient() {
   const canManage = myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin";
   const isOwner = myRoleFromOrgs === "owner";
 
+  const appName = (slug: string) => orgApps.find((a) => a.slug === slug)?.name ?? slug;
+
   async function handleRenameOrg() {
     if (!orgName.trim()) { toast.error(tOrg("nameRequired")); return; }
     setSavingOrg(true);
@@ -79,26 +87,73 @@ export function OrgSettingsClient() {
     }
   }
 
+  function toggleInviteApp(slug: string) {
+    setInviteApps((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
+  }
+
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
     setInviting(true);
     try {
+      // Apps only matter for regular members — owners/admins see every org app.
+      const app_slugs = inviteRole === "member" ? inviteApps : [];
       const result = await api<{ invited?: boolean; warning?: string }>("/api/org/members", {
         method: "POST",
-        body: { email: inviteEmail.trim(), role: inviteRole, locale },
+        body: { email: inviteEmail.trim(), role: inviteRole, locale, app_slugs },
       });
-      if (result.invited && result.warning) {
-        // Invite row was created but the email failed to send — don't claim it was sent.
-        toast.warning(tOrg("inviteCreatedEmailFailed"));
+      if (result.warning) {
+        // Either the invite email failed to send, or (existing user) the app
+        // grant didn't save — don't report a clean success.
+        toast.warning(result.invited ? tOrg("inviteCreatedEmailFailed") : tOrg("memberAppsSaveFailed"));
       } else {
         toast.success(result.invited ? tOrg("inviteSent") : tOrg("memberAdded"));
       }
       setInviteEmail("");
+      setInviteApps([]);
       refreshMembers();
+      refreshInvites();
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleResendInvite(id: string) {
+    try {
+      const r = await api<{ warning?: string }>(`/api/org/invites/${id}/resend`, {
+        method: "POST", body: { locale },
+      });
+      if (r.warning) toast.warning(tOrg("inviteCreatedEmailFailed"));
+      else toast.success(tOrg("inviteResent"));
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleRevokeInvite(id: string) {
+    if (!confirm(tOrg("revokeInviteConfirm"))) return;
+    try {
+      await api(`/api/org/invites/${id}`, { method: "DELETE" });
+      toast.success(tOrg("inviteRevoked"));
+      refreshInvites();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleToggleMemberApp(m: OrgMember, slug: string) {
+    const next = m.app_slugs.includes(slug)
+      ? m.app_slugs.filter((s) => s !== slug)
+      : [...m.app_slugs, slug];
+    setEditingAppsFor(m.user_id);
+    try {
+      await api(`/api/org/members/${m.user_id}/apps`, { method: "PATCH", body: { app_slugs: next } });
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setEditingAppsFor(null);
     }
   }
 
@@ -191,29 +246,57 @@ export function OrgSettingsClient() {
         <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
           {/* Invite form */}
           {canManage && (
-            <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:flex-wrap">
-              <Input
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder={tOrg("emailToInvite")}
-                className="w-full sm:flex-1"
-                dir="auto"
-              />
-              <div className="flex gap-2">
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value as OrgMember["role"])}
-                  className="flex-1 rounded border px-2 py-1.5 text-sm bg-background"
-                >
-                  <option value="member">{tOrg("roleMember")}</option>
-                  <option value="admin">{tOrg("roleAdmin")}</option>
-                  {isOwner && <option value="owner">{tOrg("roleOwner")}</option>}
-                </select>
-                <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="gap-2 shrink-0">
-                  {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                  {tOrg("invite")}
-                </Button>
+            <div className="mb-4 space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Input
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder={tOrg("emailToInvite")}
+                  className="w-full sm:flex-1"
+                  dir="auto"
+                />
+                <div className="flex gap-2">
+                  <select
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as OrgMember["role"])}
+                    className="flex-1 rounded border px-2 py-1.5 text-sm bg-background"
+                  >
+                    <option value="member">{tOrg("roleMember")}</option>
+                    <option value="admin">{tOrg("roleAdmin")}</option>
+                    {isOwner && <option value="owner">{tOrg("roleOwner")}</option>}
+                  </select>
+                  <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="gap-2 shrink-0">
+                    {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                    {tOrg("invite")}
+                  </Button>
+                </div>
               </div>
+
+              {/* Per-user app selection (members only; owners/admins see every app) */}
+              {inviteRole === "member" && orgApps.length > 0 && (
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1.5">{tOrg("selectApps")}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {orgApps.map((a) => {
+                      const on = inviteApps.includes(a.slug);
+                      return (
+                        <button
+                          key={a.slug}
+                          type="button"
+                          onClick={() => toggleInviteApp(a.slug)}
+                          className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                            on
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -225,45 +308,121 @@ export function OrgSettingsClient() {
               {members.map((m) => {
                 const Icon = ROLE_ICONS[m.role];
                 const colorClass = ROLE_COLORS[m.role];
+                const unrestricted = m.role === "owner" || m.role === "admin";
                 return (
-                  <div key={m.user_id} className="flex items-center gap-2 rounded-lg border p-2.5 min-w-0">
-                    <div className={`shrink-0 rounded-full p-1.5 ${colorClass}`}>
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{m.email || m.name || "—"}</div>
-                      <div className="text-xs text-muted-foreground flex items-center gap-1 min-w-0">
-                        {m.name && m.email && <span className="truncate">{m.name}</span>}
-                        {m.name && m.email && <span>·</span>}
-                        <code className="font-mono text-[10px] opacity-60 shrink-0">{m.user_id.slice(0, 8)}</code>
+                  <div key={m.user_id} className="rounded-lg border p-2.5 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className={`shrink-0 rounded-full p-1.5 ${colorClass}`}>
+                        <Icon className="h-4 w-4" />
                       </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{m.email || m.name || "—"}</div>
+                        <div className="text-xs text-muted-foreground flex items-center gap-1 min-w-0">
+                          {m.name && m.email && <span className="truncate">{m.name}</span>}
+                          {m.name && m.email && <span>·</span>}
+                          <code className="font-mono text-[10px] opacity-60 shrink-0">{m.user_id.slice(0, 8)}</code>
+                        </div>
+                      </div>
+                      {canManage && isOwner ? (
+                        <select
+                          value={m.role}
+                          onChange={(e) => handleChangeRole(m.user_id, e.target.value as OrgMember["role"])}
+                          className="shrink-0 rounded border px-1.5 py-1 text-xs bg-background max-w-[80px]"
+                        >
+                          <option value="member">{tOrg("roleMember")}</option>
+                          <option value="admin">{tOrg("roleAdmin")}</option>
+                          <option value="owner">{tOrg("roleOwner")}</option>
+                        </select>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] uppercase shrink-0">{m.role}</Badge>
+                      )}
+                      {canManage && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="shrink-0 h-8 w-8 text-destructive hover:bg-destructive/10"
+                          onClick={() => handleRemove(m.user_id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </div>
-                    {canManage && isOwner ? (
-                      <select
-                        value={m.role}
-                        onChange={(e) => handleChangeRole(m.user_id, e.target.value as OrgMember["role"])}
-                        className="shrink-0 rounded border px-1.5 py-1 text-xs bg-background max-w-[80px]"
-                      >
-                        <option value="member">{tOrg("roleMember")}</option>
-                        <option value="admin">{tOrg("roleAdmin")}</option>
-                        <option value="owner">{tOrg("roleOwner")}</option>
-                      </select>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] uppercase shrink-0">{m.role}</Badge>
-                    )}
+
+                    {/* Per-user app access (managers only) */}
                     {canManage && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="shrink-0 h-8 w-8 text-destructive hover:bg-destructive/10"
-                        onClick={() => handleRemove(m.user_id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      <div className="mt-2 ps-9 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[11px] text-muted-foreground me-1">{tOrg("appsLabel")}:</span>
+                        {unrestricted ? (
+                          <span className="text-[11px] text-muted-foreground">{tOrg("allApps")}</span>
+                        ) : orgApps.length === 0 ? (
+                          <span className="text-[11px] text-muted-foreground">—</span>
+                        ) : (
+                          <>
+                            {orgApps.map((a) => {
+                              const on = m.app_slugs.includes(a.slug);
+                              return (
+                                <button
+                                  key={a.slug}
+                                  type="button"
+                                  disabled={editingAppsFor === m.user_id}
+                                  onClick={() => handleToggleMemberApp(m, a.slug)}
+                                  className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+                                    on
+                                      ? "bg-primary text-primary-foreground border-primary"
+                                      : "bg-background text-muted-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  {a.name}
+                                </button>
+                              );
+                            })}
+                            {editingAppsFor === m.user_id && <Loader2 className="h-3 w-3 animate-spin" />}
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
               })}
+
+              {/* Pending invites */}
+              {canManage && invites.length > 0 && (
+                <div className="pt-2 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    {tOrg("pendingInvites")} ({invites.length})
+                  </div>
+                  {invites.map((inv) => (
+                    <div key={inv.id} className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 min-w-0">
+                      <div className="shrink-0 rounded-full p-1.5 bg-muted text-muted-foreground">
+                        <Mail className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{inv.email}</div>
+                        <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                          <Badge variant="secondary" className="text-[10px]">{tOrg("invitePending")}</Badge>
+                          {inv.app_slugs.map((s) => (
+                            <Badge key={s} variant="outline" className="text-[10px]">{appName(s)}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] uppercase shrink-0">{inv.role}</Badge>
+                      <Button
+                        size="icon" variant="ghost" className="shrink-0 h-8 w-8"
+                        title={tOrg("resend")} onClick={() => handleResendInvite(inv.id)}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        className="shrink-0 h-8 w-8 text-destructive hover:bg-destructive/10"
+                        title={tOrg("revoke")} onClick={() => handleRevokeInvite(inv.id)}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </CardContent>

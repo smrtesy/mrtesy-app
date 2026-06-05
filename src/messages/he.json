@@ -783,7 +783,18 @@
     "errorHandlerTitle": "אחראי שגיאות טכניות",
     "errorHandlerDesc": "משתמש זה יקבל התראה (כהצעה למשימה) כאשר אפליקציה במערכת נכשלת טכנית.",
     "errorHandlerOwnerDefault": "בעלים (ברירת מחדל)",
-    "errorHandlerSaved": "אחראי השגיאות עודכן"
+    "errorHandlerSaved": "אחראי השגיאות עודכן",
+    "selectApps": "אפליקציות להפעיל למשתמש",
+    "pendingInvites": "הזמנות ממתינות",
+    "invitePending": "הזמנה נשלחה",
+    "resend": "שלח שוב",
+    "revoke": "בטל הזמנה",
+    "inviteResent": "ההזמנה נשלחה שוב",
+    "inviteRevoked": "ההזמנה בוטלה",
+    "revokeInviteConfirm": "לבטל את ההזמנה?",
+    "appsLabel": "אפליקציות",
+    "allApps": "כל האפליקציות",
+    "memberAppsSaveFailed": "המשתמש נוסף אך הקצאת האפליקציות נכשלה, נסה שוב"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",
