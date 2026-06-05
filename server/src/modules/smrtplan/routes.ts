@@ -89,6 +89,75 @@ async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
   return plans.map((p) => ({ ...p, health: planHealthFromTasks(p, byPlan, todayISO) }));
 }
 
+/** Resolve "what's needed to start" (needs) and downstream "handoff" for a set
+ *  of tasks from smrtplan_dependencies (task→task). Shared by the plan-tasks
+ *  and my-tasks endpoints. */
+async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]> {
+  const ids = taskRows.map((t) => t.id as string);
+  if (ids.length === 0) return taskRows.map((t) => ({ ...t, needs: [], handoff: [] }));
+
+  const { data: depsRaw } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id, to_id, satisfied")
+    .eq("org_id", orgId)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .or(`from_id.in.(${ids.join(",")}),to_id.in.(${ids.join(",")})`);
+  const deps = asRows(depsRaw);
+
+  const refIds = new Set<string>();
+  for (const d of deps) {
+    refIds.add(d.from_id as string);
+    refIds.add(d.to_id as string);
+  }
+  let refs: Row[] = [];
+  if (refIds.size) {
+    const { data: refsRaw } = await db
+      .from("tasks")
+      .select("id, title, title_he, assigned_to_user_id, status")
+      .eq("organization_id", orgId)
+      .in("id", [...refIds]);
+    refs = asRows(refsRaw);
+  }
+  const refMap = new Map<string, Row>();
+  for (const r of refs) refMap.set(r.id as string, r);
+
+  const idSet = new Set(ids);
+  const needsByTask = new Map<string, unknown[]>();
+  const handoffByTask = new Map<string, unknown[]>();
+  for (const d of deps) {
+    const consumer = d.from_id as string;
+    const provider = d.to_id as string;
+    if (idSet.has(consumer)) {
+      const p = refMap.get(provider);
+      const arr = needsByTask.get(consumer) ?? [];
+      arr.push({
+        dependency_id: d.id,
+        task_id: provider,
+        title: (p?.title_he as string) || (p?.title as string) || "—",
+        satisfied: (d.satisfied as boolean) ?? false,
+        source: null,
+      });
+      needsByTask.set(consumer, arr);
+    }
+    if (idSet.has(provider)) {
+      const c = refMap.get(consumer);
+      const arr = handoffByTask.get(provider) ?? [];
+      arr.push({
+        dependency_id: d.id,
+        task_id: consumer,
+        title: (c?.title_he as string) || (c?.title as string) || "—",
+      });
+      handoffByTask.set(provider, arr);
+    }
+  }
+  return taskRows.map((t) => ({
+    ...t,
+    needs: needsByTask.get(t.id as string) ?? [],
+    handoff: handoffByTask.get(t.id as string) ?? [],
+  }));
+}
+
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtplan"));
 
@@ -320,76 +389,40 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
     .eq("plan_id", req.params.id)
     .order("created_at", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
+  res.json({ tasks: await attachNeedsHandoff(req.org!.id, asRows(tasks)) });
+});
 
-  const taskRows = asRows(tasks);
-  const ids = taskRows.map((t) => t.id as string);
-  const needsByTask = new Map<string, unknown[]>();
-  const handoffByTask = new Map<string, unknown[]>();
+// ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
+router.get("/plan/my-tasks", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("tasks")
+    .select(
+      "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
+        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id",
+    )
+    .eq("organization_id", req.org!.id)
+    .eq("assigned_to_user_id", req.user!.id)
+    .not("plan_id", "is", null)
+    .order("due_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
 
-  if (ids.length > 0) {
-    const { data: depsRaw } = await db
-      .from("smrtplan_dependencies")
-      .select("id, from_id, to_id, satisfied")
+  const tasks = await attachNeedsHandoff(req.org!.id, asRows(data));
+  // Attach the plan title so the worker view can show which plan each task is in.
+  const planIds = [...new Set(tasks.map((t) => t.plan_id as string).filter(Boolean))];
+  if (planIds.length > 0) {
+    const { data: planRows } = await db
+      .from("smrtplan_plans")
+      .select("id, title_he, title_en")
       .eq("org_id", req.org!.id)
-      .eq("from_type", "task")
-      .eq("to_type", "task")
-      .or(`from_id.in.(${ids.join(",")}),to_id.in.(${ids.join(",")})`);
-    const deps = asRows(depsRaw);
-
-    // Resolve provider/consumer titles in one batch.
-    const refIds = new Set<string>();
-    for (const d of deps) {
-      refIds.add(d.from_id as string);
-      refIds.add(d.to_id as string);
-    }
-    let refs: Row[] = [];
-    if (refIds.size) {
-      const { data: refsRaw } = await db
-        .from("tasks")
-        .select("id, title, title_he, assigned_to_user_id, status")
-        .eq("organization_id", req.org!.id)
-        .in("id", [...refIds]);
-      refs = asRows(refsRaw);
-    }
-    const refMap = new Map<string, Row>();
-    for (const r of refs) refMap.set(r.id as string, r);
-
-    for (const d of deps) {
-      const consumer = d.from_id as string;
-      const provider = d.to_id as string;
-      // needs: consumer waits on provider
-      if (ids.includes(consumer)) {
-        const p = refMap.get(provider);
-        const arr = needsByTask.get(consumer) ?? [];
-        arr.push({
-          dependency_id: d.id,
-          task_id: provider,
-          title: (p?.title_he as string) || (p?.title as string) || "—",
-          satisfied: (d.satisfied as boolean) ?? false,
-          source: null,
-        });
-        needsByTask.set(consumer, arr);
-      }
-      // handoff: provider feeds consumer
-      if (ids.includes(provider)) {
-        const c = refMap.get(consumer);
-        const arr = handoffByTask.get(provider) ?? [];
-        arr.push({
-          dependency_id: d.id,
-          task_id: consumer,
-          title: (c?.title_he as string) || (c?.title as string) || "—",
-        });
-        handoffByTask.set(provider, arr);
-      }
+      .in("id", planIds);
+    const byId = new Map(asRows(planRows).map((p) => [p.id as string, p]));
+    for (const t of tasks) {
+      const p = byId.get(t.plan_id as string);
+      t.plan_title_he = (p?.title_he as string) ?? null;
+      t.plan_title_en = (p?.title_en as string) ?? null;
     }
   }
-
-  const enriched = taskRows.map((t) => ({
-    ...t,
-    needs: needsByTask.get(t.id as string) ?? [],
-    handoff: handoffByTask.get(t.id as string) ?? [],
-  }));
-  res.json({ tasks: enriched });
+  res.json({ tasks });
 });
 
 // ── stream plan: matrix ──────────────────────────────────────────────────────
@@ -407,11 +440,48 @@ router.get("/plans/:id/matrix", async (req: Request, res: Response) => {
 
   const epIds = new Set((episodes ?? []).map((e) => e.id as string));
   const cellMap: Record<string, unknown> = {};
+  const taskIds = new Set<string>();
   for (const c of cells ?? []) {
     if (!epIds.has(c.episode_id as string)) continue;
     cellMap[`${c.episode_id}:${c.stage_id}`] = c;
+    if (c.task_id) taskIds.add(c.task_id as string);
   }
-  res.json({ stages: stages ?? [], episodes: episodes ?? [], cells: cellMap });
+  // Summaries of the tasks linked to cells, so the matrix can show/open them.
+  const taskMap: Record<string, unknown> = {};
+  if (taskIds.size > 0) {
+    const { data: taskRows } = await db
+      .from("tasks")
+      .select("id, title, title_he, status, assigned_to_user_id, due_date")
+      .eq("organization_id", req.org!.id)
+      .in("id", [...taskIds]);
+    for (const t of asRows(taskRows)) taskMap[t.id as string] = t;
+  }
+  res.json({ stages: stages ?? [], episodes: episodes ?? [], cells: cellMap, tasks: taskMap });
+});
+
+// Upsert a matrix cell (so status/linking works even before a cell row exists).
+router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
+  const { episode_id, stage_id, status } = req.body ?? {};
+  if (!episode_id || !stage_id) return res.status(400).json({ error: "episode_id and stage_id required" });
+  if (status !== undefined && !["todo", "prog", "done"].includes(status)) {
+    return res.status(400).json({ error: "status must be todo|prog|done" });
+  }
+  const { data, error } = await db
+    .from("smrtplan_episode_stage_status")
+    .upsert(
+      {
+        org_id: req.org!.id,
+        episode_id,
+        stage_id,
+        status: status ?? "todo",
+        completed_at: status === "done" ? new Date().toISOString() : null,
+      },
+      { onConflict: "episode_id,stage_id" },
+    )
+    .select("id, episode_id, stage_id, status, task_id, completed_at")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ cell: data });
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {

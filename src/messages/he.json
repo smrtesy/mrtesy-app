@@ -104,7 +104,8 @@
     "sectionBot": "smrtBot",
     "more": "עוד",
     "planBoard": "לוח",
-    "planRepository": "מאגר"
+    "planRepository": "מאגר",
+    "planMy": "המשימות שלי"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -1915,6 +1916,26 @@
     "view": {
       "list": "רשימה",
       "timeline": "ציר זמן"
+    },
+    "my": {
+      "title": "המשימות שלי",
+      "lead": "מחולק לפי מה שאפשר לעשות עכשיו · סמן ✓ כשסיימת",
+      "ready": "מוכנות להתחיל",
+      "blocked": "חסומות — ממתינות לקלט",
+      "done": "הושלמו",
+      "emptyReady": "אין משימות מוכנות כרגע",
+      "emptyBlocked": "אין משימות חסומות",
+      "emptyDone": "עוד לא הושלמו משימות",
+      "complete": "סיימתי",
+      "noTasks": "אין לך משימות בתוכניות עדיין"
+    },
+    "cell": {
+      "title": "תא במטריצה",
+      "status": "סטטוס",
+      "linkedTask": "משימה מקושרת",
+      "createTask": "צור משימה מקושרת",
+      "noTask": "אין משימה מקושרת לתא הזה",
+      "openInTasks": "מנוהל ב-smrtTask"
     }
   }
 }
