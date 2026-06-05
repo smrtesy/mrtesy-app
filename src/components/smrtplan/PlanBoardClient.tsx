@@ -7,7 +7,7 @@ import { RefreshCw, Plus, Pencil, Flag, Users, Clock } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
-import { parseISO, gregShort, hebDate, daysBetween } from "@/lib/smrtplan/dates";
+import { parseISO, gregShort, hebDate, daysBetween, countdownText } from "@/lib/smrtplan/dates";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
@@ -69,6 +69,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [capacityOpen, setCapacityOpen] = useState(false);
   const [estimatesOpen, setEstimatesOpen] = useState(false);
+  const [mobileTimeline, setMobileTimeline] = useState(false);
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
@@ -136,6 +137,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
   const dateAt = (off: number) => new Date(t0.getTime() + off * DAY_MS);
   const pxOf = (off: number) => off * DAY_PX;
+  /** Percentage position (for the responsive mobile sparkline that fits its container). */
+  const pctOf = (off: number) => `${Math.min(100, Math.max(0, (off / totalDays) * 100))}%`;
   const offsetOf = (iso: string) => daysBetween(t0, parseISO(iso));
   // "Today" is the real today (the projection slider was removed — health comes
   // from the engine's latest dates, not from sliding a frozen-progress clock).
@@ -246,7 +249,104 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           <p className="mt-1 text-[12.5px] text-muted-foreground">{t("board.emptyHint")}</p>
         </div>
       ) : (
-        <div className="flex overflow-hidden rounded-xl border bg-card">
+        <>
+        {/* mobile view toggle — list (default) vs the scrollable timeline */}
+        <div className="flex gap-1 rounded-lg border bg-card p-1 md:hidden">
+          {([["list", false], ["timeline", true]] as const).map(([key, on]) => (
+            <button
+              key={key}
+              onClick={() => setMobileTimeline(on)}
+              className={cn(
+                "flex-1 rounded-md py-1.5 text-[12.5px] font-medium transition-colors",
+                mobileTimeline === on ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+              )}
+            >
+              {t(`view.${key}`)}
+            </button>
+          ))}
+        </div>
+
+        {/* mobile card list — comfortable on a phone, no horizontal scroll */}
+        {!mobileTimeline && (
+          <div className="space-y-4 md:hidden">
+            {groups.map(([label, rows]) => (
+              <div key={label}>
+                <p className="mb-1.5 px-1 text-[12px] font-bold text-foreground/80">{label}</p>
+                <div className="space-y-2">
+                  {rows.map((p) => {
+                    const h = healthOf(p, today);
+                    const s = p.start_date ? offsetOf(p.start_date) : 0;
+                    const e = p.end_date ? offsetOf(p.end_date) : s + 7;
+                    const span = Math.max(1, e - s);
+                    const progress = p.effective_progress ?? p.progress ?? 0;
+                    const due = p.end_date;
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedId(p.id)}
+                        className={cn(
+                          "block w-full rounded-xl border bg-card p-3 text-start",
+                          selectedId === p.id && "ring-2 ring-primary/40",
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: healthColor[h] }} />
+                          <span className="flex-1 truncate text-[14px] font-bold">{planTitle(p, locale)}</span>
+                          {p.is_critical && (
+                            <span className="rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
+                              {t("tags.critical")}
+                            </span>
+                          )}
+                          <span className="whitespace-nowrap text-[10.5px] font-medium" style={{ color: healthColor[h] }}>
+                            {t(`health.${h}`)}
+                          </span>
+                        </div>
+                        {p.kind !== "stream" && (
+                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-secondary">
+                            <div className="h-full rounded" style={{ width: `${progress * 100}%`, background: p.color || "#534AB7" }} />
+                          </div>
+                        )}
+                        <div className="mt-1.5 flex items-center justify-between gap-2 text-[11.5px] text-muted-foreground">
+                          <span className="truncate">{p.goal}</span>
+                          {due && (
+                            <span className="whitespace-nowrap">
+                              {countdownText(due, t, today)} · {gregShort(parseISO(due))} · {hebDate(parseISO(due))}
+                            </span>
+                          )}
+                        </div>
+                        {/* mini timeline sparkline: plan span + milestone ticks + today */}
+                        <div className="relative mt-2 h-2 w-full overflow-hidden rounded bg-secondary/60">
+                          <div
+                            className="absolute inset-y-0 rounded"
+                            style={{ insetInlineStart: pctOf(s), width: pctOf(span), background: (p.color || "#534AB7") + "88" }}
+                          />
+                          {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
+                            <div
+                              key={m.id}
+                              className="absolute inset-y-0 w-0.5"
+                              style={{ insetInlineStart: pctOf(offsetOf(m.milestone_date)), background: m.color || "hsl(var(--muted-foreground))" }}
+                              title={locale === "en" ? m.label_en || m.label_he : m.label_he}
+                            />
+                          ))}
+                          {todayInView && (
+                            <div className="absolute inset-y-0 w-px bg-foreground/60" style={{ insetInlineStart: pctOf(todayOff) }} />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div
+          className={cn(
+            mobileTimeline ? "flex" : "hidden",
+            "overflow-hidden rounded-xl border bg-card md:flex",
+          )}
+        >
           {/* fixed label column (stays while the timeline scrolls) */}
           <div className="w-[168px] flex-shrink-0 border-e">
             {milestones.length > 0 && (
@@ -430,6 +530,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* detail */}

@@ -104,7 +104,8 @@
     "sectionBot": "smrtBot",
     "more": "More",
     "planBoard": "Board",
-    "planRepository": "Repository"
+    "planRepository": "Repository",
+    "planMy": "My tasks"
   },
   "account": {
     "title": "Account",
@@ -186,7 +187,8 @@
     "sendMagicLink": "Send magic link",
     "magicLinkSent": "Sent! Check your email",
     "signOut": "Sign out",
-    "noInviteError": "Access by invitation only. Contact your administrator."
+    "noInviteError": "Access by invitation only. Contact your administrator.",
+    "rateLimitError": "Too many emails sent. Try again in a few minutes, or sign in with Google."
   },
   "invite": {
     "title": "You've been invited",
@@ -1912,6 +1914,30 @@
       "hours": "Hours",
       "add": "Add row",
       "empty": "No estimates yet"
+    },
+    "view": {
+      "list": "List",
+      "timeline": "Timeline"
+    },
+    "my": {
+      "title": "My tasks",
+      "lead": "Grouped by what you can do now · check ✓ when done",
+      "ready": "Ready to start",
+      "blocked": "Blocked — waiting for input",
+      "done": "Done",
+      "emptyReady": "Nothing ready right now",
+      "emptyBlocked": "Nothing blocked",
+      "emptyDone": "Nothing completed yet",
+      "complete": "Done",
+      "noTasks": "You have no plan tasks yet"
+    },
+    "cell": {
+      "title": "Matrix cell",
+      "status": "Status",
+      "linkedTask": "Linked task",
+      "createTask": "Create linked task",
+      "noTask": "No task linked to this cell",
+      "openInTasks": "Managed in smrtTask"
     }
   }
 }

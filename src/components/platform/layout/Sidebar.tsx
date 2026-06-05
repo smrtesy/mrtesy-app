@@ -31,7 +31,7 @@ import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
-import { APPS } from "@/lib/apps/registry";
+import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 
@@ -69,6 +69,7 @@ const smrtBotItems = [
 
 const smrtPlanItems = [
   { key: "planBoard",      href: "/plan",            icon: CalendarRange },
+  { key: "planMy",         href: "/plan/my",         icon: CheckSquare   },
   { key: "planRepository", href: "/plan/repository", icon: Archive       },
 ] as const;
 
@@ -229,22 +230,23 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     return null;
   }
 
-  // Items shown in the "More" bottom sheet, grouped by app.
-  // Each group is rendered with an AppSectionHeader (name → guide, icon → settings).
-  // Log moved into smrtTask settings; transcription experiment moved to
-  // management; both are no longer per-app sidebar items.
-  const smrtTaskMoreItems: MobileNavItem[] = hasSmrtTask ? [
-    { key: "projects",  href: "/projects",  icon: FolderOpen    },
-    { key: "whatsapp",  href: "/whatsapp",  icon: MessageCircle },
-    { key: "knowledge", href: "/knowledge", icon: BookOpen      },
-  ] : [];
-  const smrtVoiceMoreItems: MobileNavItem[] = hasSmrtVoice ? [
-    { key: "voiceCharacters", href: "/voice/characters", icon: Users },
-  ] : [];
+  // "More" bottom sheet — mirrors the FULL desktop nav: every enabled app with
+  // its complete item set, then a management group. Each section gets the app
+  // title above and a divider line between sections (when there's more than one).
+  const moreSections: Array<{ app?: AppDef; titleKey?: string; items: MobileNavItem[] }> = [];
+  if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...smrtTaskItems] });
+  if (hasSmrtVoice) moreSections.push({ app: APPS.smrtvoice, items: [...smrtVoiceItems] });
+  if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
+  if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
+  if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
+  if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   const managementMoreItems: MobileNavItem[] = [
+    ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
+    { key: "settings", href: "/settings", icon: Settings },
     ...(hasSmrtTask ? [{ key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical }] : []),
     ...(isAdmin ? [{ key: "platformAdmin", href: "/admin", icon: Shield }] : []),
   ];
+  if (managementMoreItems.length > 0) moreSections.push({ titleKey: "sectionManagement", items: managementMoreItems });
 
   return (
     <>
@@ -466,34 +468,22 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           <SheetHeader>
             <SheetTitle className="text-start">{t("more")}</SheetTitle>
           </SheetHeader>
-          <div className="mt-4 space-y-4 pb-2">
-            {hasSmrtTask && smrtTaskMoreItems.length > 0 && (
-              <section>
-                <AppSectionHeader app={APPS.smrttask} className="!pt-0" />
-                <MoreGrid items={smrtTaskMoreItems} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} />
+          <div className="mt-4 space-y-1 overflow-y-auto pb-2">
+            {moreSections.map((section, i) => (
+              <section
+                key={section.app?.slug ?? section.titleKey}
+                className={cn(i > 0 && "border-t pt-1")}
+              >
+                {section.app ? (
+                  <AppSectionHeader app={section.app} className="!pt-2" />
+                ) : (
+                  <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                    {t(section.titleKey as Parameters<typeof t>[0])}
+                  </p>
+                )}
+                <MoreGrid items={section.items} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} />
               </section>
-            )}
-            {hasSmrtVoice && smrtVoiceMoreItems.length > 0 && (
-              <section>
-                <AppSectionHeader app={APPS.smrtvoice} className="!pt-0" />
-                <MoreGrid items={smrtVoiceMoreItems} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} />
-              </section>
-            )}
-            {managementMoreItems.length > 0 && (
-              <section>
-                <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                  {t("sectionManagement")}
-                </p>
-                <MoreGrid
-                  items={managementMoreItems}
-                  basePath={basePath}
-                  t={t}
-                  isActive={isActive}
-                  badgeFor={badgeFor}
-                  onPick={() => setMoreOpen(false)}
-                />
-              </section>
-            )}
+            ))}
           </div>
         </SheetContent>
       </Sheet>
