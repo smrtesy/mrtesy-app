@@ -29,6 +29,14 @@ interface SystemParams {
   // content-based matter router owns that). Default 90s (cron ticks every ~60s,
   // so the effective settle window is ~90–150s).
   whatsapp_debounce_seconds: number;
+  // Two-tier classification. When the cheap classification_model returns
+  // confidence="low", re-run the classification once on escalation_model (a
+  // stronger, pricier model) and keep the second answer. Lets the common case
+  // stay cheap on Haiku while genuinely ambiguous messages (spam-vs-real,
+  // informational-vs-actionable, content-behind-a-link) get a Sonnet second
+  // opinion. Disabled by default; flip escalate_low_confidence on to use it.
+  escalate_low_confidence: boolean;
+  escalation_model: string;
 }
 
 const FALLBACK_PARAMS: SystemParams = {
@@ -43,6 +51,8 @@ const FALLBACK_PARAMS: SystemParams = {
   body_truncate_task: 6000,
   whatsapp_matter_routing: true,
   whatsapp_debounce_seconds: 90,
+  escalate_low_confidence: false,
+  escalation_model: "claude-sonnet-4-6",
 };
 
 async function loadSystemParams(): Promise<SystemParams> {
@@ -60,6 +70,8 @@ async function loadSystemParams(): Promise<SystemParams> {
     body_truncate_task: data.body_truncate_task ?? FALLBACK_PARAMS.body_truncate_task,
     whatsapp_matter_routing: data.whatsapp_matter_routing ?? FALLBACK_PARAMS.whatsapp_matter_routing,
     whatsapp_debounce_seconds: data.whatsapp_debounce_seconds ?? FALLBACK_PARAMS.whatsapp_debounce_seconds,
+    escalate_low_confidence: data.escalate_low_confidence ?? FALLBACK_PARAMS.escalate_low_confidence,
+    escalation_model: data.escalation_model ?? FALLBACK_PARAMS.escalation_model,
   };
 }
 
@@ -385,6 +397,11 @@ interface ThreadAnalysis {
   // tracks (a different action/topic), rather than continuing the same one.
   // Drives the "spin off a new task vs reopen/append" decision in Path 1.
   newMatter: boolean;
+  // Model's self-reported certainty on the classification. "low" means the
+  // message was genuinely ambiguous (spam-vs-real, informational-vs-actionable)
+  // or its substance is behind a link/attachment the model couldn't read.
+  // Drives the optional escalation to a stronger model.
+  confidence: "high" | "low";
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -413,8 +430,11 @@ async function analyzeWithMemory(
   memory: ThreadMemoryRow | null,
   settings: any,
   sys: SystemParams,
+  modelOverride?: string,
 ): Promise<ThreadAnalysis> {
-  const model = sys.classification_model;
+  // modelOverride is set only on the escalation pass (see end of function), so
+  // the recursion is bounded to a single re-run on the stronger model.
+  const model = modelOverride ?? sys.classification_model;
   const myEmails: string[] = settings.my_emails ?? [];
   const officeAddresses: string[] = settings.office_addresses ?? [];
   const userName: string = settings.__userName ?? "";
@@ -503,8 +523,22 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
   "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string",
-  "new_matter": true | false
+  "new_matter": true | false,
+  "confidence": "high" | "low"
 }
+
+- confidence = your honest certainty about the "classification" field. Use
+  "low" — do not default to "high" — whenever ANY of these hold:
+    • You are torn between SPAM and a real message (e.g. an unfamiliar/generic
+      sender domain, but the subject ties it to the user's own request/case).
+    • You are torn between INFORMATIONAL and ACTIONABLE (e.g. it might be a
+      reply to something the user is waiting on, but you cannot be sure).
+    • The real substance is behind a link, PDF, attachment, or secure-message
+      portal you cannot read, so you are guessing from the envelope alone.
+    • The message is in a language/format you only partially parsed.
+  Use "high" only when the category is unambiguous from the text in front of
+  you. An honest "low" is far more useful than a confident wrong answer — a
+  stronger model gets a second look at exactly the messages you flag.
 
 - ACTIONABLE = either (a) the user must take a concrete step now, OR
   (b) the message is a pending matter the user MUST keep tracking until it
@@ -788,6 +822,7 @@ when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
       completionSignal: false,
       completionReason: "",
       newMatter: false,
+      confidence: "high",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       cacheReadTokens: result.cacheReadTokens,
@@ -801,6 +836,31 @@ when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
     cls === "actionable" ? "actionable" : cls === "spam" ? "spam" : "informational";
   const validStates = ["open", "pending_user_action", "pending_other_party", "resolved"];
   const state = validStates.includes(parsed.state) ? parsed.state : (memory?.state ?? "open");
+  const confidence: "high" | "low" = String(parsed.confidence ?? "").toLowerCase() === "low" ? "low" : "high";
+
+  // Two-tier escalation: a low-confidence answer from the cheap model gets one
+  // re-run on the stronger model, whose answer we keep. Guards against loops
+  // (only when not already on the override) and no-ops when the escalation
+  // model equals the model we just used. callClaude logs both calls to the
+  // ai_usage ledger, so escalation cost is captured automatically.
+  if (
+    confidence === "low" &&
+    sys.escalate_low_confidence &&
+    !modelOverride &&
+    sys.escalation_model &&
+    sys.escalation_model !== model
+  ) {
+    const escalated = await analyzeWithMemory(msg, memory, settings, sys, sys.escalation_model);
+    // Fold the first (cheap) pass's tokens in so downstream cost accounting in
+    // the log_entries row reflects BOTH calls, not just the escalation.
+    return {
+      ...escalated,
+      inputTokens: escalated.inputTokens + result.inputTokens,
+      outputTokens: escalated.outputTokens + result.outputTokens,
+      cacheReadTokens: escalated.cacheReadTokens + result.cacheReadTokens,
+      cacheWriteTokens: escalated.cacheWriteTokens + result.cacheWriteTokens,
+    };
+  }
 
   return {
     classification,
@@ -811,6 +871,7 @@ when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
     completionReason: String(parsed.completion_reason_he ?? ""),
     // Only an ACTIONABLE message can introduce a new trackable matter.
     newMatter: classification === "actionable" && parsed.new_matter === true,
+    confidence,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     cacheReadTokens: result.cacheReadTokens,
@@ -1973,6 +2034,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       completionSignal: false,
       completionReason: "",
       newMatter: false,
+      confidence: "high",
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -1990,6 +2052,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       completionSignal: false,
       completionReason: "",
       newMatter: false,
+      confidence: "high",
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -2477,6 +2540,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             completionSignal: true,
             completionReason: link.reason,
             newMatter: false,
+            confidence: "high",
             inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, model: "",
           };
           await appendUpdateToTask(linkedTaskId, emailMsg, completionAnalysis, "informational");
