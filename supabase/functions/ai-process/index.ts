@@ -2166,6 +2166,33 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     }
   }
 
+  // ── Idempotency guard: one source_message → its task(s) created exactly once ─
+  // A source_message row is immutable (one row per calendar event / email /
+  // WhatsApp burst), but it can be RE-SELECTED for processing — calendar events
+  // in particular are re-upserted to `pending` on every calendar sync until the
+  // event passes, so the same row reaches this point repeatedly. Without a guard
+  // each reprocess re-runs Path 2.5/3 and spawns a fresh duplicate. (Real case:
+  // one "תרומה של רסקין" calendar event produced T244 and T329 — identical tasks
+  // four days apart.) The cross-source duplicate detector below is the wrong tool
+  // for this: it's a fuzzy, AI-based CONTENT match, and calendar rows carry an
+  // empty body and no contact, so it cannot reliably recognise the same event —
+  // whereas a reprocess of the SAME row is exactly identifiable by
+  // source_message_id. Catch it deterministically here, before the paid dup call.
+  if (!linkedTaskId && classification === "actionable") {
+    const { data: existingForMsg, error: existErr } = await supabase
+      .from("tasks").select("id").eq("source_message_id", msg.id).limit(1).maybeSingle();
+    if (existErr) {
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: `dup-guard select: ${existErr.message}` });
+    } else if (existingForMsg) {
+      // Already turned into a task on a prior pass — link to it and skip
+      // re-creation. classification flips so this counts as a follow-up touch,
+      // not a fresh actionable, and the source_message is still marked processed.
+      linkedTaskId = existingForMsg.id as string;
+      classification = "actionable_followup";
+      classificationReason = `source_message already produced task ${existingForMsg.id} — skipped duplicate creation on reprocess`;
+    }
+  }
+
   // ── Path 2.5: cross-source duplicate detection ────────────────────────────
   // The sibling linker above only connects same-thread items. This catches the
   // SAME real-world event arriving from a DIFFERENT source (e.g. a Gmail
