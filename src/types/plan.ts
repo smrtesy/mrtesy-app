@@ -112,6 +112,8 @@ export interface PlanMilestone {
   label_he: string;
   label_en: string | null;
   color: string | null;
+  /** If set, this date is a hard deadline ceiling for that worker's tasks. */
+  constrains_user_id?: string | null;
 }
 
 /** Access level for the current user in smrtPlan (full = creator, lite = consumer). */
