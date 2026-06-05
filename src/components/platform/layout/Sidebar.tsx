@@ -70,6 +70,7 @@ const smrtBotItems = [
 const smrtPlanItems = [
   { key: "planBoard",      href: "/plan",            icon: CalendarRange },
   { key: "planMy",         href: "/plan/my",         icon: CheckSquare   },
+  { key: "planTeam",       href: "/plan/team",       icon: Users         },
   { key: "planRepository", href: "/plan/repository", icon: Archive       },
 ] as const;
 

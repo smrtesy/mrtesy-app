@@ -393,39 +393,56 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 });
 
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
+const MY_TASK_FIELDS =
+  "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
+  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id";
+
+/** Attach each task's plan title (so a worker/me view can show which plan it's in). */
+async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
+  const planIds = [...new Set(tasks.map((t) => t.plan_id as string).filter(Boolean))];
+  if (planIds.length === 0) return tasks;
+  const { data } = await db
+    .from("smrtplan_plans")
+    .select("id, title_he, title_en")
+    .eq("org_id", orgId)
+    .in("id", planIds);
+  const byId = new Map(asRows(data).map((p) => [p.id as string, p]));
+  for (const t of tasks) {
+    const p = byId.get(t.plan_id as string);
+    t.plan_title_he = (p?.title_he as string) ?? null;
+    t.plan_title_en = (p?.title_en as string) ?? null;
+  }
+  return tasks;
+}
+
 router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   // Mine = assigned to me, OR unassigned tasks I created (an unassigned plan
   // task still belongs to its owner — it shouldn't fall through the cracks).
   const uid = req.user!.id;
   const { data, error } = await db
     .from("tasks")
-    .select(
-      "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id",
-    )
+    .select(MY_TASK_FIELDS)
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
     .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`)
     .order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
+  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+});
 
-  const tasks = await attachNeedsHandoff(req.org!.id, asRows(data));
-  // Attach the plan title so the worker view can show which plan each task is in.
-  const planIds = [...new Set(tasks.map((t) => t.plan_id as string).filter(Boolean))];
-  if (planIds.length > 0) {
-    const { data: planRows } = await db
-      .from("smrtplan_plans")
-      .select("id, title_he, title_en")
-      .eq("org_id", req.org!.id)
-      .in("id", planIds);
-    const byId = new Map(asRows(planRows).map((p) => [p.id as string, p]));
-    for (const t of tasks) {
-      const p = byId.get(t.plan_id as string);
-      t.plan_title_he = (p?.title_he as string) ?? null;
-      t.plan_title_en = (p?.title_en as string) ?? null;
-    }
-  }
-  res.json({ tasks });
+// A specific worker's tasks across all plans (planner view, fix #4). "Design"
+// etc. are filtered views by assignee — work lives in its real plan, surfaced
+// here because the assignee is that worker.
+router.get("/plan/worker-tasks/:userId", requireFull, async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("tasks")
+    .select(MY_TASK_FIELDS)
+    .eq("organization_id", req.org!.id)
+    .not("plan_id", "is", null)
+    .eq("assigned_to_user_id", req.params.userId)
+    .order("due_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
 });
 
 // ── stream plan: matrix ──────────────────────────────────────────────────────
