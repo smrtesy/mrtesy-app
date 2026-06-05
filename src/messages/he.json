@@ -763,6 +763,8 @@
     "nameRequired": "שם נדרש",
     "organizationUpdated": "הארגון עודכן",
     "memberAdded": "המוזמן צורף",
+    "inviteSent": "ההזמנה נשלחה למייל",
+    "inviteCreatedEmailFailed": "ההזמנה נוצרה אך שליחת המייל נכשלה",
     "roleUpdated": "התפקיד עודכן",
     "removeMemberConfirm": "להסיר משתמש זה?",
     "memberRemoved": "המשתמש הוסר",

@@ -1126,8 +1126,26 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   let tasks: any[] = [];
   let parsed = true;
   try {
-    const jsonMatch = result.text.match(/\[[\s\S]*\]/);
-    if (jsonMatch) tasks = JSON.parse(jsonMatch[0]);
+    // The task builder must return a bare JSON array, but Sonnet occasionally
+    // prefixes a prose preamble and/or wraps the array in a ```json fence. The
+    // old greedy /\[[\s\S]*\]/ then latched onto the FIRST '[' in that prose —
+    // and WhatsApp preambles quote the transcript's "[INCOMING …]" markers, so
+    // the match ran from "[INCOMING…" to the final ']', produced invalid JSON,
+    // and dumped the whole raw reply into the task (T523: title "M Engel" with
+    // the model's commentary as its description and no ai_actions). Two robust
+    // anchors instead: (1) prefer the contents of a ```json fence — fences don't
+    // nest, so a greedy-to-closing-fence capture keeps nested ai_actions arrays
+    // intact; (2) else match an array that actually CONTAINS an object
+    // ("[ { … } ]"), which prose brackets like "[INCOMING…]" never satisfy,
+    // falling back to an explicit empty array "[]" so "no actionable task"
+    // still parses as [] instead of dropping into the raw-text fallback below.
+    const fence = result.text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const candidate = fence
+      ? fence[1].trim()
+      : (result.text.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0]
+         ?? result.text.match(/\[\s*\]/)?.[0]
+         ?? "");
+    if (candidate) tasks = JSON.parse(candidate);
     else parsed = false;
   } catch { parsed = false; }
   if (!parsed) {
@@ -2040,11 +2058,26 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
       if (candidates.length > 0) {
         let targetId: string | "NEW";
-        if (candidates.length === 1) {
-          // Single open matter: trust the classifier's new_matter verdict
-          // (always false for informational, so those always route to it).
-          targetId = analysis.newMatter ? "NEW" : candidates[0].id;
+        if (userForceActionable) {
+          // Explicit "this IS actionable" from the log UI: the user wants a task
+          // for THIS message. Never let the router bury it as a follow-up on
+          // another matter — spin off its own suggestion.
+          targetId = "NEW";
+        } else if (candidates.length === 1 && classification === "informational") {
+          // Cheap path retained ONLY for a lone informational follow-up: route it
+          // onto the single open matter as an update (no extra model call).
+          targetId = candidates[0].id;
         } else {
+          // 2+ candidates, OR an ACTIONABLE message with a single candidate: ask
+          // the router whether this message actually belongs to an existing
+          // matter or opens a NEW one. Previously a single-candidate actionable
+          // trusted analysis.newMatter, but that verdict is judged against the
+          // whole-CHAT thread summary, so it conflates "same chat" with "same
+          // matter" and buries a distinct new ask as a follow-up on an unrelated
+          // open task (real case: בתי-chat messages absorbed into the snoozed
+          // gift task T492 instead of becoming their own suggestion). The router
+          // compares against each matter's specific title/description, so a
+          // genuinely different matter is correctly recognised as NEW.
           const routed = await routeWhatsAppMatter(msg, candidates, sys);
           totalInputTokens += routed.inputTokens;
           totalOutputTokens += routed.outputTokens;
@@ -2163,6 +2196,33 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+    }
+  }
+
+  // ── Idempotency guard: one source_message → its task(s) created exactly once ─
+  // A source_message row is immutable (one row per calendar event / email /
+  // WhatsApp burst), but it can be RE-SELECTED for processing — calendar events
+  // in particular are re-upserted to `pending` on every calendar sync until the
+  // event passes, so the same row reaches this point repeatedly. Without a guard
+  // each reprocess re-runs Path 2.5/3 and spawns a fresh duplicate. (Real case:
+  // one "תרומה של רסקין" calendar event produced T244 and T329 — identical tasks
+  // four days apart.) The cross-source duplicate detector below is the wrong tool
+  // for this: it's a fuzzy, AI-based CONTENT match, and calendar rows carry an
+  // empty body and no contact, so it cannot reliably recognise the same event —
+  // whereas a reprocess of the SAME row is exactly identifiable by
+  // source_message_id. Catch it deterministically here, before the paid dup call.
+  if (!linkedTaskId && classification === "actionable") {
+    const { data: existingForMsg, error: existErr } = await supabase
+      .from("tasks").select("id").eq("source_message_id", msg.id).limit(1).maybeSingle();
+    if (existErr) {
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: `dup-guard select: ${existErr.message}` });
+    } else if (existingForMsg) {
+      // Already turned into a task on a prior pass — link to it and skip
+      // re-creation. classification flips so this counts as a follow-up touch,
+      // not a fresh actionable, and the source_message is still marked processed.
+      linkedTaskId = existingForMsg.id as string;
+      classification = "actionable_followup";
+      classificationReason = `source_message already produced task ${existingForMsg.id} — skipped duplicate creation on reprocess`;
     }
   }
 

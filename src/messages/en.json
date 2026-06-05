@@ -763,6 +763,8 @@
     "nameRequired": "Name required",
     "organizationUpdated": "Organization updated",
     "memberAdded": "Member added",
+    "inviteSent": "Invitation sent by email",
+    "inviteCreatedEmailFailed": "Invite created, but the email failed to send",
     "roleUpdated": "Role updated",
     "removeMemberConfirm": "Remove this member?",
     "memberRemoved": "Member removed",
