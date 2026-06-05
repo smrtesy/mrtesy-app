@@ -106,8 +106,12 @@ export interface Task {
   plan_id?: string | null;
   /** Parent task — this is a sub-task (a unit of work in the engine). */
   parent_task_id?: string | null;
-  /** Engine: estimated duration in working days. */
+  /** Engine: effective duration in working days (computed unless duration_manual). */
   duration_days?: number | null;
+  /** True when a human pinned duration_days by hand (engine then leaves it alone). */
+  duration_manual?: boolean | null;
+  /** Effort estimate in hours (direct or from the estimates catalog). */
+  estimated_hours?: number | null;
   /** Engine: forward-pass earliest start (date). */
   earliest_start?: string | null;
   /** Engine: backward-pass latest start the plan deadline allows (date). */

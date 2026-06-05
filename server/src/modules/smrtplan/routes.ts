@@ -314,7 +314,7 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
     .from("tasks")
     .select(
       "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-        "earliest_start, is_critical, duration_days, parent_task_id, assignment_status",
+        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, assignment_status",
     )
     .eq("organization_id", req.org!.id)
     .eq("plan_id", req.params.id)
@@ -562,7 +562,7 @@ router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Res
 // ── plan tasks (create / edit / delete) ───────────────────────────────────────
 
 router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
-  const { title, title_he, due_date, duration_days, parent_task_id } = req.body ?? {};
+  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id } = req.body ?? {};
   if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
   const { data, error } = await db
     .from("tasks")
@@ -577,9 +577,12 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
       assignment_status: "accepted",
       due_date: due_date ?? null,
       duration_days: duration_days ?? null,
+      duration_manual: duration_days != null,
+      estimated_hours: estimated_hours ?? null,
+      assigned_to_user_id: assigned_to_user_id ?? null,
       parent_task_id: parent_task_id ?? null,
     })
-    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .select("id, title, title_he, status, due_date, duration_days, estimated_hours, parent_task_id, plan_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   await autoRecompute(req.org!.id);
@@ -587,8 +590,8 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 });
 
 const PLAN_TASK_WRITABLE = new Set([
-  "title", "title_he", "due_date", "duration_days", "status",
-  "assigned_to_user_id", "parent_task_id",
+  "title", "title_he", "due_date", "duration_days", "duration_manual",
+  "estimated_hours", "status", "assigned_to_user_id", "parent_task_id",
 ]);
 
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
