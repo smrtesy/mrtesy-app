@@ -314,12 +314,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             </span>
                           )}
                         </div>
-                        {/* mini timeline sparkline: plan span + today marker over the whole period */}
+                        {/* mini timeline sparkline: plan span + milestone ticks + today */}
                         <div className="relative mt-2 h-2 w-full overflow-hidden rounded bg-secondary/60">
                           <div
                             className="absolute inset-y-0 rounded"
                             style={{ insetInlineStart: pctOf(s), width: pctOf(span), background: (p.color || "#534AB7") + "88" }}
                           />
+                          {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
+                            <div
+                              key={m.id}
+                              className="absolute inset-y-0 w-0.5"
+                              style={{ insetInlineStart: pctOf(offsetOf(m.milestone_date)), background: m.color || "hsl(var(--muted-foreground))" }}
+                              title={locale === "en" ? m.label_en || m.label_he : m.label_he}
+                            />
+                          ))}
                           {todayInView && (
                             <div className="absolute inset-y-0 w-px bg-foreground/60" style={{ insetInlineStart: pctOf(todayOff) }} />
                           )}
