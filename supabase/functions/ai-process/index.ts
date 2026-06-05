@@ -2058,11 +2058,26 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
       if (candidates.length > 0) {
         let targetId: string | "NEW";
-        if (candidates.length === 1) {
-          // Single open matter: trust the classifier's new_matter verdict
-          // (always false for informational, so those always route to it).
-          targetId = analysis.newMatter ? "NEW" : candidates[0].id;
+        if (userForceActionable) {
+          // Explicit "this IS actionable" from the log UI: the user wants a task
+          // for THIS message. Never let the router bury it as a follow-up on
+          // another matter — spin off its own suggestion.
+          targetId = "NEW";
+        } else if (candidates.length === 1 && classification === "informational") {
+          // Cheap path retained ONLY for a lone informational follow-up: route it
+          // onto the single open matter as an update (no extra model call).
+          targetId = candidates[0].id;
         } else {
+          // 2+ candidates, OR an ACTIONABLE message with a single candidate: ask
+          // the router whether this message actually belongs to an existing
+          // matter or opens a NEW one. Previously a single-candidate actionable
+          // trusted analysis.newMatter, but that verdict is judged against the
+          // whole-CHAT thread summary, so it conflates "same chat" with "same
+          // matter" and buries a distinct new ask as a follow-up on an unrelated
+          // open task (real case: בתי-chat messages absorbed into the snoozed
+          // gift task T492 instead of becoming their own suggestion). The router
+          // compares against each matter's specific title/description, so a
+          // genuinely different matter is correctly recognised as NEW.
           const routed = await routeWhatsAppMatter(msg, candidates, sys);
           totalInputTokens += routed.inputTokens;
           totalOutputTokens += routed.outputTokens;

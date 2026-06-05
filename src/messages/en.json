@@ -1913,6 +1913,10 @@
       "hours": "Hours",
       "add": "Add row",
       "empty": "No estimates yet"
+    },
+    "view": {
+      "list": "List",
+      "timeline": "Timeline"
     }
   }
 }
