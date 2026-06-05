@@ -186,7 +186,8 @@
     "sendMagicLink": "Send magic link",
     "magicLinkSent": "Sent! Check your email",
     "signOut": "Sign out",
-    "noInviteError": "Access by invitation only. Contact your administrator."
+    "noInviteError": "Access by invitation only. Contact your administrator.",
+    "rateLimitError": "Too many emails sent. Try again in a few minutes, or sign in with Google."
   },
   "invite": {
     "title": "You've been invited",

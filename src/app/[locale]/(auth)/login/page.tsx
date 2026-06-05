@@ -43,7 +43,14 @@ export default function LoginPage() {
     });
     setLoading(false);
     if (error) {
-      toast.error(error.message);
+      // Supabase returns over_email_send_rate_limit when too many auth emails
+      // were sent in the window. Show a clear, actionable message instead of
+      // the raw English string.
+      const isRateLimit =
+        error.code === "over_email_send_rate_limit" ||
+        error.status === 429 ||
+        /rate limit/i.test(error.message);
+      toast.error(isRateLimit ? t("rateLimitError") : error.message);
     } else {
       toast.success(t("magicLinkSent"));
     }
