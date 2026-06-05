@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,7 @@ const ROLE_COLORS: Record<OrgMember["role"], string> = {
 // arg has been dropped from the wrapper too.
 export function OrgSettingsClient() {
   const tOrg = useTranslations("orgSettings");
+  const locale = useLocale();
   const { active, refresh: refreshOrgs } = useActiveOrg();
   const { members, loading, refresh: refreshMembers } = useOrgMembers();
 
@@ -82,11 +83,16 @@ export function OrgSettingsClient() {
     if (!inviteEmail.trim()) return;
     setInviting(true);
     try {
-      await api("/api/org/members", {
+      const result = await api<{ invited?: boolean; warning?: string }>("/api/org/members", {
         method: "POST",
-        body: { email: inviteEmail.trim(), role: inviteRole },
+        body: { email: inviteEmail.trim(), role: inviteRole, locale },
       });
-      toast.success(tOrg("memberAdded"));
+      if (result.invited && result.warning) {
+        // Invite row was created but the email failed to send — don't claim it was sent.
+        toast.warning(tOrg("inviteCreatedEmailFailed"));
+      } else {
+        toast.success(result.invited ? tOrg("inviteSent") : tOrg("memberAdded"));
+      }
       setInviteEmail("");
       refreshMembers();
     } catch (e) {
