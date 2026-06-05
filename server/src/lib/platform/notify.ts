@@ -50,14 +50,25 @@ export async function notifyError(
 
   const handlerUserId = org.error_handler_user_id ?? org.created_by;
 
-  // Tenant-level: notify the org's designated error handler (unchanged).
-  await notify(orgId, handlerUserId, {
-    app_slug: appSlug,
-    type:     "action_required",
-    title:    params.title,
-    body:     params.body,
-    link:     params.link,
-  });
+  // Tenant-level: notify the org's designated error handler — UNLESS the handler
+  // is a super-admin, who will already receive the platform-level alert from the
+  // notify_superadmins_on_error trigger (via the log_entries row below). Skipping
+  // here avoids a double notification for super-admin org owners.
+  const { data: sa } = await db
+    .from("super_admins")
+    .select("user_id")
+    .eq("user_id", handlerUserId)
+    .maybeSingle();
+
+  if (!sa) {
+    await notify(orgId, handlerUserId, {
+      app_slug: appSlug,
+      type:     "action_required",
+      title:    params.title,
+      body:     params.body,
+      link:     params.link,
+    });
+  }
 
   // Platform-level: log the error so the super-admin fan-out trigger picks it
   // up. user_id is the org's handler/owner (best available "who" without the
