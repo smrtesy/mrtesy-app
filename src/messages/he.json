@@ -1900,7 +1900,8 @@
       "daysUnit": "ימים",
       "hoursUnit": "ש׳",
       "durManual": "ידני",
-      "durEstimated": "משוער"
+      "durEstimated": "משוער",
+      "capsWorker": "מאלץ עובד (דדליין)"
     },
     "capacity": {
       "button": "צוות וזמינות",

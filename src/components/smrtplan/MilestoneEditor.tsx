@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -10,8 +10,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { Plan, PlanMilestone } from "@/types/plan";
 
+interface Member {
+  user_id: string;
+  email: string | null;
+  name: string | null;
+}
+const memberName = (m: Member) => m.name || m.email || m.user_id.slice(0, 6);
+
 const fieldCls =
   "rounded-md border border-input bg-background px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+const EMPTY_DRAFT = { milestone_date: "", label_he: "", color: "#534AB7", plan_id: "", constrains_user_id: "" };
 
 export function MilestoneEditor({
   milestones,
@@ -29,10 +38,18 @@ export function MilestoneEditor({
   onChanged: () => void;
 }) {
   const te = useTranslations("smrtPlan.edit");
-  const [draft, setDraft] = useState({ milestone_date: "", label_he: "", color: "#534AB7", plan_id: "" });
+  const [members, setMembers] = useState<Member[]>([]);
+  const [draft, setDraft] = useState({ ...EMPTY_DRAFT });
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [edit, setEdit] = useState({ milestone_date: "", label_he: "", color: "#534AB7", plan_id: "" });
+  const [edit, setEdit] = useState({ ...EMPTY_DRAFT });
+
+  useEffect(() => {
+    if (!open) return;
+    api<{ members: Member[] }>("/api/org/members")
+      .then((r) => setMembers(r.members ?? []))
+      .catch(() => setMembers([]));
+  }, [open]);
 
   function startEdit(m: PlanMilestone) {
     setEditingId(m.id);
@@ -41,6 +58,7 @@ export function MilestoneEditor({
       label_he: m.label_he,
       color: m.color || "#534AB7",
       plan_id: m.plan_id || "",
+      constrains_user_id: m.constrains_user_id || "",
     });
   }
 
@@ -55,6 +73,7 @@ export function MilestoneEditor({
           label_he: edit.label_he.trim(),
           color: edit.color,
           plan_id: edit.plan_id || null,
+          constrains_user_id: edit.constrains_user_id || null,
         },
       });
       setEditingId(null);
@@ -83,9 +102,10 @@ export function MilestoneEditor({
           label_he: draft.label_he.trim(),
           color: draft.color,
           plan_id: draft.plan_id || null,
+          constrains_user_id: draft.constrains_user_id || null,
         },
       });
-      setDraft({ milestone_date: "", label_he: "", color: "#534AB7", plan_id: "" });
+      setDraft({ ...EMPTY_DRAFT });
       onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
@@ -130,6 +150,13 @@ export function MilestoneEditor({
                     <option key={p.id} value={p.id}>{locale === "en" ? p.title_en || p.title_he : p.title_he}</option>
                   ))}
                 </select>
+                <select className={fieldCls} value={edit.constrains_user_id}
+                  onChange={(e) => setEdit({ ...edit, constrains_user_id: e.target.value })} title={te("capsWorker")}>
+                  <option value="">{te("capsWorker")}</option>
+                  {members.map((mm) => (
+                    <option key={mm.user_id} value={mm.user_id}>{memberName(mm)}</option>
+                  ))}
+                </select>
                 <button onClick={() => saveEdit(m.id)} disabled={busy}
                   className="rounded p-1 text-status-ok hover:bg-status-ok/10"><Check className="h-4 w-4" /></button>
                 <button onClick={() => setEditingId(null)} disabled={busy}
@@ -162,12 +189,19 @@ export function MilestoneEditor({
             onChange={(e) => setDraft({ ...draft, label_he: e.target.value })} className="h-9" dir="rtl" />
           <input type="color" className="h-9 w-12 cursor-pointer rounded-md border border-input bg-background"
             value={draft.color} onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <select className={`${fieldCls} flex-1`} value={draft.plan_id}
               onChange={(e) => setDraft({ ...draft, plan_id: e.target.value })}>
               <option value="">{te("mGlobal")}</option>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>{locale === "en" ? p.title_en || p.title_he : p.title_he}</option>
+              ))}
+            </select>
+            <select className={`${fieldCls} flex-1`} value={draft.constrains_user_id}
+              onChange={(e) => setDraft({ ...draft, constrains_user_id: e.target.value })} title={te("capsWorker")}>
+              <option value="">{te("capsWorker")}</option>
+              {members.map((mm) => (
+                <option key={mm.user_id} value={mm.user_id}>{memberName(mm)}</option>
               ))}
             </select>
             <Button onClick={add} disabled={busy || !draft.milestone_date || !draft.label_he.trim()} className="gap-1">

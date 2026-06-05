@@ -7,10 +7,10 @@
  *   ה  Critical path          — forward+backward pass, slack = 0 ⇒ critical
  *   (ג progress, ד health live in SQL views; see migration 20260604000400.)
  *
- * Hebrew calendar (§5.1a): every scheduled date skips Shabbat (Saturday),
- * yom tov and bein-hazmanim. A blocked target rolls BACK to the nearest valid
- * working day (we schedule backwards). Shabbat is computed here; yom tov /
- * bein-hazmanim come from smrtplan_blocked_days (global + per-org rows).
+ * Hebrew calendar (§5.1a): every scheduled date skips Shabbat (Saturday) and
+ * yom tov. A blocked target rolls BACK to the nearest valid working day (we
+ * schedule backwards). Shabbat is computed here; yom tov comes from
+ * smrtplan_blocked_days (global + per-org rows).
  *
  * The engine never invents content — it only writes the engine fields it owns
  * (duration_days, earliest_start, latest_start, latest_finish, is_critical) and
@@ -73,6 +73,38 @@ export async function loadCapacity(orgId: string): Promise<Map<string, number>> 
     if (h > 0) cap.set(row.user_id as string, h);
   }
   return cap;
+}
+
+/** Load milestone deadline caps: per-user (constrains_user_id) and per-plan
+ *  (plan_id). Each is the EARLIEST milestone date for that scope — a hard
+ *  ceiling the engine pulls deadlines back to. */
+export async function loadMilestoneCaps(
+  orgId: string,
+): Promise<{ userCap: Map<string, string>; planCap: Map<string, string> }> {
+  const userCap = new Map<string, string>();
+  const planCap = new Map<string, string>();
+  const { data, error } = await db
+    .from("smrtplan_milestones")
+    .select("milestone_date, plan_id, constrains_user_id")
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[smrtplan.engine] loadMilestoneCaps:", error.message);
+    return { userCap, planCap };
+  }
+  for (const m of data ?? []) {
+    const date = m.milestone_date as string;
+    const uid = m.constrains_user_id as string | null;
+    const pid = m.plan_id as string | null;
+    if (uid) {
+      const cur = userCap.get(uid);
+      if (!cur || date < cur) userCap.set(uid, date);
+    }
+    if (pid) {
+      const cur = planCap.get(pid);
+      if (!cur || date < cur) planCap.set(pid, date);
+    }
+  }
+  return { userCap, planCap };
 }
 
 /** A working day = not Saturday and not in the blocked set. */
@@ -161,6 +193,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
 }> {
   const blocked = await loadBlockedDates(orgId);
   const capacity = await loadCapacity(orgId);
+  const { userCap, planCap } = await loadMilestoneCaps(orgId);
 
   const { data: planRows } = await db
     .from("smrtplan_plans")
@@ -263,6 +296,14 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   for (let i = order.length - 1; i >= 0; i--) {
     const t = tasks.get(order[i])!;
     let lf: Date | undefined = dueOf(t) ?? undefined;
+    // External milestone caps: a worker-leave / plan deadline pulls the date in.
+    const caps: string[] = [];
+    if (t.assigned_to_user_id && userCap.has(t.assigned_to_user_id)) caps.push(userCap.get(t.assigned_to_user_id)!);
+    if (t.plan_id && planCap.has(t.plan_id)) caps.push(planCap.get(t.plan_id)!);
+    for (const capISO of caps) {
+      const capDate = rollBack(parseISO(capISO), blocked);
+      if (!lf || capDate < lf) lf = capDate;
+    }
     for (const sId of successors.get(t.id)!) {
       const s = tasks.get(sId)!;
       if (s.latest_start) {

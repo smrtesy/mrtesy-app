@@ -289,7 +289,7 @@ router.get("/plans/board", async (req: Request, res: Response) => {
 router.get("/plans/milestones", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("smrtplan_milestones")
-    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .select("id, plan_id, milestone_date, label_he, label_en, color, constrains_user_id")
     .eq("org_id", req.org!.id)
     .order("milestone_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
@@ -615,7 +615,7 @@ router.post("/plans/:id/recompute", requireFull, async (req: Request, res: Respo
 // ── milestones (create / edit / delete) ──────────────────────────────────────
 
 router.post("/plans/milestones", requireFull, async (req: Request, res: Response) => {
-  const { milestone_date, label_he, label_en, color, plan_id } = req.body ?? {};
+  const { milestone_date, label_he, label_en, color, plan_id, constrains_user_id } = req.body ?? {};
   if (!milestone_date || !label_he) {
     return res.status(400).json({ error: "milestone_date and label_he are required" });
   }
@@ -628,17 +628,19 @@ router.post("/plans/milestones", requireFull, async (req: Request, res: Response
       label_he,
       label_en: label_en ?? null,
       color: color ?? null,
+      constrains_user_id: constrains_user_id ?? null,
       created_by: req.user!.id,
     })
-    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .select("id, plan_id, milestone_date, label_he, label_en, color, constrains_user_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id); // a constraining milestone changes the schedule
   res.status(201).json({ milestone: data });
 });
 
 router.patch("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
-  for (const k of ["milestone_date", "label_he", "label_en", "color", "plan_id"]) {
+  for (const k of ["milestone_date", "label_he", "label_en", "color", "plan_id", "constrains_user_id"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
@@ -647,9 +649,10 @@ router.patch("/plan-milestones/:id", requireFull, async (req: Request, res: Resp
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, milestone_date, label_he, label_en, color")
+    .select("id, plan_id, milestone_date, label_he, label_en, color, constrains_user_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ milestone: data });
 });
 
@@ -660,6 +663,7 @@ router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Res
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
   res.json({ ok: true });
 });
 

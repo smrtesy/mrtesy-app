@@ -1901,7 +1901,8 @@
       "daysUnit": "d",
       "hoursUnit": "h",
       "durManual": "manual",
-      "durEstimated": "est."
+      "durEstimated": "est.",
+      "capsWorker": "Caps worker (deadline)"
     },
     "capacity": {
       "button": "Team & availability",
