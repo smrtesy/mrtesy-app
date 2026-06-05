@@ -1,7 +1,7 @@
 /**
  * Org member routes (all require X-Org-Id)
  *   GET     /org/members                — list members of active org
- *   POST    /org/members                — invite by email (must already have an account)
+ *   POST    /org/members                — add an existing user, or invite an unregistered one by email
  *   PATCH   /org/members/:userId/role   — change member's role  (owner only)
  *   DELETE  /org/members/:userId        — remove a member       (owner/admin, or self-leave)
  */
@@ -10,6 +10,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireRole, type Role } from "../../../middleware";
+import { sendInviteEmail } from "../../../lib/email";
 
 const router = Router();
 
@@ -45,11 +46,21 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
   res.json({ members });
 });
 
-/** POST /org/members — invite by email. User must already have a Supabase account. */
+/**
+ * POST /org/members — add a member by email.
+ *
+ * If the email already has a Supabase account we add them to `org_members`
+ * directly (available immediately). If no account exists yet we create a
+ * pending `org_invites` row and email them a token link; the /auth/callback
+ * flow then joins them to this org with the chosen role the first time they
+ * sign in. This lets an org owner/admin invite people who haven't registered.
+ */
 router.post("/org/members",
   requireAuth, requireOrg, requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { email, role = "member" } = req.body ?? {};
+    const { email, role = "member", locale: rawLocale = "he" } = req.body ?? {};
+    // Only he/en are valid locale segments; never trust client input in the email link path.
+    const locale = rawLocale === "en" ? "en" : "he";
     if (!email || typeof email !== "string") {
       return res.status(400).json({ error: "email is required" });
     }
@@ -61,19 +72,58 @@ router.post("/org/members",
       return res.status(403).json({ error: "only owners can grant the owner role" });
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+
     // Find user by email (Supabase admin API)
     // listUsers does pagination by default; for now we read first page (1000 users).
     // If the customer scales past that, this needs to be a server-side RPC.
     const { data: userPage } = await db.auth.admin.listUsers({ perPage: 1000 });
-    const user = (userPage?.users ?? []).find((u) => u.email?.toLowerCase() === email.toLowerCase().trim());
+    const user = (userPage?.users ?? []).find((u) => u.email?.toLowerCase() === normalizedEmail);
 
+    // ── Unregistered email → create a pending invite and email a token link ──
     if (!user) {
-      return res.status(404).json({
-        error: `No user account found for ${email}. Ask them to sign up first, then re-invite.`,
-      });
+      // Don't stack duplicate active invites for the same email+org
+      const { data: existing } = await db
+        .from("org_invites")
+        .select("id")
+        .eq("org_id", req.org!.id)
+        .eq("email", normalizedEmail)
+        .is("accepted_at", null)
+        .gt("expires_at", new Date().toISOString())
+        .maybeSingle();
+      if (existing) {
+        return res.status(409).json({ error: "an active invite already exists for this email" });
+      }
+
+      const { data: invite, error: inviteErr } = await db
+        .from("org_invites")
+        .insert({
+          email: normalizedEmail,
+          org_id: req.org!.id,
+          role,
+          invited_by: req.user!.id,
+        })
+        .select("token")
+        .single();
+
+      if (inviteErr) return res.status(500).json({ error: inviteErr.message });
+
+      // FRONTEND_URL may be comma-separated (CORS list) — take the first entry as the canonical app URL
+      const appUrl = (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim();
+      const inviteUrl = `${appUrl}/${locale}/invite/${invite.token}`;
+
+      try {
+        await sendInviteEmail({ to: email.trim(), orgName: req.org!.name, inviteUrl, locale });
+      } catch (emailErr) {
+        // The invite row exists; surface a soft warning rather than failing the request.
+        console.error("[org/members] invite email send failed:", emailErr);
+        return res.status(201).json({ invited: true, warning: "Invite created but email failed to send" });
+      }
+
+      return res.status(201).json({ invited: true });
     }
 
-    // Insert membership
+    // ── Existing user → add to org directly ──
     const { error } = await db.from("org_members").insert({
       org_id: req.org!.id,
       user_id: user.id,
@@ -88,6 +138,7 @@ router.post("/org/members",
 
     res.status(201).json({
       member: { user_id: user.id, email: user.email, role },
+      invited: false,
     });
   },
 );
