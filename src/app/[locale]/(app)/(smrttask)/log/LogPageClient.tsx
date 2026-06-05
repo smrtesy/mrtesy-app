@@ -697,6 +697,33 @@ export function LogPageClient({ locale }: { locale: string }) {
                       </div>
                     )}
 
+                    {/* Task-builder confidence (recorded for every built task) */}
+                    {typeof (log.log_details as { task_confidence?: unknown } | null)?.task_confidence === "string" && (
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-medium text-foreground/70">{tLog("taskConfidence")}</span>
+                        <span className={`text-[10px] uppercase font-medium ${(log.log_details as { task_confidence: string }).task_confidence === "low" ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>
+                          {(log.log_details as { task_confidence: string }).task_confidence}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Task-builder per-model trail (Opus escalation) */}
+                    {Array.isArray((log.log_details as { task_trail?: unknown } | null)?.task_trail) && (
+                      <div>
+                        <p className="font-medium text-foreground/70 mb-0.5">{tLog("taskTrail")}</p>
+                        <div className="flex flex-col gap-1">
+                          {((log.log_details as { task_trail: Array<{ model: string; confidence: string; taskCount: number }> }).task_trail).map((step, i, arr) => (
+                            <div key={`${i}-${step.model}`} className="flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
+                              <span dir="ltr" className="font-mono text-[10px] text-foreground/80">{step.model}</span>
+                              <span className="text-[10px] uppercase opacity-70">({step.confidence})</span>
+                              <span dir="ltr" className="text-[10px]">{step.taskCount} ✓</span>
+                              {i === arr.length - 1 && <span className="text-[10px] text-primary">{tLog("modelTrailFinal")}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Extra details JSON */}
                     {log.log_details && Object.keys(log.log_details).length > 0 && (
                       <div>
