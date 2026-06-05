@@ -23,8 +23,6 @@ import { db } from "../../db";
 // ── working-day calendar ─────────────────────────────────────────────────────
 
 const DAY_MS = 86_400_000;
-/** Default estimate when a (sub-)task has no duration set, in working days. */
-const DEFAULT_DURATION_DAYS = 2;
 /** Org-wide fallback hours/day when an assignee has no capacity row (or none). */
 const ORG_DEFAULT_HOURS_PER_DAY = 8;
 /** "at risk" threshold — kept in sync with the smrtplan_task_health view. */
@@ -130,6 +128,7 @@ interface EngineTask {
   duration_manual: boolean;
   estimated_hours: number | null;
   assigned_to_user_id: string | null;
+  due_date: string | null;
   status: string;
   created_at: string;
   // computed
@@ -175,14 +174,10 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     planStartOf.set(p.id as string, p.start_date ? parseISO(p.start_date as string) : null);
     planEndOf.set(p.id as string, p.end_date ? parseISO(p.end_date as string) : null);
   }
-  // Global fallback horizon: the latest plan end, else 30 days out.
-  const allEnds = [...planEndOf.values()].filter(Boolean) as Date[];
-  const globalHorizon =
-    allEnds.length > 0 ? new Date(Math.max(...allEnds.map((d) => d.getTime()))) : addDays(new Date(), 30);
 
   const { data: taskRows, error: taskErr } = await db
     .from("tasks")
-    .select("id, plan_id, parent_task_id, duration_days, duration_manual, estimated_hours, assigned_to_user_id, status, created_at")
+    .select("id, plan_id, parent_task_id, duration_days, duration_manual, estimated_hours, assigned_to_user_id, due_date, status, created_at")
     .eq("organization_id", orgId)
     .not("plan_id", "is", null);
   if (taskErr || !taskRows || taskRows.length === 0) {
@@ -199,6 +194,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       duration_manual: (r.duration_manual as boolean | null) ?? false,
       estimated_hours: (r.estimated_hours as number | null) ?? null,
       assigned_to_user_id: (r.assigned_to_user_id as string | null) ?? null,
+      due_date: (r.due_date as string | null) ?? null,
       status: (r.status as string) ?? "inbox",
       created_at: (r.created_at as string) ?? new Date().toISOString(),
       duration: 0,
@@ -230,80 +226,80 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     predecessors.get(consumer)!.push(provider);
   }
 
-  // Implicit sequential chain among sibling sub-tasks with NO explicit deps,
-  // so they get a staggered schedule rather than one shared deadline.
+  // Group sub-tasks by parent (for the equal-split below).
   const childrenByParent = new Map<string, EngineTask[]>();
   for (const t of tasks.values()) {
     if (!t.parent_task_id) continue;
     if (!childrenByParent.has(t.parent_task_id)) childrenByParent.set(t.parent_task_id, []);
     childrenByParent.get(t.parent_task_id)!.push(t);
   }
-  for (const [, children] of childrenByParent) {
-    const anyExplicit = children.some(
-      (c) => predecessors.get(c.id)!.length > 0 || successors.get(c.id)!.length > 0,
-    );
-    if (anyExplicit) continue;
-    const ordered = [...children].sort((a, b) => a.created_at.localeCompare(b.created_at));
-    for (let i = 1; i < ordered.length; i++) {
-      successors.get(ordered[i - 1].id)!.push(ordered[i].id);
-      predecessors.get(ordered[i].id)!.push(ordered[i - 1].id);
-    }
-  }
 
-  // Duration fallback ladder (most specific → most general):
-  //   1. manual duration_days pin (human overrides)
-  //   2. estimated_hours ÷ assignee capacity (or org default 8h/day)
-  //   3. equal-split a parent's plan window across un-estimated children (below)
-  //   4. default estimate
+  // ── duration resolution — NO blanket default and NO plan-window split.
+  //    Sub-tasks carry no private duration in planning (fix #2/#3); they get a
+  //    staged date by splitting their parent's range below. ───────────────────
   for (const t of tasks.values()) {
     if (t.duration_manual && t.duration_days && t.duration_days > 0) {
-      t.duration = t.duration_days;
+      t.duration = t.duration_days; // human pin wins
     } else if (t.estimated_hours && t.estimated_hours > 0) {
       const hpd =
         (t.assigned_to_user_id && capacity.get(t.assigned_to_user_id)) || ORG_DEFAULT_HOURS_PER_DAY;
       t.duration = Math.max(1, Math.ceil(t.estimated_hours / hpd));
-      t.durationEstimated = true; // derived, not hand-confirmed
+      t.durationEstimated = true; // derived
     } else {
-      t.duration = DEFAULT_DURATION_DAYS;
-      t.durationEstimated = true;
+      t.duration = 0; // unknown — no private duration
     }
   }
-  for (const [parentId, children] of childrenByParent) {
-    // Only children with neither a manual pin nor an hours estimate get
-    // equal-split; hours-derived durations are kept.
-    const unestimated = children.filter(
-      (c) => !(c.duration_manual && c.duration_days) && !(c.estimated_hours && c.estimated_hours > 0),
-    );
-    if (unestimated.length === 0) continue;
-    const parent = tasks.get(parentId);
-    const ps = parent ? planStartOf.get(parent.plan_id ?? "") ?? null : null;
-    const pe = parent ? planEndOf.get(parent.plan_id ?? "") ?? null : null;
-    if (!ps || !pe) continue;
-    const each = Math.max(1, Math.floor(countWorkingDays(ps, pe, blocked) / children.length));
-    for (const c of unestimated) c.duration = each;
-  }
 
-  const horizonOf = (t: EngineTask): Date => planEndOf.get(t.plan_id ?? "") ?? globalHorizon;
+  // A task schedules backward from ITS OWN due_date (the row deadline), not the
+  // plan's end_date. The plan end_date is only the gantt bar.
+  const dueOf = (t: EngineTask): Date | null =>
+    t.due_date ? rollBack(parseISO(t.due_date), blocked) : null;
   const floorOf = (t: EngineTask): Date => planStartOf.get(t.plan_id ?? "") ?? new Date();
 
-  // Backward pass (reverse-topological): a task is scheduled once its successors are.
+  // Backward pass (reverse-topological): latest_finish = the earliest of the
+  // row's own deadline and any successor's start constraint (external constraints
+  // like a worker leaving therefore pull it earlier). No deadline ⇒ not scheduled.
   const order = topoOrder(ids, predecessors, successors);
   for (let i = order.length - 1; i >= 0; i--) {
     const t = tasks.get(order[i])!;
-    let lf = rollBack(horizonOf(t), blocked);
+    let lf: Date | undefined = dueOf(t) ?? undefined;
     for (const sId of successors.get(t.id)!) {
       const s = tasks.get(sId)!;
-      // Provider must FINISH the working day BEFORE its consumer starts.
       if (s.latest_start) {
         const before = subtractWorkingDays(s.latest_start, 1, blocked);
-        if (before < lf) lf = before;
+        if (!lf || before < lf) lf = before;
       }
     }
-    t.latest_finish = lf;
-    t.latest_start = subtractWorkingDays(t.latest_finish, Math.max(0, t.duration - 1), blocked);
+    if (lf) {
+      t.latest_finish = lf;
+      t.latest_start = t.duration > 0 ? subtractWorkingDays(lf, t.duration - 1, blocked) : lf;
+    }
   }
 
-  // Forward pass (topological).
+  // Sub-task equal-split: divide the parent row's [start, deadline] range among
+  // its children that have no private duration. The last child ends at the row
+  // deadline; earlier ones are staged before it. Children keep duration_days NULL.
+  for (const [parentId, children] of childrenByParent) {
+    const parent = tasks.get(parentId);
+    if (!parent) continue;
+    const parentFinish = parent.latest_finish ?? dueOf(parent) ?? undefined;
+    if (!parentFinish) continue;
+    const splitKids = [...children]
+      .filter((c) => c.duration === 0)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (splitKids.length === 0) continue;
+    const start = parent.earliest_start ?? floorOf(parent);
+    const per = Math.max(1, Math.floor(countWorkingDays(start, parentFinish, blocked) / splitKids.length));
+    let cursor = rollBack(parentFinish, blocked);
+    for (let i = splitKids.length - 1; i >= 0; i--) {
+      const c = splitKids[i];
+      c.latest_finish = cursor;
+      c.latest_start = subtractWorkingDays(cursor, per - 1, blocked);
+      cursor = subtractWorkingDays(c.latest_start, 1, blocked);
+    }
+  }
+
+  // Forward pass (topological) — earliest_* for slack/critical.
   for (const id of order) {
     const t = tasks.get(id)!;
     let es = rollForward(floorOf(t), blocked);
@@ -335,7 +331,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     const { error: upErr } = await db
       .from("tasks")
       .update({
-        duration_days: t.duration,
+        duration_days: t.duration > 0 ? t.duration : null, // sub-tasks/unknown stay NULL
         earliest_start: t.earliest_start ? toISO(t.earliest_start) : null,
         latest_start: t.latest_start ? toISO(t.latest_start) : null,
         latest_finish: t.latest_finish ? toISO(t.latest_finish) : null,

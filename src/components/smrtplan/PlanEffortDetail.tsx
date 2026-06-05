@@ -121,15 +121,18 @@ export function PlanEffortDetail({
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: plan.color || "#534AB7" }} />
             {title}
           </h2>
-          <p className="mb-3 mt-0.5 text-[12.5px] text-muted-foreground">
+          <p className="mb-1 mt-0.5 text-[12.5px] text-muted-foreground">
             {plan.goal ? `${plan.goal} · ` : ""}
             {plan.start_date && plan.end_date
               ? `${gregShort(parseISO(plan.start_date))}–${gregShort(parseISO(plan.end_date))} · `
               : ""}
             {Math.round(progress * 100)}%
           </p>
+          {plan.kind === "roster" && (
+            <p className="mb-3 text-[11.5px] italic text-muted-foreground">{te("rosterNote")}</p>
+          )}
         </div>
-        {canEdit && (
+        {canEdit && plan.kind !== "roster" && (
           <button
             onClick={() => setAdding((v) => !v)}
             className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent"
@@ -196,8 +199,13 @@ function TaskRow({
   onEdit: () => void;
 }) {
   const zone = zoneOf(task);
-  const due = task.latest_finish || task.due_date;
-  const urg = urgencyFor(due, today);
+  // The row shows the SET deadline (due_date). The engine's computed
+  // latest_finish only shows as a constraint hint when it's earlier (e.g. a
+  // worker-leave pulls it in).
+  const deadline = task.due_date || task.latest_finish || null;
+  const constraint =
+    task.latest_finish && task.due_date && task.latest_finish < task.due_date ? task.latest_finish : null;
+  const urg = urgencyFor(deadline, today);
   const waiting = (task.needs ?? []).filter((n) => !n.satisfied);
   return (
     <div className="py-2.5">
@@ -244,14 +252,16 @@ function TaskRow({
             {assignee}
           </span>
         )}
-        {due && zone !== "done" && (
+        {deadline && zone !== "done" && (
           <span
             className={cn(
               "whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold",
               urg ? countdownClasses[urg] : "bg-secondary text-muted-foreground",
             )}
+            title={constraint ? `${t("effort.constraint")}: ${gregShort(parseISO(constraint))}` : undefined}
           >
-            {countdownText(due, t, today)} · {gregShort(parseISO(due))} · {hebDate(parseISO(due))}
+            {countdownText(deadline, t, today)} · {gregShort(parseISO(deadline))} · {hebDate(parseISO(deadline))}
+            {constraint && <span className="ms-1 text-status-late">⚠ {gregShort(parseISO(constraint))}</span>}
           </span>
         )}
         {canEdit && (

@@ -104,7 +104,9 @@
     "sectionBot": "smrtBot",
     "more": "More",
     "planBoard": "Board",
-    "planRepository": "Repository"
+    "planRepository": "Repository",
+    "planMy": "My tasks",
+    "planTeam": "By worker"
   },
   "account": {
     "title": "Account",
@@ -1779,7 +1781,8 @@
     },
     "kind": {
       "effort": "Effort",
-      "stream": "Stream"
+      "stream": "Stream",
+      "roster": "Roster"
     },
     "board": {
       "expected": "expected",
@@ -1815,7 +1818,9 @@
       "ready": "Ready",
       "done": "Done",
       "waiting": "Waiting",
-      "arrived": "Arrived"
+      "arrived": "Arrived",
+      "constraint": "constraint",
+      "rosterNote": "Aggregated view: tasks from other plans by assignee"
     },
     "repository": {
       "title": "Idea repository",
@@ -1928,6 +1933,32 @@
     "view": {
       "list": "List",
       "timeline": "Timeline"
+    },
+    "my": {
+      "title": "My tasks",
+      "lead": "Grouped by what you can do now · check ✓ when done",
+      "ready": "Ready to start",
+      "blocked": "Blocked — waiting for input",
+      "done": "Done",
+      "emptyReady": "Nothing ready right now",
+      "emptyBlocked": "Nothing blocked",
+      "emptyDone": "Nothing completed yet",
+      "complete": "Done",
+      "noTasks": "You have no plan tasks yet"
+    },
+    "cell": {
+      "title": "Matrix cell",
+      "status": "Status",
+      "linkedTask": "Linked task",
+      "createTask": "Create linked task",
+      "noTask": "No task linked to this cell",
+      "openInTasks": "Managed in smrtTask"
+    },
+    "team": {
+      "title": "Tasks by worker",
+      "lead": "Pick a worker to see all their tasks across plans — ready/blocked/done",
+      "worker": "Worker",
+      "empty": "No tasks for this worker"
     }
   }
 }

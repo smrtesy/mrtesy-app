@@ -75,35 +75,47 @@ export async function getOAuthClient(userId: string, service: string) {
       // blips, Google 5xx, scope mismatches) leave the row intact and
       // the UI silently shows "disconnected" with no breadcrumb.
       const msg = err instanceof Error ? err.message : String(err);
-      // Treat any "the token is permanently dead" signal from Google
-      // the same way: nuke the credential row + tell the user.
-      //   • invalid_grant  — refresh_token was revoked / expired / unused too long
-      //   • invalid_client — refresh_token is bound to a different
-      //                      GOOGLE_CLIENT_ID/SECRET than we have now (typical
-      //                      after rotating OAuth credentials in Google Cloud —
-      //                      the token was issued by the old client and Google
-      //                      refuses to refresh it under the new one).
-      // Both states are permanent: only a fresh OAuth grant fixes them.
-      const isDeadToken = /invalid_grant/i.test(msg) || /invalid_client/i.test(msg);
+      // Two FAILURE classes that must be handled DIFFERENTLY — conflating them
+      // is what made services "disconnect by themselves":
+      //
+      //   • invalid_grant  — the refresh_token itself is permanently dead
+      //     (revoked, expired, or unused too long). Only a fresh OAuth grant
+      //     fixes it, so we wipe the row and tell the USER to reconnect.
+      //
+      //   • invalid_client — the GOOGLE_CLIENT_ID/SECRET *this environment*
+      //     sent is not a valid pair for the token's issuing client (a
+      //     mismatched/rotated secret across Vercel/Railway/Supabase, a deleted
+      //     OAuth client, or a stray newline in the env var). This is OUR
+      //     misconfiguration, NOT a dead grant: the user's refresh_token is
+      //     still good and resumes the instant the env is corrected. Deleting it
+      //     would burn a valid credential and force a pointless reconnect that
+      //     breaks again on the very next refresh. So we KEEP the row and let
+      //     the level='error' log below alert the platform operators (via the
+      //     notify_superadmins_on_error trigger) to fix the config at the source.
+      const isRevoked     = /invalid_grant/i.test(msg);
+      const isClientConfig = /invalid_client/i.test(msg);
       try {
         await db.from("log_entries").insert({
           user_id: userId,
-          level: isDeadToken ? "error" : "warning",
+          level: (isRevoked || isClientConfig) ? "error" : "warning",
           category: "token_refresh",
           status: "failed",
           error_message: `${dbService}: ${msg}`.slice(0, 1000),
         });
       } catch { /* logging is best-effort */ }
 
-      if (isDeadToken) {
-        // Wipe the credential row so the connection indicator flips to
-        // "disconnected" instead of staying green forever, and notify
-        // the user so they actually know to reconnect.
+      if (isRevoked) {
+        // Permanently dead grant → wipe the row so the indicator flips to
+        // "disconnected" instead of staying green forever, and notify the user
+        // so they actually know to reconnect.
         await db.from("user_credentials").delete().eq("id", c.id);
         await notifyServiceDisconnected(userId, dbService).catch(() => {
           /* notification is best-effort; never block the throw */
         });
       }
+      // invalid_client and transient errors (network blips, Google 5xx): leave
+      // the credential intact and let the caller's retry / next cron tick try
+      // again once the underlying issue clears.
       throw err;
     }
     oauth2Client.setCredentials(credentials);

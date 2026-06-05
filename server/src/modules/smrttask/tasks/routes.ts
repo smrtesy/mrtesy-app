@@ -473,7 +473,20 @@ router.post("/tasks/:id/materials/upload", async (req: Request, res: Response) =
     return res.status(413).json({ error: "file too large (max 7MB)" });
   }
 
-  const safeName = filename.replace(/[/\\]+/g, "_").slice(0, 200);
+  // Supabase Storage keys must be ASCII — Hebrew filenames, spaces, and other
+  // non-ASCII / unsafe characters trigger "Invalid key" and the upload fails.
+  // Keep the original name (displayName) for the user-facing title, but build
+  // an ASCII-safe slug for the storage path so the key is always valid.
+  const displayName = filename.trim().slice(0, 200);
+  const dot  = displayName.lastIndexOf(".");
+  const ext  = dot > 0 ? displayName.slice(dot).replace(/[^.a-zA-Z0-9]/g, "").slice(0, 20) : "";
+  const stem = (dot > 0 ? displayName.slice(0, dot) : displayName)
+    .replace(/[^\x20-\x7E]/g, "")        // drop non-ASCII (Hebrew, emoji, …)
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")   // collapse remaining unsafe chars + spaces
+    .replace(/_+/g, "_")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 100);
+  const safeName = (stem || "file") + ext;
   const path = `${req.org!.id}/${task.id}/${randomUUID()}-${safeName}`;
   const contentType = (typeof mime === "string" && mime) || "application/octet-stream";
 
@@ -494,7 +507,7 @@ router.post("/tasks/:id/materials/upload", async (req: Request, res: Response) =
     file_path: path,
     file_size: buf.length,
     file_mime: contentType,
-    filename:  safeName,
+    filename:  displayName,
   });
 });
 

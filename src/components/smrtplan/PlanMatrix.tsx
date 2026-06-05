@@ -8,6 +8,16 @@ import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanStageRow, PlanEpisode, EpisodeStageStatus, CellStatus } from "@/types/plan";
 import { parseISO, gregShort, daysBetween } from "@/lib/smrtplan/dates";
+import { CellSheet } from "./CellSheet";
+
+interface LinkedTask {
+  id: string;
+  title: string;
+  title_he: string | null;
+  status: string;
+  assigned_to_user_id: string | null;
+  due_date: string | null;
+}
 
 function stageName(s: PlanStageRow, locale: string) {
   return locale === "en" ? s.name_en || s.name_he : s.name_he;
@@ -16,7 +26,6 @@ function epName(e: PlanEpisode, locale: string) {
   return locale === "en" ? e.name_en || e.name_he : e.name_he;
 }
 
-const NEXT: Record<CellStatus, CellStatus> = { todo: "prog", prog: "done", done: "todo" };
 const cellGlyph: Record<CellStatus, string> = { todo: "", prog: "∙", done: "✓" };
 
 export function PlanMatrix({
@@ -37,6 +46,8 @@ export function PlanMatrix({
   const [stages, setStages] = useState<PlanStageRow[]>([]);
   const [episodes, setEpisodes] = useState<PlanEpisode[]>([]);
   const [cells, setCells] = useState<Record<string, EpisodeStageStatus>>({});
+  const [linkedTasks, setLinkedTasks] = useState<Record<string, LinkedTask>>({});
+  const [sheet, setSheet] = useState<{ episode: PlanEpisode; stage: PlanStageRow } | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function refetch() {
@@ -44,10 +55,12 @@ export function PlanMatrix({
       stages: PlanStageRow[];
       episodes: PlanEpisode[];
       cells: Record<string, EpisodeStageStatus>;
+      tasks: Record<string, LinkedTask>;
     }>(`/api/plans/${plan.id}/matrix`);
     setStages(data.stages ?? []);
     setEpisodes(data.episodes ?? []);
     setCells(data.cells ?? {});
+    setLinkedTasks(data.tasks ?? {});
     onChanged?.();
   }
 
@@ -94,11 +107,13 @@ export function PlanMatrix({
           stages: PlanStageRow[];
           episodes: PlanEpisode[];
           cells: Record<string, EpisodeStageStatus>;
+          tasks: Record<string, LinkedTask>;
         }>(`/api/plans/${plan.id}/matrix`);
         if (!alive) return;
         setStages(data.stages ?? []);
         setEpisodes(data.episodes ?? []);
         setCells(data.cells ?? {});
+        setLinkedTasks(data.tasks ?? {});
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -109,19 +124,6 @@ export function PlanMatrix({
       alive = false;
     };
   }, [plan.id]);
-
-  async function cycleCell(cell: EpisodeStageStatus) {
-    if (!canEdit) return;
-    const next = NEXT[cell.status];
-    const key = `${cell.episode_id}:${cell.stage_id}`;
-    setCells((prev) => ({ ...prev, [key]: { ...cell, status: next } }));
-    try {
-      await api(`/api/plan-cells/${cell.id}`, { method: "PATCH", body: { status: next } });
-    } catch (e) {
-      setCells((prev) => ({ ...prev, [key]: cell })); // revert
-      toast.error(e instanceof Error ? e.message : "Error");
-    }
-  }
 
   function currentStage(ep: PlanEpisode): string {
     for (const s of stages) {
@@ -214,22 +216,26 @@ export function PlanMatrix({
                     {stages.map((s) => {
                       const cell = cells[`${ep.id}:${s.id}`];
                       const status: CellStatus = cell?.status ?? "todo";
+                      const linked = cell?.task_id ? linkedTasks[cell.task_id] : undefined;
                       return (
                         <td key={s.id} className="border p-1.5 text-center">
                           <button
                             type="button"
-                            disabled={!canEdit || !cell}
-                            onClick={() => cell && cycleCell(cell)}
+                            disabled={!canEdit}
+                            onClick={() => setSheet({ episode: ep, stage: s })}
                             className={cn(
-                              "inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[12px]",
+                              "relative inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[12px]",
                               status === "done" && "bg-status-ok-bg text-status-ok",
                               status === "prog" && "bg-status-warn-bg text-status-warn",
                               status === "todo" && "bg-secondary text-muted-foreground/50",
-                              canEdit && cell && "cursor-pointer hover:ring-1 hover:ring-ring",
+                              canEdit && "cursor-pointer hover:ring-1 hover:ring-ring",
                             )}
-                            title={t(`matrix.cell.${status}`)}
+                            title={linked ? (locale === "en" ? linked.title : linked.title_he || linked.title) : t(`matrix.cell.${status}`)}
                           >
                             {cellGlyph[status]}
+                            {linked && (
+                              <span className="absolute -end-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary" />
+                            )}
                           </button>
                         </td>
                       );
@@ -254,6 +260,22 @@ export function PlanMatrix({
             </tbody>
           </table>
         </div>
+      )}
+
+      {sheet && (
+        <CellSheet
+          open={!!sheet}
+          onClose={() => setSheet(null)}
+          planId={plan.id}
+          episodeId={sheet.episode.id}
+          stageId={sheet.stage.id}
+          episodeName={epName(sheet.episode, locale)}
+          stageName={stageName(sheet.stage, locale)}
+          cell={cells[`${sheet.episode.id}:${sheet.stage.id}`]}
+          task={cells[`${sheet.episode.id}:${sheet.stage.id}`]?.task_id ? linkedTasks[cells[`${sheet.episode.id}:${sheet.stage.id}`]!.task_id!] : undefined}
+          locale={locale}
+          onChanged={refetch}
+        />
       )}
     </div>
   );

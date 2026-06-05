@@ -151,6 +151,7 @@ export function PlanEditDialog({
               <select className={fieldCls} value={form.kind} onChange={(e) => set("kind", e.target.value as PlanKind)}>
                 <option value="effort">{t("kind.effort")}</option>
                 <option value="stream">{t("kind.stream")}</option>
+                <option value="roster">{t("kind.roster")}</option>
               </select>
             </Field>
           </div>
