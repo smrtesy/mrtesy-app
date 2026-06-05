@@ -7,10 +7,11 @@
 --      second user's error in the same category within the hour was silently
 --      dropped — the admin couldn't tell that multiple users were affected, and
 --      distinct errors masked each other. We now dedup per
---      (affected user + category + exact error message): the affected user's
---      email is folded into the title and the error text into the body, and the
---      dedup check matches BOTH. Distinct users and distinct errors each surface;
---      an identical repeated error is still throttled to one alert/hour so a
+--      (affected user + category + normalized error signature): the affected
+--      user's email is folded into the title, and the dedup matches the title
+--      plus a normalized prefix of the error (digit runs collapsed to '#').
+--      Distinct users and distinct error types each surface; the same error
+--      repeating (even with varying ids) is throttled to one alert/hour so a
 --      storm can't flood the inbox.
 --
 --   2. Coverage: this trigger fires for ANY log_entries row with level='error',
