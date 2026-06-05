@@ -376,20 +376,34 @@ router.delete("/plans/:id", requireFull, async (req: Request, res: Response) => 
   res.json({ ok: true });
 });
 
-// ── effort plan: tasks with needs / handoff ────────────────────────────────
+// ── plan tasks (effort = contained by plan_id; roster = aggregated by assignee) ──
 
 router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
-  const { data: tasks, error } = await db
-    .from("tasks")
-    .select(
-      "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, assignment_status",
-    )
-    .eq("organization_id", req.org!.id)
-    .eq("plan_id", req.params.id)
-    .order("created_at", { ascending: true });
+  const { data: plan } = await db
+    .from("smrtplan_plans")
+    .select("kind, owner_user_id")
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+
+  const select =
+    "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
+    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, assignment_status";
+
+  let query = db.from("tasks").select(select).eq("organization_id", req.org!.id);
+  if (plan?.kind === "roster") {
+    // A roster aggregates its owner's tasks across all plans (the "design"
+    // view): nothing to show until it has an owner.
+    if (!plan.owner_user_id) return res.json({ tasks: [] });
+    query = query.not("plan_id", "is", null).eq("assigned_to_user_id", plan.owner_user_id);
+  } else {
+    query = query.eq("plan_id", req.params.id);
+  }
+  const { data: tasks, error } = await query.order("created_at", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ tasks: await attachNeedsHandoff(req.org!.id, asRows(tasks)) });
+  // Roster tasks live in other plans, so show which plan each is in.
+  const enriched = await attachNeedsHandoff(req.org!.id, asRows(tasks));
+  res.json({ tasks: plan?.kind === "roster" ? await attachPlanTitles(req.org!.id, enriched) : enriched });
 });
 
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──

@@ -1769,7 +1769,8 @@
     },
     "kind": {
       "effort": "מאמץ",
-      "stream": "זרם"
+      "stream": "זרם",
+      "roster": "ריכוז"
     },
     "board": {
       "expected": "צפי",
@@ -1806,7 +1807,8 @@
       "done": "הושלם",
       "waiting": "ממתין",
       "arrived": "הגיע",
-      "constraint": "אילוץ"
+      "constraint": "אילוץ",
+      "rosterNote": "מבט מרכז: משימות מתוכניות אחרות לפי אחראי"
     },
     "repository": {
       "title": "מאגר הרעיונות",

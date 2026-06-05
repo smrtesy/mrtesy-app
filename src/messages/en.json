@@ -1770,7 +1770,8 @@
     },
     "kind": {
       "effort": "Effort",
-      "stream": "Stream"
+      "stream": "Stream",
+      "roster": "Roster"
     },
     "board": {
       "expected": "expected",
@@ -1807,7 +1808,8 @@
       "done": "Done",
       "waiting": "Waiting",
       "arrived": "Arrived",
-      "constraint": "constraint"
+      "constraint": "constraint",
+      "rosterNote": "Aggregated view: tasks from other plans by assignee"
     },
     "repository": {
       "title": "Idea repository",

@@ -7,7 +7,7 @@
  * board by group_label.
  */
 
-export type PlanKind = "effort" | "stream";
+export type PlanKind = "effort" | "stream" | "roster";
 export type PlanStage = "idea" | "shaping" | "active";
 
 export interface Plan {

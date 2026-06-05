@@ -121,15 +121,18 @@ export function PlanEffortDetail({
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: plan.color || "#534AB7" }} />
             {title}
           </h2>
-          <p className="mb-3 mt-0.5 text-[12.5px] text-muted-foreground">
+          <p className="mb-1 mt-0.5 text-[12.5px] text-muted-foreground">
             {plan.goal ? `${plan.goal} · ` : ""}
             {plan.start_date && plan.end_date
               ? `${gregShort(parseISO(plan.start_date))}–${gregShort(parseISO(plan.end_date))} · `
               : ""}
             {Math.round(progress * 100)}%
           </p>
+          {plan.kind === "roster" && (
+            <p className="mb-3 text-[11.5px] italic text-muted-foreground">{te("rosterNote")}</p>
+          )}
         </div>
-        {canEdit && (
+        {canEdit && plan.kind !== "roster" && (
           <button
             onClick={() => setAdding((v) => !v)}
             className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent"
