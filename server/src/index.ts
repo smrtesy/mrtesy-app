@@ -168,6 +168,38 @@ app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
 
+// ── Global error safety-net ───────────────────────────────────────────────────
+// Any error reaching here was NOT handled by a route's own try/catch (those
+// already call notifyError). Record it as a level='error' log_entries row so the
+// notify_superadmins_on_error trigger fans it out to every super-admin — closing
+// the "unhandled 500" gap so server errors reach platform operators even when a
+// route forgot to report them. Best-effort logging; the 500 response is always
+// sent. (Process-level crashes / edge functions are outside this net by nature.)
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const userId = (req as express.Request & { user?: { id?: string } }).user?.id ?? null;
+  console.error("[global-error-handler]", req.method, req.path, message);
+  // Fire-and-forget; never let the safety-net's own logging throw or block the
+  // 500 response. Wrapped in an async IIFE so a rejection can't escape.
+  void (async () => {
+    try {
+      const { error } = await db.from("log_entries").insert({
+        user_id: userId,
+        level: "error",
+        category: "server",
+        status: "failed",
+        source_type: "server",
+        subject: `${req.method} ${req.originalUrl}`.slice(0, 500),
+        error_message: message,
+      });
+      if (error) console.error("[global-error-handler] log insert:", error.message);
+    } catch (e) {
+      console.error("[global-error-handler] log threw:", e);
+    }
+  })();
+  if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+});
+
 // ── smrtTask pipeline ─────────────────────────────────────────────────────────
 // Collection + classification run exclusively through Supabase pg_cron edge
 // functions (gmail-sync / batch-details / ai-process). The legacy server-side
