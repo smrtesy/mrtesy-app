@@ -430,9 +430,7 @@ async function analyzeWithMemory(
       ? `\n\n(Empty thread summary so far. This may be the first or second message.)`
       : "";
 
-  const whatsappNote = isWhatsApp(msg)
-    ? `\n\nWhatsApp note: the body is a chat transcript with [INCOMING <ts>]/[OUTGOING <ts>] markers. Reason about the LAST line in the transcript.`
-    : "";
+  const whatsappNote = isWhatsApp(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
 
   // Static, message-invariant instructions → cached prefix (admin-editable via
   // ai_prompts key "edge_classifier"). Per-message context (identity, memory,
@@ -460,6 +458,38 @@ title of the task should be in the form "לעקוב אחרי <party> על <topic
 
 NEVER classify such a message as INFORMATIONAL just because "no immediate
 step is required". The action IS the tracking.
+
+═══ SECOND-HARDEST RULE — A REPLY TO THE USER'S OWN REQUEST IS ACTIONABLE ═══
+
+If the message is a response, update, decision, or status notice about a
+request / claim / case / application / inquiry the USER themselves submitted —
+recognizable by signals such as:
+
+  • "regarding your request/claim/case/application #<number>"
+  • "your <Provider> request", "your claim", "case #", "reference #",
+    "request 48376432", "Read more details" about a case the user opened
+  • Hebrew: "בנוגע לבקשתך", "התביעה שלך", "מספר תיק", "בהמשך לפנייתך"
+  • a benefits administrator / insurer / bank / law office / government office
+    answering something the user initiated
+
+then the classification is ACTIONABLE — the user has an open matter with this
+party and needs to read the decision and act on it. Two failure modes this
+rule forbids:
+
+  (1) NEVER classify it as SPAM merely because the sender address looks
+      generic, third-party, or unfamiliar (e.g. an insurer's servicing domain
+      like virginiasurety.com acting for Chase), or because the visible body
+      is only legal boilerplate / a disclaimer with the real substance behind
+      a link, PDF, or "secure message" portal. A thin or boilerplate body on a
+      message that references the user's own request number is NOT evidence of
+      spam — it is a real reply whose content is one click away. When the
+      subject itself says "Important Information Regarding Your <X> Request
+      #<number>", treat it as a genuine, important reply.
+  (2) NEVER classify it as INFORMATIONAL just because it reads like a generic
+      system notification. An update on a request the user is actively waiting
+      on (e.g. "Your <Provider> request — Read more details — Case #…") is the
+      answer they have been expecting → ACTIONABLE, even with no thread memory
+      linking it.
 
 ═══ FULL CLASSIFICATION RULES ═══
 
@@ -513,7 +543,12 @@ Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
     • Closure acknowledgement: "thanks, all good", "סבבה", "תודה"
     • System sender (Vercel, Railway, GitHub Actions) with no human follow-up
 
-- SPAM = clearly junk.
+- SPAM = clearly junk (unsolicited marketing blasts, phishing with no
+  relationship to the user, obvious scams). A message that references the
+  user's OWN request / claim / case / application by number, or is a reply
+  from a party the user contacted, is NEVER spam — see the SECOND-HARDEST
+  RULE above. Do not treat a generic sender domain or a boilerplate-only body
+  as a spam signal when the subject ties the message to the user's own case.
 
 Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
 to over-track than to lose visibility on a pending matter.
