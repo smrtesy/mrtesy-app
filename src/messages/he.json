@@ -943,6 +943,8 @@
     "duration": "משך",
     "reason": "סיבה",
     "details": "פרטים נוספים",
+    "modelTrail": "הכרעת מודלים",
+    "modelTrailFinal": "סופי",
     "searchPlaceholder": "חיפוש בלוג…",
     "searchClear": "נקה חיפוש",
     "searchNoResults": "אין פריטים תואמים",

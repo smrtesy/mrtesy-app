@@ -943,6 +943,8 @@
     "duration": "Duration",
     "reason": "Reason",
     "details": "Details",
+    "modelTrail": "Model verdicts",
+    "modelTrailFinal": "final",
     "searchPlaceholder": "Search the log…",
     "searchClear": "Clear search",
     "searchNoResults": "No matching entries",

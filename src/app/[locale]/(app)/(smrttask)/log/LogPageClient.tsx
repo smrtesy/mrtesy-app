@@ -679,6 +679,24 @@ export function LogPageClient({ locale }: { locale: string }) {
                       </div>
                     )}
 
+                    {/* Per-model verdict trail (low-confidence escalation) */}
+                    {Array.isArray((log.log_details as { classification_trail?: unknown } | null)?.classification_trail) && (
+                      <div>
+                        <p className="font-medium text-foreground/70 mb-0.5">{tLog("modelTrail")}</p>
+                        <div className="flex flex-col gap-1">
+                          {((log.log_details as { classification_trail: Array<{ model: string; classification: string; confidence: string; reason: string }> }).classification_trail).map((step, i, arr) => (
+                            <div key={`${i}-${step.model}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted-foreground">
+                              <span dir="ltr" className="font-mono text-[10px] text-foreground/80">{step.model}</span>
+                              <span className="font-medium">{step.classification}</span>
+                              <span className="text-[10px] uppercase opacity-70">({step.confidence})</span>
+                              {i === arr.length - 1 && <span className="text-[10px] text-primary">{tLog("modelTrailFinal")}</span>}
+                              {step.reason && <span dir="auto" className="basis-full whitespace-pre-wrap text-[11px] opacity-80">{step.reason}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Extra details JSON */}
                     {log.log_details && Object.keys(log.log_details).length > 0 && (
                       <div>

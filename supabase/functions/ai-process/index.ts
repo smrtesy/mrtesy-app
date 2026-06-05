@@ -402,6 +402,11 @@ interface ThreadAnalysis {
   // or its substance is behind a link/attachment the model couldn't read.
   // Drives the optional escalation to a stronger model.
   confidence: "high" | "low";
+  // Populated only when low-confidence escalation fired: an ordered record of
+  // what each model said, so the log can show exactly which model produced the
+  // final verdict and what the cheap first pass had concluded. Left undefined
+  // on the normal single-model path (ai_model_used already covers that case).
+  classificationTrail?: Array<{ model: string; classification: string; confidence: "high" | "low"; reason: string }>;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -851,10 +856,17 @@ when not ACTIONABLE, when there is no prior thread summary, or when unsure.`;
     sys.escalation_model !== model
   ) {
     const escalated = await analyzeWithMemory(msg, memory, settings, sys, sys.escalation_model);
+    // Record what each model said, cheap-pass first, escalation last, so the
+    // log shows exactly which model produced the final verdict.
+    const trail = [
+      { model, classification, confidence, reason: String(parsed.reason_he ?? "") },
+      { model: escalated.model, classification: escalated.classification, confidence: escalated.confidence, reason: escalated.reason },
+    ];
     // Fold the first (cheap) pass's tokens in so downstream cost accounting in
     // the log_entries row reflects BOTH calls, not just the escalation.
     return {
       ...escalated,
+      classificationTrail: trail,
       inputTokens: escalated.inputTokens + result.inputTokens,
       outputTokens: escalated.outputTokens + result.outputTokens,
       cacheReadTokens: escalated.cacheReadTokens + result.cacheReadTokens,
@@ -1914,6 +1926,9 @@ async function logDuplicateSuggestion(userId: string, newTaskId: string, suggest
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
   const startTime = Date.now();
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheReadTokens = 0, totalCacheWriteTokens = 0, aiModel = "", classification = "", classificationReason = "";
+  // Per-model verdict trail — set only when low-confidence escalation fired, so
+  // the log can show what the cheap model said vs the final escalated verdict.
+  let classificationTrail: ThreadAnalysis["classificationTrail"] = undefined;
   let linkedTaskId: string | null = null;
   // WhatsApp per-matter routing state (Part A). When routing is active and the
   // router decides the message opens a NEW matter, we must NOT let the legacy
@@ -2072,6 +2087,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       totalCacheReadTokens += analysis.cacheReadTokens;
       totalCacheWriteTokens += analysis.cacheWriteTokens;
       aiModel = analysis.model;
+      classificationTrail = analysis.classificationTrail;
     } catch (e) {
       const retryCount = (msg.retry_count || 0) + 1;
       // After 3 failed AI attempts we give up gracefully — mark the message
@@ -2585,6 +2601,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     ai_output_tokens: totalOutputTokens,
     ai_cost_usd: estimateCost(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, costType),
     processing_duration_ms: Date.now() - startTime,
+    // Per-model verdict trail (escalation only) so the log shows exactly which
+    // model said what — cheap first pass vs the final escalated answer.
+    details: classificationTrail ? { classification_trail: classificationTrail } : undefined,
   });
 }
 
