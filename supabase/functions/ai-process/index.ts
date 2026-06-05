@@ -1126,8 +1126,26 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   let tasks: any[] = [];
   let parsed = true;
   try {
-    const jsonMatch = result.text.match(/\[[\s\S]*\]/);
-    if (jsonMatch) tasks = JSON.parse(jsonMatch[0]);
+    // The task builder must return a bare JSON array, but Sonnet occasionally
+    // prefixes a prose preamble and/or wraps the array in a ```json fence. The
+    // old greedy /\[[\s\S]*\]/ then latched onto the FIRST '[' in that prose —
+    // and WhatsApp preambles quote the transcript's "[INCOMING …]" markers, so
+    // the match ran from "[INCOMING…" to the final ']', produced invalid JSON,
+    // and dumped the whole raw reply into the task (T523: title "M Engel" with
+    // the model's commentary as its description and no ai_actions). Two robust
+    // anchors instead: (1) prefer the contents of a ```json fence — fences don't
+    // nest, so a greedy-to-closing-fence capture keeps nested ai_actions arrays
+    // intact; (2) else match an array that actually CONTAINS an object
+    // ("[ { … } ]"), which prose brackets like "[INCOMING…]" never satisfy,
+    // falling back to an explicit empty array "[]" so "no actionable task"
+    // still parses as [] instead of dropping into the raw-text fallback below.
+    const fence = result.text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const candidate = fence
+      ? fence[1].trim()
+      : (result.text.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0]
+         ?? result.text.match(/\[\s*\]/)?.[0]
+         ?? "");
+    if (candidate) tasks = JSON.parse(candidate);
     else parsed = false;
   } catch { parsed = false; }
   if (!parsed) {
