@@ -305,9 +305,14 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
   if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
 
+  // Gmail categories the user filters out (promotions/social/forums by
+  // default) are DROPPED, not kept — so they are a skip, not "informational".
+  // Labeling them "informational" was misleading: a "You're our 3rd winner"
+  // promo is filtered noise, not read-and-keep info. Route to skip so it gets
+  // the "דילוג" label and reads honestly in the log.
   if (categoryFilter.size > 0) {
-    const informationalLabel = gmailLabels.find((l) => categoryFilter.has(l));
-    if (informationalLabel) return { result: "informational", skipReason: `gmail_category:${informationalLabel}` };
+    const filteredLabel = gmailLabels.find((l) => categoryFilter.has(l));
+    if (filteredLabel) return { result: "skip", skipReason: `gmail_category:${filteredLabel}` };
   }
 
   return { result: "needs_claude" };
