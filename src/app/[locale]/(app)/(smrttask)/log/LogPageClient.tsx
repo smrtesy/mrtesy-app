@@ -132,7 +132,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     let query = supabase
       .from("source_messages")
-      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
+      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -182,7 +182,10 @@ export function LogPageClient({ locale }: { locale: string }) {
         classification_reason: logEntry?.classification_reason || null,
         task_title: logEntry?.task_title || null,
         task_serial: taskSerial,
-        task_id: linkedTask?.id ?? null,
+        // Created-from-this-message task wins; otherwise fall back to the matter
+        // the log says this message was routed INTO (serial/status resolved
+        // below) so routed follow-ups still link to their task.
+        task_id: linkedTask?.id ?? logEntry?.task_id ?? null,
         task_status: linkedTask?.status ?? null,
         task_manually_verified: linkedTask?.manually_verified ?? null,
         error_message: logEntry?.error_message || null,
@@ -197,6 +200,37 @@ export function LogPageClient({ locale }: { locale: string }) {
         processing_duration_ms: logEntry?.processing_duration_ms || null,
       };
     });
+
+    // Routed follow-ups append to an EXISTING matter, so no task is created
+    // from this message and the tasks!source_message_id join above is empty —
+    // but the log entry recorded which matter it was routed INTO. Resolve those
+    // task ids so the row links to the real task (T-serial) instead of leaving
+    // the user unable to find where the update went.
+    const needIds = Array.from(
+      new Set(
+        mapped
+          .filter((m: SourceEntry) => m.task_id && m.task_serial == null)
+          .map((m: SourceEntry) => m.task_id as string),
+      ),
+    );
+    if (needIds.length > 0) {
+      const { data: routed } = await supabase
+        .from("tasks")
+        .select("id, serial_display, status, title_he, title, manually_verified")
+        .in("id", needIds);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const byId = new Map<string, any>((routed || []).map((t: any) => [t.id, t]));
+      for (const m of mapped) {
+        if (m.task_id && m.task_serial == null && byId.has(m.task_id)) {
+          const t = byId.get(m.task_id);
+          m.task_serial = t.serial_display ?? null;
+          m.task_status = t.status ?? null;
+          m.task_manually_verified = t.manually_verified ?? null;
+          if (!m.task_title) m.task_title = t.title_he || t.title || null;
+        }
+      }
+    }
+
     setLogs(mapped as SourceEntry[]);
     setLoading(false);
 
