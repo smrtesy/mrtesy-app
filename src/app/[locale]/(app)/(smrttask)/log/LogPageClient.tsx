@@ -679,6 +679,16 @@ export function LogPageClient({ locale }: { locale: string }) {
                       </div>
                     )}
 
+                    {/* Classifier confidence (recorded on every classified message) */}
+                    {typeof (log.log_details as { classification_confidence?: unknown } | null)?.classification_confidence === "string" && (
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-medium text-foreground/70">{tLog("classificationConfidence")}</span>
+                        <span className={`text-[10px] uppercase font-medium ${(log.log_details as { classification_confidence: string }).classification_confidence === "low" ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>
+                          {(log.log_details as { classification_confidence: string }).classification_confidence}
+                        </span>
+                      </div>
+                    )}
+
                     {/* Per-model verdict trail (low-confidence escalation) */}
                     {Array.isArray((log.log_details as { classification_trail?: unknown } | null)?.classification_trail) && (
                       <div>

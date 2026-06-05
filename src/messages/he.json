@@ -945,6 +945,7 @@
     "details": "פרטים נוספים",
     "modelTrail": "הכרעת מודלים",
     "modelTrailFinal": "סופי",
+    "classificationConfidence": "ביטחון סיווג",
     "taskConfidence": "ביטחון כתיבת משימה",
     "taskTrail": "הכרעת מודלים (כתיבת משימה)",
     "searchPlaceholder": "חיפוש בלוג…",

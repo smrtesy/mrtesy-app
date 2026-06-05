@@ -945,6 +945,7 @@
     "details": "Details",
     "modelTrail": "Model verdicts",
     "modelTrailFinal": "final",
+    "classificationConfidence": "Classification confidence",
     "taskConfidence": "Task-write confidence",
     "taskTrail": "Model verdicts (task write)",
     "searchPlaceholder": "Search the log…",

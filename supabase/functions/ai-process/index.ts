@@ -1981,6 +1981,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // Per-model verdict trail — set only when low-confidence escalation fired, so
   // the log can show what the cheap model said vs the final escalated verdict.
   let classificationTrail: ThreadAnalysis["classificationTrail"] = undefined;
+  // Classifier self-reported confidence, recorded on EVERY message that ran the
+  // classifier (not just escalated ones) so the level is always visible.
+  let classificationConfidence: "high" | "low" | undefined = undefined;
   // Task-builder confidence + per-model trail (trail only on escalation). The
   // confidence level is recorded for every built task so the low-confidence
   // rate can be tracked even while task escalation is disabled.
@@ -2145,6 +2148,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       totalCacheWriteTokens += analysis.cacheWriteTokens;
       aiModel = analysis.model;
       classificationTrail = analysis.classificationTrail;
+      classificationConfidence = analysis.confidence;
     } catch (e) {
       const retryCount = (msg.retry_count || 0) + 1;
       // After 3 failed AI attempts we give up gracefully — mark the message
@@ -2663,7 +2667,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     // Per-model verdict trail (classifier escalation only) plus the task
     // builder's self-reported confidence (always, when a task was built) and
     // its own escalation trail — so the log shows exactly which model said what.
-    details: (classificationTrail || taskConfidence || taskTrail) ? {
+    details: (classificationConfidence || classificationTrail || taskConfidence || taskTrail) ? {
+      ...(classificationConfidence ? { classification_confidence: classificationConfidence } : {}),
       ...(classificationTrail ? { classification_trail: classificationTrail } : {}),
       ...(taskConfidence ? { task_confidence: taskConfidence } : {}),
       ...(taskTrail ? { task_trail: taskTrail } : {}),
