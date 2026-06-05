@@ -1805,7 +1805,8 @@
       "ready": "Ready",
       "done": "Done",
       "waiting": "Waiting",
-      "arrived": "Arrived"
+      "arrived": "Arrived",
+      "constraint": "constraint"
     },
     "repository": {
       "title": "Idea repository",

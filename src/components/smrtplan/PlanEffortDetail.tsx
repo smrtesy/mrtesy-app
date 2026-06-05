@@ -196,8 +196,13 @@ function TaskRow({
   onEdit: () => void;
 }) {
   const zone = zoneOf(task);
-  const due = task.latest_finish || task.due_date;
-  const urg = urgencyFor(due, today);
+  // The row shows the SET deadline (due_date). The engine's computed
+  // latest_finish only shows as a constraint hint when it's earlier (e.g. a
+  // worker-leave pulls it in).
+  const deadline = task.due_date || task.latest_finish || null;
+  const constraint =
+    task.latest_finish && task.due_date && task.latest_finish < task.due_date ? task.latest_finish : null;
+  const urg = urgencyFor(deadline, today);
   const waiting = (task.needs ?? []).filter((n) => !n.satisfied);
   return (
     <div className="py-2.5">
@@ -244,14 +249,16 @@ function TaskRow({
             {assignee}
           </span>
         )}
-        {due && zone !== "done" && (
+        {deadline && zone !== "done" && (
           <span
             className={cn(
               "whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold",
               urg ? countdownClasses[urg] : "bg-secondary text-muted-foreground",
             )}
+            title={constraint ? `${t("effort.constraint")}: ${gregShort(parseISO(constraint))}` : undefined}
           >
-            {countdownText(due, t, today)} · {gregShort(parseISO(due))} · {hebDate(parseISO(due))}
+            {countdownText(deadline, t, today)} · {gregShort(parseISO(deadline))} · {hebDate(parseISO(deadline))}
+            {constraint && <span className="ms-1 text-status-late">⚠ {gregShort(parseISO(constraint))}</span>}
           </span>
         )}
         {canEdit && (

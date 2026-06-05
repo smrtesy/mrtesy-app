@@ -1804,7 +1804,8 @@
       "ready": "מוכן",
       "done": "הושלם",
       "waiting": "ממתין",
-      "arrived": "הגיע"
+      "arrived": "הגיע",
+      "constraint": "אילוץ"
     },
     "repository": {
       "title": "מאגר הרעיונות",

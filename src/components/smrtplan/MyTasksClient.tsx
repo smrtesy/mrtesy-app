@@ -124,8 +124,10 @@ export function MyTasksClient({ locale }: { locale: string }) {
               ) : (
                 <div className="space-y-2">
                   {items.map((tk) => {
-                    const due = tk.latest_finish || tk.due_date;
-                    const urg = urgencyFor(due, today);
+                    const deadline = tk.due_date || tk.latest_finish || null;
+                    const constraint =
+                      tk.latest_finish && tk.due_date && tk.latest_finish < tk.due_date ? tk.latest_finish : null;
+                    const urg = urgencyFor(deadline, today);
                     const waiting = (tk.needs ?? []).filter((n) => !n.satisfied);
                     return (
                       <div key={tk.id} className={cn("rounded-xl border bg-card p-3", z.key === "done" && "opacity-70")}>
@@ -166,14 +168,15 @@ export function MyTasksClient({ locale }: { locale: string }) {
                               {planLabel(tk)}
                             </span>
                           )}
-                          {due && z.key !== "done" && (
+                          {deadline && z.key !== "done" && (
                             <span
                               className={cn(
                                 "whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold",
                                 urg ? countdownClasses[urg] : "bg-secondary text-muted-foreground",
                               )}
                             >
-                              {countdownText(due, t, today)} · {gregShort(parseISO(due))} · {hebDate(parseISO(due))}
+                              {countdownText(deadline, t, today)} · {gregShort(parseISO(deadline))} · {hebDate(parseISO(deadline))}
+                              {constraint && <span className="ms-1 text-status-late">⚠ {gregShort(parseISO(constraint))}</span>}
                             </span>
                           )}
                         </div>
