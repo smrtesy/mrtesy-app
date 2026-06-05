@@ -10,6 +10,8 @@ export interface OrgMember {
   invited_by: string | null;
   email: string | null;
   name: string | null;
+  /** App slugs explicitly granted to this user (only enforced for role='member'). */
+  app_slugs: string[];
 }
 
 /**

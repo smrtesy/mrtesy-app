@@ -1,9 +1,13 @@
 /**
  * Org member routes (all require X-Org-Id)
- *   GET     /org/members                — list members of active org
+ *   GET     /org/members                — list members (with each member's granted apps)
  *   POST    /org/members                — add an existing user, or invite an unregistered one by email
- *   PATCH   /org/members/:userId/role   — change member's role  (owner only)
- *   DELETE  /org/members/:userId        — remove a member       (owner/admin, or self-leave)
+ *   PATCH   /org/members/:userId/role   — change member's role            (owner only)
+ *   PATCH   /org/members/:userId/apps   — set which apps a member can use  (owner/admin)
+ *   DELETE  /org/members/:userId        — remove a member                 (owner/admin, or self-leave)
+ *   GET     /org/invites                — list pending invites            (owner/admin)
+ *   DELETE  /org/invites/:id            — revoke a pending invite         (owner/admin)
+ *   POST    /org/invites/:id/resend     — re-send a pending invite email  (owner/admin)
  */
 
 import { Router } from "express";
@@ -16,7 +20,30 @@ const router = Router();
 
 const ROLES: Role[] = ["owner", "admin", "member"];
 
-/** GET /org/members — list members of active org */
+/**
+ * Resolve a list of app slugs to {id, slug} rows, keeping only apps that both
+ * exist AND are currently enabled for the given org. This prevents granting a
+ * user an app the org doesn't actually have.
+ */
+async function resolveOrgApps(orgId: string, slugs: unknown): Promise<{ id: string; slug: string }[]> {
+  if (!Array.isArray(slugs) || slugs.length === 0) return [];
+  const wanted = slugs.filter((s): s is string => typeof s === "string");
+  if (wanted.length === 0) return [];
+
+  const { data: apps } = await db.from("apps").select("id, slug").in("slug", wanted);
+  const appList = apps ?? [];
+  if (appList.length === 0) return [];
+
+  const { data: orgApps } = await db
+    .from("app_memberships").select("app_id").eq("org_id", orgId);
+  const enabled = new Set((orgApps ?? []).map((m) => m.app_id as string));
+
+  return appList
+    .filter((a) => enabled.has(a.id as string))
+    .map((a) => ({ id: a.id as string, slug: a.slug as string }));
+}
+
+/** GET /org/members — list members of active org (with each member's granted apps) */
 router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("org_members")
@@ -34,6 +61,21 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
     (userPage?.users ?? []).map((u) => [u.id, { email: u.email ?? null, name: u.user_metadata?.full_name ?? null }]),
   );
 
+  // Per-user app grants for this org, as slugs grouped by user.
+  const [{ data: grants }, { data: appsRows }] = await Promise.all([
+    db.from("user_app_access").select("user_id, app_id").eq("org_id", req.org!.id),
+    db.from("apps").select("id, slug"),
+  ]);
+  const slugById = new Map((appsRows ?? []).map((a) => [a.id as string, a.slug as string]));
+  const slugsByUser = new Map<string, string[]>();
+  for (const g of grants ?? []) {
+    const slug = slugById.get(g.app_id as string);
+    if (!slug) continue;
+    const arr = slugsByUser.get(g.user_id as string) ?? [];
+    arr.push(slug);
+    slugsByUser.set(g.user_id as string, arr);
+  }
+
   const members = (data ?? []).map((m) => ({
     user_id: m.user_id,
     role: m.role,
@@ -41,24 +83,29 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
     invited_by: m.invited_by,
     email: userMap.get(m.user_id)?.email ?? null,
     name: userMap.get(m.user_id)?.name ?? null,
+    app_slugs: slugsByUser.get(m.user_id as string) ?? [],
   }));
 
   res.json({ members });
 });
 
 /**
- * POST /org/members — add a member by email.
+ * POST /org/members — add a member by email, optionally with a set of apps.
+ *
+ * `app_slugs` (string[]) — which apps to enable for this user. Only meaningful
+ * for role='member' (owners/admins are unrestricted); slugs are filtered to
+ * apps the org actually has enabled.
  *
  * If the email already has a Supabase account we add them to `org_members`
- * directly (available immediately). If no account exists yet we create a
- * pending `org_invites` row and email them a token link; the /auth/callback
- * flow then joins them to this org with the chosen role the first time they
- * sign in. This lets an org owner/admin invite people who haven't registered.
+ * directly (available immediately) and grant the chosen apps. If no account
+ * exists yet we create a pending `org_invites` row carrying the chosen apps and
+ * email them a token link; on first sign-in `accept_my_invites()` joins them to
+ * the org and applies those app grants.
  */
 router.post("/org/members",
   requireAuth, requireOrg, requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { email, role = "member", locale: rawLocale = "he" } = req.body ?? {};
+    const { email, role = "member", locale: rawLocale = "he", app_slugs } = req.body ?? {};
     // Only he/en are valid locale segments; never trust client input in the email link path.
     const locale = rawLocale === "en" ? "en" : "he";
     if (!email || typeof email !== "string") {
@@ -73,6 +120,10 @@ router.post("/org/members",
     }
 
     const normalizedEmail = email.toLowerCase().trim();
+
+    // Validate the requested apps against what the org actually has enabled.
+    const apps = await resolveOrgApps(req.org!.id, app_slugs);
+    const validSlugs = apps.map((a) => a.slug);
 
     // Find user by email (Supabase admin API)
     // listUsers does pagination by default; for now we read first page (1000 users).
@@ -102,6 +153,7 @@ router.post("/org/members",
           org_id: req.org!.id,
           role,
           invited_by: req.user!.id,
+          app_slugs: validSlugs,
         })
         .select("token")
         .single();
@@ -136,9 +188,25 @@ router.post("/org/members",
       return res.status(500).json({ error: error.message });
     }
 
+    // Grant the chosen apps to the new member.
+    let warning: string | undefined;
+    if (apps.length > 0) {
+      const rows = apps.map((a) => ({
+        org_id: req.org!.id, user_id: user.id, app_id: a.id, granted_by: req.user!.id,
+      }));
+      const { error: grantErr } = await db.from("user_app_access").insert(rows);
+      if (grantErr) {
+        // The member was added; surface a warning so the caller knows the app
+        // grant didn't stick (they can re-toggle the apps on the member row).
+        console.error("[org/members] app grant failed:", grantErr.message);
+        warning = "member added but app access failed to save";
+      }
+    }
+
     res.status(201).json({
-      member: { user_id: user.id, email: user.email, role },
+      member: { user_id: user.id, email: user.email, role, app_slugs: warning ? [] : validSlugs },
       invited: false,
+      ...(warning ? { warning } : {}),
     });
   },
 );
@@ -220,6 +288,122 @@ router.delete("/org/members/:userId",
       .eq("user_id", userId);
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Remove their per-user app grants for this org (no FK cascade from org_members).
+    const { error: grantErr } = await db
+      .from("user_app_access")
+      .delete()
+      .eq("org_id", req.org!.id)
+      .eq("user_id", userId);
+    if (grantErr) console.error("[org/members] app-grant cleanup failed:", grantErr.message);
+
+    res.json({ ok: true });
+  },
+);
+
+/**
+ * PATCH /org/members/:userId/apps — replace which apps a member can use.
+ * Body: { app_slugs: string[] }. Slugs are filtered to apps the org has enabled.
+ * Owner/admin only. (Editing an owner/admin's grants is harmless — they're
+ * unrestricted — but the UI only exposes this for role='member'.)
+ */
+router.patch("/org/members/:userId/apps",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { userId } = req.params;
+    const { app_slugs } = req.body ?? {};
+    if (!Array.isArray(app_slugs)) {
+      return res.status(400).json({ error: "app_slugs must be an array" });
+    }
+
+    // Target must be a member of this org.
+    const { data: target } = await db
+      .from("org_members").select("user_id")
+      .eq("org_id", req.org!.id).eq("user_id", userId).maybeSingle();
+    if (!target) return res.status(404).json({ error: "member not found" });
+
+    const apps = await resolveOrgApps(req.org!.id, app_slugs);
+
+    // Replace the full set: clear existing grants, then insert the new ones.
+    const { error: delErr } = await db
+      .from("user_app_access").delete()
+      .eq("org_id", req.org!.id).eq("user_id", userId);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+
+    if (apps.length > 0) {
+      const rows = apps.map((a) => ({
+        org_id: req.org!.id, user_id: userId, app_id: a.id, granted_by: req.user!.id,
+      }));
+      const { error: insErr } = await db.from("user_app_access").insert(rows);
+      if (insErr) return res.status(500).json({ error: insErr.message });
+    }
+
+    res.json({ ok: true, app_slugs: apps.map((a) => a.slug) });
+  },
+);
+
+/** GET /org/invites — pending (not-yet-accepted) invites for the active org */
+router.get("/org/invites",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { data, error } = await db
+      .from("org_invites")
+      .select("id, email, role, app_slugs, expires_at, created_at")
+      .eq("org_id", req.org!.id)
+      .is("accepted_at", null)
+      .order("created_at", { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ invites: data ?? [] });
+  },
+);
+
+/** DELETE /org/invites/:id — revoke a pending invite */
+router.delete("/org/invites/:id",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { error, count } = await db
+      .from("org_invites")
+      .delete({ count: "exact" })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .is("accepted_at", null);
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (count === 0) return res.status(404).json({ error: "invite not found" });
+    res.json({ ok: true });
+  },
+);
+
+/** POST /org/invites/:id/resend — extend expiry by 7 days and re-send the email */
+router.post("/org/invites/:id/resend",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const locale = (req.body?.locale === "en" ? "en" : "he") as "he" | "en";
+    const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: invite, error } = await db
+      .from("org_invites")
+      .update({ expires_at: newExpiry })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .is("accepted_at", null)
+      .select("token, email")
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!invite) return res.status(404).json({ error: "invite not found" });
+
+    const appUrl = (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim();
+    const inviteUrl = `${appUrl}/${locale}/invite/${invite.token}`;
+
+    try {
+      await sendInviteEmail({ to: invite.email, orgName: req.org!.name, inviteUrl, locale });
+    } catch (emailErr) {
+      console.error("[org/invites] resend email failed:", emailErr);
+      return res.status(201).json({ ok: true, warning: "email failed to send" });
+    }
+
     res.json({ ok: true });
   },
 );

@@ -4,9 +4,13 @@
  * Usage:
  *   router.post("/sync/part3", requireAuth, requireOrg, requireApp("smrttask"), handler);
  *
- * Looks up `app_memberships` for the active org and the given app slug.
- * Returns 403 if the app isn't enabled for the org.
+ * Two-level check:
+ *   1. The active org must have the app enabled (`app_memberships`).
+ *   2. For role='member', the user must additionally have a per-user grant
+ *      (`user_app_access`). Owners/admins are unrestricted — having the app at
+ *      the org level is enough for them.
  *
+ * Returns 403 if either check fails. Must run AFTER requireOrg (needs req.member).
  * Caches the app id lookup per slug in process memory (apps rarely change).
  */
 
@@ -50,6 +54,26 @@ export function requireApp(slug: string) {
       return res.status(403).json({ error: `App "${slug}" is not enabled for this organization` });
     }
 
+    // Members need a per-user grant; owners/admins (and the no-member edge case)
+    // are unrestricted once the org has the app.
+    if (req.member?.role === "member") {
+      const { data: grant, error: grantErr } = await db
+        .from("user_app_access")
+        .select("app_id")
+        .eq("org_id", req.org.id)
+        .eq("user_id", req.user!.id)
+        .eq("app_id", appId)
+        .maybeSingle();
+
+      if (grantErr) {
+        return res.status(500).json({ error: `app access check failed: ${grantErr.message}` });
+      }
+      if (!grant) {
+        return res.status(403).json({ error: `App "${slug}" is not enabled for your user` });
+      }
+    }
+
     next();
   };
 }
+

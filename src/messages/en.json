@@ -785,7 +785,18 @@
     "errorHandlerTitle": "Technical Error Handler",
     "errorHandlerDesc": "This user receives a notification (as a task suggestion) whenever an app fails technically.",
     "errorHandlerOwnerDefault": "Owner (default)",
-    "errorHandlerSaved": "Error handler updated"
+    "errorHandlerSaved": "Error handler updated",
+    "selectApps": "Apps to enable for this user",
+    "pendingInvites": "Pending invitations",
+    "invitePending": "Invitation sent",
+    "resend": "Resend",
+    "revoke": "Revoke invitation",
+    "inviteResent": "Invitation resent",
+    "inviteRevoked": "Invitation revoked",
+    "revokeInviteConfirm": "Revoke this invitation?",
+    "appsLabel": "Apps",
+    "allApps": "All apps",
+    "memberAppsSaveFailed": "Member added, but saving app access failed — try again"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",
