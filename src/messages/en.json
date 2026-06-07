@@ -1987,6 +1987,7 @@
     "headerSubtitle": "Here to help",
     "errorGeneric": "Something went wrong. Please try again.",
     "reconnecting": "Reconnecting…",
-    "poweredBy": "Powered by smrtesy"
+    "poweredBy": "Powered by smrtesy",
+    "unavailable": "This chat is not available right now."
   }
 }

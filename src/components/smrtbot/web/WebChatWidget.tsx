@@ -34,6 +34,7 @@ export interface WebChatLabels {
   errorGeneric: string;
   reconnecting: string;
   poweredBy: string;
+  unavailable: string;
 }
 
 interface WebMessage {
@@ -133,11 +134,24 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
       .on("broadcast", { event: "bot_message" }, (message: { payload?: WebMessage }) => {
         if (message.payload) appendMessages([message.payload]);
       })
-      .subscribe();
+      .subscribe((status: string) => {
+        // Catch up on any replies that landed during the subscription
+        // handshake; appendMessages dedups by id, so overlap is harmless.
+        if (status === "SUBSCRIBED") {
+          fetch(`/api/bot/web/${slug}/history?session_token=${encodeURIComponent(token)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d: { messages?: WebMessage[] } | null) => {
+              if (d?.messages) appendMessages(d.messages);
+            })
+            .catch(() => {
+              /* offline — live broadcast still active */
+            });
+        }
+      });
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [token, appendMessages]);
+  }, [token, slug, appendMessages]);
 
   // Resume an existing session (token kept in localStorage) on mount.
   useEffect(() => {

@@ -186,15 +186,16 @@ router.post("/api/bot/internal/web-message", async (req: Request, res: Response)
 
   const env = session.env === "test" ? "test" : "live";
 
-  await db
+  const { error: seenErr } = await db
     .from("smrtbot_web_sessions")
     .update({ last_seen_at: new Date().toISOString() })
     .eq("id", session.id);
+  if (seenErr) console.error("[smrtbot/web] last_seen update", seenErr.message);
 
   // Persist the inbound bubble so history/reload reconstructs the full thread.
   // The browser renders its own outgoing bubble optimistically, so we don't
   // broadcast inbound — only the engine's replies are pushed back.
-  await db.from("smrtbot_web_messages").insert({
+  const { error: inErr } = await db.from("smrtbot_web_messages").insert({
     org_id: session.org_id,
     bot_id: session.bot_id,
     session_id: session.id,
@@ -203,6 +204,7 @@ router.post("/api/bot/internal/web-message", async (req: Request, res: Response)
     body: text ?? buttonId ?? "",
     payload: buttonId ? { buttonId } : {},
   });
+  if (inErr) console.error("[smrtbot/web] inbound persist", inErr.message);
 
   const channel = new WebChannel({
     orgId: session.org_id,

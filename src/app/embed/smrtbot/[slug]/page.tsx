@@ -49,7 +49,7 @@ export default async function SmrtBotEmbedPage({
   if (!bot || !bot.web_enabled) {
     return (
       <div dir={dir} className="flex h-screen w-screen items-center justify-center bg-slate-50 px-6 text-center text-sm text-slate-500">
-        {locale === "he" ? "הצ׳אט אינו זמין כרגע." : "This chat is not available right now."}
+        {labels.unavailable}
       </div>
     );
   }
