@@ -1604,7 +1604,28 @@
     "guide": {
       "title": "smrtBot guide",
       "intro": "smrtBot runs your WhatsApp conversational bots — menu, game, FAQ and video — migrated into smrtesy."
-    }
+    },
+    "webTab": "Web chat",
+    "webTitle": "Web chat (widget)",
+    "webIntro": "Turn on a web version of the bot and embed it on any site. The widget gives the exact same experience as WhatsApp — same menus, buttons and replies.",
+    "webEnable": "Enable web chat",
+    "webEnableHint": "Lets you embed the bot as a chat widget on any website.",
+    "webAccent": "Accent color",
+    "webOrigins": "Allowed domains",
+    "webOriginsHint": "One origin per line (e.g. https://example.com). Empty = any site allowed.",
+    "webGreeting": "Greeting (optional)",
+    "webEmbedTitle": "Embed code",
+    "webEmbedHint": "Paste this into your site HTML, right before the </body> tag.",
+    "webCopy": "Copy code",
+    "webCopied": "Copied!",
+    "webRegenerate": "Generate new key",
+    "webRegenerateConfirm": "Generate a new key? The old embed code will stop working immediately.",
+    "webNotEnabled": "Enable and save to get your embed code.",
+    "convEmpty": "No web conversations yet.",
+    "convSelect": "Select a conversation to view it.",
+    "convAnon": "Visitor",
+    "logsModeMessages": "Message log",
+    "logsModeWeb": "Web chats"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

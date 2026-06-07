@@ -12,18 +12,19 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 export interface WebBotConfig {
   id: string;
   org_id: string;
-  slug: string;
   web_enabled: boolean | null;
   web_allowed_origins: string[] | null;
 }
 
-export async function loadWebBot(slug: string): Promise<WebBotConfig | null> {
+/** Resolve a bot from its public, globally-unique web embed key. The slug is
+ *  only unique per org, so it can't identify a bot from an anonymous request. */
+export async function loadWebBot(webKey: string): Promise<WebBotConfig | null> {
   const db = createAdminSupabaseClient();
-  if (!db) return null;
+  if (!db || !webKey) return null;
   const { data } = await db
     .from("smrtbot_bots")
-    .select("id, org_id, slug, web_enabled, web_allowed_origins")
-    .eq("slug", slug)
+    .select("id, org_id, web_enabled, web_allowed_origins")
+    .eq("web_key", webKey)
     .maybeSingle();
   return (data as WebBotConfig | null) ?? null;
 }
@@ -64,10 +65,10 @@ export function jsonWithCors(
 /** Preflight handler shared by every web-chat route. */
 export async function handleOptions(
   request: NextRequest,
-  slug: string,
+  webKey: string,
 ): Promise<Response> {
   const origin = request.headers.get("origin");
-  const bot = await loadWebBot(slug);
+  const bot = await loadWebBot(webKey);
   const allowed = bot ? originAllowed(bot, origin) : false;
   return new Response(null, { status: 204, headers: corsHeaders(origin, allowed) });
 }

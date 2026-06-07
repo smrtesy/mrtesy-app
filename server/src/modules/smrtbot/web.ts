@@ -1,7 +1,7 @@
 /**
  * smrtBot — web-chat internal route (machine-to-machine).
  *
- * The public Next.js route (/api/bot/web/[slug]/*) forwards browser traffic
+ * The public Next.js route (/api/bot/web/[key]/*) forwards browser traffic
  * here so the conversation engine runs on the long-running Railway server, the
  * same way the WhatsApp webhook forwards to /api/bot/internal/inbound. Guarded
  * by the shared internal secret (NOT the user auth chain), so it is mounted
@@ -59,8 +59,8 @@ function asEngineBot(bot: WebBotRow): BotRow {
   return { id: bot.id, org_id: bot.org_id, slug: bot.slug } as BotRow;
 }
 
-async function loadBotBySlug(slug: string): Promise<WebBotRow | null> {
-  const { data } = await db.from("smrtbot_bots").select(BOT_FIELDS).eq("slug", slug).maybeSingle();
+async function loadBotById(botId: string): Promise<WebBotRow | null> {
+  const { data } = await db.from("smrtbot_bots").select(BOT_FIELDS).eq("id", botId).maybeSingle();
   return (data as WebBotRow | null) ?? null;
 }
 
@@ -79,19 +79,19 @@ async function recentMessages(sessionId: string, sinceIso?: string): Promise<Web
 router.post("/api/bot/internal/web-start", async (req: Request, res: Response) => {
   if (!secretOk(req)) return res.status(401).json({ error: "unauthorized" });
 
-  const { slug, lead, origin, user_agent } = (req.body ?? {}) as {
-    slug?: string;
+  const { bot_id, lead, origin, user_agent } = (req.body ?? {}) as {
+    bot_id?: string;
     lead?: { name?: string; email?: string; phone?: string };
     origin?: string;
     user_agent?: string;
   };
 
   const email = (lead?.email ?? "").trim();
-  if (!slug || !email) {
-    return res.status(400).json({ error: "slug and lead.email are required" });
+  if (!bot_id || !email) {
+    return res.status(400).json({ error: "bot_id and lead.email are required" });
   }
 
-  const bot = await loadBotBySlug(slug);
+  const bot = await loadBotById(bot_id);
   if (!bot) return res.status(404).json({ error: "bot not found" });
   if (!bot.web_enabled) return res.status(403).json({ error: "web chat is not enabled for this bot" });
 
@@ -143,7 +143,7 @@ router.post("/api/bot/internal/web-start", async (req: Request, res: Response) =
       message,
       botId: bot.id,
       stack,
-      details: { slug, participantKey },
+      details: { bot: bot.slug, participantKey },
     });
   }
 

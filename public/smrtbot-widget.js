@@ -4,22 +4,23 @@
  * Drop this on any website to add the bot as a floating chat:
  *
  *   <script src="https://app.smrtesy.com/smrtbot-widget.js"
- *           data-slug="my-bot"
+ *           data-key="wk_xxxxxxxx"
  *           data-accent="#2563eb"
  *           data-lang="he"
  *           data-position="right"
  *           async></script>
  *
- * It injects a launcher button + an iframe pointing at /embed/smrtbot/<slug>
+ * The data-key is the bot's public web key (copy it from the bot's Web tab).
+ * It injects a launcher button + an iframe pointing at /embed/smrtbot/<key>
  * on this same origin, so the chat (API + Realtime) runs first-party.
  */
 (function () {
   var script = document.currentScript;
   if (!script) return;
 
-  var slug = script.getAttribute("data-slug");
-  if (!slug) {
-    console.error("[smrtbot-widget] missing data-slug");
+  var key = script.getAttribute("data-key");
+  if (!key) {
+    console.error("[smrtbot-widget] missing data-key");
     return;
   }
   var accent = script.getAttribute("data-accent") || "#2563eb";
@@ -34,7 +35,7 @@
     base = "";
   }
 
-  var NS = "smrtbot-widget-" + slug;
+  var NS = "smrtbot-widget-" + key;
   if (document.getElementById(NS + "-launcher")) return; // already mounted
 
   var open = false;
@@ -67,7 +68,7 @@
   // ── Chat iframe ──────────────────────────────────────────
   var frame = document.createElement("iframe");
   frame.id = NS + "-frame";
-  frame.src = base + "/embed/smrtbot/" + encodeURIComponent(slug) + "?lang=" + encodeURIComponent(lang);
+  frame.src = base + "/embed/smrtbot/" + encodeURIComponent(key) + "?lang=" + encodeURIComponent(lang);
   frame.title = "chat";
   frame.allow = "clipboard-write";
   frame.style.cssText = [

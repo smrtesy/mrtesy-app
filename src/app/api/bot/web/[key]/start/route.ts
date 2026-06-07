@@ -17,18 +17,18 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { params: Promise<{ slug: string }> };
+type Params = { params: Promise<{ key: string }> };
 
 export async function OPTIONS(request: NextRequest, { params }: Params): Promise<Response> {
-  const { slug } = await params;
-  return handleOptions(request, slug);
+  const { key } = await params;
+  return handleOptions(request, key);
 }
 
 export async function POST(request: NextRequest, { params }: Params): Promise<Response> {
-  const { slug } = await params;
+  const { key } = await params;
   const origin = request.headers.get("origin");
 
-  const bot = await loadWebBot(slug);
+  const bot = await loadWebBot(key);
   if (!bot || !bot.web_enabled) {
     return jsonWithCors({ error: "bot not found" }, 404, origin, false);
   }
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
   }
 
   const { status, body: result } = await forwardToEngine("web-start", {
-    slug,
+    bot_id: bot.id,
     lead: { name: body.lead?.name, email, phone: body.lead?.phone },
     origin: origin ?? undefined,
     user_agent: request.headers.get("user-agent") ?? undefined,

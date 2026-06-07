@@ -54,7 +54,7 @@ interface WebMessage {
 }
 
 interface Props {
-  slug: string;
+  botKey: string;
   botName: string;
   accentColor: string;
   dir: "rtl" | "ltr";
@@ -62,7 +62,7 @@ interface Props {
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const sessionKey = (slug: string) => `smrtbot_web_session::${slug}`;
+const sessionKey = (botKey: string) => `smrtbot_web_session::${botKey}`;
 
 /** Render WhatsApp-style *bold* and bare URLs as React nodes (no raw HTML). */
 function renderRich(text: string): React.ReactNode[] {
@@ -90,7 +90,7 @@ function renderRich(text: string): React.ReactNode[] {
   return out;
 }
 
-export default function WebChatWidget({ slug, botName, accentColor, dir, labels }: Props) {
+export default function WebChatWidget({ botKey, botName, accentColor, dir, labels }: Props) {
   const [phase, setPhase] = useState<"form" | "chat">("form");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -138,7 +138,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
         // Catch up on any replies that landed during the subscription
         // handshake; appendMessages dedups by id, so overlap is harmless.
         if (status === "SUBSCRIBED") {
-          fetch(`/api/bot/web/${slug}/history?session_token=${encodeURIComponent(token)}`)
+          fetch(`/api/bot/web/${botKey}/history?session_token=${encodeURIComponent(token)}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((d: { messages?: WebMessage[] } | null) => {
               if (d?.messages) appendMessages(d.messages);
@@ -151,18 +151,18 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [token, slug, appendMessages]);
+  }, [token, botKey, appendMessages]);
 
   // Resume an existing session (token kept in localStorage) on mount.
   useEffect(() => {
     let active = true;
-    const saved = typeof window !== "undefined" ? window.localStorage.getItem(sessionKey(slug)) : null;
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem(sessionKey(botKey)) : null;
     if (!saved) return;
     (async () => {
       try {
-        const resp = await fetch(`/api/bot/web/${slug}/history?session_token=${encodeURIComponent(saved)}`);
+        const resp = await fetch(`/api/bot/web/${botKey}/history?session_token=${encodeURIComponent(saved)}`);
         if (!resp.ok) {
-          window.localStorage.removeItem(sessionKey(slug));
+          window.localStorage.removeItem(sessionKey(botKey));
           return;
         }
         const data = (await resp.json()) as { messages?: WebMessage[] };
@@ -177,7 +177,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
     return () => {
       active = false;
     };
-  }, [slug, appendMessages]);
+  }, [botKey, appendMessages]);
 
   const startSession = useCallback(async () => {
     setFormError(null);
@@ -187,7 +187,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
     }
     setStarting(true);
     try {
-      const resp = await fetch(`/api/bot/web/${slug}/start`, {
+      const resp = await fetch(`/api/bot/web/${botKey}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lead: { name: name.trim(), email: email.trim(), phone: phone.trim() } }),
@@ -197,7 +197,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
         setFormError(data.error ?? labels.errorGeneric);
         return;
       }
-      window.localStorage.setItem(sessionKey(slug), data.session_token);
+      window.localStorage.setItem(sessionKey(botKey), data.session_token);
       setToken(data.session_token);
       setPhase("chat");
       appendMessages(data.messages ?? []);
@@ -206,7 +206,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
     } finally {
       setStarting(false);
     }
-  }, [slug, name, email, phone, labels, appendMessages]);
+  }, [botKey, name, email, phone, labels, appendMessages]);
 
   const sendTurn = useCallback(
     async (body: { text?: string; buttonId?: string }, displayText: string) => {
@@ -218,7 +218,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
         { id: localId, direction: "in", kind: "text", body: displayText, payload: {}, created_at: new Date().toISOString() },
       ]);
       try {
-        const resp = await fetch(`/api/bot/web/${slug}/message`, {
+        const resp = await fetch(`/api/bot/web/${botKey}/message`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ session_token: token, ...body }),
@@ -228,7 +228,7 @@ export default function WebChatWidget({ slug, botName, accentColor, dir, labels 
         setError(labels.errorGeneric);
       }
     },
-    [slug, token, labels, appendMessages],
+    [botKey, token, labels, appendMessages],
   );
 
   const onSend = useCallback(() => {

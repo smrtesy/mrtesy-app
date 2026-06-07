@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
+import { WebConversations } from "@/components/smrtbot/WebConversations";
 
 interface LogRow {
   phone: string | null;
@@ -17,12 +18,14 @@ interface LogRow {
 
 export function LogsClient({ botId }: { botId: string }) {
   const t = useTranslations("smrtBot");
+  const [mode, setMode] = useState<"messages" | "web">("messages");
   const [logs, setLogs] = useState<LogRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dir, setDir] = useState<"" | "IN" | "OUT">("");
   const [errorsOnly, setErrorsOnly] = useState(false);
 
   const load = useCallback(async () => {
+    if (mode !== "messages") return;
     setLogs(null);
     try {
       const qs = new URLSearchParams();
@@ -33,7 +36,7 @@ export function LogsClient({ botId }: { botId: string }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     }
-  }, [botId, dir, errorsOnly]);
+  }, [botId, dir, errorsOnly, mode]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -41,6 +44,23 @@ export function LogsClient({ botId }: { botId: string }) {
 
   return (
     <div className="space-y-3">
+      {/* Channel switch: WhatsApp/system message log vs web-widget conversations. */}
+      <div className="inline-flex rounded-md border border-border p-0.5">
+        {([["messages", t("logsModeMessages")], ["web", t("logsModeWeb")]] as const).map(([v, lbl]) => (
+          <button
+            key={v}
+            onClick={() => setMode(v as "messages" | "web")}
+            className={"rounded px-3 py-1 text-sm " + (mode === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
+          >
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {mode === "web" ? (
+        <WebConversations botId={botId} />
+      ) : (
+      <>
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-md border border-border p-0.5">
           {([["", t("logsAll")], ["IN", t("logsIn")], ["OUT", t("logsOut")]] as const).map(([v, lbl]) => (
@@ -84,6 +104,8 @@ export function LogsClient({ botId }: { botId: string }) {
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
     </div>
   );

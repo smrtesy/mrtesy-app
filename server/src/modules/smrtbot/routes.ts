@@ -13,6 +13,7 @@ import contentRouter from "./routes/content";
 import statsRouter from "./routes/stats";
 import qaRouter from "./routes/qa";
 import publishRouter from "./routes/publish";
+import webAdminRouter from "./routes/web-admin";
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use(contentRouter);
 router.use(statsRouter);
 router.use(qaRouter);
 router.use(publishRouter);
+router.use(webAdminRouter);
 
 export default router;

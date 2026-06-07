@@ -20,13 +20,13 @@ interface BotRow {
   web_accent_color: string | null;
 }
 
-async function loadBot(slug: string): Promise<BotRow | null> {
+async function loadBot(webKey: string): Promise<BotRow | null> {
   const db = createAdminSupabaseClient();
-  if (!db) return null;
+  if (!db || !webKey) return null;
   const { data } = await db
     .from("smrtbot_bots")
     .select("name, web_enabled, web_accent_color")
-    .eq("slug", slug)
+    .eq("web_key", webKey)
     .maybeSingle();
   return (data as BotRow | null) ?? null;
 }
@@ -35,16 +35,16 @@ export default async function SmrtBotEmbedPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ key: string }>;
   searchParams: Promise<{ lang?: string }>;
 }) {
-  const { slug } = await params;
+  const { key } = await params;
   const { lang } = await searchParams;
   const locale = lang === "en" ? "en" : "he";
   const dir = locale === "he" ? "rtl" : "ltr";
   const labels = (locale === "en" ? enMessages : heMessages).smrtBotWeb as WebChatLabels;
 
-  const bot = await loadBot(slug);
+  const bot = await loadBot(key);
 
   if (!bot || !bot.web_enabled) {
     return (
@@ -57,7 +57,7 @@ export default async function SmrtBotEmbedPage({
   return (
     <main className="h-screen w-screen overflow-hidden bg-transparent">
       <WebChatWidget
-        slug={slug}
+        botKey={key}
         botName={bot.name}
         accentColor={bot.web_accent_color ?? "#2563eb"}
         dir={dir}

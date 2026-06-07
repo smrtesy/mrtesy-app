@@ -7,6 +7,7 @@
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomBytes } from "crypto";
 
 import { db } from "../../../db";
 import { requireRole } from "../../../middleware";
@@ -14,6 +15,11 @@ import { emitEvent, notifyError } from "../../../lib/platform";
 import { requireBotAccess } from "../require-bot-access";
 
 const router = Router();
+
+/** Public, globally-unique, rotatable embed key for the web-chat widget. */
+function generateWebKey(): string {
+  return `wk_${randomBytes(12).toString("hex")}`;
+}
 
 // Fields a client may set when creating/updating a bot.
 const BOT_UPDATABLE = new Set([
@@ -38,6 +44,12 @@ const BOT_UPDATABLE = new Set([
   "live_wa_access_token",
   "live_verify_token",
   "live_phone_display",
+  // web-chat channel
+  "web_enabled",
+  "web_env",
+  "web_allowed_origins",
+  "web_greeting",
+  "web_accent_color",
 ]);
 
 function pickUpdatable(body: Record<string, unknown>): Record<string, unknown> {
@@ -124,6 +136,18 @@ router.patch("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: R
     return res.status(400).json({ error: "No updatable fields provided" });
   }
 
+  // Mint a public embed key the first time web chat is enabled, so the admin
+  // UI always has a key to build the snippet from.
+  if (updates.web_enabled === true) {
+    const { data: current } = await db
+      .from("smrtbot_bots")
+      .select("web_key")
+      .eq("org_id", req.org!.id)
+      .eq("id", req.params.botId)
+      .maybeSingle();
+    if (!current?.web_key) updates.web_key = generateWebKey();
+  }
+
   const { data, error } = await db
     .from("smrtbot_bots")
     .update(updates)
@@ -139,6 +163,19 @@ router.patch("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: R
     return res.status(500).json({ error: error.message });
   }
   res.json({ bot: data });
+});
+
+// ── Rotate the public web embed key ──────────────────────────
+router.post("/bot/bots/:botId/web-key", requireBotAccess(), async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtbot_bots")
+    .update({ web_key: generateWebKey() })
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.botId)
+    .select("web_key")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ web_key: data.web_key });
 });
 
 // ── Access management (managers only) ────────────────────────
