@@ -4,19 +4,17 @@
  * holidays) and sheets.js (filterByListKey/searchVideos), reading the migrated
  * smrtbot_videos / smrtbot_holidays tables instead of the Google Sheet.
  *
- * Behavioural verification pending (needs a test bot). Compiles clean and
- * mirrors the botsite flows.
+ * Transport-agnostic: every reply goes through the BotChannel the engine hands
+ * in, so the same flows run on WhatsApp and on the web widget.
  */
 import { db } from "../../db";
-import {
-  resolveCreds, sendText, sendButtons, sendList,
-  type BotEnv, type ResolvedCreds, type ReplyButton,
-} from "./wa";
+import { type BotEnv, type ReplyButton } from "./wa";
+import { type BotChannel } from "./channel";
 import type { BotRow } from "./engine";
 
 type State = Record<string, unknown>;
 
-interface Ctx { bot: BotRow; env: BotEnv; creds: ResolvedCreds; phone: string }
+interface Ctx { bot: BotRow; env: BotEnv; channel: BotChannel; phone: string }
 
 async function msg(bot: BotRow, env: BotEnv, key: string, fallback: string): Promise<string> {
   const { data } = await db.from("smrtbot_messages").select("text")
@@ -102,13 +100,13 @@ async function navButtons(c: Ctx, hasMore: boolean): Promise<void> {
   if (hasMore) btns.push({ id: "nav_more", title: "➕ עוד" });
   btns.push({ id: "nav_home", title: "🏠 תפריט ראשי" });
   btns.push({ id: "nav_share", title: "📲 שתף להורים" });
-  await sendButtons(c.creds, c.phone, await msg(c.bot, c.env, "nav_buttons_header", "ועוד אפשרויות:"), btns.slice(0, 3));
+  await c.channel.buttons(await msg(c.bot, c.env, "nav_buttons_header", "ועוד אפשרויות:"), btns.slice(0, 3));
 }
 
 async function sendVideoPage(c: Ctx, listKey: string, listTitle: string, offset: number, items?: VideoRow[]): Promise<void> {
   const vids = items ?? (await filterVideos(c.bot, listKey));
   if (!vids.length) {
-    await sendText(c.creds, c.phone, await msg(c.bot, c.env, "no_results", "😔 לא נמצאו וידאוים."));
+    await c.channel.text(await msg(c.bot, c.env, "no_results", "😔 לא נמצאו וידאוים."));
     await navButtons(c, false);
     return;
   }
@@ -127,7 +125,7 @@ async function sendVideoPage(c: Ctx, listKey: string, listTitle: string, offset:
   const pag = (await msg(c.bot, c.env, "video_list_pagination", "מציג {from}–{to} מתוך {total}"))
     .replace("{from}", String(safeOffset + 1)).replace("{to}", String(safeOffset + page.length)).replace("{total}", String(vids.length));
   lines.push(pag);
-  await sendText(c.creds, c.phone, lines.join("\n"));
+  await c.channel.text(lines.join("\n"));
   await setState(c.bot, c.phone, { currentListKey: listKey, currentListTitle: listTitle, currentOffset: safeOffset });
   await navButtons(c, safeOffset + pageSize < vids.length);
 }
@@ -145,13 +143,13 @@ async function sendHolidays(c: Ctx, upcomingOnly: boolean): Promise<void> {
   const { data } = await q;
   const rows = (data as { holiday_name: string; hebrew_date: string | null; display_emoji: string | null }[]) ?? [];
   if (!rows.length) {
-    await sendText(c.creds, c.phone, await msg(c.bot, c.env, "no_holidays", "אין חגים להצגה כרגע."));
+    await c.channel.text(await msg(c.bot, c.env, "no_holidays", "אין חגים להצגה כרגע."));
     await navButtons(c, false);
     return;
   }
   const lines = [`*${await msg(c.bot, c.env, upcomingOnly ? "holidays_upcoming_title" : "holidays_all_title", upcomingOnly ? "🗓️ חגים קרובים" : "🗓️ כל החגים")}*`, ""];
   for (const h of rows) lines.push(`${h.display_emoji || "📅"} *${h.holiday_name}*${h.hebrew_date ? ` — ${h.hebrew_date}` : ""}`);
-  await sendText(c.creds, c.phone, lines.join("\n"));
+  await c.channel.text(lines.join("\n"));
   await navButtons(c, false);
 }
 
@@ -159,7 +157,7 @@ async function runSearch(c: Ctx, query: string): Promise<void> {
   const videos = await allVideos(c.bot);
   const tokens = normalizeHe(query).split(" ").filter((t) => t.length > 1);
   if (!tokens.length) {
-    await sendText(c.creds, c.phone, await msg(c.bot, c.env, "no_results", "😔 לא נמצאו תוצאות."));
+    await c.channel.text(await msg(c.bot, c.env, "no_results", "😔 לא נמצאו תוצאות."));
     return;
   }
   const scored = videos.map((v) => {
@@ -172,7 +170,7 @@ async function runSearch(c: Ctx, query: string): Promise<void> {
   }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
 
   if (!scored.length) {
-    await sendText(c.creds, c.phone, await msg(c.bot, c.env, "search_no_results", "😔 לא מצאתי וידאוים מתאימים. נסו מילים אחרות."));
+    await c.channel.text(await msg(c.bot, c.env, "search_no_results", "😔 לא מצאתי וידאוים מתאימים. נסו מילים אחרות."));
     await navButtons(c, false);
     return;
   }
@@ -184,35 +182,29 @@ async function runSearch(c: Ctx, query: string): Promise<void> {
     if (link) lines.push(link);
     lines.push("");
   }
-  await sendText(c.creds, c.phone, lines.join("\n"));
+  await c.channel.text(lines.join("\n"));
   await navButtons(c, false);
 }
 
 /** Free-text after the user picked "search" — returns true if consumed. */
-export async function handleSearchText(bot: BotRow, env: BotEnv, phone: string, text: string): Promise<void> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) return;
+export async function handleSearchText(bot: BotRow, env: BotEnv, phone: string, text: string, channel: BotChannel): Promise<void> {
   await setState(bot, phone, { expectedInput: "" });
-  await runSearch({ bot, env, creds, phone }, text);
+  await runSearch({ bot, env, channel, phone }, text);
 }
 
 /** Handle a video_list / action node. Returns true if handled. */
 export async function handleVideoNode(bot: BotRow, env: BotEnv, phone: string,
-  node: { node_key: string; label: string; type: string; action: string | null; body_text: string | null }): Promise<boolean> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) return false;
-  const c: Ctx = { bot, env, creds, phone };
+  node: { node_key: string; label: string; type: string; action: string | null; body_text: string | null }, channel: BotChannel): Promise<boolean> {
+  const c: Ctx = { bot, env, channel, phone };
   if (node.type === "video_list") { await sendVideoList(c, node); return true; }
-  if (node.type === "action") return handleVideoAction(bot, env, phone, node.action || node.node_key);
-  if (node.type === "text") { await sendText(creds, phone, node.body_text ?? ""); return true; }
+  if (node.type === "action") return handleVideoAction(bot, env, phone, node.action || node.node_key, channel);
+  if (node.type === "text") { await channel.text(node.body_text ?? ""); return true; }
   return false;
 }
 
 /** Handle nav / holiday / search actions (button ids). Returns true if handled. */
-export async function handleVideoAction(bot: BotRow, env: BotEnv, phone: string, action: string): Promise<boolean> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) return false;
-  const c: Ctx = { bot, env, creds, phone };
+export async function handleVideoAction(bot: BotRow, env: BotEnv, phone: string, action: string, channel: BotChannel): Promise<boolean> {
+  const c: Ctx = { bot, env, channel, phone };
   switch (action) {
     case "nav_more": {
       const s = await getState(bot.id, phone);
@@ -221,13 +213,13 @@ export async function handleVideoAction(bot: BotRow, env: BotEnv, phone: string,
       return true;
     }
     case "nav_share":
-      await sendText(creds, phone, await msg(bot, env, "share_footer", "📲 שתפו את הבוט: https://wa.me/?text=שלום"));
+      await channel.text(await msg(bot, env, "share_footer", "📲 שתפו את הבוט: https://wa.me/?text=שלום"));
       return true;
     case "holidays_all": await sendHolidays(c, false); return true;
     case "holidays_upcoming": await sendHolidays(c, true); return true;
     case "main_free_search":
       await setState(bot, phone, { expectedInput: "SEARCH" });
-      await sendText(creds, phone, await msg(bot, env, "search_prompt", "🔍 מה תרצו לחפש? כתבו מילה או נושא."));
+      await channel.text(await msg(bot, env, "search_prompt", "🔍 מה תרצו לחפש? כתבו מילה או נושא."));
       return true;
     default:
       return false;

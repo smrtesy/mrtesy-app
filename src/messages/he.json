@@ -1965,5 +1965,27 @@
       "worker": "עובד",
       "empty": "אין משימות לעובד הזה"
     }
+  },
+  "smrtBotWeb": {
+    "formTitle": "בואו נתחיל לדבר",
+    "formSubtitle": "רק כמה פרטים קצרים ונצא לדרך",
+    "nameLabel": "שם",
+    "namePlaceholder": "איך קוראים לך?",
+    "emailLabel": "אימייל",
+    "emailPlaceholder": "name@example.com",
+    "phoneLabel": "טלפון (לא חובה)",
+    "phonePlaceholder": "050-0000000",
+    "startButton": "התחלת שיחה",
+    "starting": "מתחבר…",
+    "emailInvalid": "אנא הזינו כתובת אימייל תקינה",
+    "privacyNote": "הפרטים משמשים ליצירת קשר בלבד.",
+    "inputPlaceholder": "הקלידו הודעה…",
+    "send": "שליחה",
+    "launcherLabel": "פתיחת צ׳אט",
+    "closeLabel": "סגירה",
+    "headerSubtitle": "כאן בשבילך",
+    "errorGeneric": "משהו השתבש. נסו שוב.",
+    "reconnecting": "מתחבר מחדש…",
+    "poweredBy": "מופעל על ידי smrtesy"
   }
 }

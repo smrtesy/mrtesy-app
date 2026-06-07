@@ -15,12 +15,11 @@ import {
   resolveCreds,
   sendText,
   sendButtons,
-  sendList,
   type BotEnv,
-  type ResolvedCreds,
   type ReplyButton,
   type ListRow,
 } from "./wa";
+import { type BotChannel } from "./channel";
 
 const GAME_CONFIG = {
   TRIVIA_DAILY_LIMIT: 9,
@@ -98,7 +97,7 @@ export interface GameBot {
 interface Ctx {
   bot: GameBot;
   env: BotEnv;
-  creds: ResolvedCreds;
+  channel: BotChannel;
   phone: string;
 }
 
@@ -347,10 +346,10 @@ export function parseHebrewBirthday(input: string): string | null {
 }
 
 // ── send helpers bound to ctx ───────────────────────────────
-const txt = async (c: Ctx, t: string): Promise<void> => { await sendText(c.creds, c.phone, t); };
-const btns = async (c: Ctx, body: string, b: ReplyButton[]): Promise<void> => { await sendButtons(c.creds, c.phone, body, b); };
+const txt = async (c: Ctx, t: string): Promise<void> => { await c.channel.text(t); };
+const btns = async (c: Ctx, body: string, b: ReplyButton[]): Promise<void> => { await c.channel.buttons(body, b); };
 const list = async (c: Ctx, body: string, label: string, section: string, rows: ListRow[]): Promise<void> => {
-  await sendList(c.creds, c.phone, body, label, rows, section);
+  await c.channel.list(body, label, rows, section);
 };
 
 // ── flows ───────────────────────────────────────────────────
@@ -692,10 +691,8 @@ async function sendGameExplanation(c: Ctx): Promise<void> {
  * Dispatch a button/list id (or menu node action) to a game handler.
  * Returns true if the action was a game action and was handled.
  */
-export async function handleGameAction(bot: GameBot, env: BotEnv, phone: string, action: string): Promise<boolean> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) return false;
-  const c: Ctx = { bot, env, creds, phone };
+export async function handleGameAction(bot: GameBot, env: BotEnv, phone: string, action: string, channel: BotChannel): Promise<boolean> {
+  const c: Ctx = { bot, env, channel, phone };
 
   if (action === "main_general" || action === "game_daily" || action === "game_switch_child") { await startDailyGameFlow(c); return true; }
   if (action.startsWith("select_child:")) { await showChildGameMenu(c, action.slice("select_child:".length)); return true; }
@@ -723,10 +720,8 @@ export async function handleGameAction(bot: GameBot, env: BotEnv, phone: string,
 }
 
 /** Onboarding / edit text input. Call when state.expectedInput is set. */
-export async function handleGameText(bot: GameBot, env: BotEnv, phone: string, text: string, state: State): Promise<void> {
-  const creds = resolveCreds(bot, env);
-  if (!creds) return;
-  return runOnboarding({ bot, env, creds, phone }, text, state);
+export async function handleGameText(bot: GameBot, env: BotEnv, phone: string, text: string, state: State, channel: BotChannel): Promise<void> {
+  return runOnboarding({ bot, env, channel, phone }, text, state);
 }
 
 // ── referral (called from engine on first interaction with ?ref=) ───────────

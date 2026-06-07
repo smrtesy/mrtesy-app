@@ -1966,5 +1966,27 @@
       "worker": "Worker",
       "empty": "No tasks for this worker"
     }
+  },
+  "smrtBotWeb": {
+    "formTitle": "Let’s start chatting",
+    "formSubtitle": "Just a couple of quick details and we’re off",
+    "nameLabel": "Name",
+    "namePlaceholder": "What should we call you?",
+    "emailLabel": "Email",
+    "emailPlaceholder": "name@example.com",
+    "phoneLabel": "Phone (optional)",
+    "phonePlaceholder": "+1 555 000 0000",
+    "startButton": "Start chat",
+    "starting": "Connecting…",
+    "emailInvalid": "Please enter a valid email address",
+    "privacyNote": "Your details are used only to contact you.",
+    "inputPlaceholder": "Type a message…",
+    "send": "Send",
+    "launcherLabel": "Open chat",
+    "closeLabel": "Close",
+    "headerSubtitle": "Here to help",
+    "errorGeneric": "Something went wrong. Please try again.",
+    "reconnecting": "Reconnecting…",
+    "poweredBy": "Powered by smrtesy"
   }
 }

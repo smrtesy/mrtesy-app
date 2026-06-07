@@ -17,4 +17,5 @@ router.use(smrtbotRoutes);
 export default router;
 // Unauthenticated (shared-secret) routers — mount BEFORE auth guards.
 export { default as internalRouter } from "./internal";
+export { default as webRouter } from "./web";
 export { default as jobsRouter } from "./jobs";

@@ -35,10 +35,12 @@ export async function middleware(request: NextRequest) {
   const host = request.headers.get("host") || "";
   const appDomain = process.env.NEXT_PUBLIC_APP_DOMAIN;
 
-  // Skip API routes and static files
+  // Skip API routes, static files, and the public embeddable widget (/embed/*
+  // is anonymous + locale-agnostic — it must not hit the auth/locale gates).
   if (
     pathname.startsWith("/api/") ||
     pathname.startsWith("/_next/") ||
+    pathname.startsWith("/embed/") ||
     pathname.includes(".")
   ) {
     return NextResponse.next();
@@ -205,5 +207,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next|api|.*\\..*).*)"],
+  matcher: ["/((?!_next|api|embed|.*\\..*).*)"],
 };

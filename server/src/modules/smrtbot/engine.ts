@@ -16,15 +16,8 @@
  */
 import { db } from "../../db";
 import { emitEvent } from "../../lib/platform";
-import {
-  resolveCreds,
-  sendText,
-  sendButtons,
-  sendImage,
-  type BotEnv,
-  type ResolvedCreds,
-  type ReplyButton,
-} from "./wa";
+import { resolveCreds, type BotEnv, type ReplyButton } from "./wa";
+import { whatsappChannel, type BotChannel } from "./channel";
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
 import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
@@ -174,7 +167,7 @@ function buttonOf(b: MenuNode["buttons"][number]): ReplyButton | null {
 }
 
 async function sendMenuNode(
-  creds: ResolvedCreds,
+  channel: BotChannel,
   orgId: string,
   botId: string,
   env: BotEnv,
@@ -185,20 +178,20 @@ async function sendMenuNode(
   const buttons = (node.buttons ?? []).map(buttonOf).filter((b): b is ReplyButton => b !== null);
 
   if (node.image_url) {
-    await sendImage(creds, phone, node.image_url, bodyText || undefined);
+    await channel.image(node.image_url, bodyText || undefined);
     await logMsg(orgId, botId, phone, "OUT", env, "image", node.image_url, node.node_key);
   }
   if (buttons.length > 0) {
-    await sendButtons(creds, phone, bodyText, buttons);
+    await channel.buttons(bodyText, buttons);
     await logMsg(orgId, botId, phone, "OUT", env, "buttons", bodyText, node.node_key);
   } else if (bodyText && !node.image_url) {
-    await sendText(creds, phone, bodyText);
+    await channel.text(bodyText);
     await logMsg(orgId, botId, phone, "OUT", env, "text", bodyText, node.node_key);
   }
 }
 
 async function routeNode(
-  creds: ResolvedCreds,
+  channel: BotChannel,
   orgId: string,
   bot: BotRow,
   env: BotEnv,
@@ -214,27 +207,27 @@ async function routeNode(
     const act = node.action || node.node_key;
     if (act === "nav_home") {
       const root = findRootNode(nodes);
-      if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+      if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
       return true;
     }
     if (act === "nav_back") {
       const s = await getState(bot.id, phone);
       const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? findRootNode(nodes);
-      if (back) await sendMenuNode(creds, orgId, bot.id, env, phone, back);
+      if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
       return true;
     }
-    if (await handleVideoAction(bot, env, phone, act)) return true;
+    if (await handleVideoAction(bot, env, phone, act, channel)) return true;
     // Unknown action → render the node as a menu so the user isn't stuck.
-    await sendMenuNode(creds, orgId, bot.id, env, phone, node);
+    await sendMenuNode(channel, orgId, bot.id, env, phone, node);
     return true;
   }
   if (node.type === "video_list" || node.type === "text") {
-    await handleVideoNode(bot, env, phone, node);
+    await handleVideoNode(bot, env, phone, node, channel);
     return true;
   }
   // menu (default)
   await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey });
-  await sendMenuNode(creds, orgId, bot.id, env, phone, node);
+  await sendMenuNode(channel, orgId, bot.id, env, phone, node);
   return true;
 }
 
@@ -249,7 +242,7 @@ function normalizeHe(text: string): string {
 }
 
 async function handleFreeText(
-  creds: ResolvedCreds,
+  channel: BotChannel,
   orgId: string,
   bot: BotRow,
   env: BotEnv,
@@ -275,7 +268,7 @@ async function handleFreeText(
   }
 
   if (best) {
-    await sendText(creds, phone, best.answer);
+    await channel.text(best.answer);
     await logMsg(orgId, bot.id, phone, "OUT", env, "text", best.answer, "faq");
     return;
   }
@@ -293,7 +286,7 @@ async function handleFreeText(
   if (qErr) console.error("[smrtbot/engine] question insert", qErr.message);
   await emitEvent(orgId, "smrtbot", "question.received", "question", phone, { message_text: text });
   const fallback = await msg(orgId, bot.id, env, "no_results", "לא הבנתי, נסה שוב או בחר מהתפריט.");
-  await sendText(creds, phone, fallback);
+  await channel.text(fallback);
   await logMsg(orgId, bot.id, phone, "OUT", env, "text", fallback, "no_results");
 }
 
@@ -306,24 +299,35 @@ export interface InboundMessage {
   buttonId?: string; // interactive button/list reply id
 }
 
-/** Entry point: a single inbound WhatsApp message for a bot+env. */
+/** Entry point: a single inbound message for a bot+env.
+ *
+ *  WhatsApp callers (internal.ts) omit `channelOverride` — we resolve the bot's
+ *  Meta creds and build a WhatsApp channel. The web channel (web.ts) passes a
+ *  WebChannel so the exact same flow runs, but replies are broadcast to the
+ *  browser instead of sent to Meta. */
 export async function handleInbound(
   bot: BotRow,
   env: BotEnv,
   message: InboundMessage,
+  channelOverride?: BotChannel,
 ): Promise<void> {
   const orgId = bot.org_id;
   const phone = message.from;
-  const creds = resolveCreds(bot, env);
-  if (!creds) {
-    await reportError(orgId, {
-      area: "engine",
-      title: `Missing ${env} WhatsApp credentials`,
-      message: `Bot "${bot.slug}" has no ${env} phone_number_id/access_token, so it cannot reply.`,
-      botId: bot.id,
-      details: { bot: bot.slug, env },
-    });
-    return;
+
+  let channel = channelOverride;
+  if (!channel) {
+    const creds = resolveCreds(bot, env);
+    if (!creds) {
+      await reportError(orgId, {
+        area: "engine",
+        title: `Missing ${env} WhatsApp credentials`,
+        message: `Bot "${bot.slug}" has no ${env} phone_number_id/access_token, so it cannot reply.`,
+        botId: bot.id,
+        details: { bot: bot.slug, env },
+      });
+      return;
+    }
+    channel = whatsappChannel(creds, phone);
   }
 
   try {
@@ -350,14 +354,14 @@ export async function handleInbound(
 
     // 1. Mid-flow text input (game onboarding / profile edit / reminder / search).
     if (text && state.expectedInput) {
-      if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text);
-      else await handleGameText(bot, env, phone, text, state);
+      if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text, channel);
+      else await handleGameText(bot, env, phone, text, state, channel);
       return;
     }
 
     // 2. Game action (button id or a text that maps to a game action).
     const action = message.buttonId ?? text;
-    if (action && (await handleGameAction(bot, env, phone, action))) return;
+    if (action && (await handleGameAction(bot, env, phone, action, channel))) return;
 
     const nodes = await loadNodes(orgId, bot.id, env);
 
@@ -365,35 +369,35 @@ export async function handleInbound(
     if (action) {
       if (action === "nav_home") {
         const root = findRootNode(nodes);
-        if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+        if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
         return;
       }
       if (action === "nav_back") {
         const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? findRootNode(nodes);
-        if (back) await sendMenuNode(creds, orgId, bot.id, env, phone, back);
+        if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
         return;
       }
-      if (await handleVideoAction(bot, env, phone, action)) return;
+      if (await handleVideoAction(bot, env, phone, action, channel)) return;
     }
 
     // 3. Menu-tree node by key (button id or text equal to a node_key).
     if (action) {
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
-        await routeNode(creds, orgId, bot, env, phone, action, nodes);
+        await routeNode(channel, orgId, bot, env, phone, action, nodes);
         return;
       }
     }
 
     // 4. Existing user's free text with no match → FAQ search.
     if (text && existed) {
-      await handleFreeText(creds, orgId, bot, env, phone, text);
+      await handleFreeText(channel, orgId, bot, env, phone, text);
       return;
     }
 
     // 5. New users / empty input → root menu so they land on the welcome.
     const root = findRootNode(nodes);
-    if (root) await sendMenuNode(creds, orgId, bot.id, env, phone, root);
+    if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
   } catch (e) {
     const { message: msg, stack } = errInfo(e);
     await reportError(orgId, {
