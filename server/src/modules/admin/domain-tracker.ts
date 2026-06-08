@@ -98,10 +98,13 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--no-zygote",
-        "--single-process",
         "--disable-accelerated-2d-canvas",
-        "--disable-features=VizDisplayCompositor",
         "--disable-software-rasterizer",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--no-first-run",
+        "--mute-audio",
       ],
     });
 
@@ -125,7 +128,7 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
     });
 
     await page.goto(parsedUrl.toString(), {
-      waitUntil: "networkidle",
+      waitUntil: "load",
       timeout: 30_000,
     });
 
