@@ -28,18 +28,6 @@ interface Section {
 
 const SECTIONS: Section[] = [
   {
-    key: "settings",
-    icon: Settings,
-    labelKey: "secSettings",
-    items: [
-      { seg: "", key: "general", labelKey: "tabBasic" },
-      { seg: "whatsapp", labelKey: "waTab" },
-      { seg: "web", labelKey: "webTab" },
-      { seg: "settings", labelKey: "settingsAdvanced" },
-      { seg: "publish", labelKey: "publishTitle" },
-    ],
-  },
-  {
     key: "content",
     icon: MessageSquareText,
     labelKey: "secContent",
@@ -68,6 +56,18 @@ const SECTIONS: Section[] = [
     icon: BarChart3,
     labelKey: "secData",
     items: [{ seg: "stats", labelKey: "statsTitle" }, { seg: "logs", labelKey: "logsTitle" }],
+  },
+  {
+    key: "settings",
+    icon: Settings,
+    labelKey: "secSettings",
+    items: [
+      { seg: "", key: "general", labelKey: "tabBasic" },
+      { seg: "whatsapp", labelKey: "waTab" },
+      { seg: "web", labelKey: "webTab" },
+      { seg: "settings", labelKey: "settingsAdvanced" },
+      { seg: "publish", labelKey: "publishTitle" },
+    ],
   },
 ];
 

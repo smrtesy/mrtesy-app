@@ -1705,7 +1705,14 @@
     "aiModel_claude_haiku": "Claude Haiku (fast & cheap)",
     "aiModel_claude_sonnet": "Claude Sonnet (balanced)",
     "aiModel_claude_opus": "Claude Opus (most capable)",
-    "aiModel_gemini": "Google Gemini"
+    "aiModel_gemini": "Google Gemini",
+    "menuButtons": "Buttons",
+    "menuAddButton": "Add button",
+    "menuBtnTitle": "Button text",
+    "menuBtnTarget": "Target…",
+    "menuSplitLabel": "Split into separate messages (3 buttons each) instead of a list",
+    "menuNone": "(none)",
+    "menuUploadImage": "Upload image"
   },
   "smrtVoice": {
     "appName": "smrtVoice",
