@@ -4,7 +4,15 @@
  * intercepts every network request, and returns a deduplicated list of
  * hostnames — grouped by count and resource type.
  *
- * Requires requireAuth + requireSuperAdmin (applied in the admin index router).
+ * Each domain is classified by load phase so callers can tell which
+ * domains must be whitelisted in filtered networks:
+ *   "blocking"    — requested before DOMContentLoaded with a render-blocking
+ *                   type (script/stylesheet/document).  If blocked, the page
+ *                   will hang or fail to render.
+ *   "functional"  — requested before the load event but not render-blocking.
+ *                   Blocking it may break interactive features (XHR, fetch).
+ *   "optional"    — requested after the load event (analytics, lazy media,
+ *                   beacon pings).  Safe to block.
  *
  * POST /api/admin/domain-tracker
  * Body: { url: string }
@@ -16,11 +24,14 @@ import { requireAuth, requireSuperAdmin } from "../../middleware";
 
 const router = Router();
 
+type LoadPhase = "blocking" | "functional" | "optional";
+
 type DomainEntry = {
   domain: string;
   count: number;
   types: string[];
   isMain: boolean;
+  loadPhase: LoadPhase;
 };
 
 type ScanResult = {
@@ -30,6 +41,13 @@ type ScanResult = {
   totalDomains: number;
   scannedUrl: string;
 };
+
+const BLOCKING_TYPES = new Set(["document", "script", "stylesheet"]);
+
+function worstPhase(a: LoadPhase, b: LoadPhase): LoadPhase {
+  const rank: Record<LoadPhase, number> = { blocking: 0, functional: 1, optional: 2 };
+  return rank[a] <= rank[b] ? a : b;
+}
 
 router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
   const rawUrl = (typeof req.body?.url === "string" ? req.body.url : "").trim();
@@ -49,7 +67,6 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
   try {
     const { chromium } = await import("playwright");
 
-    // playwright uses its own downloaded Chromium — no executablePath needed.
     browser = await chromium.launch({
       args: [
         "--no-sandbox",
@@ -74,12 +91,26 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
 
     const page = await context.newPage();
 
-    const raw: Array<{ domain: string; type: string }> = [];
+    // Track load phase transitions.
+    let currentPhase: LoadPhase = "blocking";
+    page.on("domcontentloaded", () => { currentPhase = "functional"; });
+
+    const raw: Array<{ domain: string; type: string; phase: LoadPhase }> = [];
 
     page.on("request", (r) => {
       try {
         const u = new URL(r.url());
-        if (u.hostname) raw.push({ domain: u.hostname, type: r.resourceType() });
+        if (!u.hostname) return;
+        const type = r.resourceType();
+        // A request is render-blocking only if it fires before DCL AND has a
+        // blocking type.  After DCL the phase switches to "functional".
+        const phase: LoadPhase =
+          currentPhase === "blocking" && BLOCKING_TYPES.has(type)
+            ? "blocking"
+            : currentPhase === "optional"
+            ? "optional"
+            : "functional";
+        raw.push({ domain: u.hostname, type, phase });
       } catch {
         // malformed url — skip
       }
@@ -90,6 +121,9 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
       timeout: 30_000,
     });
 
+    // Switch to optional phase: anything fired after load is non-critical.
+    currentPhase = "optional";
+
     // Extra wait for lazy analytics / beacon pings
     await page.waitForTimeout(2_000);
 
@@ -97,15 +131,16 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
     browser = null;
 
     const mainDomain = parsedUrl.hostname;
-    const domainMap = new Map<string, { count: number; types: Set<string> }>();
+    const domainMap = new Map<string, { count: number; types: Set<string>; loadPhase: LoadPhase }>();
 
     for (const r of raw) {
       const e = domainMap.get(r.domain);
       if (e) {
         e.count++;
         e.types.add(r.type);
+        e.loadPhase = worstPhase(e.loadPhase, r.phase);
       } else {
-        domainMap.set(r.domain, { count: 1, types: new Set([r.type]) });
+        domainMap.set(r.domain, { count: 1, types: new Set([r.type]), loadPhase: r.phase });
       }
     }
 
@@ -115,9 +150,13 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
         count: info.count,
         types: Array.from(info.types).sort(),
         isMain: domain === mainDomain || domain.endsWith(`.${mainDomain}`),
+        loadPhase: info.loadPhase,
       }))
       .sort((a, b) => {
+        // Sort: main first, then by severity (blocking > functional > optional), then by count
         if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+        const rank: Record<LoadPhase, number> = { blocking: 0, functional: 1, optional: 2 };
+        if (rank[a.loadPhase] !== rank[b.loadPhase]) return rank[a.loadPhase] - rank[b.loadPhase];
         return b.count - a.count;
       });
 
