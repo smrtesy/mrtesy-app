@@ -439,8 +439,16 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   transparent enough to read the bars and labels underneath. */}
               {todayInView && (
                 <div
-                  className="pointer-events-none absolute inset-y-0 z-[7]"
-                  style={{ insetInlineStart: xOf(todayOff), width: COL_PX, background: "rgba(115,115,115,0.25)" }}
+                  className="pointer-events-none absolute bottom-0 z-[7]"
+                  style={{
+                    insetInlineStart: xOf(todayOff),
+                    width: COL_PX,
+                    // Start at the day-strip (date row), below the milestone lane
+                    // (h-8 = 32px, only when present) + month band (h-5 = 20px),
+                    // so the wash doesn't rise into the header.
+                    top: (milestones.length > 0 ? 32 : 0) + 20,
+                    background: "rgba(115,115,115,0.15)",
+                  }}
                 />
               )}
               {/* milestone label lane — pills centered on their date, each on a
@@ -482,11 +490,12 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   return (
                     <div
                       key={seg.start}
-                      className={cn(
-                        "absolute top-0 flex h-full items-center justify-center overflow-hidden whitespace-nowrap px-1 text-[10px] font-semibold text-muted-foreground",
-                        seg.start !== 0 && "border-s",
-                      )}
-                      style={{ insetInlineStart: seg.start * COL_PX, width }}
+                      className="absolute top-0 flex h-full items-center justify-center overflow-hidden whitespace-nowrap px-1 text-[10px] font-semibold text-muted-foreground"
+                      style={{
+                        insetInlineStart: seg.start * COL_PX,
+                        width,
+                        borderInlineStart: seg.start !== 0 ? "2px solid hsl(var(--foreground) / 0.3)" : undefined,
+                      }}
                     >
                       {width >= 52 ? seg.label : ""}
                     </div>
