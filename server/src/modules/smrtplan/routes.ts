@@ -98,7 +98,7 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
 
   const { data: depsRaw } = await db
     .from("smrtplan_dependencies")
-    .select("id, from_id, to_id, satisfied")
+    .select("id, from_id, to_id, satisfied, lag_days")
     .eq("org_id", orgId)
     .eq("from_type", "task")
     .eq("to_type", "task")
@@ -136,6 +136,7 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
         task_id: provider,
         title: (p?.title_he as string) || (p?.title as string) || "—",
         satisfied: (d.satisfied as boolean) ?? false,
+        lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
       });
       needsByTask.set(consumer, arr);
@@ -227,12 +228,13 @@ function requireFull(req: Request, res: Response, next: NextFunction) {
 
 const PLAN_FIELDS =
   "id, org_id, parent_id, project_id, title_he, title_en, goal, kind, group_label, " +
-  "start_date, end_date, stage, progress, progress_manual, is_critical, color, " +
+  "start_date, end_date, stage, status, is_capability, is_available, progress, progress_manual, is_critical, color, " +
   "is_private, owner_user_id, created_by, created_at, updated_at";
 
 const PLAN_WRITABLE = new Set([
   "parent_id", "project_id", "title_he", "title_en", "goal", "kind", "group_label",
-  "start_date", "end_date", "stage", "progress_manual", "color", "is_private", "owner_user_id",
+  "start_date", "end_date", "stage", "status", "is_capability", "is_available",
+  "progress_manual", "color", "is_private", "owner_user_id",
 ]);
 
 function pickPlan(body: Record<string, unknown>): Record<string, unknown> {
@@ -253,6 +255,15 @@ async function withProgress(orgId: string, plans: Record<string, unknown>[]): Pr
   const byId = new Map<string, number>();
   for (const p of prog ?? []) byId.set(p.plan_id as string, (p.effective_progress as number) ?? 0);
   return plans.map((pl) => ({ ...pl, effective_progress: byId.get(pl.id as string) ?? 0 }));
+}
+
+/** IDs of plans whose tasks must stay SILENT — i.e. drafts, not yet approved.
+ *  Used to keep draft-plan tasks out of every list a worker/teammate sees, so a
+ *  plan can be built freely before it becomes real work. Approving the plan
+ *  (status → active) un-hides them instantly, with no task mutation. */
+async function silentPlanIds(orgId: string): Promise<string[]> {
+  const { data } = await db.from("smrtplan_plans").select("id").eq("org_id", orgId).eq("status", "draft");
+  return asRows(data).map((p) => p.id as string);
 }
 
 // ── access level ─────────────────────────────────────────────────────────────
@@ -446,13 +457,16 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   // Mine = assigned to me, OR unassigned tasks I created (an unassigned plan
   // task still belongs to its owner — it shouldn't fall through the cracks).
   const uid = req.user!.id;
-  const { data, error } = await db
+  const silent = await silentPlanIds(req.org!.id);
+  let q = db
     .from("tasks")
     .select(MY_TASK_FIELDS)
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
-    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`)
-    .order("due_date", { ascending: true });
+    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`);
+  // Every row here has a non-null plan_id, so a plain not-in is null-safe.
+  if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
+  const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
 });
@@ -461,13 +475,15 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
 // etc. are filtered views by assignee — work lives in its real plan, surfaced
 // here because the assignee is that worker.
 router.get("/plan/worker-tasks/:userId", requireFull, async (req: Request, res: Response) => {
-  const { data, error } = await db
+  const silent = await silentPlanIds(req.org!.id);
+  let q = db
     .from("tasks")
     .select(MY_TASK_FIELDS)
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
-    .eq("assigned_to_user_id", req.params.userId)
-    .order("due_date", { ascending: true });
+    .eq("assigned_to_user_id", req.params.userId);
+  if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
+  const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
 });
@@ -583,19 +599,34 @@ router.patch("/plan-cells/:id", requireFull, async (req: Request, res: Response)
 // ── dependencies ─────────────────────────────────────────────────────────────
 
 router.post("/plan-dependencies", requireFull, async (req: Request, res: Response) => {
-  const { from_type, from_id, to_type, to_id } = req.body ?? {};
+  const { from_type, from_id, to_type, to_id, lag_days } = req.body ?? {};
   const ends = ["plan", "stage", "task"];
   if (!ends.includes(from_type) || !ends.includes(to_type) || !from_id || !to_id) {
     return res.status(400).json({ error: "from_type/from_id/to_type/to_id required" });
   }
   const { data, error } = await db
     .from("smrtplan_dependencies")
-    .insert({ org_id: req.org!.id, from_type, from_id, to_type, to_id })
-    .select("id, from_type, from_id, to_type, to_id, satisfied")
+    .insert({ org_id: req.org!.id, from_type, from_id, to_type, to_id, lag_days: Math.max(0, Math.round(Number(lag_days)) || 0) })
+    .select("id, from_type, from_id, to_type, to_id, satisfied, lag_days")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   await autoRecompute(req.org!.id);
   res.status(201).json({ dependency: data });
+});
+
+router.patch("/plan-dependencies/:id", requireFull, async (req: Request, res: Response) => {
+  const { lag_days } = req.body ?? {};
+  if (lag_days == null || isNaN(Number(lag_days))) return res.status(400).json({ error: "lag_days (number) is required" });
+  const { data, error } = await db
+    .from("smrtplan_dependencies")
+    .update({ lag_days: Math.max(0, Math.round(Number(lag_days))) })
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, from_type, from_id, to_type, to_id, satisfied, lag_days")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
+  res.json({ dependency: data });
 });
 
 router.delete("/plan-dependencies/:id", requireFull, async (req: Request, res: Response) => {

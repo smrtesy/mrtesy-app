@@ -1977,6 +1977,7 @@
       "mGlobal": "Global (all rows)",
       "needs": "Dependencies (to start)",
       "addNeed": "Add dependency",
+      "lagDays": "buffer days",
       "pickTask": "Pick a task…",
       "none": "—",
       "statusInbox": "Open",
@@ -2035,6 +2036,25 @@
       "makePrimary": "Make default",
       "primary": "Default",
       "color": "Color"
+    },
+    "status": {
+      "draft": "Draft",
+      "active": "Active",
+      "done": "Done",
+      "archived": "Archived",
+      "approve": "Approve plan",
+      "toDraft": "Back to draft",
+      "label": "Status"
+    },
+    "capability": {
+      "field": "Reusable tool / capability",
+      "shelf": "Available capabilities",
+      "markAvailable": "Mark available",
+      "returnToTimeline": "Return to timeline",
+      "available": "Available",
+      "unavailable": "Unavailable",
+      "markUnavailable": "Mark unavailable",
+      "markAvailableAgain": "Mark available again"
     },
     "view": {
       "list": "List",

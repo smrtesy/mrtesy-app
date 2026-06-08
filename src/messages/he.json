@@ -1976,6 +1976,7 @@
       "mGlobal": "כללי (כל השורות)",
       "needs": "תלויות (כדי להתחיל)",
       "addNeed": "הוסף תלות",
+      "lagDays": "ימי חיץ",
       "pickTask": "בחר משימה…",
       "none": "—",
       "statusInbox": "פתוח",
@@ -2034,6 +2035,25 @@
       "makePrimary": "הפוך לברירת מחדל",
       "primary": "ברירת מחדל",
       "color": "צבע"
+    },
+    "status": {
+      "draft": "טיוטה",
+      "active": "פעיל",
+      "done": "הושלם",
+      "archived": "בארכיון",
+      "approve": "אשר תוכנית",
+      "toDraft": "החזר לטיוטה",
+      "label": "סטטוס"
+    },
+    "capability": {
+      "field": "כלי / יכולת לשימוש חוזר",
+      "shelf": "יכולות זמינות",
+      "markAvailable": "סמן כזמין",
+      "returnToTimeline": "החזר לטיים-ליין",
+      "available": "זמין",
+      "unavailable": "לא זמין",
+      "markUnavailable": "סמן כלא זמין",
+      "markAvailableAgain": "סמן כזמין שוב"
     },
     "view": {
       "list": "רשימה",

@@ -9,6 +9,9 @@
 
 export type PlanKind = "effort" | "stream" | "roster";
 export type PlanStage = "idea" | "shaping" | "active";
+/** Approval lifecycle. draft = free planning, tasks stay silent; active = live;
+ *  done = finished (for a capability: "available"); archived = put away. */
+export type PlanStatus = "draft" | "active" | "done" | "archived";
 
 export interface Plan {
   id: string;
@@ -24,6 +27,12 @@ export interface Plan {
   start_date: string | null;
   end_date: string | null;
   stage: PlanStage;
+  /** Approval lifecycle state. */
+  status: PlanStatus;
+  /** A one-time, reusable tool/enabler (vs a deliverable/event). */
+  is_capability: boolean;
+  /** For a capability: whether it is usable right now. */
+  is_available: boolean;
   /** 0..1 computed progress. */
   progress: number;
   /** 0..1 manual override (null = use computed). */

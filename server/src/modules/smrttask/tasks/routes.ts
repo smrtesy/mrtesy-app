@@ -214,6 +214,11 @@ router.get("/tasks", async (req: Request, res: Response) => {
     .eq("organization_id", req.org!.id);
 
   q = applyTaskFilters(q, req.query);
+  // Hide tasks of draft (not-yet-approved) smrtPlan plans. Ordinary tasks have a
+  // null plan_id, so the null branch keeps them (a bare not-in would drop nulls).
+  const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
+  const draftIds = (draftPlans ?? []).map((p) => p.id as string);
+  if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
   q = q.order("created_at", { ascending: false });
   const n = Math.min(parseInt((limit as string) ?? "50", 10) || 50, 200);
   q = q.limit(n);
@@ -230,6 +235,9 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
     .select("id", { count: "exact", head: true })
     .eq("organization_id", req.org!.id);
   q = applyTaskFilters(q, req.query);
+  const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
+  const draftIds = (draftPlans ?? []).map((p) => p.id as string);
+  if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
 
   const { count, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
