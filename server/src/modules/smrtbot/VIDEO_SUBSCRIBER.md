@@ -22,6 +22,7 @@ Vault-backed) is the fallback/default.
 | Key | Scope | Example / notes |
 |---|---|---|
 | `VIDEO_WATCH_BASE_URL` | per-bot | `https://rebbek.org` → link is `<base>/<video_number>` |
+| `VIDEO_LOCALE` | per-bot | the bot's locale, e.g. `he` / `en` — controls per-video availability (below) |
 | `SUBSCRIPTION_API_BASE_URL` | per-bot | external subscription system for that domain |
 | `SUBSCRIPTION_API_SECRET` | per-bot (Vault) | bearer we send to that system |
 | `VIDEO_OTP_FROM_EMAIL` / `VIDEO_OTP_SES_REGION` | per-bot | verified SES sender (branding per domain) |
@@ -91,6 +92,16 @@ Authorization: Bearer {VIDEO_VERIFY_SECRET}
 
 Token TTL bounds staleness (default 6h, `playback-token.ts`); minted only for a
 verified subscriber.
+
+## Per-video availability (language / domain)
+
+The catalog (`smrtbot_videos`) is org-wide, but each bot serves one
+domain/locale. `smrtbot_videos.languages text[]` lists the locales a video is
+available in; a bot (with `VIDEO_LOCALE` set) serves a video only when its
+locale is in the array — or the array is NULL/empty (available everywhere,
+back-compat). So an English-only video (`languages = {en}`) is never listed or
+linked by the Hebrew bot. Same Hebrew videos shared across both domains →
+`{he,en}`. Filtering happens in `videos.ts` (`allVideos`).
 
 ## Bunny Stream notes
 

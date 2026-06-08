@@ -13,6 +13,7 @@ import {
   type BotEnv, type ResolvedCreds, type ReplyButton,
 } from "./wa";
 import { getSubscriberContext, watchLinkFor } from "./identity";
+import { getBotConfig } from "./config";
 import type { BotRow } from "./engine";
 
 type State = Record<string, unknown>;
@@ -45,6 +46,7 @@ interface VideoRow {
   vd_id: string | null; video_number: string | null; video_name: string | null; video_link: string | null; full_url: string | null;
   display_link: string | null; main_category: string | null; sub_category: string | null;
   rebbe: string | null; holidays: string | null; icon: string | null; search_text: string | null;
+  languages: string[] | null;
 }
 
 // listKey → { main, subs[] }  (ported from sheets.js filterByListKey switch)
@@ -73,10 +75,17 @@ const FILTERS: Record<string, { main: string; subs: string[] }> = {
 
 async function allVideos(bot: BotRow): Promise<VideoRow[]> {
   const { data, error } = await db.from("smrtbot_videos")
-    .select("vd_id, video_number, video_name, video_link, full_url, display_link, main_category, sub_category, rebbe, holidays, icon, search_text")
+    .select("vd_id, video_number, video_name, video_link, full_url, display_link, main_category, sub_category, rebbe, holidays, icon, search_text, languages")
     .eq("org_id", bot.org_id).eq("active", true);
   if (error) console.error("[smrtbot/videos] allVideos", error.message);
-  return (data as VideoRow[]) ?? [];
+  let vids = (data as VideoRow[]) ?? [];
+  // Per-domain availability: a bot with a locale only serves videos tagged for
+  // it (or untagged = available everywhere). No locale set → serve all.
+  const locale = (await getBotConfig(bot.id, "VIDEO_LOCALE", "VIDEO_LOCALE")) || "";
+  if (locale) {
+    vids = vids.filter((v) => !v.languages || v.languages.length === 0 || v.languages.includes(locale));
+  }
+  return vids;
 }
 
 async function filterVideos(bot: BotRow, listKey: string): Promise<VideoRow[]> {
