@@ -67,7 +67,7 @@ export default function DomainTrackerPage() {
     setError(null);
 
     try {
-      const data = await api<ScanResult>("/api/tools/domain-tracker", {
+      const data = await api<ScanResult>("/api/admin/domain-tracker", {
         method: "POST",
         noOrg: true,
         body: JSON.stringify({ url: url.trim() }),
