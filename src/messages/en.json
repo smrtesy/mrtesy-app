@@ -1927,7 +1927,9 @@
       "waiting": "Waiting",
       "arrived": "Arrived",
       "constraint": "constraint",
-      "rosterNote": "Aggregated view: tasks from other plans by assignee"
+      "rosterNote": "Aggregated view: tasks from other plans by assignee",
+      "viewList": "List",
+      "viewGantt": "Timeline"
     },
     "repository": {
       "title": "Idea repository",
@@ -2011,7 +2013,19 @@
       "hoursUnit": "h",
       "durManual": "manual",
       "durEstimated": "est.",
-      "capsWorker": "Caps worker (deadline)"
+      "capsWorker": "Caps worker (deadline)",
+      "editMode": "Edit mode",
+      "exitEdit": "Done editing",
+      "editHint": "Edit mode: drag a bar to move it, pull the edges to change date/length, click a title to rename, click an empty row to add a milestone, or add a new row.",
+      "addRow": "Add row",
+      "pickKind": "Row kind",
+      "newRowTitle": "New row"
+    },
+    "gantt": {
+      "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
+      "connecting": "Pick the dependent task…",
+      "depExists": "Dependency already exists",
+      "unscheduled": "No date"
     },
     "capacity": {
       "button": "Team & availability",

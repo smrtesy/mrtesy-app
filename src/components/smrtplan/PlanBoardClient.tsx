@@ -1,27 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
+import { useTimeline, COL_PX } from "@/lib/smrtplan/timeline";
+import { useGanttDrag, spanWidth } from "@/lib/smrtplan/useGanttDrag";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
+import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { RolesEditor } from "./RolesEditor";
 
 const DAY_MS = 86_400_000;
-/** Pixels per working-day column on the timeline. The track is wider than the
- *  viewport, so the chart scrolls horizontally to reveal future dates (instead
- *  of squeezing the whole span into view). */
-const COL_PX = 22;
-/** Weekday numbers hidden from the board (0 = Sunday, 6 = Saturday). The board
- *  shows only Monday–Friday columns; positions compress over the hidden days. */
-const HIDDEN_DOW = new Set([0, 6]);
 
 /** Day-of-week letter, indexed by getDay(): Hebrew (יום א׳…שבת) or English. */
 const HE_DOW = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
@@ -80,7 +76,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
+  // Free-planning (edit) mode: drag bars, drag milestones, add rows inline.
+  const [editMode, setEditMode] = useState(false);
+  const [addRowOpen, setAddRowOpen] = useState(false);
+  const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
+  const [detailView, setDetailView] = useState<"list" | "gantt">("list");
   const canEdit = access === "full";
+  const trackRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     const [{ plans }, { access_level }, { milestones }, { holidays }] = await Promise.all([
@@ -170,10 +172,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     return { t0: start, totalDays: Math.max(14, daysBetween(start, end) + 7) };
   }, [boardPlans]);
 
-  const dateAt = useCallback((off: number) => new Date(t0.getTime() + off * DAY_MS), [t0]);
+  const tl = useTimeline(t0, totalDays);
+  const { cols, dateAt, offsetOf, xOf, trackWidth } = tl;
   /** Percentage position (for the responsive mobile sparkline that fits its container). */
   const pctOf = (off: number) => `${Math.min(100, Math.max(0, (off / totalDays) * 100))}%`;
-  const offsetOf = (iso: string) => daysBetween(t0, parseISO(iso));
   // "Today" is the real today (the projection slider was removed — health comes
   // from the engine's latest dates, not from sliding a frozen-progress clock).
   const today = useMemo(() => new Date(), []);
@@ -182,45 +184,112 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   // translateX is PHYSICAL (doesn't mirror in RTL), so center a date-anchored
   // element direction-aware: shift left in LTR, right in RTL, to sit over its x.
   const centerTx = locale === "he" ? "translateX(50%)" : "translateX(-50%)";
+  const editing = editMode && canEdit;
 
-  // Group plans by group_label, preserving first-seen order.
-  const groups = useMemo(() => {
-    const map = new Map<string, Plan[]>();
-    for (const p of boardPlans) {
-      const key = p.group_label || "—";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(p);
-    }
-    return [...map.entries()];
-  }, [boardPlans]);
+  // ── edit-mode mutations ────────────────────────────────────────────────────
 
-  // Visible working-day columns: every day in the window except hidden weekdays
-  // (Saturday + Sunday). `cols[i]` is the day-offset (from t0) of column i.
-  const cols = useMemo(() => {
-    const out: number[] = [];
-    for (let o = 0; o <= totalDays; o++) {
-      if (!HIDDEN_DOW.has(new Date(t0.getTime() + o * DAY_MS).getDay())) out.push(o);
-    }
-    return out;
-  }, [t0, totalDays]);
-
-  // Pixel x for a day-offset = (number of visible columns before it) × COL_PX.
-  // A hidden weekend date lands on the boundary just before the next column.
-  const colPos = useCallback(
-    (off: number) => {
-      let lo = 0;
-      let hi = cols.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (cols[mid] < off) lo = mid + 1;
-        else hi = mid;
+  // Drag/resize a plan window → pin its start_date/end_date. The engine reruns
+  // on the PATCH (autoRecompute) and fills everything we didn't touch.
+  const commitPlanDates = useCallback(
+    async (id: string, startOff: number, endOff: number) => {
+      const start_date = isoOf(dateAt(startOff));
+      const end_date = isoOf(dateAt(Math.max(startOff, endOff)));
+      const before = plans;
+      // Optimistic: move the bar immediately, then reconcile with the server.
+      setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, start_date, end_date } : p)));
+      try {
+        await api(`/api/plans/${id}`, { method: "PATCH", body: { start_date, end_date } });
+        await load();
+      } catch (e) {
+        setPlans(before);
+        toast.error(e instanceof Error ? e.message : "Error");
       }
-      return lo;
     },
-    [cols],
+    [dateAt, plans, load],
   );
-  const xOf = useCallback((off: number) => colPos(off) * COL_PX, [colPos]);
-  const trackWidth = cols.length * COL_PX;
+
+  const commitMilestoneDate = useCallback(
+    async (id: string, startOff: number) => {
+      const milestone_date = isoOf(dateAt(startOff));
+      const before = milestones;
+      setMilestones((ms) => ms.map((m) => (m.id === id ? { ...m, milestone_date } : m)));
+      try {
+        await api(`/api/plan-milestones/${id}`, { method: "PATCH", body: { milestone_date } });
+        await load();
+      } catch (e) {
+        setMilestones(before);
+        toast.error(e instanceof Error ? e.message : "Error");
+      }
+    },
+    [dateAt, milestones, load],
+  );
+
+  const planDrag = useGanttDrag(tl, locale, trackRef, commitPlanDates);
+  const msDrag = useGanttDrag(tl, locale, trackRef, (id, startOff) => commitMilestoneDate(id, startOff));
+
+  async function saveTitle(id: string, title: string) {
+    const trimmed = title.trim();
+    setEditingTitleId(null);
+    const cur = plans.find((p) => p.id === id);
+    if (!trimmed || !cur || trimmed === cur.title_he) return;
+    setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, title_he: trimmed } : p)));
+    try {
+      await api(`/api/plans/${id}`, { method: "PATCH", body: { title_he: trimmed } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      await load();
+    }
+  }
+
+  async function addMilestoneAt(planId: string | null, off: number) {
+    const label = window.prompt(t("edit.mLabel"));
+    if (!label || !label.trim()) return;
+    try {
+      await api("/api/plans/milestones", {
+        method: "POST",
+        body: { milestone_date: isoOf(dateAt(off)), label_he: label.trim(), plan_id: planId },
+      });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  async function deleteMilestone(id: string) {
+    try {
+      await api(`/api/plan-milestones/${id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  async function quickAddPlan(kind: "effort" | "stream", is_capability: boolean) {
+    setAddRowOpen(false);
+    const start = today;
+    const end = new Date(today.getTime() + 14 * DAY_MS);
+    try {
+      const { plan } = await api<{ plan: Plan }>("/api/plans", {
+        method: "POST",
+        body: {
+          title_he: t("edit.newRowTitle"),
+          kind,
+          is_capability,
+          status: "draft",
+          start_date: isoOf(start),
+          end_date: isoOf(end),
+        },
+      });
+      await load();
+      if (plan?.id) {
+        setSelectedId(plan.id);
+        setEditingTitleId(plan.id);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
   // Top edge of the day-strip = below the milestone lane (h-8=32px, only when
   // present) + month band (h-5=20px). Column washes (today, holidays) start here
   // so they don't rise into the header.
@@ -278,6 +347,17 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const lineColor = (m: PlanMilestone) => m.color || "hsl(var(--muted-foreground))";
   const mLabel = (m: PlanMilestone) => (locale === "en" ? m.label_en || m.label_he : m.label_he);
 
+  // Group plans by group_label, preserving first-seen order.
+  const groups = useMemo(() => {
+    const map = new Map<string, Plan[]>();
+    for (const p of boardPlans) {
+      const key = p.group_label || "—";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(p);
+    }
+    return [...map.entries()];
+  }, [boardPlans]);
+
   const selected = plans.find((p) => p.id === selectedId) ?? null;
 
   if (loading) {
@@ -317,6 +397,21 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         </div>
         {canEdit && (
           <div className="ms-auto flex flex-wrap items-center gap-2">
+            {editing && (
+              <div className="relative">
+                <ControlButton onClick={() => setAddRowOpen((o) => !o)}>
+                  <Plus className="h-3.5 w-3.5" /> {t("edit.addRow")}
+                </ControlButton>
+                {addRowOpen && (
+                  <div className="absolute end-0 z-20 mt-1 w-44 rounded-lg border bg-card p-1 shadow-lg">
+                    <p className="px-2 py-1 text-[11px] font-bold text-muted-foreground">{t("edit.pickKind")}</p>
+                    <RowKindButton onClick={() => quickAddPlan("effort", false)}>{t("kind.effort")}</RowKindButton>
+                    <RowKindButton onClick={() => quickAddPlan("stream", false)}>{t("kind.stream")}</RowKindButton>
+                    <RowKindButton onClick={() => quickAddPlan("effort", true)}>{t("capability.field")}</RowKindButton>
+                  </div>
+                )}
+              </div>
+            )}
             <ControlButton onClick={() => { setEditorPlan(null); setEditorOpen(true); }}>
               <Plus className="h-3.5 w-3.5" /> {t("edit.newPlan")}
             </ControlButton>
@@ -330,9 +425,24 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
               {recomputing ? t("recomputing") : t("recompute")}
             </ControlButton>
+            <button
+              onClick={() => { setEditMode((v) => !v); setAddRowOpen(false); setEditingTitleId(null); }}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-medium transition-colors",
+                editing ? "border-primary bg-primary text-primary-foreground" : "bg-card text-foreground hover:bg-accent",
+              )}
+            >
+              <Pencil className="h-3.5 w-3.5" /> {editing ? t("edit.exitEdit") : t("edit.editMode")}
+            </button>
           </div>
         )}
       </div>
+
+      {editing && (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-muted-foreground">
+          {t("edit.editHint")}
+        </div>
+      )}
 
       {/* available-capabilities shelf — done one-time tools, off the timeline */}
       {shelfPlans.length > 0 && (
@@ -492,16 +602,37 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 {rows.map((p) => {
                   const h = healthOf(p, today);
                   return (
-                    <button
+                    <div
                       key={p.id}
-                      onClick={() => setSelectedId(p.id)}
                       className={cn(
-                        "flex h-[52px] w-full flex-col justify-center gap-1 overflow-hidden border-b px-3 text-start transition-colors hover:bg-accent/40",
+                        "flex h-[52px] w-full flex-col justify-center gap-1 overflow-hidden border-b px-3 text-start transition-colors",
+                        !editing && "cursor-pointer hover:bg-accent/40",
                         selectedId === p.id && "bg-accent/60",
                       )}
+                      onClick={() => { if (editingTitleId !== p.id) setSelectedId(p.id); }}
                     >
                       <span className="flex items-center gap-1.5 text-[13px] font-bold" title={planTitle(p, locale)}>
-                        <span className="truncate">{planTitle(p, locale)}</span>
+                        {editing && editingTitleId === p.id ? (
+                          <input
+                            autoFocus
+                            defaultValue={p.title_he}
+                            dir="rtl"
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => saveTitle(p.id, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                              if (e.key === "Escape") setEditingTitleId(null);
+                            }}
+                            className="w-full rounded border border-input bg-background px-1 py-0.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                        ) : (
+                          <span
+                            className={cn("truncate", editing && "cursor-text rounded px-0.5 hover:bg-accent")}
+                            onClick={editing ? (e) => { e.stopPropagation(); setEditingTitleId(p.id); } : undefined}
+                          >
+                            {planTitle(p, locale)}
+                          </span>
+                        )}
                         {p.is_critical && (
                           <span className="shrink-0 rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
                             {t("tags.critical")}
@@ -516,7 +647,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         <span className="h-2 w-2 rounded-full" style={{ background: healthColor[h] }} />
                         {t(`health.${h}`)}
                       </span>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -525,7 +656,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
-            <div className="relative" style={{ width: trackWidth }}>
+            <div ref={trackRef} className="relative" style={{ width: trackWidth }}>
               {/* holiday (no-work) columns — a diagonal hatch in the brand
                   indigo so it never clashes with the grey "today" wash. */}
               {holidaySpans.map((h) => (
@@ -564,26 +695,39 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               {milestones.length > 0 && (
                 <div className="relative h-8 border-b bg-secondary/40">
                   {milestones.map((m) => {
-                    const x = xOf(offsetOf(m.milestone_date));
+                    const pcol = msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date));
                     return (
                       <div key={m.id}>
                         <div
-                          className="absolute top-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold"
+                          className={cn(
+                            "group absolute top-1 z-[8] inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold",
+                            editing && "cursor-grab active:cursor-grabbing",
+                          )}
                           style={{
-                            insetInlineStart: x,
+                            insetInlineStart: pcol,
                             transform: centerTx,
                             color: lineColor(m),
                             background: "hsl(var(--card))",
                             border: `1px solid ${lineColor(m)}`,
                           }}
                           title={mLabel(m)}
+                          onPointerDown={editing ? (e) => msDrag.onPointerDown(e, m.id, offsetOf(m.milestone_date), offsetOf(m.milestone_date), "move") : undefined}
                         >
                           {mLabel(m)}
+                          {editing && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteMilestone(m.id); }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="rounded text-muted-foreground hover:text-status-late"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
                         {/* stem anchoring the pill to the exact date */}
                         <div
                           className="absolute bottom-0 h-2 w-0"
-                          style={{ insetInlineStart: x, borderInlineStart: `2px solid ${lineColor(m)}` }}
+                          style={{ insetInlineStart: pcol, borderInlineStart: `2px solid ${lineColor(m)}` }}
                         />
                       </div>
                     );
@@ -643,7 +787,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   <div
                     key={m.id}
                     className="absolute inset-y-0 z-[3] w-0 opacity-70"
-                    style={{ insetInlineStart: xOf(offsetOf(m.milestone_date)), borderInlineStart: `2px solid ${lineColor(m)}` }}
+                    style={{ insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date))), borderInlineStart: `2px solid ${lineColor(m)}` }}
                   />
                 ))}
               </div>
@@ -652,16 +796,29 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 <div key={label}>
                   <div className="h-[30px] border-b bg-secondary" />
                   {rows.map((p) => {
+                    const pv = planDrag.preview?.id === p.id ? planDrag.preview : null;
                     const s = p.start_date ? offsetOf(p.start_date) : 0;
                     const e = p.end_date ? offsetOf(p.end_date) : s + 7;
+                    const barStart = pv ? pv.startCol * COL_PX : xOf(s);
+                    const barWidth = pv ? spanWidth(pv.startCol, pv.endCol) : Math.max(COL_PX, xOf(e) - xOf(s));
                     const progress = p.effective_progress ?? p.progress ?? 0;
                     const isStream = p.kind === "stream";
                     return (
-                      <button
+                      <div
                         key={p.id}
-                        onClick={() => setSelectedId(p.id)}
+                        onClick={(ev) => {
+                          if (planDrag.didMove()) return;
+                          if (editing) {
+                            // Click on empty timeline space (not a bar) → add a milestone here.
+                            const rect = trackRef.current?.getBoundingClientRect();
+                            if (rect) addMilestoneAt(p.id, tl.offsetAtCol(tl.colUnderX(ev.clientX, rect, locale)));
+                          } else {
+                            setSelectedId(p.id);
+                          }
+                        }}
                         className={cn(
-                          "relative block h-[52px] w-full border-b transition-colors hover:bg-accent/30",
+                          "relative block h-[52px] w-full border-b transition-colors",
+                          editing ? "cursor-copy" : "cursor-pointer hover:bg-accent/30",
                           selectedId === p.id && "bg-accent/40",
                         )}
                       >
@@ -669,24 +826,39 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                           className={cn(
                             "absolute top-2.5 h-8 overflow-hidden rounded-md border",
                             isStream && "border-dashed",
+                            editing && "cursor-grab active:cursor-grabbing ring-1 ring-primary/40",
                           )}
                           style={{
-                            insetInlineStart: xOf(s),
-                            width: Math.max(COL_PX, xOf(e) - xOf(s)),
+                            insetInlineStart: barStart,
+                            width: barWidth,
                             background: (p.color || "#534AB7") + "1f",
                             borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
                           }}
+                          onClick={(ev) => { ev.stopPropagation(); if (!planDrag.didMove()) setSelectedId(p.id); }}
+                          onPointerDown={editing ? (ev) => planDrag.onPointerDown(ev, p.id, s, e, "move") : undefined}
                         >
                           {!isStream && (
                             <div
-                              className="absolute inset-y-0 start-0 h-full"
+                              className="pointer-events-none absolute inset-y-0 start-0 h-full"
                               style={{ width: `${progress * 100}%`, background: (p.color || "#534AB7") + "44" }}
                             />
+                          )}
+                          {editing && (
+                            <>
+                              <span
+                                className="absolute inset-y-0 start-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-start")}
+                              />
+                              <span
+                                className="absolute inset-y-0 end-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-end")}
+                              />
+                            </>
                           )}
                         </div>
                         <div
                           className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
-                          style={{ insetInlineStart: xOf(s), color: p.color || "#534AB7" }}
+                          style={{ insetInlineStart: barStart, color: p.color || "#534AB7" }}
                         >
                           {isStream
                             ? p.goal || ""
@@ -698,12 +870,12 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             key={m.id}
                             className="pointer-events-none absolute inset-y-0 z-[4] w-0 opacity-40"
                             style={{
-                              insetInlineStart: xOf(offsetOf(m.milestone_date)),
+                              insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date))),
                               borderInlineStart: `2px dashed ${lineColor(m)}`,
                             }}
                           />
                         ))}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -757,7 +929,28 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {selected.kind === "stream" ? (
             <PlanMatrix plan={selected} locale={locale} canEdit={canEdit} today={today} onChanged={load} />
           ) : (
-            <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} onChanged={load} />
+            <>
+              {/* list (rows + needs) vs gantt (bars + dependency arrows) */}
+              <div className="mb-3 flex w-fit gap-1 rounded-lg border bg-card p-1">
+                {([["list", "effort.viewList"], ["gantt", "effort.viewGantt"]] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setDetailView(key)}
+                    className={cn(
+                      "rounded-md px-3 py-1 text-[12px] font-medium transition-colors",
+                      detailView === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                    )}
+                  >
+                    {t(label)}
+                  </button>
+                ))}
+              </div>
+              {detailView === "gantt" ? (
+                <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={load} />
+              ) : (
+                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} onChanged={load} />
+              )}
+            </>
           )}
         </div>
       )}
@@ -791,6 +984,18 @@ function ControlButton({
       disabled={disabled}
       className="inline-flex items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
     >
+      {children}
+    </button>
+  );
+}
+
+function RowKindButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[12.5px] font-medium hover:bg-accent"
+    >
+      <Pin className="h-3.5 w-3.5 text-muted-foreground" />
       {children}
     </button>
   );
