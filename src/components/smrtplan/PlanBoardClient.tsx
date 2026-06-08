@@ -3,23 +3,34 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Users, Clock } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
-import { parseISO, gregShort, hebDate, daysBetween, countdownText } from "@/lib/smrtplan/dates";
+import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { CapacityEditor } from "./CapacityEditor";
 import { EstimatesEditor } from "./EstimatesEditor";
+import { RolesEditor } from "./RolesEditor";
 
 const DAY_MS = 86_400_000;
-/** Pixels per day on the timeline. The track is wider than the viewport, so the
- *  chart scrolls horizontally to reveal future dates (instead of squeezing the
- *  whole span into view). */
-const DAY_PX = 16;
+/** Pixels per working-day column on the timeline. The track is wider than the
+ *  viewport, so the chart scrolls horizontally to reveal future dates (instead
+ *  of squeezing the whole span into view). */
+const COL_PX = 22;
+/** Weekday numbers hidden from the board (0 = Sunday, 6 = Saturday). The board
+ *  shows only Monday–Friday columns; positions compress over the hidden days. */
+const HIDDEN_DOW = new Set([0, 6]);
+
+/** Day-of-week letter, indexed by getDay(): Hebrew (יום א׳…שבת) or English. */
+const HE_DOW = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
+const EN_DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+function dowLetter(d: Date, locale: string): string {
+  return (locale === "en" ? EN_DOW : HE_DOW)[d.getDay()];
+}
 
 type Health = "waiting" | "on_track" | "at_risk" | "late" | "stream";
 
@@ -60,6 +71,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
+  const [holidays, setHolidays] = useState<{ blocked_date: string; reason: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
   const [access, setAccess] = useState<PlanAccessLevel>("lite");
@@ -69,18 +81,21 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [capacityOpen, setCapacityOpen] = useState(false);
   const [estimatesOpen, setEstimatesOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
-    const [{ plans }, { access_level }, { milestones }] = await Promise.all([
+    const [{ plans }, { access_level }, { milestones }, { holidays }] = await Promise.all([
       api<{ plans: Plan[] }>("/api/plans/board"),
       api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
       api<{ milestones: PlanMilestone[] }>("/api/plans/milestones"),
+      api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
     ]);
     setPlans(plans ?? []);
     setAccess(access_level ?? "lite");
     setMilestones(milestones ?? []);
+    setHolidays(holidays ?? []);
     if (plans?.length) setSelectedId((cur) => cur ?? plans[0].id);
   }, []);
 
@@ -135,8 +150,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     return { t0: start, totalDays: Math.max(14, daysBetween(start, end) + 7) };
   }, [plans]);
 
-  const dateAt = (off: number) => new Date(t0.getTime() + off * DAY_MS);
-  const pxOf = (off: number) => off * DAY_PX;
+  const dateAt = useCallback((off: number) => new Date(t0.getTime() + off * DAY_MS), [t0]);
   /** Percentage position (for the responsive mobile sparkline that fits its container). */
   const pctOf = (off: number) => `${Math.min(100, Math.max(0, (off / totalDays) * 100))}%`;
   const offsetOf = (iso: string) => daysBetween(t0, parseISO(iso));
@@ -145,7 +159,6 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const today = useMemo(() => new Date(), []);
   const todayOff = daysBetween(t0, today);
   const todayInView = todayOff >= 0 && todayOff <= totalDays;
-  const trackWidth = totalDays * DAY_PX;
   // translateX is PHYSICAL (doesn't mirror in RTL), so center a date-anchored
   // element direction-aware: shift left in LTR, right in RTL, to sit over its x.
   const centerTx = locale === "he" ? "translateX(50%)" : "translateX(-50%)";
@@ -161,12 +174,73 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     return [...map.entries()];
   }, [plans]);
 
-  // Week gridlines.
-  const weeks = useMemo(() => {
+  // Visible working-day columns: every day in the window except hidden weekdays
+  // (Saturday + Sunday). `cols[i]` is the day-offset (from t0) of column i.
+  const cols = useMemo(() => {
     const out: number[] = [];
-    for (let o = 0; o < totalDays; o += 7) out.push(o);
+    for (let o = 0; o <= totalDays; o++) {
+      if (!HIDDEN_DOW.has(new Date(t0.getTime() + o * DAY_MS).getDay())) out.push(o);
+    }
     return out;
-  }, [totalDays]);
+  }, [t0, totalDays]);
+
+  // Pixel x for a day-offset = (number of visible columns before it) × COL_PX.
+  // A hidden weekend date lands on the boundary just before the next column.
+  const colPos = useCallback(
+    (off: number) => {
+      let lo = 0;
+      let hi = cols.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cols[mid] < off) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    },
+    [cols],
+  );
+  const xOf = useCallback((off: number) => colPos(off) * COL_PX, [colPos]);
+  const trackWidth = cols.length * COL_PX;
+  // Top edge of the day-strip = below the milestone lane (h-8=32px, only when
+  // present) + month band (h-5=20px). Column washes (today, holidays) start here
+  // so they don't rise into the header.
+  const laneTop = (milestones.length > 0 ? 32 : 0) + 20;
+
+  // Month band segments — a new segment starts whenever the Gregorian OR the
+  // Hebrew month changes, so both calendars are tracked on one slim row.
+  const monthSegments = useMemo(() => {
+    const segs: { start: number; end: number; label: string }[] = [];
+    cols.forEach((o, i) => {
+      const d = new Date(t0.getTime() + o * DAY_MS);
+      const label = `${gregMonthLabel(d, locale)} · ${hebMonth(d)}`;
+      const last = segs[segs.length - 1];
+      if (last && last.label === label) last.end = i + 1;
+      else segs.push({ start: i, end: i + 1, label });
+    });
+    return segs;
+  }, [cols, t0, locale]);
+
+  // Holiday (no-work) markers. The weekend is already hidden; these are the
+  // calendar holidays (Israeli yom tov + org rows) that fall on a Mon–Fri.
+  const holidayByDate = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of holidays) m.set(h.blocked_date, h.reason || t("holiday"));
+    return m;
+  }, [holidays, t]);
+
+  // Contiguous holiday columns merged into one span (so a multi-day chag shows
+  // its hatch as one block and its name once).
+  const holidaySpans = useMemo(() => {
+    const spans: { start: number; end: number; label: string }[] = [];
+    cols.forEach((o, i) => {
+      const label = holidayByDate.get(isoOf(dateAt(o)));
+      if (!label) return;
+      const last = spans[spans.length - 1];
+      if (last && last.end === i && last.label === label) last.end = i + 1;
+      else spans.push({ start: i, end: i + 1, label });
+    });
+    return spans;
+  }, [cols, holidayByDate, dateAt]);
 
   // Milestones split into global (cross every row) and per-plan.
   const { globalMilestones, milestonesByPlan } = useMemo(() => {
@@ -234,6 +308,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </ControlButton>
             <ControlButton onClick={() => setEstimatesOpen(true)}>
               <Clock className="h-3.5 w-3.5" /> {t("estimates.button")}
+            </ControlButton>
+            <ControlButton onClick={() => setRolesOpen(true)}>
+              <UserCog className="h-3.5 w-3.5" /> {t("roles.button")}
             </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
@@ -354,6 +431,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 {t("board.milestones")}
               </div>
             )}
+            <div className="h-5 border-b bg-secondary/40" />
             <div className="flex h-12 items-center border-b bg-secondary/60 px-3 text-[12px] font-bold text-muted-foreground">
               {t("title")}
             </div>
@@ -397,13 +475,46 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
-            <div style={{ width: trackWidth }}>
+            <div className="relative" style={{ width: trackWidth }}>
+              {/* holiday (no-work) columns — a diagonal hatch in the brand
+                  indigo so it never clashes with the grey "today" wash. */}
+              {holidaySpans.map((h) => (
+                <div
+                  key={`hol-${h.start}`}
+                  className="pointer-events-none absolute bottom-0 z-[6]"
+                  style={{
+                    insetInlineStart: h.start * COL_PX,
+                    width: (h.end - h.start) * COL_PX,
+                    top: laneTop,
+                    backgroundImage:
+                      "repeating-linear-gradient(45deg, hsl(var(--primary) / 0.18) 0 3px, transparent 3px 7px)",
+                  }}
+                  title={h.label}
+                >
+                  <span className="absolute inset-x-0 truncate px-0.5 text-center text-[9px] font-semibold text-primary/80" style={{ top: 50 }}>
+                    {h.label}
+                  </span>
+                </div>
+              ))}
+              {/* today column — a translucent grey wash over the whole day,
+                  transparent enough to read the bars and labels underneath. */}
+              {todayInView && (
+                <div
+                  className="pointer-events-none absolute bottom-0 z-[7]"
+                  style={{
+                    insetInlineStart: xOf(todayOff),
+                    width: COL_PX,
+                    top: laneTop,
+                    background: "rgba(115,115,115,0.15)",
+                  }}
+                />
+              )}
               {/* milestone label lane — pills centered on their date, each on a
                   short stem so it's clear exactly when it happens (no stacking). */}
               {milestones.length > 0 && (
                 <div className="relative h-8 border-b bg-secondary/40">
                   {milestones.map((m) => {
-                    const x = pxOf(offsetOf(m.milestone_date));
+                    const x = xOf(offsetOf(m.milestone_date));
                     return (
                       <div key={m.id}>
                         <div
@@ -429,18 +540,52 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   })}
                 </div>
               )}
-              {/* week strip */}
+              {/* month band — Gregorian + Hebrew month; a new segment (with a
+                  divider) marks every point where either month changes. */}
+              <div className="relative h-5 border-b bg-secondary/40">
+                {monthSegments.map((seg) => {
+                  const width = (seg.end - seg.start) * COL_PX;
+                  return (
+                    <div
+                      key={seg.start}
+                      className="absolute top-0 flex h-full items-center justify-center overflow-hidden whitespace-nowrap px-1 text-[10px] font-semibold text-muted-foreground"
+                      style={{
+                        insetInlineStart: seg.start * COL_PX,
+                        width,
+                        borderInlineStart: seg.start !== 0 ? "2px solid hsl(var(--foreground) / 0.3)" : undefined,
+                      }}
+                    >
+                      {width >= 52 ? seg.label : ""}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* day strip — one column per working day; Hebrew date on top,
+                  Gregorian (day only) below. Thin line between days, a stronger
+                  separator before each new week (Monday). */}
               <div className="relative h-12 border-b bg-secondary/60">
-                {weeks.map((o) => (
-                  <div
-                    key={o}
-                    className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e"
-                    style={{ insetInlineStart: pxOf(o), width: 7 * DAY_PX }}
-                  >
-                    <span className="whitespace-nowrap text-[10.5px] font-medium">{gregShort(dateAt(o))}</span>
-                    <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{hebDate(dateAt(o))}</span>
-                  </div>
-                ))}
+                {cols.map((o, i) => {
+                  const d = dateAt(o);
+                  const weekStart = d.getDay() === 1; // Monday — first working day of the week
+                  return (
+                    <div
+                      key={o}
+                      className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e"
+                      style={{
+                        insetInlineStart: i * COL_PX,
+                        width: COL_PX,
+                        // Thicker, darker divider before each new week (Monday).
+                        ...(weekStart && i !== 0
+                          ? { borderInlineStartWidth: 3, borderInlineStartStyle: "solid", borderInlineStartColor: "hsl(var(--foreground) / 0.22)" }
+                          : {}),
+                      }}
+                    >
+                      <span className="whitespace-nowrap text-[10.5px] font-medium">{hebDay(d)}</span>
+                      <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{d.getDate()}</span>
+                      <span className="whitespace-nowrap text-[9px] font-medium text-primary/55">{dowLetter(d, locale)}</span>
+                    </div>
+                  );
+                })}
                 {/* milestone date markers — a solid colored bar pinpointing the date.
                     Anchored by borderInlineStart at x (same as the stem & row lines)
                     so the whole column lines up exactly in both RTL and LTR. */}
@@ -448,15 +593,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   <div
                     key={m.id}
                     className="absolute inset-y-0 z-[3] w-0 opacity-70"
-                    style={{ insetInlineStart: pxOf(offsetOf(m.milestone_date)), borderInlineStart: `2px solid ${lineColor(m)}` }}
+                    style={{ insetInlineStart: xOf(offsetOf(m.milestone_date)), borderInlineStart: `2px solid ${lineColor(m)}` }}
                   />
                 ))}
-                {todayInView && (
-                  <div
-                    className="absolute inset-y-0 z-[5] w-0"
-                    style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "2px solid hsl(var(--foreground) / 0.4)" }}
-                  />
-                )}
               </div>
 
               {groups.map(([label, rows]) => (
@@ -465,7 +604,6 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   {rows.map((p) => {
                     const s = p.start_date ? offsetOf(p.start_date) : 0;
                     const e = p.end_date ? offsetOf(p.end_date) : s + 7;
-                    const span = Math.max(1, e - s);
                     const progress = p.effective_progress ?? p.progress ?? 0;
                     const isStream = p.kind === "stream";
                     return (
@@ -483,8 +621,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             isStream && "border-dashed",
                           )}
                           style={{
-                            insetInlineStart: pxOf(s),
-                            width: pxOf(span),
+                            insetInlineStart: xOf(s),
+                            width: Math.max(COL_PX, xOf(e) - xOf(s)),
                             background: (p.color || "#534AB7") + "1f",
                             borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
                           }}
@@ -498,7 +636,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         </div>
                         <div
                           className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
-                          style={{ insetInlineStart: pxOf(s), color: p.color || "#534AB7" }}
+                          style={{ insetInlineStart: xOf(s), color: p.color || "#534AB7" }}
                         >
                           {isStream
                             ? p.goal || ""
@@ -510,18 +648,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             key={m.id}
                             className="pointer-events-none absolute inset-y-0 z-[4] w-0 opacity-40"
                             style={{
-                              insetInlineStart: pxOf(offsetOf(m.milestone_date)),
+                              insetInlineStart: xOf(offsetOf(m.milestone_date)),
                               borderInlineStart: `2px dashed ${lineColor(m)}`,
                             }}
                           />
                         ))}
-                        {/* today line — semi-transparent so the bar label underneath stays readable */}
-                        {todayInView && (
-                          <div
-                            className="pointer-events-none absolute inset-y-0 z-[5] w-0"
-                            style={{ insetInlineStart: pxOf(todayOff), borderInlineStart: "1px solid hsl(var(--foreground) / 0.3)" }}
-                          />
-                        )}
                       </button>
                     );
                   })}
@@ -562,6 +693,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       />
       <CapacityEditor open={capacityOpen} onClose={() => setCapacityOpen(false)} />
       <EstimatesEditor open={estimatesOpen} onClose={() => setEstimatesOpen(false)} />
+      <RolesEditor open={rolesOpen} onClose={() => setRolesOpen(false)} />
     </div>
   );
 }

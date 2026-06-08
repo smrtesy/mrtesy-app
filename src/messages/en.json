@@ -1846,6 +1846,7 @@
     "recomputed": "Schedule recomputed",
     "liteNotice": "View access — you can follow plans but not edit them",
     "loading": "Loading…",
+    "holiday": "Holiday",
     "legend": {
       "onTrack": "On track",
       "atRisk": "At risk",
@@ -2017,6 +2018,20 @@
       "hours": "Hours",
       "add": "Add row",
       "empty": "No estimates yet"
+    },
+    "roles": {
+      "button": "Roles",
+      "title": "Roles & staffing",
+      "hint": "A role is a discipline (designer, editor, tool-builder). Each role maps to one or more people; one is the default. A new task with a role is auto-assigned to that default — always overridable.",
+      "name": "Role name",
+      "add": "Add role",
+      "empty": "No roles yet",
+      "members": "Members",
+      "addMember": "Add person",
+      "noMembers": "No people in this role",
+      "makePrimary": "Make default",
+      "primary": "Default",
+      "color": "Color"
     },
     "view": {
       "list": "List",
