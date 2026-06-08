@@ -42,10 +42,33 @@ interface Broadcast {
 /** Unofficial WhatsApp (Baileys) channel: pair, sync groups, schedule broadcasts. */
 export function WhatsAppChannel({ botId }: { botId: string }) {
   const t = useTranslations("smrtBot");
+  const [transport, setTransport] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [busy, setBusy] = useState(false);
+
+  const loadBot = useCallback(async () => {
+    try {
+      const { bot } = await api<{ bot: { transport: string | null } }>(`/api/bot/bots/${botId}`);
+      setTransport(bot.transport ?? "meta");
+    } catch {
+      setTransport("meta");
+    }
+  }, [botId]);
+
+  const switchToBaileys = useCallback(async () => {
+    setBusy(true);
+    try {
+      await api(`/api/bot/bots/${botId}`, { method: "PATCH", body: { transport: "baileys" } });
+      setTransport("baileys");
+      toast.success(t("waSwitched"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setBusy(false);
+    }
+  }, [botId, t]);
 
   // Schedule form.
   const [targetJid, setTargetJid] = useState("");
@@ -81,10 +104,14 @@ export function WhatsAppChannel({ botId }: { botId: string }) {
 
   // Initial load + poll the connection status while pairing/connecting.
   useEffect(() => {
+    void loadBot();
+  }, [loadBot]);
+  useEffect(() => {
+    if (transport !== "baileys") return;
     void loadStatus();
     void loadGroups();
     void loadBroadcasts();
-  }, [loadStatus, loadGroups, loadBroadcasts]);
+  }, [transport, loadStatus, loadGroups, loadBroadcasts]);
 
   const status = session?.status ?? "closed";
   const pollRef = useRef(status);
@@ -172,6 +199,28 @@ export function WhatsAppChannel({ botId }: { botId: string }) {
 
   const statusColor =
     status === "open" ? "bg-green-500" : status === "qr" || status === "connecting" ? "bg-amber-500" : "bg-muted-foreground";
+
+  if (transport === null) {
+    return <p className="text-sm text-muted-foreground">…</p>;
+  }
+
+  // The bot is still on the official (Meta) transport — offer to switch it to
+  // the unofficial WhatsApp-Web (Baileys) stack before showing the pairing UI
+  // (the /wa/* endpoints require transport='baileys').
+  if (transport !== "baileys") {
+    return (
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <h2 className="font-semibold">{t("waTitle")}</h2>
+          <p className="text-sm text-muted-foreground">{t("waSwitchPrompt")}</p>
+          <p className="text-xs text-destructive">{t("waUnofficialWarning")}</p>
+          <Button onClick={switchToBaileys} disabled={busy}>
+            {t("waSwitchToBaileys")}
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">

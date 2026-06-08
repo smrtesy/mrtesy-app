@@ -1677,7 +1677,15 @@
     "webIconUploading": "מעלה…",
     "webIconUploaded": "הלוגו הועלה — לחצו שמירה כדי להחיל.",
     "webIconTooLarge": "הקובץ גדול מדי — עד 2MB.",
-    "webIconBadType": "סוג קובץ לא נתמך. השתמשו ב-PNG, JPG, WebP או SVG."
+    "webIconBadType": "סוג קובץ לא נתמך. השתמשו ב-PNG, JPG, WebP או SVG.",
+    "transportLabel": "סוג חיבור",
+    "transportMeta": "רשמי (Meta Cloud API)",
+    "transportBaileys": "לא רשמי (WhatsApp Web)",
+    "transportMetaHint": "החיבור הרשמי דרך Meta — דורש מספר עסקי מאושר ב-WhatsApp Business.",
+    "transportBaileysHint": "מתחבר כמו WhatsApp Web (מספר רגיל, סריקת QR). מפר את תנאי השימוש — סיכון לחסימה. השתמשו במספר ייעודי.",
+    "waSwitchPrompt": "הבוט הזה במצב רשמי (Meta). כדי להשתמש בערוץ הלא-רשמי (חיבור QR, קבוצות, ברודקאסטים) — העבירו אותו לחיבור לא רשמי.",
+    "waSwitchToBaileys": "מעבר לחיבור לא רשמי",
+    "waSwitched": "הבוט הועבר לחיבור לא רשמי."
   },
   "smrtVoice": {
     "appName": "smrtVoice",
