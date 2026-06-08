@@ -28,7 +28,7 @@ import smrttaskRouter from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
-import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
+import smrtbotRouter, { internalRouter as smrtbotInternalRouter, jobsRouter as smrtbotJobsRouter, playbackRouter as smrtbotPlaybackRouter } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
 
 const app = express();
@@ -151,6 +151,9 @@ app.use("/api", smrtcrmIngestRouter);
 // Vercel webhook / pg_cron call them), so they come BEFORE the auth guards.
 app.use(smrtbotInternalRouter);
 app.use(smrtbotJobsRouter);
+// smrtBot playback-token verification — called server-to-server by the external
+// video site (rebbek.org) to grant direct playback; shared-secret guarded.
+app.use(smrtbotPlaybackRouter);
 
 // smrtPlan engine refresh — shared-secret guarded (pg_cron calls it), so it
 // comes BEFORE the auth-guarded routers (same reasoning as smrtBot jobs).
