@@ -1696,7 +1696,16 @@
     "secInbox": "Inbox",
     "secData": "Insights",
     "settingsAdvanced": "Advanced",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "aiTitle": "AI answering for free-text questions",
+    "aiHint": "When a question has no FAQ match, the bot can answer with AI grounded in your knowledge base.",
+    "aiEnable": "Enable AI answering",
+    "aiEnableHint": "Off by default. Off = the bot hands off to a human.",
+    "aiModel": "Model",
+    "aiModel_claude_haiku": "Claude Haiku (fast & cheap)",
+    "aiModel_claude_sonnet": "Claude Sonnet (balanced)",
+    "aiModel_claude_opus": "Claude Opus (most capable)",
+    "aiModel_gemini": "Google Gemini"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

@@ -21,6 +21,7 @@ import { whatsappChannel, type BotChannel } from "./channel";
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
 import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
+import { aiAnswer, type KbEntry } from "./ai-answer";
 
 export interface BotRow {
   id: string;
@@ -270,6 +271,15 @@ async function handleFreeText(
   if (best) {
     await channel.text(best.answer);
     await logMsg(orgId, bot.id, phone, "OUT", env, "text", best.answer, "faq");
+    return;
+  }
+
+  // No FAQ match → optional AI answer (only if the bot enabled it), grounded in
+  // the knowledge base. Falls through to the human-handoff fallback otherwise.
+  const ai = await aiAnswer(bot.id, text, (data as KbEntry[] | null) ?? []);
+  if (ai) {
+    await channel.text(ai);
+    await logMsg(orgId, bot.id, phone, "OUT", env, "text", ai, "ai");
     return;
   }
 
