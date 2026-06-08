@@ -116,6 +116,36 @@ linked by the Hebrew bot. Same Hebrew videos shared across both domains →
   preserves title/description/tags, resumable). Map the resulting GUIDs into
   `smrtbot_videos.bunny_video_guid`.
 
+## Content protection — free baseline (chosen)
+
+Decision: Bunny's **free** security layers + our gate. Enterprise multi-DRM
+(Widevine/FairPlay/PlayReady) is an optional later upgrade, not used now.
+
+Layers to enable (all free, all compatible with the hybrid hls.js/native player —
+encryption is transparent to the player):
+1. **HLS only, no MP4** — no single-file download link exists.
+2. **Token Authentication V2** — directory token, short TTL, signed server-side,
+   not IP-locked (see Bunny notes).
+3. **Referrer / domain lock** — allowed domains = the bot's front domain(s)
+   (`rebbek.org`, `mymaor.org`).
+4. **AES-128 encryption + rotating keys** — segments encrypted.
+5. **MediaCage Basic DRM** — per-session single-use keys (free; not hardware DRM).
+6. **Brand watermark** (logo overlay).
+
+Our layers on top (already built / planned):
+- **Subscription gate** — only a verified subscriber gets a playable token.
+- **Per-link use limit (2×)** — anti-forwarding (`smrtbot_playback_uses`).
+- **Forensic overlay** *(player-side, we control)* — since the token identifies
+  the subscriber (email/customer_id), the player can burn their email/phone as a
+  faint on-video overlay → deters leaking and traces who leaked. This is our
+  answer to screen-recording (which no non-DRM system prevents).
+
+What this stops: casual download, link sharing / hot-linking, trivial ripping.
+What it does NOT stop: determined ripping / screen recording — that needs
+**Enterprise DRM** (paid; also requires EME license-flow integration in the
+custom player, so it's a deliberate later decision). The forensic overlay is the
+deterrent until/unless DRM is added.
+
 ## View tracking (built) — consuming views in other apps
 
 Every successful `playback/verify` records a real-time, per-subscriber view in
