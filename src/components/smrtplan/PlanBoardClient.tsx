@@ -7,7 +7,7 @@ import { RefreshCw, Plus, Pencil, Flag, Users, Clock } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
-import { parseISO, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
+import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
@@ -63,6 +63,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
+  const [holidays, setHolidays] = useState<{ blocked_date: string; reason: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
   const [access, setAccess] = useState<PlanAccessLevel>("lite");
@@ -76,14 +77,16 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const canEdit = access === "full";
 
   const load = useCallback(async () => {
-    const [{ plans }, { access_level }, { milestones }] = await Promise.all([
+    const [{ plans }, { access_level }, { milestones }, { holidays }] = await Promise.all([
       api<{ plans: Plan[] }>("/api/plans/board"),
       api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
       api<{ milestones: PlanMilestone[] }>("/api/plans/milestones"),
+      api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
     ]);
     setPlans(plans ?? []);
     setAccess(access_level ?? "lite");
     setMilestones(milestones ?? []);
+    setHolidays(holidays ?? []);
     if (plans?.length) setSelectedId((cur) => cur ?? plans[0].id);
   }, []);
 
@@ -189,6 +192,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   );
   const xOf = useCallback((off: number) => colPos(off) * COL_PX, [colPos]);
   const trackWidth = cols.length * COL_PX;
+  // Top edge of the day-strip = below the milestone lane (h-8=32px, only when
+  // present) + month band (h-5=20px). Column washes (today, holidays) start here
+  // so they don't rise into the header.
+  const laneTop = (milestones.length > 0 ? 32 : 0) + 20;
 
   // Month band segments — a new segment starts whenever the Gregorian OR the
   // Hebrew month changes, so both calendars are tracked on one slim row.
@@ -203,6 +210,28 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     });
     return segs;
   }, [cols, t0, locale]);
+
+  // Holiday (no-work) markers. The weekend is already hidden; these are the
+  // calendar holidays (Israeli yom tov + org rows) that fall on a Mon–Fri.
+  const holidayByDate = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of holidays) m.set(h.blocked_date, h.reason || t("holiday"));
+    return m;
+  }, [holidays, t]);
+
+  // Contiguous holiday columns merged into one span (so a multi-day chag shows
+  // its hatch as one block and its name once).
+  const holidaySpans = useMemo(() => {
+    const spans: { start: number; end: number; label: string }[] = [];
+    cols.forEach((o, i) => {
+      const label = holidayByDate.get(isoOf(dateAt(o)));
+      if (!label) return;
+      const last = spans[spans.length - 1];
+      if (last && last.end === i && last.label === label) last.end = i + 1;
+      else spans.push({ start: i, end: i + 1, label });
+    });
+    return spans;
+  }, [cols, holidayByDate, dateAt]);
 
   // Milestones split into global (cross every row) and per-plan.
   const { globalMilestones, milestonesByPlan } = useMemo(() => {
@@ -435,6 +464,26 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
             <div className="relative" style={{ width: trackWidth }}>
+              {/* holiday (no-work) columns — a diagonal hatch in the brand
+                  indigo so it never clashes with the grey "today" wash. */}
+              {holidaySpans.map((h) => (
+                <div
+                  key={`hol-${h.start}`}
+                  className="pointer-events-none absolute bottom-0 z-[6]"
+                  style={{
+                    insetInlineStart: h.start * COL_PX,
+                    width: (h.end - h.start) * COL_PX,
+                    top: laneTop,
+                    backgroundImage:
+                      "repeating-linear-gradient(45deg, hsl(var(--primary) / 0.18) 0 3px, transparent 3px 7px)",
+                  }}
+                  title={h.label}
+                >
+                  <span className="absolute inset-x-0 truncate px-0.5 text-center text-[9px] font-semibold text-primary/80" style={{ top: 50 }}>
+                    {h.label}
+                  </span>
+                </div>
+              ))}
               {/* today column — a translucent grey wash over the whole day,
                   transparent enough to read the bars and labels underneath. */}
               {todayInView && (
@@ -443,10 +492,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   style={{
                     insetInlineStart: xOf(todayOff),
                     width: COL_PX,
-                    // Start at the day-strip (date row), below the milestone lane
-                    // (h-8 = 32px, only when present) + month band (h-5 = 20px),
-                    // so the wash doesn't rise into the header.
-                    top: (milestones.length > 0 ? 32 : 0) + 20,
+                    top: laneTop,
                     background: "rgba(115,115,115,0.15)",
                   }}
                 />

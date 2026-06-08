@@ -296,6 +296,19 @@ router.get("/plans/milestones", async (req: Request, res: Response) => {
   res.json({ milestones: data ?? [] });
 });
 
+// Blocked/no-work days for the board's holiday markers: global Israeli yom tov
+// (org_id NULL) plus this org's own rows. The Mon–Fri weekend is drawn client-
+// side, so only the calendar holidays come from here.
+router.get("/plans/holidays", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_blocked_days")
+    .select("blocked_date, reason, kind, org_id")
+    .or(`org_id.is.null,org_id.eq.${req.org!.id}`)
+    .order("blocked_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ holidays: data ?? [] });
+});
+
 router.post("/plans/recompute", requireFull, async (req: Request, res: Response) => {
   const summary = await computeOrgSchedule(req.org!.id);
   res.json(summary);
