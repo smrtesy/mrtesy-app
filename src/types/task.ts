@@ -149,6 +149,8 @@ export interface TaskNeed {
   source?: string | null;
   /** true once the provider task is complete (the input "arrived"). */
   satisfied: boolean;
+  /** Working-day buffer between the provider's finish and this task's start. */
+  lag_days?: number;
   /** External material link (entity_links requires), when not a task. */
   url?: string | null;
 }

@@ -98,7 +98,7 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
 
   const { data: depsRaw } = await db
     .from("smrtplan_dependencies")
-    .select("id, from_id, to_id, satisfied")
+    .select("id, from_id, to_id, satisfied, lag_days")
     .eq("org_id", orgId)
     .eq("from_type", "task")
     .eq("to_type", "task")
@@ -136,6 +136,7 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
         task_id: provider,
         title: (p?.title_he as string) || (p?.title as string) || "—",
         satisfied: (d.satisfied as boolean) ?? false,
+        lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
       });
       needsByTask.set(consumer, arr);
@@ -598,19 +599,34 @@ router.patch("/plan-cells/:id", requireFull, async (req: Request, res: Response)
 // ── dependencies ─────────────────────────────────────────────────────────────
 
 router.post("/plan-dependencies", requireFull, async (req: Request, res: Response) => {
-  const { from_type, from_id, to_type, to_id } = req.body ?? {};
+  const { from_type, from_id, to_type, to_id, lag_days } = req.body ?? {};
   const ends = ["plan", "stage", "task"];
   if (!ends.includes(from_type) || !ends.includes(to_type) || !from_id || !to_id) {
     return res.status(400).json({ error: "from_type/from_id/to_type/to_id required" });
   }
   const { data, error } = await db
     .from("smrtplan_dependencies")
-    .insert({ org_id: req.org!.id, from_type, from_id, to_type, to_id })
-    .select("id, from_type, from_id, to_type, to_id, satisfied")
+    .insert({ org_id: req.org!.id, from_type, from_id, to_type, to_id, lag_days: Math.max(0, Math.round(Number(lag_days)) || 0) })
+    .select("id, from_type, from_id, to_type, to_id, satisfied, lag_days")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   await autoRecompute(req.org!.id);
   res.status(201).json({ dependency: data });
+});
+
+router.patch("/plan-dependencies/:id", requireFull, async (req: Request, res: Response) => {
+  const { lag_days } = req.body ?? {};
+  if (lag_days == null || isNaN(Number(lag_days))) return res.status(400).json({ error: "lag_days (number) is required" });
+  const { data, error } = await db
+    .from("smrtplan_dependencies")
+    .update({ lag_days: Math.max(0, Math.round(Number(lag_days))) })
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, from_type, from_id, to_type, to_id, satisfied, lag_days")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  await autoRecompute(req.org!.id);
+  res.json({ dependency: data });
 });
 
 router.delete("/plan-dependencies/:id", requireFull, async (req: Request, res: Response) => {

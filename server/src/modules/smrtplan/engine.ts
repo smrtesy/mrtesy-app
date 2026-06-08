@@ -251,16 +251,20 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   }
   const { data: deps } = await db
     .from("smrtplan_dependencies")
-    .select("from_id, to_id, from_type, to_type")
+    .select("from_id, to_id, from_type, to_type, lag_days")
     .eq("org_id", orgId)
     .eq("from_type", "task")
     .eq("to_type", "task");
+  // Per-edge lag (working days) between a provider's finish and the consumer's
+  // start — e.g. "translation ready two weeks before release". Keyed provider:consumer.
+  const edgeLag = new Map<string, number>();
   for (const d of deps ?? []) {
     const consumer = d.from_id as string;
     const provider = d.to_id as string;
     if (!tasks.has(consumer) || !tasks.has(provider)) continue;
     successors.get(provider)!.push(consumer);
     predecessors.get(consumer)!.push(provider);
+    edgeLag.set(`${provider}:${consumer}`, (d.lag_days as number | null) ?? 0);
   }
 
   // Group sub-tasks by parent (for the equal-split below).
@@ -311,7 +315,8 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     for (const sId of successors.get(t.id)!) {
       const s = tasks.get(sId)!;
       if (s.latest_start) {
-        const before = subtractWorkingDays(s.latest_start, 1, blocked);
+        const lag = edgeLag.get(`${t.id}:${sId}`) ?? 0;
+        const before = subtractWorkingDays(s.latest_start, 1 + lag, blocked);
         if (!lf || before < lf) lf = before;
       }
     }
@@ -364,7 +369,8 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     for (const pId of predecessors.get(t.id)!) {
       const p = tasks.get(pId)!;
       if (p.earliest_finish) {
-        const after = addWorkingDays(p.earliest_finish, 1, blocked);
+        const lag = edgeLag.get(`${pId}:${t.id}`) ?? 0;
+        const after = addWorkingDays(p.earliest_finish, 1 + lag, blocked);
         if (after > es) es = after;
       }
     }

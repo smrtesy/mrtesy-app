@@ -425,6 +425,14 @@ function EditTaskRow({
       toast.error(e instanceof Error ? e.message : "Error");
     }
   }
+  async function setLag(depId: string, lag: number) {
+    try {
+      await api(`/api/plan-dependencies/${depId}`, { method: "PATCH", body: { lag_days: lag } });
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
   async function removeNeed(depId: string) {
     try {
       await api(`/api/plan-dependencies/${depId}`, { method: "DELETE" });
@@ -482,7 +490,20 @@ function EditTaskRow({
         <div className="text-[11px] font-bold text-muted-foreground">{te("needs")}</div>
         {(task.needs ?? []).map((n) => (
           <div key={n.dependency_id} className="flex items-center gap-2 text-[12px]">
-            <span>{n.title}</span>
+            <span className="flex-1">{n.title}</span>
+            <label className="flex items-center gap-1 whitespace-nowrap text-[10.5px] text-muted-foreground">
+              <input
+                type="number"
+                min={0}
+                defaultValue={n.lag_days ?? 0}
+                onBlur={(e) => {
+                  const v = Math.max(0, parseInt(e.target.value, 10) || 0);
+                  if (v !== (n.lag_days ?? 0)) setLag(n.dependency_id, v);
+                }}
+                className="w-12 rounded border border-input bg-background px-1 py-0.5 text-end"
+              />
+              {te("lagDays")}
+            </label>
             <button onClick={() => removeNeed(n.dependency_id)}
               className="rounded p-0.5 text-muted-foreground hover:bg-status-late/10 hover:text-status-late">
               <X className="h-3 w-3" />

@@ -1974,6 +1974,7 @@
       "mGlobal": "Global (all rows)",
       "needs": "Dependencies (to start)",
       "addNeed": "Add dependency",
+      "lagDays": "buffer days",
       "pickTask": "Pick a task…",
       "none": "—",
       "statusInbox": "Open",
