@@ -97,6 +97,11 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--no-zygote",
+        "--single-process",
+        "--disable-accelerated-2d-canvas",
+        "--disable-features=VizDisplayCompositor",
+        "--disable-software-rasterizer",
       ],
     });
 
