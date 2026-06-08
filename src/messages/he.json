@@ -1626,8 +1626,8 @@
     "convAnon": "מבקר",
     "logsModeMessages": "יומן הודעות",
     "logsModeWeb": "שיחות אתר",
-    "webIcon": "לוגו / אייקון (כתובת תמונה)",
-    "webIconHint": "מופיע בכפתור הצף ובאווטאר בכותרת. ריק = בועת ברירת מחדל.",
+    "webIcon": "לוגו / אייקון של הבוט",
+    "webIconHint": "קובץ תמונה: PNG, JPG, WebP או SVG. מומלץ ריבועי בגודל 512×512 פיקסל עם רקע שקוף. משקל מקסימלי 2MB (מומלץ עד 512KB לטעינה מהירה).",
     "webTitleField": "כותרת",
     "webSubtitle": "שורת משנה",
     "webSize": "גודל החלון",
@@ -1636,7 +1636,14 @@
     "webSizeLarge": "גדול",
     "webPosition": "מיקום הכפתור",
     "webPositionRight": "ימין",
-    "webPositionLeft": "שמאל"
+    "webPositionLeft": "שמאל",
+    "webIconUpload": "העלאת לוגו",
+    "webIconReplace": "החלפת לוגו",
+    "webIconRemove": "הסרה",
+    "webIconUploading": "מעלה…",
+    "webIconUploaded": "הלוגו הועלה — לחצו שמירה כדי להחיל.",
+    "webIconTooLarge": "הקובץ גדול מדי — עד 2MB.",
+    "webIconBadType": "סוג קובץ לא נתמך. השתמשו ב-PNG, JPG, WebP או SVG."
   },
   "smrtVoice": {
     "appName": "smrtVoice",

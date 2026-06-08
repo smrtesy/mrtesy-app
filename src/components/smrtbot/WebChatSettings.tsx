@@ -1,17 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, RefreshCw, Upload, X } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
+import { createClient } from "@/lib/supabase/client";
+
+const ICON_BUCKET = "smrtbot-web-icons";
+const ICON_MAX_BYTES = 2 * 1024 * 1024; // 2 MB — must match the bucket limit
+const ICON_TYPES = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
 
 interface Bot {
   id: string;
+  org_id: string;
   name: string;
   web_enabled: boolean | null;
   web_accent_color: string | null;
@@ -42,6 +48,8 @@ export function WebChatSettings({ botId }: { botId: string }) {
   const [subtitle, setSubtitle] = useState("");
   const [position, setPosition] = useState("right");
   const [size, setSize] = useState("standard");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hydrate = useCallback((b: Bot) => {
     setBot(b);
@@ -109,6 +117,39 @@ export function WebChatSettings({ botId }: { botId: string }) {
     }
   }
 
+  async function onPickIcon(file: File | null) {
+    if (!file || !bot) return;
+    if (!ICON_TYPES.includes(file.type)) {
+      toast.error(t("webIconBadType"));
+      return;
+    }
+    if (file.size > ICON_MAX_BYTES) {
+      toast.error(t("webIconTooLarge"));
+      return;
+    }
+    setUploading(true);
+    try {
+      const supabase = createClient();
+      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const path = `${bot.org_id}/${bot.id}/icon-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from(ICON_BUCKET)
+        .upload(path, file, { contentType: file.type, upsert: false });
+      if (upErr) {
+        toast.error(upErr.message);
+        return;
+      }
+      const { data } = supabase.storage.from(ICON_BUCKET).getPublicUrl(path);
+      setIconUrl(data.publicUrl);
+      toast.success(t("webIconUploaded"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const snippet = useMemo(() => {
     if (!bot?.web_key) return "";
@@ -156,9 +197,43 @@ export function WebChatSettings({ botId }: { botId: string }) {
             <Input dir="ltr" value={accent} onChange={(e) => setAccent(e.target.value)} className="w-32" />
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">{t("webIcon")}</label>
-            <Input dir="ltr" value={iconUrl} onChange={(e) => setIconUrl(e.target.value)} placeholder="https://…/logo.png" />
+            <div className="flex items-center gap-3">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-muted/40">
+                {iconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={iconUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <Upload className="h-5 w-5 text-muted-foreground" />
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ICON_TYPES.join(",")}
+                  className="hidden"
+                  onChange={(e) => onPickIcon(e.target.files?.[0] ?? null)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="me-1 h-3.5 w-3.5" />
+                  {uploading ? t("webIconUploading") : iconUrl ? t("webIconReplace") : t("webIconUpload")}
+                </Button>
+                {iconUrl && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setIconUrl("")}>
+                    <X className="me-1 h-3.5 w-3.5" />
+                    {t("webIconRemove")}
+                  </Button>
+                )}
+              </div>
+            </div>
             <p className="text-xs text-muted-foreground">{t("webIconHint")}</p>
           </div>
 

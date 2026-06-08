@@ -1627,8 +1627,8 @@
     "convAnon": "Visitor",
     "logsModeMessages": "Message log",
     "logsModeWeb": "Web chats",
-    "webIcon": "Logo / icon (image URL)",
-    "webIconHint": "Shown on the floating button and the header avatar. Empty = default bubble.",
+    "webIcon": "Bot logo / icon",
+    "webIconHint": "Image file: PNG, JPG, WebP or SVG. Square 512×512px with a transparent background recommended. Max 2MB (≤512KB recommended for fast loading).",
     "webTitleField": "Title",
     "webSubtitle": "Subtitle",
     "webSize": "Panel size",
@@ -1637,7 +1637,14 @@
     "webSizeLarge": "Large",
     "webPosition": "Button position",
     "webPositionRight": "Right",
-    "webPositionLeft": "Left"
+    "webPositionLeft": "Left",
+    "webIconUpload": "Upload logo",
+    "webIconReplace": "Replace logo",
+    "webIconRemove": "Remove",
+    "webIconUploading": "Uploading…",
+    "webIconUploaded": "Logo uploaded — click Save to apply.",
+    "webIconTooLarge": "File too large — max 2MB.",
+    "webIconBadType": "Unsupported file type. Use PNG, JPG, WebP or SVG."
   },
   "smrtVoice": {
     "appName": "smrtVoice",
