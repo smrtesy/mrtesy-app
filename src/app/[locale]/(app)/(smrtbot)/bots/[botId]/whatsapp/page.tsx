@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { getTranslations } from "next-intl/server";
-import { WhatsAppChannel } from "@/components/smrtbot/WhatsAppChannel";
+import { WhatsAppTab } from "@/components/smrtbot/WhatsAppTab";
 import { ResourceNav } from "@/components/smrtbot/ResourceNav";
 
 export default async function BotWhatsAppPage({
@@ -14,8 +14,8 @@ export default async function BotWhatsAppPage({
   return (
     <div className="space-y-4 p-6">
       <ResourceNav botId={botId} active="whatsapp" />
-      <h1 className="text-2xl font-bold">{t("waTitle")}</h1>
-      <WhatsAppChannel botId={botId} />
+      <h1 className="text-2xl font-bold">{t("waConnectionTitle")}</h1>
+      <WhatsAppTab botId={botId} />
     </div>
   );
 }
