@@ -59,6 +59,10 @@ interface Props {
   accentColor: string;
   dir: "rtl" | "ltr";
   labels: WebChatLabels;
+  iconUrl?: string | null;
+  title?: string | null;
+  subtitle?: string | null;
+  greeting?: string | null;
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -90,7 +94,17 @@ function renderRich(text: string): React.ReactNode[] {
   return out;
 }
 
-export default function WebChatWidget({ botKey, botName, accentColor, dir, labels }: Props) {
+export default function WebChatWidget({
+  botKey,
+  botName,
+  accentColor,
+  dir,
+  labels,
+  iconUrl,
+  title,
+  subtitle,
+  greeting,
+}: Props) {
   const [phase, setPhase] = useState<"form" | "chat">("form");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -102,6 +116,9 @@ export default function WebChatWidget({ botKey, botName, accentColor, dir, label
   const [messages, setMessages] = useState<WebMessage[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // A main-menu button the visitor tapped on the launcher's hover fan, queued
+  // until the session exists (the lead form may still need filling).
+  const [pendingPrefill, setPendingPrefill] = useState<{ buttonId: string; title: string } | null>(null);
 
   const seenIds = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -245,6 +262,30 @@ export default function WebChatWidget({ botKey, botName, accentColor, dir, label
     [sendTurn],
   );
 
+  // Handshake with the embed loader: announce readiness, and queue a tapped
+  // launcher-menu option as a prefill.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onMsg = (ev: MessageEvent) => {
+      const d = (ev.data ?? {}) as { type?: string; buttonId?: string; title?: string };
+      if (d.type === "smrtbot:prefill" && d.buttonId) {
+        setPendingPrefill({ buttonId: d.buttonId, title: d.title || d.buttonId });
+      }
+    };
+    window.addEventListener("message", onMsg);
+    window.parent?.postMessage({ type: "smrtbot:ready" }, "*");
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // Once a session exists, send any queued prefill as the first real turn.
+  useEffect(() => {
+    if (token && pendingPrefill) {
+      const p = pendingPrefill;
+      setPendingPrefill(null);
+      void sendTurn({ buttonId: p.buttonId }, p.title);
+    }
+  }, [token, pendingPrefill, sendTurn]);
+
   const closeWidget = useCallback(() => {
     if (typeof window !== "undefined") {
       window.parent?.postMessage({ type: "smrtbot:close" }, "*");
@@ -255,12 +296,17 @@ export default function WebChatWidget({ botKey, botName, accentColor, dir, label
     () => (
       <div className="flex items-center justify-between px-4 py-3 text-white" style={{ backgroundColor: accent }}>
         <div className="flex items-center gap-2 min-w-0">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/20">
-            <MessageSquareText className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/20">
+            {iconUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={iconUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <MessageSquareText className="h-4 w-4" />
+            )}
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold leading-tight">{botName}</div>
-            <div className="truncate text-xs opacity-80 leading-tight">{labels.headerSubtitle}</div>
+            <div className="truncate text-sm font-semibold leading-tight">{title || botName}</div>
+            <div className="truncate text-xs opacity-80 leading-tight">{subtitle || labels.headerSubtitle}</div>
           </div>
         </div>
         <button
@@ -273,7 +319,7 @@ export default function WebChatWidget({ botKey, botName, accentColor, dir, label
         </button>
       </div>
     ),
-    [accent, botName, labels.headerSubtitle, labels.closeLabel, closeWidget],
+    [accent, botName, title, subtitle, iconUrl, labels.headerSubtitle, labels.closeLabel, closeWidget],
   );
 
   return (
@@ -331,6 +377,13 @@ export default function WebChatWidget({ botKey, botName, accentColor, dir, label
       ) : (
         <>
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            {greeting && (
+              <div className="flex items-start">
+                <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-white px-3.5 py-2 text-sm text-slate-800 shadow-sm">
+                  {renderRich(greeting)}
+                </div>
+              </div>
+            )}
             {messages.map((m) => (
               <MessageBubble key={m.id} m={m} accent={accent} onButton={onButton} />
             ))}

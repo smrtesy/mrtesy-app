@@ -18,6 +18,10 @@ interface BotRow {
   name: string;
   web_enabled: boolean | null;
   web_accent_color: string | null;
+  web_icon_url: string | null;
+  web_title: string | null;
+  web_subtitle: string | null;
+  web_greeting: string | null;
 }
 
 async function loadBot(webKey: string): Promise<BotRow | null> {
@@ -25,7 +29,7 @@ async function loadBot(webKey: string): Promise<BotRow | null> {
   if (!db || !webKey) return null;
   const { data } = await db
     .from("smrtbot_bots")
-    .select("name, web_enabled, web_accent_color")
+    .select("name, web_enabled, web_accent_color, web_icon_url, web_title, web_subtitle, web_greeting")
     .eq("web_key", webKey)
     .maybeSingle();
   return (data as BotRow | null) ?? null;
@@ -62,6 +66,10 @@ export default async function SmrtBotEmbedPage({
         accentColor={bot.web_accent_color ?? "#2563eb"}
         dir={dir}
         labels={labels}
+        iconUrl={bot.web_icon_url}
+        title={bot.web_title}
+        subtitle={bot.web_subtitle}
+        greeting={bot.web_greeting}
       />
     </main>
   );

@@ -17,6 +17,11 @@ interface Bot {
   web_accent_color: string | null;
   web_allowed_origins: string[] | null;
   web_greeting: string | null;
+  web_icon_url: string | null;
+  web_title: string | null;
+  web_subtitle: string | null;
+  web_position: string | null;
+  web_size: string | null;
   web_key: string | null;
 }
 
@@ -32,6 +37,11 @@ export function WebChatSettings({ botId }: { botId: string }) {
   const [accent, setAccent] = useState("#2563eb");
   const [origins, setOrigins] = useState("");
   const [greeting, setGreeting] = useState("");
+  const [iconUrl, setIconUrl] = useState("");
+  const [title, setTitle] = useState("");
+  const [subtitle, setSubtitle] = useState("");
+  const [position, setPosition] = useState("right");
+  const [size, setSize] = useState("standard");
 
   const hydrate = useCallback((b: Bot) => {
     setBot(b);
@@ -39,6 +49,11 @@ export function WebChatSettings({ botId }: { botId: string }) {
     setAccent(b.web_accent_color || "#2563eb");
     setOrigins((b.web_allowed_origins ?? []).join("\n"));
     setGreeting(b.web_greeting ?? "");
+    setIconUrl(b.web_icon_url ?? "");
+    setTitle(b.web_title ?? "");
+    setSubtitle(b.web_subtitle ?? "");
+    setPosition(b.web_position || "right");
+    setSize(b.web_size || "standard");
   }, []);
 
   const load = useCallback(async () => {
@@ -67,6 +82,11 @@ export function WebChatSettings({ botId }: { botId: string }) {
             .map((o) => o.trim())
             .filter(Boolean),
           web_greeting: greeting.trim() || null,
+          web_icon_url: iconUrl.trim() || null,
+          web_title: title.trim() || null,
+          web_subtitle: subtitle.trim() || null,
+          web_position: position,
+          web_size: size,
         },
       });
       hydrate(bot);
@@ -92,8 +112,10 @@ export function WebChatSettings({ botId }: { botId: string }) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const snippet = useMemo(() => {
     if (!bot?.web_key) return "";
-    return `<script src="${origin}/smrtbot-widget.js"\n        data-key="${bot.web_key}"\n        data-accent="${accent}"\n        data-lang="he"\n        async></script>`;
-  }, [bot?.web_key, origin, accent]);
+    // Appearance is driven from this tab (DB) via the public /config endpoint,
+    // so the snippet only carries the key (and an optional language).
+    return `<script src="${origin}/smrtbot-widget.js"\n        data-key="${bot.web_key}"\n        data-lang="he"\n        async></script>`;
+  }, [bot?.web_key, origin]);
 
   function copySnippet() {
     if (!snippet) return;
@@ -132,6 +154,49 @@ export function WebChatSettings({ botId }: { botId: string }) {
               className="h-9 w-14 cursor-pointer rounded border border-border bg-transparent"
             />
             <Input dir="ltr" value={accent} onChange={(e) => setAccent(e.target.value)} className="w-32" />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("webIcon")}</label>
+            <Input dir="ltr" value={iconUrl} onChange={(e) => setIconUrl(e.target.value)} placeholder="https://…/logo.png" />
+            <p className="text-xs text-muted-foreground">{t("webIconHint")}</p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t("webTitleField")}</label>
+              <Input dir="auto" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={bot.name} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t("webSubtitle")}</label>
+              <Input dir="auto" value={subtitle} onChange={(e) => setSubtitle(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t("webSize")}</label>
+              <select
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring"
+              >
+                <option value="compact">{t("webSizeCompact")}</option>
+                <option value="standard">{t("webSizeStandard")}</option>
+                <option value="large">{t("webSizeLarge")}</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t("webPosition")}</label>
+              <select
+                value={position}
+                onChange={(e) => setPosition(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring"
+              >
+                <option value="right">{t("webPositionRight")}</option>
+                <option value="left">{t("webPositionLeft")}</option>
+              </select>
+            </div>
           </div>
 
           <div className="space-y-1">

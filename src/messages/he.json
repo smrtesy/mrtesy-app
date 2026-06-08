@@ -1624,7 +1624,18 @@
     "convSelect": "בחרו שיחה כדי לצפות בה.",
     "convAnon": "מבקר",
     "logsModeMessages": "יומן הודעות",
-    "logsModeWeb": "שיחות אתר"
+    "logsModeWeb": "שיחות אתר",
+    "webIcon": "לוגו / אייקון (כתובת תמונה)",
+    "webIconHint": "מופיע בכפתור הצף ובאווטאר בכותרת. ריק = בועת ברירת מחדל.",
+    "webTitleField": "כותרת",
+    "webSubtitle": "שורת משנה",
+    "webSize": "גודל החלון",
+    "webSizeCompact": "קטן",
+    "webSizeStandard": "רגיל",
+    "webSizeLarge": "גדול",
+    "webPosition": "מיקום הכפתור",
+    "webPositionRight": "ימין",
+    "webPositionLeft": "שמאל"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

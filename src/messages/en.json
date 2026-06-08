@@ -1625,7 +1625,18 @@
     "convSelect": "Select a conversation to view it.",
     "convAnon": "Visitor",
     "logsModeMessages": "Message log",
-    "logsModeWeb": "Web chats"
+    "logsModeWeb": "Web chats",
+    "webIcon": "Logo / icon (image URL)",
+    "webIconHint": "Shown on the floating button and the header avatar. Empty = default bubble.",
+    "webTitleField": "Title",
+    "webSubtitle": "Subtitle",
+    "webSize": "Panel size",
+    "webSizeCompact": "Compact",
+    "webSizeStandard": "Standard",
+    "webSizeLarge": "Large",
+    "webPosition": "Button position",
+    "webPositionRight": "Right",
+    "webPositionLeft": "Left"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

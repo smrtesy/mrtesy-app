@@ -50,6 +50,11 @@ const BOT_UPDATABLE = new Set([
   "web_allowed_origins",
   "web_greeting",
   "web_accent_color",
+  "web_icon_url",
+  "web_title",
+  "web_subtitle",
+  "web_position",
+  "web_size",
 ]);
 
 function pickUpdatable(body: Record<string, unknown>): Record<string, unknown> {
@@ -134,6 +139,11 @@ router.patch("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: R
   const updates = pickUpdatable((req.body ?? {}) as Record<string, unknown>);
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "No updatable fields provided" });
+  }
+
+  // web_position / web_size are NOT NULL with defaults — never write null/empty.
+  for (const k of ["web_position", "web_size"] as const) {
+    if (k in updates && !updates[k]) delete updates[k];
   }
 
   // Mint a public embed key the first time web chat is enabled, so the admin
