@@ -714,7 +714,7 @@ router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Res
 // ── plan tasks (create / edit / delete) ───────────────────────────────────────
 
 router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
-  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id } = req.body ?? {};
+  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id, status } = req.body ?? {};
   if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
   // Default staffing: a task with a role but no explicit assignee falls back to
   // the role's primary member. An explicit assignee always wins. role_id is
@@ -746,7 +746,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
       plan_id: req.params.id,
       title: title ?? title_he,
       title_he: title_he ?? null,
-      status: "inbox",
+      status: typeof status === "string" ? status : "inbox",
       is_private: false,
       assignment_status: "accepted",
       due_date: due_date ?? null,

@@ -739,16 +739,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   <Pencil className="h-3.5 w-3.5" /> {t("status.toDraft")}
                 </ControlButton>
               )}
-              {selected.is_capability && selected.status === "active" && (
-                <ControlButton onClick={() => setStatus(selected.id, "done")}>
-                  <Check className="h-3.5 w-3.5" /> {t("capability.markAvailable")}
-                </ControlButton>
-              )}
-              {selected.is_capability && selected.status === "done" && (
+              {selected.is_capability && (
                 <>
-                  <ControlButton onClick={() => setStatus(selected.id, "active")}>
-                    <RefreshCw className="h-3.5 w-3.5" /> {t("capability.returnToTimeline")}
-                  </ControlButton>
+                  {/* where it lives: on the timeline (active) vs done/on the shelf */}
+                  {selected.status === "active" && (
+                    <ControlButton onClick={() => setStatus(selected.id, "done")}>
+                      <Check className="h-3.5 w-3.5" /> {t("capability.markDone")}
+                    </ControlButton>
+                  )}
+                  {selected.status === "done" && (
+                    <ControlButton onClick={() => setStatus(selected.id, "active")}>
+                      <RefreshCw className="h-3.5 w-3.5" /> {t("capability.returnToTimeline")}
+                    </ControlButton>
+                  )}
+                  {/* availability is a SEPARATE switch — usable now or temporarily down */}
                   <ControlButton onClick={() => setAvailable(selected.id, !selected.is_available)}>
                     <AlertTriangle className="h-3.5 w-3.5" />
                     {selected.is_available ? t("capability.markUnavailable") : t("capability.markAvailableAgain")}
