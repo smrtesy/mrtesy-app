@@ -2,7 +2,8 @@
  * smrtBot inbound WhatsApp webhook — per-bot, Vercel Route Handler.
  *
  * Each bot is its own Meta app, so each points its callback at
- *   /api/webhooks/smrtbot/<slug>
+ *   /api/webhooks/smrtbot/<org_slug>_<bot_slug>   (preferred, globally unique)
+ *   /api/webhooks/smrtbot/<bot_slug>              (legacy, still accepted)
  * and verifies against that bot's own verify_token. Runs on Vercel (not the
  * Railway server) so a dyno restart never drops inbound messages — same
  * reasoning as the smrtTask webhook.
@@ -32,16 +33,41 @@ interface BotRow {
   wa_phone_number_id: string | null;
 }
 
-async function loadBot(slug: string): Promise<BotRow | null> {
+const BOT_FIELDS =
+  "id, org_id, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
+
+/** Resolve a bot from the callback path segment.
+ *
+ *  The bot `slug` is only unique per org, so the preferred form is the
+ *  globally-unique "<org_slug>_<bot_slug>" (org slug is unique, and neither
+ *  slug can contain '_', so the first '_' splits unambiguously). The legacy
+ *  "<bot_slug>" form is still accepted — a legacy slug can never contain '_',
+ *  so the two formats never collide — letting existing Meta callbacks keep
+ *  working until they're switched over. */
+async function loadBot(ref: string): Promise<BotRow | null> {
   const db = createAdminSupabaseClient();
   if (!db) return null;
-  const { data } = await db
-    .from("smrtbot_bots")
-    .select(
-      "id, org_id, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id",
-    )
-    .eq("slug", slug)
-    .maybeSingle();
+
+  const sep = ref.indexOf("_");
+  if (sep > 0) {
+    const orgSlug = ref.slice(0, sep);
+    const botSlug = ref.slice(sep + 1);
+    const { data: org } = await db
+      .from("organizations")
+      .select("id")
+      .eq("slug", orgSlug)
+      .maybeSingle();
+    if (!org) return null;
+    const { data } = await db
+      .from("smrtbot_bots")
+      .select(BOT_FIELDS)
+      .eq("org_id", org.id)
+      .eq("slug", botSlug)
+      .maybeSingle();
+    return (data as BotRow | null) ?? null;
+  }
+
+  const { data } = await db.from("smrtbot_bots").select(BOT_FIELDS).eq("slug", ref).maybeSingle();
   return (data as BotRow | null) ?? null;
 }
 
