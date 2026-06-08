@@ -20,7 +20,8 @@
  */
 import crypto from "crypto";
 
-import { db, getAppSecret } from "../../db";
+import { db } from "../../db";
+import { getBotConfig } from "./config";
 import { resolveCreds, sendText, sendButtons, type BotEnv } from "./wa";
 import { checkSubscription, registerSubscriber, isSubscriptionConfigured } from "./subscription";
 import { signPlaybackToken } from "./playback-token";
@@ -112,7 +113,7 @@ type OtpSendResult = "sent" | "rate_limited" | "failed";
 /** Generate, persist, and e-mail a 6-digit OTP. Rate-limited per phone so the
  *  per-code attempt cap can't be bypassed by re-requesting fresh codes. */
 async function sendOtp(bot: BotRow, env: BotEnv, phone: string, email: string): Promise<OtpSendResult> {
-  const fromEmail = await getAppSecret("smrtbot", "VIDEO_OTP_FROM_EMAIL", "VIDEO_OTP_FROM_EMAIL");
+  const fromEmail = await getBotConfig(bot.id, "VIDEO_OTP_FROM_EMAIL", "VIDEO_OTP_FROM_EMAIL");
   if (!fromEmail) {
     console.error("[smrtbot/identity] VIDEO_OTP_FROM_EMAIL not configured — cannot send OTP");
     return "failed";
@@ -128,7 +129,7 @@ async function sendOtp(bot: BotRow, env: BotEnv, phone: string, email: string): 
     .gte("created_at", since);
   if ((count ?? 0) >= OTP_MAX_PER_WINDOW) return "rate_limited";
 
-  const region = (await getAppSecret("smrtbot", "VIDEO_OTP_SES_REGION", "VIDEO_OTP_SES_REGION")) || "us-east-1";
+  const region = (await getBotConfig(bot.id, "VIDEO_OTP_SES_REGION", "VIDEO_OTP_SES_REGION")) || "us-east-1";
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
 
   const { error } = await db.from("smrtbot_email_otps").insert({
@@ -215,9 +216,9 @@ async function verifyOtp(bot: BotRow, phone: string, code: string, email: string
 // ── feature gate ──────────────────────────────────────────────────────────────
 /** Identity onboarding is usable only when the subscription API and an OTP
  *  sender are both configured. Otherwise the bot behaves exactly as before. */
-export async function isIdentityEnabled(): Promise<boolean> {
-  if (!(await isSubscriptionConfigured())) return false;
-  const from = await getAppSecret("smrtbot", "VIDEO_OTP_FROM_EMAIL", "VIDEO_OTP_FROM_EMAIL");
+export async function isIdentityEnabled(bot: BotRow): Promise<boolean> {
+  if (!(await isSubscriptionConfigured(bot.id))) return false;
+  const from = await getBotConfig(bot.id, "VIDEO_OTP_FROM_EMAIL", "VIDEO_OTP_FROM_EMAIL");
   return !!from;
 }
 
@@ -314,7 +315,7 @@ export async function handleIdentityInput(
         return true;
       }
 
-      const sub = await checkSubscription(email);
+      const sub = await checkSubscription(bot.id, email);
       const { error: cacheErr } = await db
         .from("smrtbot_wa_users")
         .update({
@@ -368,7 +369,7 @@ export async function handleIdentityInput(
         .eq("phone", phone);
       if (nameErr) console.error("[smrtbot/identity] save name failed", nameErr.message);
 
-      const reg = await registerSubscriber({ email, phone, firstName: first, lastName: last });
+      const reg = await registerSubscriber(bot.id, { email, phone, firstName: first, lastName: last });
       if (reg.customerId) {
         const { error: custErr } = await db
           .from("smrtbot_wa_users")
@@ -400,7 +401,7 @@ export async function handleIdentityAction(bot: BotRow, env: BotEnv, phone: stri
   const creds = resolveCreds(bot, env);
   if (!creds) return false;
 
-  if (!(await isIdentityEnabled())) {
+  if (!(await isIdentityEnabled(bot))) {
     // Feature not configured — do not hijack the conversation.
     return false;
   }
@@ -408,7 +409,7 @@ export async function handleIdentityAction(bot: BotRow, env: BotEnv, phone: stri
   if (action === "my_account") {
     const ident = await getIdentity(bot, phone);
     if (ident.email && ident.emailVerifiedAt) {
-      const sub = await checkSubscription(ident.email);
+      const sub = await checkSubscription(bot.id, ident.email);
       const tmpl = sub.subscriber
         ? await msg(bot, env, "account_subscriber", "האימייל המקושר: {email}\nמנוי פעיל ✅")
         : await msg(bot, env, "account_not_subscriber", "האימייל המקושר: {email}\nאין מנוי פעיל.");
@@ -439,7 +440,7 @@ export interface SubscriberContext {
 
 /** Resolve the playback context for a phone once per send (one external check). */
 export async function getSubscriberContext(bot: BotRow, phone: string): Promise<SubscriberContext> {
-  const watchBaseRaw = await getAppSecret("smrtbot", "VIDEO_WATCH_BASE_URL", "VIDEO_WATCH_BASE_URL");
+  const watchBaseRaw = await getBotConfig(bot.id, "VIDEO_WATCH_BASE_URL", "VIDEO_WATCH_BASE_URL");
   const watchBase = (watchBaseRaw ?? "").replace(/\/+$/, "");
   if (!watchBase) {
     return { configured: false, watchBase: "", subscriber: false, email: null, customerId: null };
@@ -450,7 +451,7 @@ export async function getSubscriberContext(bot: BotRow, phone: string): Promise<
   let subscriber = false;
   let customerId = ident.externalCustomerId;
   if (email) {
-    const sub = await checkSubscription(email);
+    const sub = await checkSubscription(bot.id, email);
     subscriber = sub.subscriber;
     if (sub.customerId) customerId = sub.customerId;
   }

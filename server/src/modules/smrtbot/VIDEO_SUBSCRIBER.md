@@ -1,42 +1,69 @@
-# smrtBot — subscriber video links (email identity + subscription gate)
+# smrtBot — subscriber video (email gate + Bunny Stream, white-labelled)
 
-The WhatsApp bot sends a video link to everyone. For a **verified subscriber**
-the link carries a short-lived signed token so the video opens **directly**
-(no login) on the external video site (`rebbek.org/<video_number>?t=<token>`).
-Identity is by **email**; the WhatsApp phone is mapped → a verified email, and
-**entitlement always comes from the external subscription system** — never
-decided here. fail-closed: on any doubt the user gets the plain link.
+Unified spec for the bot's gated video links. Two layers that compose:
 
-## Dormant until configured
+- **Our subscription gate** decides **who is allowed** (identity by email →
+  external entitlement). Built in this module.
+- **Bunny Stream + a white-labelled player** handles **hosting, encoding,
+  delivery and hot-link protection**, all under the bot's own domain.
 
-With none of the config keys set, the bot behaves **exactly as before** (raw
-links, no onboarding). Set keys in `app_secrets` (slug `smrtbot`) via the admin
-UI; secret values stored in Vault (`is_secret = true`).
+Identity is by **email**; the WhatsApp phone maps → a verified email, and
+**entitlement always comes from the external system** — never decided here.
+fail-closed: on any doubt the user gets the plain link, never direct playback.
 
-| Key | Secret? | Purpose |
+## Per-bot, per-domain
+
+Each bot has its own domain (Hebrew bot → `rebbek.org`; others → their own) and
+its own video CDN subdomain (`video.rebbek.org`). All config is resolved
+**per bot** via `getBotConfig(botId, key)` (`config.ts`): a `smrtbot_settings`
+(bot_id, key) row wins, else the global `app_secrets` value (slug `smrtbot`,
+Vault-backed) is the fallback/default.
+
+| Key | Scope | Example / notes |
 |---|---|---|
-| `SUBSCRIPTION_API_BASE_URL` | no | Base URL of the external subscription system (e.g. `https://rebbek.org`) |
-| `SUBSCRIPTION_API_SECRET` | yes | Bearer token we send to that system |
-| `VIDEO_WATCH_BASE_URL` | no | Where video links point. Hebrew → `https://rebbek.org` → link is `<base>/<video_number>` |
-| `VIDEO_TOKEN_SECRET` | yes | HMAC key signing the playback token |
-| `VIDEO_VERIFY_SECRET` | yes | Bearer the video site sends to our verify endpoint |
-| `VIDEO_OTP_FROM_EMAIL` | no | Verified SES sender for the OTP email |
-| `VIDEO_OTP_SES_REGION` | no | SES region (default `us-east-1`) |
+| `VIDEO_WATCH_BASE_URL` | per-bot | `https://rebbek.org` → link is `<base>/<video_number>` |
+| `SUBSCRIPTION_API_BASE_URL` | per-bot | external subscription system for that domain |
+| `SUBSCRIPTION_API_SECRET` | per-bot (Vault) | bearer we send to that system |
+| `VIDEO_OTP_FROM_EMAIL` / `VIDEO_OTP_SES_REGION` | per-bot | verified SES sender (branding per domain) |
+| `BUNNY_LIBRARY_ID` / `BUNNY_CDN_HOSTNAME` | per-bot | Bunny library + custom hostname `video.rebbek.org` |
+| `BUNNY_TOKEN_KEY` | per-bot (Vault) | Bunny token-auth signing key (server-side only) |
+| `VIDEO_TOKEN_SECRET` | platform (Vault) | HMAC key signing OUR playback token |
+| `VIDEO_VERIFY_SECRET` | platform (Vault) | bearer the site sends to our verify endpoint |
 
-Onboarding (email collection) is active only when `SUBSCRIPTION_API_*` **and**
-`VIDEO_OTP_FROM_EMAIL` are set. Token links activate when `VIDEO_WATCH_BASE_URL`
-is set (token appended only when `VIDEO_TOKEN_SECRET` is also set).
+Dormant until configured: with no `VIDEO_WATCH_BASE_URL`/subscription config the
+bot behaves exactly as before (raw links, no onboarding).
 
-## Flow
+## Unified flow
 
-1. A WhatsApp user runs the `connect_email` action → enters email → receives a
-   6-digit OTP by email → enters it → phone↔email linked (verified).
-2. We `checkSubscription(email)` against the external system. If the email is
-   unknown (`not_found`) we collect first/last name and `registerSubscriber()`
-   pushes it back to the external system. Phone is taken from WhatsApp.
-3. On every video send we `getSubscriberContext(phone)` (one external check per
-   page) and build the link: subscriber → `<base>/<num>?t=<token>`, otherwise
-   `<base>/<num>` (or the raw link if `VIDEO_WATCH_BASE_URL` is unset).
+```
+WhatsApp: bot sends  https://rebbek.org/<video_number>[?t=<our-token>]
+   (verified subscriber → token appended; otherwise plain link)
+
+Browser opens rebbek.org/<video_number>?t=...   (address bar: only rebbek.org)
+   page backend (server-side):
+     1. POST our /api/smrtbot/playback/verify { token }  → valid? video? email?
+     2. if valid subscriber → sign a Bunny DIRECTORY token (server-side, BUNNY_TOKEN_KEY)
+        and inject the tokenised master.m3u8 URL (video.rebbek.org/...) into the player
+     3. else → no signed URL → show login / subscribe
+   player (hybrid, no third-party video domain):
+     - Safari/iOS  → native <video src=m3u8>   (AirPlay works)
+     - Chrome/etc. → hls.js loadSource(m3u8)    (Google Cast works)
+```
+
+White-label: the page is on the bot domain; HLS + segments come from the per-bot
+custom CDN hostname (`video.rebbek.org`, a CNAME to the Bunny pull zone); our
+verify API is called **server-side** so the browser never sees it. No
+`bunny.net` / `b-cdn.net` / `mediadelivery.net` appears in the Network tab.
+(The Google Cast SDK loads from `gstatic.com` — the one unavoidable external
+script if casting is enabled; it is not a video/CDN domain.)
+
+## Onboarding (in WhatsApp chat)
+
+`connect_email` action → enter email → 6-digit OTP by email (hashed at rest,
+rate-limited, scoped to the pending email) → phone↔email linked →
+`checkSubscription(email)`. If unknown (`not_found`) collect first/last name and
+`registerSubscriber()` pushes it back to the external system (phone = the
+WhatsApp number). See `identity.ts`.
 
 ## Contracts
 
@@ -45,45 +72,45 @@ is set (token appended only when `VIDEO_TOKEN_SECRET` is also set).
 ```
 POST {SUBSCRIPTION_API_BASE_URL}/api/subscription/check
 Authorization: Bearer {SUBSCRIPTION_API_SECRET}
-{ "email": "user@example.com", "context": "whatsapp_link_request" }
-→ 200 { "subscriber": true, "status": "active", "plan": "...",
-        "expires_at": "ISO-8601|null", "customer": { "id": "...", "name": "..." } }
-   200 { "subscriber": false, "status": "expired" }   // not a subscriber
-   404                                                  // email unknown → not_found
-```
+{ "email", "context":"whatsapp_link_request" }
+→ 200 { subscriber, status, plan, expires_at, customer:{id,name} } | 404 (=not_found)
 
-```
 POST {SUBSCRIPTION_API_BASE_URL}/api/subscription/register
-Authorization: Bearer {SUBSCRIPTION_API_SECRET}
-{ "email", "phone" (E.164), "first_name", "last_name", "name", "source":"whatsapp_bot", "registered_at" }
-→ 200/201 { "ok": true, "customer_id": "...", "already_existed": false, "status": "registered" }
+{ email, phone(E.164), first_name, last_name, name, source:"whatsapp_bot", registered_at }
+→ 200/201 { ok, customer_id, already_existed, status }
 ```
-
-fail-closed: anything other than `200 { subscriber:true }` is treated as “not a
-subscriber”. `404`/`not_found` triggers self-registration.
 
 ### Playback verification — **served by us, consumed by the video site**
 
-`rebbek.org/<video_number>?t=<token>` → the page (which already plays the video)
-calls us server-to-server to grant direct playback:
-
 ```
-POST /api/smrtbot/playback/verify        (or GET ...?t=<token>)
+POST /api/smrtbot/playback/verify        (or GET ?t=<token>)
 Authorization: Bearer {VIDEO_VERIFY_SECRET}
-{ "token": "<t from the URL>" }
-→ 200 { "valid": true, "video": "123", "email": "...", "customer_id": "...", "expires_at": "ISO" }
-   200 { "valid": false }                 // bad / expired token → fall back to normal login
-   401 { "valid": false }                 // VIDEO_VERIFY_SECRET unset or wrong
+{ "token" }
+→ 200 { valid:true, video, email, customer_id, expires_at } | { valid:false } | 401
 ```
 
-Token staleness is bounded by its TTL (default 6h, `playback-token.ts`); it is
-only ever minted for a verified subscriber.
+Token TTL bounds staleness (default 6h, `playback-token.ts`); minted only for a
+verified subscriber.
 
-## Device / app routing (future)
+## Bunny Stream notes
 
-The bot can't see the user's OS (WhatsApp webhooks carry no device info). Device
-detection happens when the link is opened (the page's `User-Agent`). For a native
-app, register the same `https://rebbek.org/<num>` URL as an Android App Link /
-iOS Universal Link: installed → opens in the app (token passes through), not
-installed → opens the page. A `connect`/download button can deep-link to the
-correct store via a `User-Agent` redirect.
+- Storage/encoding/delivery only; **metadata, permissions, view tracking stay in
+  Supabase** (`smrtbot_videos.bunny_video_guid` maps our video → Bunny GUID).
+- Custom CDN hostname (CNAME) + Token Authentication V2 **directory tokens**
+  (one token authorises the whole HLS path — required for segments, and works
+  with native HLS for AirPlay). Sign the directory token **server-side**.
+- Token must **not** be IP-locked, or casting breaks (the cast device fetches
+  segments from its own IP).
+- Migration from Vimeo: `npx vimeo2bunny` (fetches via Bunny's pull endpoint,
+  preserves title/description/tags, resumable). Map the resulting GUIDs into
+  `smrtbot_videos.bunny_video_guid`.
+
+## Planned next (not yet built)
+
+- Per-link **use limit (2×)**: add a `jti` to the playback token + a
+  `smrtbot_playback_uses` table; the verify endpoint counts/enforces (HLS
+  segment requests do NOT count — only the page-load verify).
+- Optional: have the verify endpoint also return a signed Bunny URL, so the site
+  gets "subscriber valid" + the playable URL in one call.
+- Native app: register the same `https://<domain>/<num>` as an Android App Link /
+  iOS Universal Link → opens in-app when installed, else the page.
