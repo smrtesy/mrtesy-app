@@ -13,6 +13,7 @@ import {
   FileText,
   BookOpen,
   DollarSign,
+  Globe,
 } from "lucide-react";
 
 // Platform-level only. Per-app concerns (services, prompts) now live
@@ -28,6 +29,7 @@ const items = [
   { key: "logs",         href: "logs",           labelKey: "logs",         icon: FileText },
   { key: "usage",        href: "usage",          labelKey: "usage",        icon: DollarSign },
   { key: "docs",         href: "docs",           labelKey: "docs",         icon: BookOpen },
+  { key: "domain-tracker", href: "domain-tracker", labelKey: "domainTracker", icon: Globe },
 ];
 
 export function AdminNav() {

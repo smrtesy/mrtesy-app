@@ -991,7 +991,8 @@
     "superAdmins": "Super Admins",
     "logs": "Logs",
     "usage": "AI Usage",
-    "docs": "Docs"
+    "docs": "Docs",
+    "domainTracker": "Domain Tracker"
   },
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
@@ -2010,5 +2011,21 @@
     "reconnecting": "Reconnecting…",
     "poweredBy": "Powered by smrtesy",
     "unavailable": "This chat is not available right now."
+  },
+  "domainTracker": {
+    "title": "Domain Tracker",
+    "subtitle": "Enter a URL and get a list of every domain the browser contacts while loading the page.",
+    "placeholder": "https://example.com",
+    "scan": "Scan",
+    "scanning": "Scanning…",
+    "waitMessage": "The browser is loading the page — this may take around 30 seconds…",
+    "domainsFound": "domains",
+    "totalRequests": "total requests",
+    "copyAll": "Copy all",
+    "copied": "Copied!",
+    "domain": "Domain",
+    "requests": "Requests",
+    "types": "Resource types",
+    "main": "main"
   }
 }
