@@ -1,31 +1,13 @@
 [phases.setup]
 # nodejs_22 must be listed explicitly — specifying nixPkgs replaces nixpacks'
 # auto-detected Node.js packages rather than extending them.
-# System libs required by playwright's own Chromium (downloaded via postinstall).
-# We do NOT install the nix chromium package — playwright downloads a version
-# that is guaranteed compatible with its CDP protocol implementation.
+#
+# We do NOT list any Chromium-related nix packages here.
+# playwright's postinstall hook runs "playwright install chromium --with-deps"
+# which uses apt-get to install Chromium's system dependencies in standard
+# Ubuntu library paths (/usr/lib/...) where the playwright-downloaded binary
+# can actually find them.  Nix packages live in /nix/store/... and are not
+# visible to dynamically-linked binaries compiled for standard paths.
 nixPkgs = [
   "nodejs_22",
-  "nss",
-  "nspr",
-  "atk",
-  "at-spi2-atk",
-  "xorg.libX11",
-  "xorg.libxcb",
-  "xorg.libXcomposite",
-  "xorg.libXdamage",
-  "xorg.libXext",
-  "xorg.libXfixes",
-  "xorg.libXrandr",
-  "xorg.libXrender",
-  "mesa",
-  "expat",
-  "libdrm",
-  "libxkbcommon",
-  "gtk3",
-  "pango",
-  "cairo",
-  "glib",
-  "cups",
-  "alsa-lib",
 ]

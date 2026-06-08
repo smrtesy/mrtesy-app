@@ -10,7 +10,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install chromium --with-deps"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
