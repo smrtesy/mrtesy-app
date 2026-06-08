@@ -1,0 +1,28 @@
+[phases.setup]
+# System Chromium for the domain-tracker feature.
+# playwright-core is pointed at this binary via CHROMIUM_EXECUTABLE_PATH.
+nixPkgs = [
+  "chromium",
+  "nss",
+  "nspr",
+  "atk",
+  "at-spi2-atk",
+  "xorg.libX11",
+  "xorg.libxcb",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libXrender",
+  "mesa",
+  "expat",
+  "libdrm",
+  "libxkbcommon",
+  "gtk3",
+  "pango",
+  "cairo",
+  "glib",
+  "cups",
+  "alsa-lib",
+]

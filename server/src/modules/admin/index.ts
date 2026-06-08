@@ -8,11 +8,13 @@ import usersRouter from "./users/routes";
 import orgsRouter from "./orgs/routes";
 import appsRouter from "./apps/routes";
 import logsRouter from "./logs/routes";
+import domainTrackerRouter from "./domain-tracker";
 
 const router = Router();
 router.use(usersRouter);
 router.use(orgsRouter);
 router.use(appsRouter);
 router.use(logsRouter);
+router.use(domainTrackerRouter);
 
 export default router;
