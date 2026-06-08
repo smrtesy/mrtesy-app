@@ -25,6 +25,13 @@ const COL_PX = 22;
  *  shows only Monday–Friday columns; positions compress over the hidden days. */
 const HIDDEN_DOW = new Set([0, 6]);
 
+/** Day-of-week letter, indexed by getDay(): Hebrew (יום א׳…שבת) or English. */
+const HE_DOW = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
+const EN_DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+function dowLetter(d: Date, locale: string): string {
+  return (locale === "en" ? EN_DOW : HE_DOW)[d.getDay()];
+}
+
 type Health = "waiting" | "on_track" | "at_risk" | "late" | "stream";
 
 function planTitle(p: Plan, locale: string): string {
@@ -563,14 +570,19 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   return (
                     <div
                       key={o}
-                      className={cn(
-                        "absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e",
-                        weekStart && i !== 0 && "border-s-2",
-                      )}
-                      style={{ insetInlineStart: i * COL_PX, width: COL_PX }}
+                      className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e"
+                      style={{
+                        insetInlineStart: i * COL_PX,
+                        width: COL_PX,
+                        // Thicker, darker divider before each new week (Monday).
+                        ...(weekStart && i !== 0
+                          ? { borderInlineStartWidth: 3, borderInlineStartStyle: "solid", borderInlineStartColor: "hsl(var(--foreground) / 0.22)" }
+                          : {}),
+                      }}
                     >
                       <span className="whitespace-nowrap text-[10.5px] font-medium">{hebDay(d)}</span>
                       <span className="whitespace-nowrap text-[9.5px] text-muted-foreground">{d.getDate()}</span>
+                      <span className="whitespace-nowrap text-[9px] font-medium text-primary/55">{dowLetter(d, locale)}</span>
                     </div>
                   );
                 })}
