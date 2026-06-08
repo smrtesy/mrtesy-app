@@ -1,0 +1,30 @@
+[phases.setup]
+# nodejs_22 must be listed explicitly — specifying nixPkgs replaces nixpacks'
+# auto-detected Node.js packages rather than extending them.
+# Chromium and its X11/GTK deps are needed for the domain-tracker feature.
+nixPkgs = [
+  "nodejs_22",
+  "chromium",
+  "nss",
+  "nspr",
+  "atk",
+  "at-spi2-atk",
+  "xorg.libX11",
+  "xorg.libxcb",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libXrender",
+  "mesa",
+  "expat",
+  "libdrm",
+  "libxkbcommon",
+  "gtk3",
+  "pango",
+  "cairo",
+  "glib",
+  "cups",
+  "alsa-lib",
+]

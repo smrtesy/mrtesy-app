@@ -991,7 +991,8 @@
     "superAdmins": "מנהלי-על",
     "logs": "לוגים",
     "usage": "עלויות AI",
-    "docs": "מסמכים"
+    "docs": "מסמכים",
+    "domainTracker": "מעקב דומיינים"
   },
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
@@ -2020,5 +2021,21 @@
     "reconnecting": "מתחבר מחדש…",
     "poweredBy": "מופעל על ידי smrtesy",
     "unavailable": "הצ׳אט אינו זמין כרגע."
+  },
+  "domainTracker": {
+    "title": "מעקב דומיינים",
+    "subtitle": "הזן כתובת URL וקבל רשימה של כל הדומיינים שהדפדפן ניגש אליהם בטעינת הדף.",
+    "placeholder": "https://example.com",
+    "scan": "סרוק",
+    "scanning": "סורק…",
+    "waitMessage": "הדפדפן טוען את הדף — זה עשוי לקחת כ-30 שניות…",
+    "domainsFound": "דומיינים",
+    "totalRequests": "בקשות סה״כ",
+    "copyAll": "העתק הכל",
+    "copied": "הועתק!",
+    "domain": "דומיין",
+    "requests": "בקשות",
+    "types": "סוגי משאבים",
+    "main": "ראשי"
   }
 }
