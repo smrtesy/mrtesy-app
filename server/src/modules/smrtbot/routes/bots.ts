@@ -33,6 +33,7 @@ const BOT_UPDATABLE = new Set([
   "admin_phones",
   "timezone",
   "active",
+  "transport",
   "wa_phone_number_id",
   "wa_access_token",
   "verify_token",
