@@ -22,7 +22,7 @@ const CRUD: CrudOpts[] = [
     updatable: [
       "node_key", "type", "label", "title_he", "body_text", "buttons",
       "extra_buttons", "extra_body", "action", "parent_key", "sort_order",
-      "active", "category", "image_url", "image_mode", "env", "version",
+      "active", "category", "image_url", "image_mode", "env", "version", "button_layout",
     ],
   },
   {

@@ -1,18 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import dagre from "dagre";
 import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
   Handle,
   Position,
   type Node,
   type Edge,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronDown, Pencil } from "lucide-react";
@@ -20,9 +20,10 @@ import { ChevronLeft, ChevronDown, Pencil } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { MenuNodeEditDialog } from "./MenuNodeEditDialog";
 
-interface Btn { id?: string; value?: string; title?: string; label?: string }
+export interface Btn { id?: string; value?: string; title?: string; label?: string }
 export interface MenuNode {
   id: string;
+  org_id: string;
   node_key: string;
   label: string;
   title_he: string | null;
@@ -34,6 +35,7 @@ export interface MenuNode {
   sort_order: number | null;
   active: boolean;
   buttons: Btn[];
+  button_layout: string | null;
 }
 
 const NODE_W = 230;
@@ -213,6 +215,8 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editKey, setEditKey] = useState<string | null>(null);
+  const rfRef = useRef<ReactFlowInstance | null>(null);
+  const [centerKey, setCenterKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setMenu(null);
@@ -234,6 +238,7 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
       else next.add(key);
       return next;
     });
+    setCenterKey(key); // keep the toggled node centered (same zoom) after re-layout
   }, []);
   const onEdit = useCallback((key: string) => setEditKey(key), []);
 
@@ -244,6 +249,18 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
     () => (menu && rootKey ? layout(menu, rootKey, expanded, children, onToggle, onEdit) : { nodes: [], edges: [] }),
     [menu, rootKey, expanded, children, onToggle, onEdit],
   );
+
+  // After a toggle re-lays-out the tree, pan (keeping zoom) so the toggled node
+  // stays centered — easier to follow what opened/closed.
+  useEffect(() => {
+    if (!centerKey || !rfRef.current) return;
+    const n = nodes.find((x) => x.id === centerKey);
+    if (n) {
+      const z = rfRef.current.getZoom();
+      rfRef.current.setCenter(n.position.x + NODE_W / 2, n.position.y + NODE_H / 2, { zoom: z, duration: 300 });
+    }
+    setCenterKey(null);
+  }, [nodes, centerKey]);
 
   const editingNode = useMemo(
     () => (editKey && menu ? menu.find((n) => n.node_key === editKey) ?? null : null),
@@ -265,6 +282,7 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            onInit={(inst) => { rfRef.current = inst; }}
             fitView
             fitViewOptions={{ maxZoom: 1, minZoom: 0.4, padding: 0.4 }}
             minZoom={0.2}
@@ -272,15 +290,15 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
           >
             <Background />
             <Controls position="top-left" showInteractive={false} />
-            <MiniMap pannable zoomable />
           </ReactFlow>
         )}
       </div>
 
-      {editingNode && (
+      {editingNode && menu && (
         <MenuNodeEditDialog
           botId={botId}
           node={editingNode}
+          allNodes={menu}
           onClose={() => setEditKey(null)}
           onSaved={() => { setEditKey(null); void load(); }}
         />
