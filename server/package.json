@@ -9,7 +9,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "postinstall": "playwright install chromium"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
@@ -21,7 +22,7 @@
     "express": "^4.19.2",
     "googleapis": "^140.0.1",
     "node-cron": "^3.0.3",
-    "playwright-core": "^1.56.1",
+    "playwright": "^1.56.1",
     "resend": "^6.12.3"
   },
   "devDependencies": {

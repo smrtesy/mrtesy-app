@@ -12,41 +12,9 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { existsSync } from "fs";
-import { execSync } from "child_process";
 import { requireAuth, requireSuperAdmin } from "../../middleware";
 
 const router = Router();
-
-function findChromiumPath(): string {
-  // Explicit override wins (set in Railway env vars)
-  if (process.env.CHROMIUM_EXECUTABLE_PATH) {
-    return process.env.CHROMIUM_EXECUTABLE_PATH;
-  }
-  // Try common system locations (nixpacks installs to /run/current-system or nix store)
-  const candidates = [
-    "/run/current-system/sw/bin/chromium",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  // Last resort: ask the shell
-  try {
-    const which = execSync(
-      "which chromium || which chromium-browser || which google-chrome",
-      { encoding: "utf-8", timeout: 3000 },
-    )
-      .trim()
-      .split("\n")[0];
-    if (which && existsSync(which)) return which;
-  } catch {
-    // ignore
-  }
-  return "";
-}
 
 type DomainEntry = {
   domain: string;
@@ -77,21 +45,12 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
     return res.status(400).json({ error: "Invalid URL — must start with http:// or https://" });
   }
 
-  const executablePath = findChromiumPath();
-  if (!executablePath) {
-    return res.status(503).json({
-      error:
-        "Chromium not found on this server. Set CHROMIUM_EXECUTABLE_PATH env var, " +
-        "or ensure the nixpacks.toml in server/ is deployed so nixpkgs install chromium.",
-    });
-  }
-
-  let browser: import("playwright-core").Browser | null = null;
+  let browser: import("playwright").Browser | null = null;
   try {
-    const { chromium } = await import("playwright-core");
+    const { chromium } = await import("playwright");
 
+    // playwright uses its own downloaded Chromium — no executablePath needed.
     browser = await chromium.launch({
-      executablePath,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -99,7 +58,6 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
         "--disable-gpu",
         "--no-zygote",
         "--disable-accelerated-2d-canvas",
-        "--disable-software-rasterizer",
         "--disable-extensions",
         "--disable-background-networking",
         "--disable-sync",

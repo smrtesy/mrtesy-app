@@ -1,10 +1,11 @@
 [phases.setup]
 # nodejs_22 must be listed explicitly — specifying nixPkgs replaces nixpacks'
 # auto-detected Node.js packages rather than extending them.
-# Chromium and its X11/GTK deps are needed for the domain-tracker feature.
+# System libs required by playwright's own Chromium (downloaded via postinstall).
+# We do NOT install the nix chromium package — playwright downloads a version
+# that is guaranteed compatible with its CDP protocol implementation.
 nixPkgs = [
   "nodejs_22",
-  "chromium",
   "nss",
   "nspr",
   "atk",
