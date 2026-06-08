@@ -1712,7 +1712,10 @@
     "menuBtnTarget": "Target…",
     "menuSplitLabel": "Split into separate messages (3 buttons each) instead of a list",
     "menuNone": "(none)",
-    "menuUploadImage": "Upload image"
+    "menuUploadImage": "Upload image",
+    "menuEditOnTestOnly": "Switch to test to edit (live is the published version).",
+    "publishPending": "Unpublished changes",
+    "publishNoDiff": "No content diff / imported version"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

@@ -1711,7 +1711,10 @@
     "menuBtnTarget": "יעד…",
     "menuSplitLabel": "פצל להודעות נפרדות (3 כפתורים בכל אחת) במקום רשימה",
     "menuNone": "(ללא)",
-    "menuUploadImage": "העלאת תמונה"
+    "menuUploadImage": "העלאת תמונה",
+    "menuEditOnTestOnly": "עברו ל-test כדי לערוך (live הוא הגרסה המפורסמת).",
+    "publishPending": "יש שינויים שלא פורסמו",
+    "publishNoDiff": "ללא שינויי תוכן / גרסה מיובאת"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

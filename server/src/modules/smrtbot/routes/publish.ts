@@ -27,6 +27,59 @@ const ENV_TABLES = [
 type Row = Record<string, unknown>;
 const STRIP = new Set(["id", "created_at", "updated_at"]);
 
+// ── diff helpers (what a publish changed; and pending test-vs-live) ──────────
+const RESOURCE_OF: Record<string, string> = {
+  smrtbot_menu_nodes: "menu",
+  smrtbot_messages: "messages",
+  smrtbot_missions: "missions",
+  smrtbot_trivia: "trivia",
+  smrtbot_holidays: "holidays",
+  smrtbot_knowledge_base: "knowledge",
+  smrtbot_auto_messages: "auto-messages",
+};
+const KEY_OF: Record<string, (r: Row) => string> = {
+  smrtbot_menu_nodes: (r) => String(r.node_key),
+  smrtbot_messages: (r) => String(r.msg_key),
+  smrtbot_missions: (r) => String(r.mission_id),
+  smrtbot_trivia: (r) => `${r.video_id}|${r.level}|${String(r.question ?? "").slice(0, 40)}`,
+  smrtbot_holidays: (r) => String(r.holiday_name),
+  smrtbot_knowledge_base: (r) => String(r.question_pattern),
+  smrtbot_auto_messages: (r) => String(r.name),
+};
+const IGNORE_COLS = new Set(["id", "created_at", "updated_at", "org_id", "bot_id", "env", "version", "legacy_id"]);
+
+function contentHash(r: Row): string {
+  const o: Row = {};
+  for (const k of Object.keys(r).sort()) if (!IGNORE_COLS.has(k)) o[k] = r[k];
+  return JSON.stringify(o);
+}
+
+interface TableDiff { added: number; removed: number; updated: number }
+
+function diffTable(table: string, oldRows: Row[], newRows: Row[]): TableDiff {
+  const keyFn = KEY_OF[table] ?? contentHash;
+  const oldMap = new Map(oldRows.map((r) => [keyFn(r), r]));
+  const newMap = new Map(newRows.map((r) => [keyFn(r), r]));
+  let added = 0, removed = 0, updated = 0;
+  for (const [k, r] of newMap) {
+    const prev = oldMap.get(k);
+    if (!prev) added++;
+    else if (contentHash(r) !== contentHash(prev)) updated++;
+  }
+  for (const k of oldMap.keys()) if (!newMap.has(k)) removed++;
+  return { added, removed, updated };
+}
+
+/** Per-resource diff (only resources that actually changed). */
+function diffSummary(oldByTable: Record<string, Row[]>, newByTable: Record<string, Row[]>): Record<string, TableDiff> {
+  const out: Record<string, TableDiff> = {};
+  for (const table of ENV_TABLES) {
+    const d = diffTable(table, oldByTable[table] ?? [], newByTable[table] ?? []);
+    if (d.added || d.removed || d.updated) out[RESOURCE_OF[table]] = d;
+  }
+  return out;
+}
+
 async function snapshot(table: string, orgId: string, botId: string, env: string): Promise<Row[]> {
   const { data, error } = await db.from(table).select("*").eq("org_id", orgId).eq("bot_id", botId).eq("env", env);
   if (error) throw new Error(`${table}: ${error.message}`);
@@ -72,9 +125,11 @@ router.post("/bot/:botId/publish", requireBotAccess("botId"), async (req: Reques
     // Promote test → live. supabase-js has no multi-statement transaction, so
     // on any failure we restore the full pre-publish live snapshot rather than
     // leave a table deleted-but-not-repopulated.
+    const newLive: Record<string, Row[]> = {};
     try {
       for (const table of ENV_TABLES) {
         const testRows = await snapshot(table, orgId, botId, "test");
+        newLive[table] = testRows;
         await replaceEnv(table, orgId, botId, "live", testRows);
       }
     } catch (promoteErr) {
@@ -84,12 +139,16 @@ router.post("/bot/:botId/publish", requireBotAccess("botId"), async (req: Reques
       throw promoteErr;
     }
 
+    // What this publish actually changed (old live → new live), for the history.
+    const summary = diffSummary(snap, newLive);
+
     const { error: insErr } = await db.from("smrtbot_publish_batches").insert({
       org_id: orgId, bot_id: botId, version, status: "published",
       note: typeof req.body?.note === "string" ? req.body.note : null,
       published_by: req.user!.email ?? req.user!.id,
       tables_json: ENV_TABLES,
       changes_json: snap, // the pre-publish live snapshot, for rollback
+      summary_json: summary,
     });
     if (insErr) throw new Error(insErr.message);
     res.json({ ok: true, version });
@@ -100,13 +159,28 @@ router.post("/bot/:botId/publish", requireBotAccess("botId"), async (req: Reques
 
 // ── publish history ─────────────────────────────────────────
 router.get("/bot/:botId/publish", requireBotAccess("botId"), async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const botId = req.params.botId;
   const { data, error } = await db
     .from("smrtbot_publish_batches")
-    .select("id, version, status, note, published_by, created_at")
-    .eq("org_id", req.org!.id).eq("bot_id", req.params.botId)
+    .select("id, version, status, note, published_by, created_at, summary_json")
+    .eq("org_id", orgId).eq("bot_id", botId)
     .order("version", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ batches: data ?? [] });
+
+  // Pending = what's in test but not yet published to live.
+  let pending: Record<string, TableDiff> = {};
+  try {
+    const live: Record<string, Row[]> = {};
+    const test: Record<string, Row[]> = {};
+    for (const table of ENV_TABLES) {
+      live[table] = await snapshot(table, orgId, botId, "live");
+      test[table] = await snapshot(table, orgId, botId, "test");
+    }
+    pending = diffSummary(live, test);
+  } catch { /* pending is best-effort */ }
+
+  res.json({ batches: data ?? [], pending });
 });
 
 // ── rollback live to a batch's snapshot ─────────────────────

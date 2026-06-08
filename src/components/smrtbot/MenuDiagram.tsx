@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 import dagre from "dagre";
 import {
   ReactFlow,
@@ -240,7 +241,16 @@ export function MenuDiagram({ botId, env }: { botId: string; env: "test" | "live
     });
     setCenterKey(key); // keep the toggled node centered (same zoom) after re-layout
   }, []);
-  const onEdit = useCallback((key: string) => setEditKey(key), []);
+  const onEdit = useCallback(
+    (key: string) => {
+      if (env !== "test") {
+        toast.message(t("menuEditOnTestOnly"));
+        return;
+      }
+      setEditKey(key);
+    },
+    [env, t],
+  );
 
   const rootKey = useMemo(() => (menu ? findRootKey(menu) : null), [menu]);
   const children = useMemo(() => (menu ? buildChildren(menu) : new Map<string, string[]>()), [menu]);
