@@ -50,6 +50,7 @@ export function PlanEditDialog({
     kind: "effort" as PlanKind,
     stage: "active" as PlanStage,
     status: "active" as PlanStatus,
+    is_capability: false,
     start_date: "",
     end_date: "",
     owner_user_id: "",
@@ -67,6 +68,7 @@ export function PlanEditDialog({
       kind: plan?.kind ?? "effort",
       stage: plan?.stage ?? "active",
       status: plan?.status ?? "active",
+      is_capability: plan?.is_capability ?? false,
       start_date: plan?.start_date ?? "",
       end_date: plan?.end_date ?? "",
       owner_user_id: plan?.owner_user_id ?? "",
@@ -95,6 +97,7 @@ export function PlanEditDialog({
       kind: form.kind,
       stage: form.stage,
       status: form.status,
+      is_capability: form.is_capability,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
       owner_user_id: form.owner_user_id || null,
@@ -215,6 +218,11 @@ export function PlanEditDialog({
               <Input value={form.color} onChange={(e) => set("color", e.target.value)} className="h-7 w-24" dir="ltr" />
             </div>
           </Field>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.is_capability} onChange={(e) => set("is_capability", e.target.checked)} className="h-4 w-4" />
+            {t("capability.field")}
+          </label>
         </div>
 
         <DialogFooter className="mt-2 flex items-center justify-between gap-2 sm:justify-between">

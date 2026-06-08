@@ -2042,6 +2042,16 @@
       "toDraft": "Back to draft",
       "label": "Status"
     },
+    "capability": {
+      "field": "Reusable tool / capability",
+      "shelf": "Available capabilities",
+      "markAvailable": "Mark available",
+      "returnToTimeline": "Return to timeline",
+      "available": "Available",
+      "unavailable": "Unavailable",
+      "markUnavailable": "Mark unavailable",
+      "markAvailableAgain": "Mark available again"
+    },
     "view": {
       "list": "List",
       "timeline": "Timeline"

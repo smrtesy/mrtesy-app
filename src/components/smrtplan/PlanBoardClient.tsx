@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog, Check } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
@@ -82,6 +82,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [capacityOpen, setCapacityOpen] = useState(false);
   const [estimatesOpen, setEstimatesOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [shelfOpen, setShelfOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
   const canEdit = access === "full";
 
@@ -144,10 +145,24 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     }
   }
 
+  async function setAvailable(id: string, is_available: boolean) {
+    try {
+      await api(`/api/plans/${id}`, { method: "PATCH", body: { is_available } });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  // Done capabilities leave the active board and live on the "available" shelf;
+  // everything else (incl. done deliverables/events) stays on the timeline.
+  const shelfPlans = useMemo(() => plans.filter((p) => p.is_capability && p.status === "done"), [plans]);
+  const boardPlans = useMemo(() => plans.filter((p) => !(p.is_capability && p.status === "done")), [plans]);
+
   // Timeline bounds from the data (fallback: today .. +90d).
   const { t0, totalDays } = useMemo(() => {
-    const starts = plans.map((p) => p.start_date).filter(Boolean) as string[];
-    const ends = plans.map((p) => p.end_date).filter(Boolean) as string[];
+    const starts = boardPlans.map((p) => p.start_date).filter(Boolean) as string[];
+    const ends = boardPlans.map((p) => p.end_date).filter(Boolean) as string[];
     if (!starts.length) {
       const now = new Date();
       return { t0: now, totalDays: 90 };
@@ -157,7 +172,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     const start = parseISO(minS);
     const end = parseISO(maxE);
     return { t0: start, totalDays: Math.max(14, daysBetween(start, end) + 7) };
-  }, [plans]);
+  }, [boardPlans]);
 
   const dateAt = useCallback((off: number) => new Date(t0.getTime() + off * DAY_MS), [t0]);
   /** Percentage position (for the responsive mobile sparkline that fits its container). */
@@ -175,13 +190,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
     const map = new Map<string, Plan[]>();
-    for (const p of plans) {
+    for (const p of boardPlans) {
       const key = p.group_label || "—";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(p);
     }
     return [...map.entries()];
-  }, [plans]);
+  }, [boardPlans]);
 
   // Visible working-day columns: every day in the window except hidden weekdays
   // (Saturday + Sunday). `cols[i]` is the day-offset (from t0) of column i.
@@ -329,7 +344,41 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         )}
       </div>
 
-      {plans.length === 0 ? (
+      {/* available-capabilities shelf — done one-time tools, off the timeline */}
+      {shelfPlans.length > 0 && (
+        <div className="rounded-xl border bg-card">
+          <button
+            onClick={() => setShelfOpen((o) => !o)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12.5px] font-medium text-muted-foreground"
+          >
+            {shelfOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            {t("capability.shelf")} ({shelfPlans.length})
+          </button>
+          {shelfOpen && (
+            <div className="flex flex-wrap gap-2 border-t p-3">
+              {shelfPlans.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setSelectedId(p.id)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors",
+                    p.is_available
+                      ? "border-status-ok/40 bg-status-ok/10 text-status-ok"
+                      : "border-status-late/40 bg-status-late/10 text-status-late",
+                    selectedId === p.id && "ring-2 ring-primary/40",
+                  )}
+                >
+                  {p.is_available ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                  {planTitle(p, locale)}
+                  {!p.is_available && <span className="text-[10px]">· {t("capability.unavailable")}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {boardPlans.length === 0 ? (
         <div className="rounded-xl border bg-card p-10 text-center">
           <p className="text-sm font-medium">{t("board.empty")}</p>
           <p className="mt-1 text-[12.5px] text-muted-foreground">{t("board.emptyHint")}</p>
@@ -689,6 +738,22 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 <ControlButton onClick={() => setStatus(selected.id, "draft")}>
                   <Pencil className="h-3.5 w-3.5" /> {t("status.toDraft")}
                 </ControlButton>
+              )}
+              {selected.is_capability && selected.status === "active" && (
+                <ControlButton onClick={() => setStatus(selected.id, "done")}>
+                  <Check className="h-3.5 w-3.5" /> {t("capability.markAvailable")}
+                </ControlButton>
+              )}
+              {selected.is_capability && selected.status === "done" && (
+                <>
+                  <ControlButton onClick={() => setStatus(selected.id, "active")}>
+                    <RefreshCw className="h-3.5 w-3.5" /> {t("capability.returnToTimeline")}
+                  </ControlButton>
+                  <ControlButton onClick={() => setAvailable(selected.id, !selected.is_available)}>
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {selected.is_available ? t("capability.markUnavailable") : t("capability.markAvailableAgain")}
+                  </ControlButton>
+                </>
               )}
               <ControlButton onClick={() => { setEditorPlan(selected); setEditorOpen(true); }}>
                 <Pencil className="h-3.5 w-3.5" /> {t("edit.editPlan")}

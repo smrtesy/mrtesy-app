@@ -2041,6 +2041,16 @@
       "toDraft": "החזר לטיוטה",
       "label": "סטטוס"
     },
+    "capability": {
+      "field": "כלי / יכולת לשימוש חוזר",
+      "shelf": "יכולות זמינות",
+      "markAvailable": "סמן כזמין",
+      "returnToTimeline": "החזר לטיים-ליין",
+      "available": "זמין",
+      "unavailable": "לא זמין",
+      "markUnavailable": "סמן כלא זמין",
+      "markAvailableAgain": "סמן כזמין שוב"
+    },
     "view": {
       "list": "רשימה",
       "timeline": "ציר זמן"
