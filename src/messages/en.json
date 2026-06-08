@@ -1695,7 +1695,8 @@
     "secGame": "Game",
     "secInbox": "Inbox",
     "secData": "Insights",
-    "settingsAdvanced": "Advanced"
+    "settingsAdvanced": "Advanced",
+    "cancel": "Cancel"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

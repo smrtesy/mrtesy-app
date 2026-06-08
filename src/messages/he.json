@@ -1694,7 +1694,8 @@
     "secGame": "משחק",
     "secInbox": "פניות",
     "secData": "נתונים",
-    "settingsAdvanced": "מתקדם"
+    "settingsAdvanced": "מתקדם",
+    "cancel": "ביטול"
   },
   "smrtVoice": {
     "appName": "smrtVoice",
