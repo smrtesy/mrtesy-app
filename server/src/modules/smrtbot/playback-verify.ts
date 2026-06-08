@@ -18,7 +18,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 
-import { getAppSecret } from "../../db";
+import { db, getAppSecret } from "../../db";
 import { verifyPlaybackToken } from "./playback-token";
 
 const router = Router();
@@ -49,6 +49,25 @@ async function handleVerify(req: Request, res: Response): Promise<void> {
   if (!claims) {
     res.json({ valid: false });
     return;
+  }
+
+  // Per-link use limit (anti-forwarding). Each page-load verify counts once;
+  // HLS segment requests hit the CDN, not here. fail-open on a DB hiccup — the
+  // subscription gate already passed, so this is anti-abuse, not access control.
+  if (claims.j) {
+    const max = parseInt((await getAppSecret("smrtbot", "VIDEO_MAX_USES", "VIDEO_MAX_USES")) || "2", 10) || 2;
+    const { data: allowed, error } = await db.rpc("smrtbot_playback_consume", {
+      p_jti: claims.j,
+      p_video: claims.v,
+      p_email: claims.e,
+      p_max: max,
+    });
+    if (error) {
+      console.error("[smrtbot/playback] consume failed", error.message);
+    } else if (allowed === false) {
+      res.json({ valid: false, reason: "use_limit_exceeded" });
+      return;
+    }
   }
 
   res.json({

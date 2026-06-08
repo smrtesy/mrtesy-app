@@ -1,0 +1,112 @@
+<!doctype html>
+<!--
+  smrtBot — white-label hybrid HLS player (reference for the rebbek.org team).
+
+  Plays an HLS stream served from YOUR custom Bunny hostname (e.g.
+  video.rebbek.org) with NO third-party video domain visible:
+    • Safari / iOS  → native HLS playback  → AirPlay works automatically
+    • Chrome / etc. → hls.js               → Google Cast works
+  The signed master URL is injected by your server AFTER it verified the
+  subscriber (see README.md). This file plays it; it does not decide access.
+
+  White-label notes:
+    • Self-host hls.js (serve /js/hls.min.js from your own domain) so even the
+      player library isn't a third-party request.
+    • The only unavoidable external request is the Google Cast SDK (gstatic.com),
+      and only if casting is enabled.
+-->
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>נגן</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; }
+    #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+    video { width: 100%; height: 100%; background: #000; }
+    #castBtn { position: fixed; top: 12px; left: 12px; z-index: 5; background: rgba(0,0,0,.5);
+               color: #fff; border: 1px solid #fff6; border-radius: 8px; padding: 8px 12px;
+               font: 14px sans-serif; cursor: pointer; display: none; }
+    #tap { position: fixed; inset: 0; z-index: 6; display: none; align-items: center;
+           justify-content: center; color: #fff; font: 600 18px sans-serif;
+           background: rgba(0,0,0,.45); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <!-- x-webkit-airplay=allow surfaces the AirPlay control in Safari. -->
+    <video id="player" controls playsinline x-webkit-airplay="allow" webkit-playsinline></video>
+  </div>
+  <button id="castBtn">📺 הקרנה לטלוויזיה</button>
+  <div id="tap">▶ הקש כדי לנגן</div>
+
+  <!-- Self-host this for full white-label: <script src="/js/hls.min.js"></script> -->
+  <script src="/js/hls.min.js"></script>
+  <script>
+    // ── Injected by your server after verifying the subscriber ──────────────
+    // A SIGNED, tokenised master playlist URL on your custom Bunny hostname,
+    // e.g. https://video.rebbek.org/bcdn_token=...&expires=...&token_path=.../<guid>/playlist.m3u8
+    const MASTER_URL = "__SIGNED_MASTER_M3U8_URL__";
+
+    const video = document.getElementById("player");
+    const tap = document.getElementById("tap");
+
+    function attemptAutoplay() {
+      // Browsers block UNMUTED autoplay without a gesture. Try with sound; if
+      // blocked, fall back to a one-tap overlay (keeps sound) rather than
+      // silently muting.
+      video.play().catch(() => {
+        tap.style.display = "flex";
+        tap.addEventListener("click", () => {
+          tap.style.display = "none";
+          video.play().catch(() => {});
+        }, { once: true });
+      });
+    }
+
+    function loadStream() {
+      const canNative = video.canPlayType("application/vnd.apple.mpegurl");
+      if (canNative) {
+        // Safari / iOS — native HLS. AirPlay + the native pipeline work here.
+        video.src = MASTER_URL;
+        video.addEventListener("loadedmetadata", attemptAutoplay, { once: true });
+      } else if (window.Hls && window.Hls.isSupported()) {
+        // Chrome / Firefox / Android — Media Source Extensions via hls.js.
+        const hls = new Hls({ enableWorker: true });
+        hls.loadSource(MASTER_URL);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.MANIFEST_PARSED, attemptAutoplay);
+      } else {
+        // Last resort — let the browser try directly.
+        video.src = MASTER_URL;
+        attemptAutoplay();
+      }
+    }
+    loadStream();
+
+    // ── Google Cast (Chromecast) — optional. SDK loads from gstatic.com. ─────
+    window["__onGCastApiAvailable"] = function (available) {
+      if (!available) return;
+      const ctx = cast.framework.CastContext.getInstance();
+      ctx.setOptions({
+        receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+      });
+      const btn = document.getElementById("castBtn");
+      btn.style.display = "block";
+      btn.addEventListener("click", () => {
+        ctx.requestSession().then(() => {
+          const session = ctx.getCurrentSession();
+          // The cast device fetches the stream itself → the directory token
+          // must NOT be IP-locked, or this 403s.
+          const mediaInfo = new chrome.cast.media.MediaInfo(MASTER_URL, "application/x-mpegURL");
+          const request = new chrome.cast.media.LoadRequest(mediaInfo);
+          session.loadMedia(request);
+        }).catch(() => {});
+      });
+    };
+  </script>
+  <!-- Cast SDK (only if you want Chromecast). Comment out to stay 100% on your domain. -->
+  <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+</body>
+</html>

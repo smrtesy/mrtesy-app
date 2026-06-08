@@ -16,6 +16,7 @@ export interface PlaybackClaims {
   v: string; // video number / id
   e: string; // subscriber email (lowercased)
   c: string | null; // external customer id
+  j: string; // unique token id (jti) — for the per-link use limit
   iat: number; // issued-at (epoch seconds)
   exp: number; // expiry (epoch seconds)
 }
@@ -46,7 +47,7 @@ export async function signPlaybackToken(
   const key = await secret();
   if (!key) return null;
   const now = Math.floor(Date.now() / 1000);
-  const full: PlaybackClaims = { ...claims, iat: now, exp: now + ttlSec };
+  const full: PlaybackClaims = { ...claims, j: crypto.randomUUID(), iat: now, exp: now + ttlSec };
   const payloadB64 = b64url(Buffer.from(JSON.stringify(full), "utf8"));
   return `${payloadB64}.${sign(payloadB64, key)}`;
 }
