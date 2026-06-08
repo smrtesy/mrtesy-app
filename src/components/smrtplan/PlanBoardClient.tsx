@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
@@ -12,8 +12,6 @@ import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
-import { CapacityEditor } from "./CapacityEditor";
-import { EstimatesEditor } from "./EstimatesEditor";
 import { RolesEditor } from "./RolesEditor";
 
 const DAY_MS = 86_400_000;
@@ -79,8 +77,6 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
-  const [capacityOpen, setCapacityOpen] = useState(false);
-  const [estimatesOpen, setEstimatesOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
@@ -326,12 +322,6 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </ControlButton>
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
-            </ControlButton>
-            <ControlButton onClick={() => setCapacityOpen(true)}>
-              <Users className="h-3.5 w-3.5" /> {t("capacity.button")}
-            </ControlButton>
-            <ControlButton onClick={() => setEstimatesOpen(true)}>
-              <Clock className="h-3.5 w-3.5" /> {t("estimates.button")}
             </ControlButton>
             <ControlButton onClick={() => setRolesOpen(true)}>
               <UserCog className="h-3.5 w-3.5" /> {t("roles.button")}
@@ -781,8 +771,6 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onClose={() => setMilestonesOpen(false)}
         onChanged={load}
       />
-      <CapacityEditor open={capacityOpen} onClose={() => setCapacityOpen(false)} />
-      <EstimatesEditor open={estimatesOpen} onClose={() => setEstimatesOpen(false)} />
       <RolesEditor open={rolesOpen} onClose={() => setRolesOpen(false)} />
     </div>
   );
