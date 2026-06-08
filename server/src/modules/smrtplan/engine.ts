@@ -320,6 +320,15 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   // Sub-task equal-split: divide the parent row's [start, deadline] range among
   // its children that have no private duration. The last child ends at the row
   // deadline; earlier ones are staged before it. Children keep duration_days NULL.
+  //
+  // Children must be staged in DEPENDENCY order (provider→consumer), not creation
+  // order: a chain like "propose → discuss → design → approve" only lines up if
+  // the final consumer lands on the parent deadline and predecessors stage back.
+  // `order` is the org-wide topological order, so a child's index in it respects
+  // the task→task edges among siblings; created_at is only a tiebreaker for
+  // independent siblings with no edge between them.
+  const orderIndex = new Map<string, number>();
+  order.forEach((id, i) => orderIndex.set(id, i));
   for (const [parentId, children] of childrenByParent) {
     const parent = tasks.get(parentId);
     if (!parent) continue;
@@ -327,7 +336,11 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     if (!parentFinish) continue;
     const splitKids = [...children]
       .filter((c) => c.duration === 0)
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      .sort((a, b) => {
+        const ai = orderIndex.get(a.id) ?? 0;
+        const bi = orderIndex.get(b.id) ?? 0;
+        return ai !== bi ? ai - bi : a.created_at.localeCompare(b.created_at);
+      });
     if (splitKids.length === 0) continue;
     const start = parent.earliest_start ?? floorOf(parent);
     const per = Math.max(1, Math.floor(countWorkingDays(start, parentFinish, blocked) / splitKids.length));
