@@ -1,7 +1,9 @@
 [phases.setup]
-# System Chromium for the domain-tracker feature.
-# playwright-core is pointed at this binary via CHROMIUM_EXECUTABLE_PATH.
+# nodejs_22 must be listed explicitly — specifying nixPkgs replaces nixpacks'
+# auto-detected Node.js packages rather than extending them.
+# Chromium and its X11/GTK deps are needed for the domain-tracker feature.
 nixPkgs = [
+  "nodejs_22",
   "chromium",
   "nss",
   "nspr",
