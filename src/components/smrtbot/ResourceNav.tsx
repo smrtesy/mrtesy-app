@@ -34,7 +34,7 @@ export function ResourceNav({ botId, active }: { botId: string; active?: string 
           {label(r)}
         </Link>
       ))}
-      {(["stats", "logs", "web", "publish", "settings"] as const).map((r) => (
+      {(["stats", "logs", "web", "whatsapp", "publish", "settings"] as const).map((r) => (
         <Link
           key={r}
           href={`/${locale}/bots/${botId}/${r}`}
@@ -49,9 +49,11 @@ export function ResourceNav({ botId, active }: { botId: string; active?: string 
               ? t("logsTitle")
               : r === "web"
                 ? t("webTab")
-                : r === "publish"
-                  ? t("publishTitle")
-                  : t("settingsTitle")}
+                : r === "whatsapp"
+                  ? t("waTab")
+                  : r === "publish"
+                    ? t("publishTitle")
+                    : t("settingsTitle")}
         </Link>
       ))}
     </div>

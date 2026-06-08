@@ -23,6 +23,7 @@ import {
   WhatsAppSendError,
   type BotEnv,
 } from "./wa";
+import { sendBaileysText, toJid } from "./baileys";
 
 const router = Router();
 
@@ -111,12 +112,52 @@ router.post("/api/bot/internal/send", async (req: Request, res: Response) => {
   const { data: bot, error } = await db
     .from("smrtbot_bots")
     .select(
-      "id, org_id, wa_phone_number_id, wa_access_token, test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token",
+      "id, org_id, transport, wa_phone_number_id, wa_access_token, test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token",
     )
     .eq("id", bot_id)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!bot) return res.status(404).json({ error: "bot not found" });
+
+  // ── Unofficial transport (Baileys) ──────────────────────────────────────
+  // The WhatsApp-Web connection sends free-form text to a JID (group …@g.us
+  // or contact …@s.whatsapp.net). Meta templates don't apply here; broadcasts
+  // carry `text`. Per-user opt-out is enforced for 1:1 sends, not group JIDs.
+  if ((bot as { transport?: string }).transport === "baileys") {
+    if (!text) {
+      return res.status(400).json({ error: "baileys transport requires text" });
+    }
+    const results: SendResult[] = [];
+    for (const r of recipients) {
+      if (!r.phone) {
+        results.push({ phone: "", contact_id: r.contact_id ?? null, status: "skipped", error: "no phone" });
+        continue;
+      }
+      const jid = toJid(r.phone);
+      const isGroup = jid.endsWith("@g.us");
+      if (!isGroup) {
+        const { data: waUser } = await db
+          .from("smrtbot_wa_users")
+          .select("wa_opted_out")
+          .eq("bot_id", bot_id)
+          .eq("phone", r.phone)
+          .maybeSingle();
+        if (waUser?.wa_opted_out) {
+          results.push({ phone: r.phone, contact_id: r.contact_id ?? null, status: "skipped", error: "opted out" });
+          continue;
+        }
+      }
+      const sent = await sendBaileysText(bot_id, jid, text);
+      results.push({
+        phone: r.phone,
+        contact_id: r.contact_id ?? null,
+        status: sent.status,
+        wa_message_id: sent.wa_message_id ?? null,
+        error: sent.error,
+      });
+    }
+    return res.json({ results });
+  }
 
   const useEnv: BotEnv = env === "test" ? "test" : "live";
   const creds = resolveCreds(bot as Parameters<typeof resolveCreds>[0], useEnv);

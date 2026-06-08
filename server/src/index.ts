@@ -28,7 +28,7 @@ import smrttaskRouter from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
-import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter } from "./modules/smrtbot";
+import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
 
 const app = express();
@@ -210,6 +210,12 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
+  // Resume any unofficial WhatsApp (Baileys) connections that were already
+  // paired. Best-effort — a failure here must never crash boot. Assumes a
+  // single replica (two sockets on one number get logged out by WhatsApp).
+  void initBaileysConnections().catch((e) =>
+    console.error("[startup] initBaileysConnections failed:", e),
+  );
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash

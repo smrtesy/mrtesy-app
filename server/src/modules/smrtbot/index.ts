@@ -19,3 +19,6 @@ export default router;
 export { default as internalRouter } from "./internal";
 export { default as webRouter } from "./web";
 export { default as jobsRouter } from "./jobs";
+
+// Resume the unofficial WhatsApp (Baileys) connections on boot.
+export { initBaileysConnections } from "./baileys";

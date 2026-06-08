@@ -1,0 +1,34 @@
+-- ============================================================
+-- smrtBot — pg_cron schedule for scheduled broadcasts (DEPLOY-TIME TEMPLATE)
+-- ============================================================
+-- Drains smrtbot_scheduled_broadcasts: every minute, pg_cron POSTs to the
+-- Railway server's bounded job route, which sends each due broadcast through
+-- the bot's transport (Baileys for the unofficial channel, Meta for official)
+-- and flips the row to 'sent' / 'failed'. Mirrors the other smrtBot job routes
+-- (model ג3) and the smrtPlan cron template.
+--
+-- Deploy-dependent: replace <RAILWAY_URL> with the server's public base URL and
+-- <SMRTBOT_INTERNAL_SECRET> with the shared secret the Express route checks
+-- (process.env.SMRTBOT_INTERNAL_SECRET || CRON_SECRET), then run this against
+-- the project. NOT applied automatically (hence .template).
+--
+-- Requires pg_cron + pg_net (already enabled on Smrtesy). Times are UTC.
+
+CREATE OR REPLACE FUNCTION smrtbot_schedule(job_name text, sched text, route text)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM cron.unschedule(job_name) WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = job_name);
+  PERFORM cron.schedule(job_name, sched, format($q$
+    SELECT net.http_post(
+      url     := '%s/api/bot/jobs/%s',
+      headers := jsonb_build_object('Content-Type','application/json','x-smrtbot-secret','%s'),
+      body    := '{}'::jsonb
+    );
+  $q$, '<RAILWAY_URL>', route, '<SMRTBOT_INTERNAL_SECRET>'));
+END$$;
+
+-- Every minute: send any broadcast whose scheduled_at has passed.
+SELECT smrtbot_schedule('smrtbot-broadcasts', '* * * * *', 'broadcasts');
+
+-- To remove:
+--   SELECT cron.unschedule('smrtbot-broadcasts');
