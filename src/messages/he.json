@@ -2024,6 +2024,15 @@
       "primary": "ברירת מחדל",
       "color": "צבע"
     },
+    "status": {
+      "draft": "טיוטה",
+      "active": "פעיל",
+      "done": "הושלם",
+      "archived": "בארכיון",
+      "approve": "אשר תוכנית",
+      "toDraft": "החזר לטיוטה",
+      "label": "סטטוס"
+    },
     "view": {
       "list": "רשימה",
       "timeline": "ציר זמן"

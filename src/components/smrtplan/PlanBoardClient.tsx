@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Users, Clock, UserCog, Check } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
-import type { Plan, PlanAccessLevel, PlanMilestone } from "@/types/plan";
+import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
@@ -132,6 +132,15 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       toast.error(e instanceof Error ? e.message : "Error");
     } finally {
       setRecomputing(false);
+    }
+  }
+
+  async function setStatus(id: string, status: PlanStatus) {
+    try {
+      await api(`/api/plans/${id}`, { method: "PATCH", body: { status } });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
     }
   }
 
@@ -374,6 +383,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                               {t("tags.critical")}
                             </span>
                           )}
+                          <StatusBadge status={p.status} t={t} />
                           <span className="whitespace-nowrap text-[10.5px] font-medium" style={{ color: healthColor[h] }}>
                             {t(`health.${h}`)}
                           </span>
@@ -458,6 +468,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             {t("tags.critical")}
                           </span>
                         )}
+                        <StatusBadge status={p.status} t={t} />
                       </span>
                       <span
                         className="inline-flex items-center gap-1 whitespace-nowrap text-[10.5px] font-medium"
@@ -668,7 +679,17 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       {selected && (
         <div className="rounded-xl border bg-card p-4">
           {canEdit && (
-            <div className="mb-2 flex justify-end">
+            <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
+              {selected.status === "draft" && (
+                <ControlButton onClick={() => setStatus(selected.id, "active")}>
+                  <Check className="h-3.5 w-3.5" /> {t("status.approve")}
+                </ControlButton>
+              )}
+              {selected.status === "active" && (
+                <ControlButton onClick={() => setStatus(selected.id, "draft")}>
+                  <Pencil className="h-3.5 w-3.5" /> {t("status.toDraft")}
+                </ControlButton>
+              )}
               <ControlButton onClick={() => { setEditorPlan(selected); setEditorOpen(true); }}>
                 <Pencil className="h-3.5 w-3.5" /> {t("edit.editPlan")}
               </ControlButton>
@@ -715,6 +736,22 @@ function ControlButton({
     >
       {children}
     </button>
+  );
+}
+
+const STATUS_CHIP: Record<string, string> = {
+  draft: "bg-amber-500/15 text-amber-600",
+  done: "bg-status-ok/15 text-status-ok",
+  archived: "bg-muted text-muted-foreground",
+};
+
+/** A small chip for any non-active plan status (draft / done / archived). */
+function StatusBadge({ status, t }: { status: PlanStatus; t: (key: string) => string }) {
+  if (status === "active") return null;
+  return (
+    <span className={cn("shrink-0 rounded px-1.5 py-px text-[9px] font-bold", STATUS_CHIP[status] ?? "bg-muted text-muted-foreground")}>
+      {t(`status.${status}`)}
+    </span>
   );
 }
 

@@ -84,14 +84,18 @@ interface OpenTaskRow {
 }
 
 async function fetchOpenTasks(userId: string, orgId: string): Promise<OpenTaskRow[]> {
-  const { data } = await db
+  // Keep draft-plan (not-yet-approved) tasks out of the assistant's context.
+  // Ordinary tasks have a null plan_id, so the null branch keeps them.
+  const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", orgId).eq("status", "draft");
+  const draftIds = (draftPlans ?? []).map((p) => (p as { id: string }).id);
+  let q = db
     .from("tasks")
     .select("id, serial_display, title, title_he, status, due_date, priority")
     .eq("user_id", userId)
     .eq("organization_id", orgId)
-    .in("status", ["inbox", "in_progress", "snoozed"])
-    .order("created_at", { ascending: false })
-    .limit(80);
+    .in("status", ["inbox", "in_progress", "snoozed"]);
+  if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
+  const { data } = await q.order("created_at", { ascending: false }).limit(80);
   return (data ?? []) as OpenTaskRow[];
 }
 

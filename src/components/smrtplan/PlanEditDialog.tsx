@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import type { Plan, PlanKind, PlanStage } from "@/types/plan";
+import type { Plan, PlanKind, PlanStage, PlanStatus } from "@/types/plan";
 
 const COLORS = [
   "#534AB7", "#7F77DD", "#185FA5", "#378ADD", "#0F6E56", "#1D9E75",
@@ -49,6 +49,7 @@ export function PlanEditDialog({
     color: COLORS[0],
     kind: "effort" as PlanKind,
     stage: "active" as PlanStage,
+    status: "active" as PlanStatus,
     start_date: "",
     end_date: "",
     owner_user_id: "",
@@ -65,6 +66,7 @@ export function PlanEditDialog({
       color: plan?.color ?? COLORS[0],
       kind: plan?.kind ?? "effort",
       stage: plan?.stage ?? "active",
+      status: plan?.status ?? "active",
       start_date: plan?.start_date ?? "",
       end_date: plan?.end_date ?? "",
       owner_user_id: plan?.owner_user_id ?? "",
@@ -92,6 +94,7 @@ export function PlanEditDialog({
       color: form.color,
       kind: form.kind,
       stage: form.stage,
+      status: form.status,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
       owner_user_id: form.owner_user_id || null,
@@ -175,15 +178,24 @@ export function PlanEditDialog({
                 <option value="active">{t("repository.stage.active")}</option>
               </select>
             </Field>
-            <Field label={te("owner")}>
-              <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
-                <option value="">{te("unassigned")}</option>
-                {members.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id.slice(0, 6)}</option>
-                ))}
+            <Field label={t("status.label")}>
+              <select className={fieldCls} value={form.status} onChange={(e) => set("status", e.target.value as PlanStatus)}>
+                <option value="draft">{t("status.draft")}</option>
+                <option value="active">{t("status.active")}</option>
+                <option value="done">{t("status.done")}</option>
+                <option value="archived">{t("status.archived")}</option>
               </select>
             </Field>
           </div>
+
+          <Field label={te("owner")}>
+            <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
+              <option value="">{te("unassigned")}</option>
+              {members.map((m) => (
+                <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id.slice(0, 6)}</option>
+              ))}
+            </select>
+          </Field>
 
           <Field label={te("color")}>
             <div className="flex flex-wrap items-center gap-2">

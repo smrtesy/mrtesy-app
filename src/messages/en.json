@@ -2025,6 +2025,15 @@
       "primary": "Default",
       "color": "Color"
     },
+    "status": {
+      "draft": "Draft",
+      "active": "Active",
+      "done": "Done",
+      "archived": "Archived",
+      "approve": "Approve plan",
+      "toDraft": "Back to draft",
+      "label": "Status"
+    },
     "view": {
       "list": "List",
       "timeline": "Timeline"
