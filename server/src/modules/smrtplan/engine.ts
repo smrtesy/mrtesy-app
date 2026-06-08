@@ -201,15 +201,17 @@ export async function computeOrgSchedule(orgId: string): Promise<{
 
   const { data: planRows } = await db
     .from("smrtplan_plans")
-    .select("id, start_date, end_date")
+    .select("id, start_date, end_date, kind")
     .eq("org_id", orgId);
   if (!planRows || planRows.length === 0) return { org_id: orgId, scheduled: 0, critical: 0 };
 
   const planStartOf = new Map<string, Date | null>();
   const planEndOf = new Map<string, Date | null>();
+  const planKindOf = new Map<string, string>();
   for (const p of planRows) {
     planStartOf.set(p.id as string, p.start_date ? parseISO(p.start_date as string) : null);
     planEndOf.set(p.id as string, p.end_date ? parseISO(p.end_date as string) : null);
+    planKindOf.set(p.id as string, (p.kind as string) ?? "stream");
   }
 
   const { data: taskRows, error: taskErr } = await db
@@ -293,8 +295,18 @@ export async function computeOrgSchedule(orgId: string): Promise<{
 
   // A task schedules backward from ITS OWN due_date (the row deadline), not the
   // plan's end_date. The plan end_date is only the gantt bar.
-  const dueOf = (t: EngineTask): Date | null =>
-    t.due_date ? rollBack(parseISO(t.due_date), blocked) : null;
+  const dueOf = (t: EngineTask): Date | null => {
+    if (t.due_date) return rollBack(parseISO(t.due_date), blocked);
+    // Effort-plan tasks inherit the plan's deliverable deadline (its end_date)
+    // as their anchor — so the whole plan schedules backward from one date
+    // through the dependency chain, with no per-task due dates. (Streams anchor
+    // per-episode; that needs the episode structure and lands in a follow-up.)
+    if (t.plan_id && planKindOf.get(t.plan_id) === "effort") {
+      const end = planEndOf.get(t.plan_id);
+      if (end) return rollBack(end, blocked);
+    }
+    return null;
+  };
   const floorOf = (t: EngineTask): Date => planStartOf.get(t.plan_id ?? "") ?? new Date();
 
   // Backward pass (reverse-topological): latest_finish = the earliest of the
