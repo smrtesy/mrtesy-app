@@ -1994,6 +1994,7 @@
       "estimatedHours": "שעות מוערכות",
       "fromCatalog": "בחר מהקטלוג…",
       "manualDuration": "משך ידני (ימים)",
+      "durationDays": "משך (ימים)",
       "autoDuration": "משך אוטומטי לפי שעות/קיבולת",
       "daysUnit": "ימים",
       "hoursUnit": "ש׳",
@@ -2054,6 +2055,7 @@
     "capability": {
       "field": "כלי / יכולת לשימוש חוזר",
       "shelf": "יכולות זמינות",
+      "markDone": "סמן כהושלם (העבר למדף)",
       "markAvailable": "סמן כזמין",
       "returnToTimeline": "החזר לטיים-ליין",
       "available": "זמין",

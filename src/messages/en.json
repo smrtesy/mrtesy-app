@@ -1995,6 +1995,7 @@
       "estimatedHours": "Estimated hours",
       "fromCatalog": "Pick from catalog…",
       "manualDuration": "Manual duration (days)",
+      "durationDays": "Duration (days)",
       "autoDuration": "Auto duration from hours/capacity",
       "daysUnit": "d",
       "hoursUnit": "h",
@@ -2055,6 +2056,7 @@
     "capability": {
       "field": "Reusable tool / capability",
       "shelf": "Available capabilities",
+      "markDone": "Mark done (to shelf)",
       "markAvailable": "Mark available",
       "returnToTimeline": "Return to timeline",
       "available": "Available",

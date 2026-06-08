@@ -20,12 +20,6 @@ interface Member {
   email: string | null;
   name: string | null;
 }
-interface Estimate {
-  id: string;
-  name: string;
-  description: string | null;
-  hours: number;
-}
 function memberName(m: Member): string {
   return m.name || m.email || m.user_id.slice(0, 6);
 }
@@ -66,7 +60,6 @@ export function PlanEffortDetail({
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<PlanTask[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
-  const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -83,15 +76,13 @@ export function PlanEffortDetail({
     setLoading(true);
     (async () => {
       try {
-        const [data, mem, est] = await Promise.all([
+        const [data, mem] = await Promise.all([
           api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`),
           api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
-          api<{ estimates: Estimate[] }>("/api/plan/estimates").catch(() => ({ estimates: [] as Estimate[] })),
         ]);
         if (!alive) return;
         setTasks(data.tasks ?? []);
         setMembers(mem.members ?? []);
-        setEstimates(est.estimates ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -143,7 +134,7 @@ export function PlanEffortDetail({
       </div>
 
       {adding && canEdit && (
-        <NewTaskRow planId={plan.id} te={te} onDone={async () => { setAdding(false); await afterMutation(); }} />
+        <NewTaskRow planId={plan.id} members={members} te={te} onDone={async () => { setAdding(false); await afterMutation(); }} />
       )}
 
       {tasks.length === 0 && !adding ? (
@@ -157,7 +148,6 @@ export function PlanEffortDetail({
                 task={task}
                 otherTasks={tasks.filter((x) => x.id !== task.id)}
                 members={members}
-                estimates={estimates}
                 te={te}
                 onClose={() => setEditingId(null)}
                 onChanged={afterMutation}
@@ -306,16 +296,20 @@ function TaskRow({
 
 function NewTaskRow({
   planId,
+  members,
   te,
   onDone,
 }: {
   planId: string;
+  members: Member[];
   te: ReturnType<typeof useTranslations>;
   onDone: () => void;
 }) {
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
-  const [hours, setHours] = useState("");
+  const [dur, setDur] = useState("");
+  const [status, setStatus] = useState("inbox");
+  const [assignee, setAssignee] = useState("");
   const [busy, setBusy] = useState(false);
   async function save() {
     if (!title.trim()) return;
@@ -323,7 +317,13 @@ function NewTaskRow({
     try {
       await api(`/api/plans/${planId}/tasks`, {
         method: "POST",
-        body: { title_he: title.trim(), due_date: due || null, estimated_hours: hours ? Number(hours) : null },
+        body: {
+          title_he: title.trim(),
+          due_date: due || null,
+          duration_days: dur ? Number(dur) : null,
+          status,
+          assigned_to_user_id: assignee || null,
+        },
       });
       onDone();
     } catch (e) {
@@ -332,13 +332,26 @@ function NewTaskRow({
       setBusy(false);
     }
   }
+  // One-step create: set every core setting here — no save-then-reopen.
+  // (Dependencies are added after creation, since they reference this task's id.)
   return (
     <div className="my-2 flex flex-wrap items-center gap-2 rounded-lg border bg-secondary/40 p-2">
       <input className={`${fieldCls} flex-1`} placeholder={te("taskTitle")} value={title}
         onChange={(e) => setTitle(e.target.value)} dir="rtl" autoFocus />
+      <select className={fieldCls} value={assignee} onChange={(e) => setAssignee(e.target.value)} title={te("assignee")}>
+        <option value="">{te("unassigned")}</option>
+        {members.map((m) => (
+          <option key={m.user_id} value={m.user_id}>{memberName(m)}</option>
+        ))}
+      </select>
+      <select className={fieldCls} value={status} onChange={(e) => setStatus(e.target.value)} title={te("statusInbox")}>
+        <option value="inbox">{te("statusInbox")}</option>
+        <option value="in_progress">{te("statusInProgress")}</option>
+        <option value="archived">{te("statusDone")}</option>
+      </select>
       <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
-      <input type="number" min={0} step={0.5} className={`${fieldCls} w-28`} placeholder={te("estimatedHours")} value={hours}
-        onChange={(e) => setHours(e.target.value)} />
+      <input type="number" min={0} step={1} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
+        onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       <button onClick={save} disabled={busy || !title.trim()}
         className="rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:opacity-50">
         {te("save")}
@@ -351,7 +364,6 @@ function EditTaskRow({
   task,
   otherTasks,
   members,
-  estimates,
   te,
   onClose,
   onChanged,
@@ -359,7 +371,6 @@ function EditTaskRow({
   task: PlanTask;
   otherTasks: PlanTask[];
   members: Member[];
-  estimates: Estimate[];
   te: ReturnType<typeof useTranslations>;
   onClose: () => void;
   onChanged: () => void;
@@ -368,7 +379,6 @@ function EditTaskRow({
   const [due, setDue] = useState(task.due_date ?? "");
   // dur is the MANUAL override only — blank means "let the engine compute it".
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
-  const [hours, setHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   const [provider, setProvider] = useState("");
@@ -386,7 +396,6 @@ function EditTaskRow({
           // a filled manual duration pins it; otherwise the engine owns it.
           duration_days: dur ? Number(dur) : null,
           duration_manual: !!dur,
-          estimated_hours: hours ? Number(hours) : null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -460,29 +469,10 @@ function EditTaskRow({
         </select>
       </div>
 
-      {/* effort estimate → duration */}
+      {/* duration in working days */}
       <div className="flex flex-wrap items-center gap-2">
-        {estimates.length > 0 && (
-          <select
-            className={fieldCls}
-            value=""
-            onChange={(e) => {
-              const est = estimates.find((x) => x.id === e.target.value);
-              if (est) setHours(String(est.hours));
-            }}
-            title={te("fromCatalog")}
-          >
-            <option value="">{te("fromCatalog")}</option>
-            {estimates.map((est) => (
-              <option key={est.id} value={est.id}>{est.name} · {est.hours}h</option>
-            ))}
-          </select>
-        )}
-        <input type="number" min={0} step={0.5} className={`${fieldCls} w-28`} placeholder={te("estimatedHours")}
-          value={hours} onChange={(e) => setHours(e.target.value)} title={te("estimatedHours")} />
-        <input type="number" min={1} className={`${fieldCls} w-32`} placeholder={te("manualDuration")}
-          value={dur} onChange={(e) => setDur(e.target.value)} title={te("manualDuration")} />
-        <span className="text-[11px] italic text-muted-foreground">{!dur && hours ? te("autoDuration") : ""}</span>
+        <input type="number" min={0} step={1} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
+          value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       </div>
 
       {/* needs editor */}
