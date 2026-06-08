@@ -1606,7 +1606,7 @@
       "title": "smrtBot guide",
       "intro": "smrtBot runs your WhatsApp conversational bots — menu, game, FAQ and video — migrated into smrtesy."
     },
-    "waTab": "WhatsApp (unofficial)",
+    "waTab": "WhatsApp",
     "waTitle": "Unofficial WhatsApp channel",
     "waUnofficialWarning": "The unofficial channel connects like WhatsApp Web and violates WhatsApp's Terms of Service — the number can be banned. Use a dedicated number, not your personal or main business line.",
     "waConnect": "Connect",
@@ -1686,7 +1686,10 @@
     "transportBaileysHint": "Connects like WhatsApp Web (a regular number, QR scan). Violates the Terms of Service — risk of a ban. Use a dedicated number.",
     "waSwitchPrompt": "This bot is on the official (Meta) transport. To use the unofficial channel (QR pairing, groups, broadcasts), switch it to the unofficial connection.",
     "waSwitchToBaileys": "Switch to unofficial connection",
-    "waSwitched": "Bot switched to the unofficial connection."
+    "waSwitched": "Bot switched to the unofficial connection.",
+    "waConnectionTitle": "WhatsApp connection",
+    "waSwitchToMeta": "Switch to official (Meta)",
+    "waSwitchedMeta": "Bot switched to the official connection."
   },
   "smrtVoice": {
     "appName": "smrtVoice",
