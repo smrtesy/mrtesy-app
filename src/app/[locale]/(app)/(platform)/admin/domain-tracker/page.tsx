@@ -70,7 +70,7 @@ export default function DomainTrackerPage() {
       const data = await api<ScanResult>("/api/admin/domain-tracker", {
         method: "POST",
         noOrg: true,
-        body: JSON.stringify({ url: url.trim() }),
+        body: { url: url.trim() },
       });
       setResult(data);
     } catch (err) {
