@@ -1678,7 +1678,15 @@
     "webIconUploading": "Uploading…",
     "webIconUploaded": "Logo uploaded — click Save to apply.",
     "webIconTooLarge": "File too large — max 2MB.",
-    "webIconBadType": "Unsupported file type. Use PNG, JPG, WebP or SVG."
+    "webIconBadType": "Unsupported file type. Use PNG, JPG, WebP or SVG.",
+    "transportLabel": "Connection type",
+    "transportMeta": "Official (Meta Cloud API)",
+    "transportBaileys": "Unofficial (WhatsApp Web)",
+    "transportMetaHint": "The official Meta connection — requires an approved WhatsApp Business number.",
+    "transportBaileysHint": "Connects like WhatsApp Web (a regular number, QR scan). Violates the Terms of Service — risk of a ban. Use a dedicated number.",
+    "waSwitchPrompt": "This bot is on the official (Meta) transport. To use the unofficial channel (QR pairing, groups, broadcasts), switch it to the unofficial connection.",
+    "waSwitchToBaileys": "Switch to unofficial connection",
+    "waSwitched": "Bot switched to the unofficial connection."
   },
   "smrtVoice": {
     "appName": "smrtVoice",

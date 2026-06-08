@@ -23,17 +23,19 @@ export function BotFormDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [transport, setTransport] = useState<"meta" | "baileys">("meta");
   const [saving, setSaving] = useState(false);
 
   async function submit() {
     if (!name.trim() || !slug.trim()) return;
     setSaving(true);
     try {
-      await api("/api/bot/bots", { method: "POST", body: { name, slug } });
+      await api("/api/bot/bots", { method: "POST", body: { name, slug, transport } });
       toast.success(t("created"));
       setOpen(false);
       setName("");
       setSlug("");
+      setTransport("meta");
       onCreated();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
@@ -68,6 +70,20 @@ export function BotFormDialog({ onCreated }: { onCreated: () => void }) {
               placeholder="rl"
             />
             <p className="text-xs text-muted-foreground">{t("slugHint")}</p>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("transportLabel")}</label>
+            <select
+              value={transport}
+              onChange={(e) => setTransport(e.target.value === "baileys" ? "baileys" : "meta")}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="meta">{t("transportMeta")}</option>
+              <option value="baileys">{t("transportBaileys")}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {transport === "baileys" ? t("transportBaileysHint") : t("transportMetaHint")}
+            </p>
           </div>
         </div>
         <DialogFooter>
