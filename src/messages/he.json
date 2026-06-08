@@ -1688,7 +1688,13 @@
     "waSwitched": "הבוט הועבר לחיבור לא רשמי.",
     "waConnectionTitle": "חיבור וואטסאפ",
     "waSwitchToMeta": "מעבר לחיבור רשמי (Meta)",
-    "waSwitchedMeta": "הבוט הועבר לחיבור רשמי."
+    "waSwitchedMeta": "הבוט הועבר לחיבור רשמי.",
+    "secSettings": "הגדרות",
+    "secContent": "תוכן",
+    "secGame": "משחק",
+    "secInbox": "פניות",
+    "secData": "נתונים",
+    "settingsAdvanced": "מתקדם"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

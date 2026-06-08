@@ -1689,7 +1689,13 @@
     "waSwitched": "Bot switched to the unofficial connection.",
     "waConnectionTitle": "WhatsApp connection",
     "waSwitchToMeta": "Switch to official (Meta)",
-    "waSwitchedMeta": "Bot switched to the official connection."
+    "waSwitchedMeta": "Bot switched to the official connection.",
+    "secSettings": "Settings",
+    "secContent": "Content",
+    "secGame": "Game",
+    "secInbox": "Inbox",
+    "secData": "Insights",
+    "settingsAdvanced": "Advanced"
   },
   "smrtVoice": {
     "appName": "smrtVoice",
