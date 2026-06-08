@@ -683,8 +683,30 @@ router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Res
 // ── plan tasks (create / edit / delete) ───────────────────────────────────────
 
 router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
-  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id } = req.body ?? {};
+  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id } = req.body ?? {};
   if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
+  // Default staffing: a task with a role but no explicit assignee falls back to
+  // the role's primary member. An explicit assignee always wins. role_id is
+  // verified to belong to this org before it is stored or used.
+  let assignee = (assigned_to_user_id as string | null) ?? null;
+  let validRoleId: string | null = null;
+  if (role_id) {
+    const { data: role } = await db
+      .from("smrtplan_roles").select("id").eq("org_id", req.org!.id).eq("id", role_id).maybeSingle();
+    if (role) {
+      validRoleId = role_id as string;
+      if (!assignee) {
+        const { data: primary } = await db
+          .from("smrtplan_role_members")
+          .select("user_id")
+          .eq("org_id", req.org!.id)
+          .eq("role_id", role_id)
+          .eq("is_primary", true)
+          .maybeSingle();
+        if (primary) assignee = primary.user_id as string;
+      }
+    }
+  }
   const { data, error } = await db
     .from("tasks")
     .insert({
@@ -700,10 +722,11 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
       duration_days: duration_days ?? null,
       duration_manual: duration_days != null,
       estimated_hours: estimated_hours ?? null,
-      assigned_to_user_id: assigned_to_user_id ?? null,
+      assigned_to_user_id: assignee,
       parent_task_id: parent_task_id ?? null,
+      role_id: validRoleId,
     })
-    .select("id, title, title_he, status, due_date, duration_days, estimated_hours, parent_task_id, plan_id")
+    .select("id, title, title_he, status, due_date, duration_days, estimated_hours, parent_task_id, plan_id, role_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   await autoRecompute(req.org!.id);
@@ -712,7 +735,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 
 const PLAN_TASK_WRITABLE = new Set([
   "title", "title_he", "due_date", "duration_days", "duration_manual",
-  "estimated_hours", "status", "assigned_to_user_id", "parent_task_id",
+  "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
 ]);
 
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
@@ -891,6 +914,97 @@ router.patch("/plan/estimates/:id", requireFull, async (req: Request, res: Respo
 router.delete("/plan/estimates/:id", requireFull, async (req: Request, res: Response) => {
   const { error } = await db
     .from("smrtplan_estimates").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ── roles + default staffing ───────────────────────────────────────────────
+// A role (designer / editor / tool-builder) maps to one or more people, one of
+// whom is the primary (the default assignee). Creating a task with a role and
+// no explicit assignee falls back to the role's primary.
+
+router.get("/plan/roles", async (req: Request, res: Response) => {
+  const [{ data: roles, error: rErr }, { data: members, error: mErr }] = await Promise.all([
+    db.from("smrtplan_roles").select("id, name_he, name_en, color").eq("org_id", req.org!.id).order("name_he", { ascending: true }),
+    db.from("smrtplan_role_members").select("id, role_id, user_id, is_primary").eq("org_id", req.org!.id),
+  ]);
+  if (rErr) return res.status(500).json({ error: rErr.message });
+  if (mErr) return res.status(500).json({ error: mErr.message });
+  const byRole = new Map<string, Row[]>();
+  for (const m of asRows(members)) {
+    const rid = m.role_id as string;
+    if (!byRole.has(rid)) byRole.set(rid, []);
+    byRole.get(rid)!.push({ id: m.id, user_id: m.user_id, is_primary: m.is_primary });
+  }
+  res.json({ roles: asRows(roles).map((r) => ({ ...r, members: byRole.get(r.id as string) ?? [] })) });
+});
+
+router.post("/plan/roles", requireFull, async (req: Request, res: Response) => {
+  const { name_he, name_en, color } = req.body ?? {};
+  if (!name_he || typeof name_he !== "string") return res.status(400).json({ error: "name_he is required" });
+  const { data, error } = await db
+    .from("smrtplan_roles")
+    .insert({ org_id: req.org!.id, name_he: name_he.trim(), name_en: name_en ?? null, color: color ?? null, created_by: req.user!.id })
+    .select("id, name_he, name_en, color")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ role: { ...data, members: [] } });
+});
+
+router.patch("/plan/roles/:id", requireFull, async (req: Request, res: Response) => {
+  const patch: Record<string, unknown> = {};
+  for (const k of ["name_he", "name_en", "color"]) if (k in (req.body ?? {})) patch[k] = req.body[k];
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("smrtplan_roles").update(patch).eq("org_id", req.org!.id).eq("id", req.params.id)
+    .select("id, name_he, name_en, color").single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ role: data });
+});
+
+router.delete("/plan/roles/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtplan_roles").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+router.post("/plan/roles/:id/members", requireFull, async (req: Request, res: Response) => {
+  const { user_id, is_primary } = req.body ?? {};
+  if (!user_id) return res.status(400).json({ error: "user_id is required" });
+  const { data: member } = await db.from("org_members").select("user_id").eq("org_id", req.org!.id).eq("user_id", user_id).maybeSingle();
+  if (!member) return res.status(404).json({ error: "user is not a member of this org" });
+  const { data: role } = await db.from("smrtplan_roles").select("id").eq("org_id", req.org!.id).eq("id", req.params.id).maybeSingle();
+  if (!role) return res.status(404).json({ error: "role not found" });
+  // Only one primary per role — clear the others first (partial-unique index).
+  if (is_primary) {
+    await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", req.params.id);
+  }
+  const { data, error } = await db
+    .from("smrtplan_role_members")
+    .insert({ org_id: req.org!.id, role_id: req.params.id, user_id, is_primary: !!is_primary })
+    .select("id, role_id, user_id, is_primary")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ member: data });
+});
+
+router.patch("/plan/role-members/:id", requireFull, async (req: Request, res: Response) => {
+  const { is_primary } = req.body ?? {};
+  if (typeof is_primary !== "boolean") return res.status(400).json({ error: "is_primary (boolean) is required" });
+  const { data: row } = await db.from("smrtplan_role_members").select("id, role_id").eq("org_id", req.org!.id).eq("id", req.params.id).maybeSingle();
+  if (!row) return res.status(404).json({ error: "member not found" });
+  if (is_primary) {
+    await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", row.role_id as string);
+  }
+  const { data, error } = await db
+    .from("smrtplan_role_members").update({ is_primary }).eq("org_id", req.org!.id).eq("id", req.params.id)
+    .select("id, role_id, user_id, is_primary").single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ member: data });
+});
+
+router.delete("/plan/role-members/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtplan_role_members").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });
