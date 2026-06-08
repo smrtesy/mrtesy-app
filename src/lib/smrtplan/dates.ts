@@ -49,13 +49,34 @@ function hebFormatters() {
   return { dF: _dF, mF: _mF };
 }
 
+/** Hebrew day numeral only, e.g. "ז׳". Empty string if Intl lacks the calendar. */
+export function hebDay(d: Date): string {
+  const { dF } = hebFormatters();
+  if (!dF) return "";
+  return gematriaDay(parseInt(dF.format(d), 10));
+}
+
+/** Hebrew month name only, e.g. "אלול". Empty string if Intl lacks the calendar. */
+export function hebMonth(d: Date): string {
+  const { mF } = hebFormatters();
+  if (!mF) return "";
+  return mF.format(d).replace(/^ב/, "");
+}
+
 /** Hebrew date label, e.g. "ז׳ אלול". Empty string if Intl lacks the calendar. */
 export function hebDate(d: Date): string {
-  const { dF, mF } = hebFormatters();
-  if (!dF || !mF) return "";
-  const day = gematriaDay(parseInt(dF.format(d), 10));
-  const month = mF.format(d).replace(/^ב/, "");
+  const day = hebDay(d);
+  const month = hebMonth(d);
+  if (!day || !month) return "";
   return `${day} ${month}`;
+}
+
+/** Localised Gregorian month + year, e.g. "יוני 2026" / "June 2026". */
+export function gregMonthLabel(d: Date, locale: string): string {
+  return new Intl.DateTimeFormat(locale === "en" ? "en" : "he", {
+    month: "long",
+    year: "numeric",
+  }).format(d);
 }
 
 export function daysBetween(from: Date, to: Date): number {
