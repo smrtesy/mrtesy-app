@@ -12,6 +12,7 @@ import {
   resolveCreds, sendText, sendButtons, sendList,
   type BotEnv, type ResolvedCreds, type ReplyButton,
 } from "./wa";
+import { getSubscriberContext, watchLinkFor } from "./identity";
 import type { BotRow } from "./engine";
 
 type State = Record<string, unknown>;
@@ -41,7 +42,7 @@ function normalizeHe(s: string): string {
 const eq = (a: string, b: string) => normalizeHe(a) === normalizeHe(b);
 
 interface VideoRow {
-  vd_id: string | null; video_name: string | null; video_link: string | null; full_url: string | null;
+  vd_id: string | null; video_number: string | null; video_name: string | null; video_link: string | null; full_url: string | null;
   display_link: string | null; main_category: string | null; sub_category: string | null;
   rebbe: string | null; holidays: string | null; icon: string | null; search_text: string | null;
 }
@@ -72,7 +73,7 @@ const FILTERS: Record<string, { main: string; subs: string[] }> = {
 
 async function allVideos(bot: BotRow): Promise<VideoRow[]> {
   const { data, error } = await db.from("smrtbot_videos")
-    .select("vd_id, video_name, video_link, full_url, display_link, main_category, sub_category, rebbe, holidays, icon, search_text")
+    .select("vd_id, video_number, video_name, video_link, full_url, display_link, main_category, sub_category, rebbe, holidays, icon, search_text")
     .eq("org_id", bot.org_id).eq("active", true);
   if (error) console.error("[smrtbot/videos] allVideos", error.message);
   return (data as VideoRow[]) ?? [];
@@ -116,11 +117,11 @@ async function sendVideoPage(c: Ctx, listKey: string, listTitle: string, offset:
   const safeOffset = Math.max(0, offset);
   const page = vids.slice(safeOffset, safeOffset + pageSize);
   const countText = (await msg(c.bot, c.env, "video_list_count", 'סה"כ {count} וידאוים')).replace("{count}", String(vids.length));
+  const ctx = await getSubscriberContext(c.bot, c.phone);
   const lines = [`*${listTitle}*`, countText, ""];
   for (const item of page) {
     lines.push(`${item.icon || "🎬"} *${item.video_name ?? ""}*`);
-    const raw = String(item.display_link || item.video_link || item.full_url || "").trim();
-    const link = raw.split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith("http")) || raw;
+    const link = await watchLinkFor(item, ctx);
     if (link) lines.push(link);
     lines.push("");
   }
@@ -177,10 +178,10 @@ async function runSearch(c: Ctx, query: string): Promise<void> {
     return;
   }
   const lines = [`*🔍 ${await msg(c.bot, c.env, "search_results_title", "תוצאות חיפוש")}*`, ""];
+  const ctx = await getSubscriberContext(c.bot, c.phone);
   for (const { v } of scored) {
     lines.push(`${v.icon || "🎬"} *${v.video_name ?? ""}*`);
-    const raw = String(v.display_link || v.video_link || v.full_url || "").trim();
-    const link = raw.split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith("http")) || raw;
+    const link = await watchLinkFor(v, ctx);
     if (link) lines.push(link);
     lines.push("");
   }

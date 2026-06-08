@@ -28,6 +28,7 @@ import {
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
 import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
+import { handleIdentityInput, handleIdentityAction } from "./identity";
 
 export interface BotRow {
   id: string;
@@ -348,16 +349,22 @@ export async function handleInbound(
       if (m && m[1] !== phone) await processReferral(bot, env, phone, m[1]);
     }
 
-    // 1. Mid-flow text input (game onboarding / profile edit / reminder / search).
+    // 1. Mid-flow text input (game onboarding / profile edit / reminder / search /
+    //    subscriber email-collection + registration).
     if (text && state.expectedInput) {
       if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text);
-      else await handleGameText(bot, env, phone, text, state);
+      else if (await handleIdentityInput(bot, env, phone, text, state)) {
+        // consumed by the email-verification / registration flow
+      } else await handleGameText(bot, env, phone, text, state);
       return;
     }
 
     // 2. Game action (button id or a text that maps to a game action).
     const action = message.buttonId ?? text;
     if (action && (await handleGameAction(bot, env, phone, action))) return;
+    // 2a. Subscriber identity actions (connect email / account). No-op unless
+    //     the subscription + OTP config is present, so it never hijacks otherwise.
+    if (action && (await handleIdentityAction(bot, env, phone, action))) return;
 
     const nodes = await loadNodes(orgId, bot.id, env);
 
