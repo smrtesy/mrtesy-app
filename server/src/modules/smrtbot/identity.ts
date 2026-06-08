@@ -436,6 +436,8 @@ export interface SubscriberContext {
   subscriber: boolean;
   email: string | null;
   customerId: string | null;
+  orgId: string;
+  botId: string | null;
 }
 
 /** Resolve the playback context for a phone once per send (one external check). */
@@ -443,7 +445,7 @@ export async function getSubscriberContext(bot: BotRow, phone: string): Promise<
   const watchBaseRaw = await getBotConfig(bot.id, "VIDEO_WATCH_BASE_URL", "VIDEO_WATCH_BASE_URL");
   const watchBase = (watchBaseRaw ?? "").replace(/\/+$/, "");
   if (!watchBase) {
-    return { configured: false, watchBase: "", subscriber: false, email: null, customerId: null };
+    return { configured: false, watchBase: "", subscriber: false, email: null, customerId: null, orgId: bot.org_id, botId: bot.id };
   }
 
   const ident = await getIdentity(bot, phone);
@@ -455,7 +457,7 @@ export async function getSubscriberContext(bot: BotRow, phone: string): Promise<
     subscriber = sub.subscriber;
     if (sub.customerId) customerId = sub.customerId;
   }
-  return { configured: true, watchBase, subscriber, email, customerId };
+  return { configured: true, watchBase, subscriber, email, customerId, orgId: bot.org_id, botId: bot.id };
 }
 
 export interface VideoLinkFields {
@@ -491,7 +493,7 @@ export async function watchLinkFor(video: VideoLinkFields, ctx: SubscriberContex
 
   let url = `${ctx.watchBase}/${encodeURIComponent(num)}`;
   if (ctx.subscriber && ctx.email) {
-    const token = await signPlaybackToken({ v: num, e: ctx.email, c: ctx.customerId });
+    const token = await signPlaybackToken({ v: num, e: ctx.email, c: ctx.customerId, o: ctx.orgId, b: ctx.botId });
     if (token) url += `?t=${token}`;
   }
   return url;

@@ -105,11 +105,29 @@ verified subscriber.
   preserves title/description/tags, resumable). Map the resulting GUIDs into
   `smrtbot_videos.bunny_video_guid`.
 
+## View tracking (built) — consuming views in other apps
+
+Every successful `playback/verify` records a real-time, per-subscriber view in
+two places, so any app can pull the data:
+
+1. **`smrtbot_video_views`** (queryable log) — one row per authorized play:
+   `org_id, bot_id, video, email, customer_id, jti, ip, user_agent, watched_at`.
+   - smrtCRM: views per contact / per link → join on `email` (or `customer_id`).
+   - dashboards: counts / trends / top videos → group by `video`, `watched_at`.
+   - de-dupe a refresh by `jti` if you want unique-link views vs play events.
+   (`ip`/`user_agent` are only populated if the site forwards the *viewer's* ip /
+   user_agent in the verify request body — the request itself is server-to-server.)
+2. **`video.viewed` app_event** (real-time stream) — emitted via `emitEvent`,
+   payload `{ email, customer_id, jti, bot_id }`. To ingest in an app, add a
+   `subscribes` entry for `{ event: "video.viewed", source: "smrtbot" }` in its
+   manifest + a handler (the smrtCRM `contact.observed` ingestion is the pattern).
+   Until an app subscribes it's simply stored in `app_events` (no side effects).
+
+The playback token now carries `o` (org) and `b` (bot) so the verify endpoint
+can attribute the view.
+
 ## Planned next (not yet built)
 
-- Per-link **use limit (2×)**: add a `jti` to the playback token + a
-  `smrtbot_playback_uses` table; the verify endpoint counts/enforces (HLS
-  segment requests do NOT count — only the page-load verify).
 - Optional: have the verify endpoint also return a signed Bunny URL, so the site
   gets "subscriber valid" + the playable URL in one call.
 - Native app: register the same `https://<domain>/<num>` as an Android App Link /

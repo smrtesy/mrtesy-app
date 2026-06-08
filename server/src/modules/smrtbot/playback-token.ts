@@ -17,6 +17,8 @@ export interface PlaybackClaims {
   e: string; // subscriber email (lowercased)
   c: string | null; // external customer id
   j: string; // unique token id (jti) — for the per-link use limit
+  o: string; // org id — to attribute the view
+  b: string | null; // bot id
   iat: number; // issued-at (epoch seconds)
   exp: number; // expiry (epoch seconds)
 }
@@ -41,7 +43,7 @@ function sign(payloadB64: string, key: string): string {
 
 /** Build a signed token. Returns null if no signing secret is configured. */
 export async function signPlaybackToken(
-  claims: Pick<PlaybackClaims, "v" | "e" | "c">,
+  claims: Pick<PlaybackClaims, "v" | "e" | "c" | "o" | "b">,
   ttlSec = DEFAULT_TTL_SEC,
 ): Promise<string | null> {
   const key = await secret();

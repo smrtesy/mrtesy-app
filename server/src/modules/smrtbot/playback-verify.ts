@@ -19,6 +19,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import { db, getAppSecret } from "../../db";
+import { emitEvent } from "../../lib/platform";
 import { verifyPlaybackToken } from "./playback-token";
 
 const router = Router();
@@ -38,7 +39,7 @@ async function handleVerify(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const body = (req.body ?? {}) as { token?: unknown };
+  const body = (req.body ?? {}) as { token?: unknown; ip?: unknown; user_agent?: unknown };
   const token = String(body.token ?? req.query?.t ?? "").trim();
   if (!token) {
     res.status(400).json({ valid: false, error: "token required" });
@@ -68,6 +69,31 @@ async function handleVerify(req: Request, res: Response): Promise<void> {
       res.json({ valid: false, reason: "use_limit_exceeded" });
       return;
     }
+  }
+
+  // Per-subscriber view tracking (real-time, queryable) + a durable app_event
+  // so other apps (smrtCRM per contact/link, smrtPlan, dashboards) can ingest
+  // views. Best-effort: never let logging fail the playback authorization.
+  if (claims.o) {
+    const ip = typeof body.ip === "string" ? body.ip : null;
+    const ua = typeof body.user_agent === "string" ? body.user_agent : null;
+    const { error: viewErr } = await db.from("smrtbot_video_views").insert({
+      org_id: claims.o,
+      bot_id: claims.b ?? null,
+      video: claims.v,
+      email: claims.e,
+      customer_id: claims.c,
+      jti: claims.j,
+      ip,
+      user_agent: ua,
+    });
+    if (viewErr) console.error("[smrtbot/playback] view log failed", viewErr.message);
+    await emitEvent(claims.o, "smrtbot", "video.viewed", "video", claims.v, {
+      email: claims.e,
+      customer_id: claims.c,
+      jti: claims.j,
+      bot_id: claims.b ?? null,
+    });
   }
 
   res.json({
