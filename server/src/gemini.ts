@@ -256,6 +256,58 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
   return (await callGeminiDetailed(opts)).text;
 }
 
+/** Text-only generation (no media) — used by smrtBot's optional AI answering.
+ *  Mirrors callGeminiDetailed but sends a single text part. Key + model come
+ *  from the platform's app_secrets (GEMINI_API_KEY / GEMINI_MODEL). */
+export async function generateText(
+  prompt: string,
+  opts?: { model?: string; maxOutputTokens?: number },
+): Promise<string> {
+  const apiKey = await getAppSecret("smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
+  const model =
+    opts?.model ?? (await getAppSecret("smrttask", "GEMINI_MODEL", "GEMINI_MODEL")) ?? "gemini-3-flash-preview";
+
+  const url = `${GEMINI_API_BASE}/${model}:generateContent`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.3, maxOutputTokens: opts?.maxOutputTokens ?? 1024 },
+  };
+
+  const fetchOnce = () =>
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(body),
+    });
+  // Gemini routinely returns 503 ("high demand") — one short backoff usually clears it.
+  let res = await fetchOnce();
+  if (!res.ok && res.status >= 500 && res.status < 600) {
+    await new Promise((r) => setTimeout(r, 3000));
+    res = await fetchOnce();
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Gemini ${res.status}: ${errText.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as GeminiResponse;
+  const candidate = data.candidates?.[0];
+  const text = candidate?.content?.parts?.filter((p) => p.text).map((p) => p.text).join("\n") ?? "";
+
+  try {
+    await db.from("ai_usage").insert({
+      provider: "google",
+      component: "smrtbot.ai-answer",
+      model,
+      input_tokens: data.usageMetadata?.promptTokenCount ?? 0,
+      output_tokens: data.usageMetadata?.candidatesTokenCount ?? 0,
+      cost_usd: estimateGeminiCost(model, data.usageMetadata),
+    });
+  } catch { /* ledger insert must not break the caller */ }
+
+  return text;
+}
+
 /**
  * Transcribe a WhatsApp voice/audio message. Prompt is identical to the
  * Apps Script that's been running in production — multi-language detection,

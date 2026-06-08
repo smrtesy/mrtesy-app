@@ -1695,7 +1695,16 @@
     "secInbox": "פניות",
     "secData": "נתונים",
     "settingsAdvanced": "מתקדם",
-    "cancel": "ביטול"
+    "cancel": "ביטול",
+    "aiTitle": "מענה AI לשאלות חופשיות",
+    "aiHint": "כששואלים שאלה שאין לה התאמה בשאלות הנפוצות, הבוט יכול לענות עם AI מבוסס על מאגר הידע שלך.",
+    "aiEnable": "להפעיל מענה AI",
+    "aiEnableHint": "כבוי כברירת מחדל. כבוי = הבוט מפנה לנציג אנושי.",
+    "aiModel": "מודל",
+    "aiModel_claude_haiku": "Claude Haiku (מהיר וזול)",
+    "aiModel_claude_sonnet": "Claude Sonnet (מאוזן)",
+    "aiModel_claude_opus": "Claude Opus (החכם ביותר)",
+    "aiModel_gemini": "Google Gemini"
   },
   "smrtVoice": {
     "appName": "smrtVoice",
