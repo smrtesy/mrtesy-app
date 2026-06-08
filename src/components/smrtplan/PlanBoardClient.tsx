@@ -745,11 +745,13 @@ const STATUS_CHIP: Record<string, string> = {
   archived: "bg-muted text-muted-foreground",
 };
 
-/** A small chip for any non-active plan status (draft / done / archived). */
-function StatusBadge({ status, t }: { status: PlanStatus; t: (key: string) => string }) {
-  if (status === "active") return null;
+/** A small chip for a non-active plan status (draft / done / archived) only.
+ *  Anything else — "active", undefined (e.g. an older API response that predates
+ *  the status field), or an unknown value — renders nothing. */
+function StatusBadge({ status, t }: { status: PlanStatus | undefined; t: (key: string) => string }) {
+  if (!status || !STATUS_CHIP[status]) return null;
   return (
-    <span className={cn("shrink-0 rounded px-1.5 py-px text-[9px] font-bold", STATUS_CHIP[status] ?? "bg-muted text-muted-foreground")}>
+    <span className={cn("shrink-0 rounded px-1.5 py-px text-[9px] font-bold", STATUS_CHIP[status])}>
       {t(`status.${status}`)}
     </span>
   );
