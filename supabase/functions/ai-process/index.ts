@@ -320,6 +320,18 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
 
 type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
 
+// Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
+// or a low surrogate not preceded by a high one). They arise when a body is
+// truncated by code-unit count (bodyForClassify slices WhatsApp text with
+// .slice/.substring, which can cut an emoji's surrogate pair in half) or when
+// the source itself is corrupt. JSON.stringify escapes a lone surrogate to
+// \udXXX, which is syntactically "valid" but the Anthropic API's JSON parser
+// rejects it with HTTP 400 "invalid high surrogate in string". A complete emoji
+// (well-formed pair) is untouched; only the dangling half is dropped.
+function stripLoneSurrogates(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 // Mark a large, message-invariant instruction block for prompt caching.
 // The cached prefix must be byte-identical across calls to hit (5-min TTL),
 // so ALL per-message context (identity, memory, project, body) must live in
@@ -332,10 +344,17 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
 async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  // Sanitize every text field that goes into the JSON body. A lone surrogate
+  // anywhere (system prefix OR user message) makes the request body invalid
+  // JSON and the API returns 400 before processing — see stripLoneSurrogates.
+  const safeSystem = typeof system === "string"
+    ? stripLoneSurrogates(system)
+    : system.map((b) => ({ ...b, text: stripLoneSurrogates(b.text) }));
+  const safeUserMessage = stripLoneSurrogates(userMessage);
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userMessage }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages: [{ role: "user", content: safeUserMessage }] }),
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
