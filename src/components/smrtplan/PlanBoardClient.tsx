@@ -31,6 +31,19 @@ function dowLetter(d: Date, locale: string): string {
 
 type Health = "waiting" | "on_track" | "at_risk" | "late" | "stream";
 
+/** A plan's stage, optionally with its own [start_date, end_date] window so it
+ *  renders as one draggable square on the plan's timeline row. */
+interface BoardStage {
+  id: string;
+  plan_id: string;
+  name_he: string;
+  name_en: string | null;
+  sequence: number;
+  default_duration_days: number | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
 function planTitle(p: Plan, locale: string): string {
   return locale === "en" ? p.title_en || p.title_he : p.title_he;
 }
@@ -68,6 +81,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
+  const [stages, setStages] = useState<BoardStage[]>([]);
   const [holidays, setHolidays] = useState<{ blocked_date: string; reason: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
@@ -92,18 +106,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
-    const [{ plans }, { access_level }, { milestones }, { holidays }, { templates }] = await Promise.all([
+    const [{ plans }, { access_level }, { milestones }, { holidays }, { templates }, { stages }] = await Promise.all([
       api<{ plans: Plan[] }>("/api/plans/board"),
       api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
       api<{ milestones: PlanMilestone[] }>("/api/plans/milestones"),
       api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
       api<{ templates: { id: string; name_he: string }[] }>("/api/plan/templates").catch(() => ({ templates: [] })),
+      api<{ stages: BoardStage[] }>("/api/plans/board-stages").catch(() => ({ stages: [] })),
     ]);
     setPlans(plans ?? []);
     setAccess(access_level ?? "lite");
     setMilestones(milestones ?? []);
     setHolidays(holidays ?? []);
     setTemplates(templates ?? []);
+    setStages(stages ?? []);
     if (plans?.length) setSelectedId((cur) => cur ?? plans[0].id);
   }, []);
 
@@ -487,6 +503,116 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     [plans],
   );
 
+  // Stages per plan (sorted by sequence) → one square each on the row.
+  const stagesByPlan = useMemo(() => {
+    const m = new Map<string, BoardStage[]>();
+    for (const s of stages) {
+      if (!m.has(s.plan_id)) m.set(s.plan_id, []);
+      m.get(s.plan_id)!.push(s);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.sequence - b.sequence);
+    return m;
+  }, [stages]);
+
+  // Each stage's day-offset window: explicit [start,end] if set, else tiled in
+  // sequence across the plan span (default_duration_days, fallback equal split).
+  const deriveStageWindows = useCallback(
+    (p: Plan, sts: BoardStage[]) => {
+      const planStart = p.start_date ? offsetOf(p.start_date) : 0;
+      const planEnd = p.end_date ? offsetOf(p.end_date) : planStart + 14;
+      const fallback = Math.max(1, Math.round((planEnd - planStart) / Math.max(1, sts.length)));
+      let cursor = planStart;
+      return sts.map((stage) => {
+        if (stage.start_date && stage.end_date) {
+          const startOff = offsetOf(stage.start_date);
+          const endOff = Math.max(startOff, offsetOf(stage.end_date));
+          cursor = Math.max(cursor, endOff);
+          return { stage, startOff, endOff, derived: false };
+        }
+        const dur = stage.default_duration_days && stage.default_duration_days > 0 ? Math.ceil(stage.default_duration_days) : fallback;
+        const startOff = cursor;
+        const endOff = cursor + dur;
+        cursor = endOff;
+        return { stage, startOff, endOff, derived: true };
+      });
+    },
+    [offsetOf],
+  );
+
+  // Drag/resize a stage square → pin its window (PATCH, recorded for undo).
+  const commitStageDates = useCallback(
+    async (id: string, startOff: number, endOff: number) => {
+      const st = stages.find((s) => s.id === id);
+      if (!st) return;
+      const oldStart = st.start_date;
+      const oldEnd = st.end_date;
+      const start_date = isoOf(dateAt(startOff));
+      const end_date = isoOf(dateAt(Math.max(startOff, endOff)));
+      if (start_date === oldStart && end_date === oldEnd) return;
+      const key = histKeyOf(id);
+      const apply = async (s: string | null, e: string | null) => {
+        const live = histResolve(key);
+        setStages((ss) => ss.map((x) => (x.id === live ? { ...x, start_date: s, end_date: e } : x)));
+        await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { start_date: s, end_date: e } });
+        await load();
+      };
+      await runCmd({ label: t("edit.actStageMove"), redo: () => apply(start_date, end_date), undo: () => apply(oldStart, oldEnd) });
+    },
+    [stages, dateAt, load, histKeyOf, histResolve, runCmd, t],
+  );
+  const stageDrag = useGanttDrag(tl, locale, trackRef, commitStageDates);
+
+  function addStage(planId: string) {
+    const name = window.prompt(t("edit.name"));
+    if (!name || !name.trim()) return;
+    const p = plans.find((x) => x.id === planId);
+    const sts = stagesByPlan.get(planId) ?? [];
+    const wins = p ? deriveStageWindows(p, sts) : [];
+    const startOff = wins.length ? wins[wins.length - 1].endOff : p?.start_date ? offsetOf(p.start_date) : 0;
+    const start_date = isoOf(dateAt(startOff));
+    const end_date = isoOf(dateAt(startOff + 5));
+    const key = newKey();
+    const create = async () => {
+      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${planId}/stages`, {
+        method: "POST",
+        body: { name_he: name.trim(), sequence: sts.length + 1, start_date, end_date },
+      });
+      if (stage?.id) histBind(key, stage.id);
+      await load();
+    };
+    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await load(); };
+    runCmd({ label: t("edit.actStageAdd"), redo: create, undo: remove });
+  }
+
+  function renameStage(st: BoardStage) {
+    const name = window.prompt(t("edit.name"), st.name_he);
+    if (name == null) return;
+    const v = name.trim();
+    if (!v || v === st.name_he) return;
+    const key = histKeyOf(st.id);
+    const apply = async (val: string) => {
+      const live = histResolve(key);
+      setStages((ss) => ss.map((x) => (x.id === live ? { ...x, name_he: val } : x)));
+      await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
+      await load();
+    };
+    runCmd({ label: t("edit.actRename"), redo: () => apply(v), undo: () => apply(st.name_he) });
+  }
+
+  function deleteStage(st: BoardStage) {
+    const key = histKeyOf(st.id);
+    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await load(); };
+    const recreate = async () => {
+      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${st.plan_id}/stages`, {
+        method: "POST",
+        body: { name_he: st.name_he, name_en: st.name_en, sequence: st.sequence, default_duration_days: st.default_duration_days, start_date: st.start_date, end_date: st.end_date },
+      });
+      if (stage?.id) histBind(key, stage.id);
+      await load();
+    };
+    runCmd({ label: t("edit.actStageDel"), redo: remove, undo: recreate });
+  }
+
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
     const map = new Map<string, Plan[]>();
@@ -864,6 +990,15 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             <option value="__new__">+ {t("table.newSection")}</option>
                           </select>
                         )}
+                        {editing && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); addStage(p.id); }}
+                            className="inline-flex items-center gap-0.5 rounded px-1 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                            title={t("edit.addStage")}
+                          >
+                            <Plus className="h-3 w-3" /> {t("edit.stageShort")}
+                          </button>
+                        )}
                       </span>
                     </div>
                   );
@@ -1018,6 +1153,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     const barWidth = pv ? spanWidth(pv.startCol, pv.endCol, colPx) : Math.max(colPx, xOf(e) - xOf(s));
                     const progress = p.effective_progress ?? p.progress ?? 0;
                     const isStream = p.kind === "stream";
+                    const planStages = stagesByPlan.get(p.id) ?? [];
+                    const stageWins = planStages.length ? deriveStageWindows(p, planStages) : [];
                     return (
                       <div
                         key={p.id}
@@ -1037,49 +1174,94 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                           selectedId === p.id && "bg-accent/40",
                         )}
                       >
-                        {/* one bar per project (effort + stream) */}
-                        <div
-                          className={cn(
-                            "absolute top-2.5 h-8 overflow-hidden rounded-md border",
-                            isStream && "border-dashed",
-                            editing && "cursor-grab active:cursor-grabbing ring-1 ring-primary/40",
-                          )}
-                          style={{
-                            insetInlineStart: barStart,
-                            width: barWidth,
-                            background: (p.color || "#534AB7") + "1f",
-                            borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
-                          }}
-                          onClick={(ev) => { ev.stopPropagation(); if (!planDrag.didMove()) setSelectedId(p.id); }}
-                          onPointerDown={editing ? (ev) => planDrag.onPointerDown(ev, p.id, s, e, "move") : undefined}
-                        >
-                          {!isStream && (
+                        {stageWins.length > 0 ? (
+                          // One draggable square per stage along the row.
+                          stageWins.map(({ stage, startOff, endOff, derived }) => {
+                            const spv = stageDrag.preview?.id === stage.id ? stageDrag.preview : null;
+                            const sStart = spv ? spv.startCol * colPx : xOf(startOff);
+                            const sWidth = spv ? spanWidth(spv.startCol, spv.endCol, colPx) : Math.max(colPx, xOf(endOff) - xOf(startOff));
+                            const stageName = locale === "en" ? stage.name_en || stage.name_he : stage.name_he;
+                            return (
+                              <div
+                                key={stage.id}
+                                className={cn(
+                                  "absolute top-2.5 flex h-8 items-center overflow-hidden rounded-md border px-1.5",
+                                  derived && "border-dashed",
+                                  editing && "cursor-grab active:cursor-grabbing",
+                                )}
+                                style={{
+                                  insetInlineStart: sStart,
+                                  width: sWidth,
+                                  background: (p.color || "#534AB7") + (derived ? "14" : "26"),
+                                  borderColor: (p.color || "#534AB7") + "88",
+                                }}
+                                title={stageName}
+                                onClick={(ev) => { ev.stopPropagation(); if (stageDrag.didMove()) return; if (editing) renameStage(stage); else setSelectedId(p.id); }}
+                                onPointerDown={editing ? (ev) => stageDrag.onPointerDown(ev, stage.id, startOff, endOff, "move") : undefined}
+                              >
+                                <span className="truncate text-[10px] font-medium" style={{ color: p.color || "#534AB7" }}>{stageName}</span>
+                                {editing && (
+                                  <>
+                                    <span className="absolute inset-y-0 start-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                      onPointerDown={(ev) => stageDrag.onPointerDown(ev, stage.id, startOff, endOff, "resize-start")} />
+                                    <span className="absolute inset-y-0 end-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                      onPointerDown={(ev) => stageDrag.onPointerDown(ev, stage.id, startOff, endOff, "resize-end")} />
+                                    <button className="absolute end-2 top-0 z-[3] rounded p-px text-muted-foreground hover:text-status-late"
+                                      onClick={(ev) => { ev.stopPropagation(); deleteStage(stage); }}
+                                      onPointerDown={(ev) => ev.stopPropagation()}>
+                                      <X className="h-2.5 w-2.5" />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <>
                             <div
-                              className="pointer-events-none absolute inset-y-0 start-0 h-full"
-                              style={{ width: `${progress * 100}%`, background: (p.color || "#534AB7") + "44" }}
-                            />
-                          )}
-                          {editing && (
-                            <>
-                              <span
-                                className="absolute inset-y-0 start-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
-                                onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-start")}
-                              />
-                              <span
-                                className="absolute inset-y-0 end-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
-                                onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-end")}
-                              />
-                            </>
-                          )}
-                        </div>
-                        <div
-                          className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
-                          style={{ insetInlineStart: barStart, color: p.color || "#534AB7" }}
-                        >
-                          {isStream
-                            ? p.goal || ""
-                            : `${p.goal || ""}${p.goal ? "  ·  " : ""}${Math.round(progress * 100)}%`}
-                        </div>
+                              className={cn(
+                                "absolute top-2.5 h-8 overflow-hidden rounded-md border",
+                                isStream && "border-dashed",
+                                editing && "cursor-grab active:cursor-grabbing ring-1 ring-primary/40",
+                              )}
+                              style={{
+                                insetInlineStart: barStart,
+                                width: barWidth,
+                                background: (p.color || "#534AB7") + "1f",
+                                borderColor: (p.color || "#534AB7") + (isStream ? "99" : "55"),
+                              }}
+                              onClick={(ev) => { ev.stopPropagation(); if (!planDrag.didMove()) setSelectedId(p.id); }}
+                              onPointerDown={editing ? (ev) => planDrag.onPointerDown(ev, p.id, s, e, "move") : undefined}
+                            >
+                              {!isStream && (
+                                <div
+                                  className="pointer-events-none absolute inset-y-0 start-0 h-full"
+                                  style={{ width: `${progress * 100}%`, background: (p.color || "#534AB7") + "44" }}
+                                />
+                              )}
+                              {editing && (
+                                <>
+                                  <span
+                                    className="absolute inset-y-0 start-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                    onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-start")}
+                                  />
+                                  <span
+                                    className="absolute inset-y-0 end-0 z-[2] w-1.5 cursor-ew-resize bg-primary/50"
+                                    onPointerDown={(ev) => planDrag.onPointerDown(ev, p.id, s, e, "resize-end")}
+                                  />
+                                </>
+                              )}
+                            </div>
+                            <div
+                              className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
+                              style={{ insetInlineStart: barStart, color: p.color || "#534AB7" }}
+                            >
+                              {isStream
+                                ? p.goal || ""
+                                : `${p.goal || ""}${p.goal ? "  ·  " : ""}${Math.round(progress * 100)}%`}
+                            </div>
+                          </>
+                        )}
                         {/* milestone lines: global + this row's own */}
                         {[...globalMilestones, ...(milestonesByPlan.get(p.id) ?? [])].map((m) => (
                           <div
