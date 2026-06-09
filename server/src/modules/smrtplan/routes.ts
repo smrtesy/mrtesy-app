@@ -226,6 +226,26 @@ async function autoRecompute(orgId: string): Promise<void> {
   }
 }
 
+/** Resolve a role's default staffing: verify the role belongs to the org and
+ *  return its primary member (the fallback assignee). Shared by task-create and
+ *  template-apply so both staff a role the same way. */
+async function roleDefaultAssignee(
+  orgId: string,
+  roleId: string | null,
+): Promise<{ validRoleId: string | null; primary: string | null }> {
+  if (!roleId) return { validRoleId: null, primary: null };
+  const { data: role } = await db.from("smrtplan_roles").select("id").eq("org_id", orgId).eq("id", roleId).maybeSingle();
+  if (!role) return { validRoleId: null, primary: null };
+  const { data: primary } = await db
+    .from("smrtplan_role_members")
+    .select("user_id")
+    .eq("org_id", orgId)
+    .eq("role_id", roleId)
+    .eq("is_primary", true)
+    .maybeSingle();
+  return { validRoleId: roleId, primary: (primary?.user_id as string | null) ?? null };
+}
+
 // ── full/lite access ─────────────────────────────────────────────────────────
 
 let smrtplanAppId: string | null = null;
@@ -794,27 +814,9 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
   const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id, status } = req.body ?? {};
   if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
   // Default staffing: a task with a role but no explicit assignee falls back to
-  // the role's primary member. An explicit assignee always wins. role_id is
-  // verified to belong to this org before it is stored or used.
-  let assignee = (assigned_to_user_id as string | null) ?? null;
-  let validRoleId: string | null = null;
-  if (role_id) {
-    const { data: role } = await db
-      .from("smrtplan_roles").select("id").eq("org_id", req.org!.id).eq("id", role_id).maybeSingle();
-    if (role) {
-      validRoleId = role_id as string;
-      if (!assignee) {
-        const { data: primary } = await db
-          .from("smrtplan_role_members")
-          .select("user_id")
-          .eq("org_id", req.org!.id)
-          .eq("role_id", role_id)
-          .eq("is_primary", true)
-          .maybeSingle();
-        if (primary) assignee = primary.user_id as string;
-      }
-    }
-  }
+  // the role's primary member. An explicit assignee always wins.
+  const { validRoleId, primary } = await roleDefaultAssignee(req.org!.id, (role_id as string | null) ?? null);
+  const assignee = (assigned_to_user_id as string | null) || primary;
   const { data, error } = await db
     .from("tasks")
     .insert({
@@ -1122,6 +1124,195 @@ router.delete("/plan/role-members/:id", requireFull, async (req: Request, res: R
   const { error } = await db.from("smrtplan_role_members").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// ── templates ("marketing = 4 stages") ───────────────────────────────────────
+// A template is an ordered set of task items (role + default duration) plus a
+// dependency chain. Applying it spins up a new effort plan and generates the
+// tasks, default assignees (role primary), and dependency edges in one shot.
+
+const DAY = 86_400_000;
+
+router.get("/plan/templates", async (req: Request, res: Response) => {
+  const [{ data: tpls, error: tErr }, { data: items }, { data: deps }] = await Promise.all([
+    db.from("smrtplan_templates").select("id, name_he, name_en, description").eq("org_id", req.org!.id).order("name_he", { ascending: true }),
+    db.from("smrtplan_template_items").select("id, template_id, title_he, title_en, role_id, default_duration_days, sequence").eq("org_id", req.org!.id).order("sequence", { ascending: true }),
+    db.from("smrtplan_template_deps").select("id, template_id, from_item_id, to_item_id, lag_days").eq("org_id", req.org!.id),
+  ]);
+  if (tErr) return res.status(500).json({ error: tErr.message });
+  const itemsByTpl = new Map<string, Row[]>();
+  for (const i of asRows(items)) {
+    const k = i.template_id as string;
+    if (!itemsByTpl.has(k)) itemsByTpl.set(k, []);
+    itemsByTpl.get(k)!.push(i);
+  }
+  const depsByTpl = new Map<string, Row[]>();
+  for (const d of asRows(deps)) {
+    const k = d.template_id as string;
+    if (!depsByTpl.has(k)) depsByTpl.set(k, []);
+    depsByTpl.get(k)!.push(d);
+  }
+  res.json({
+    templates: asRows(tpls).map((t) => ({
+      ...t,
+      items: itemsByTpl.get(t.id as string) ?? [],
+      deps: depsByTpl.get(t.id as string) ?? [],
+    })),
+  });
+});
+
+router.post("/plan/templates", requireFull, async (req: Request, res: Response) => {
+  const { name_he, name_en, description } = req.body ?? {};
+  if (!name_he || typeof name_he !== "string") return res.status(400).json({ error: "name_he is required" });
+  const { data, error } = await db
+    .from("smrtplan_templates")
+    .insert({ org_id: req.org!.id, name_he: name_he.trim(), name_en: name_en ?? null, description: description ?? null, created_by: req.user!.id })
+    .select("id, name_he, name_en, description")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ template: { ...data, items: [], deps: [] } });
+});
+
+router.delete("/plan/templates/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtplan_templates").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+router.post("/plan/templates/:id/items", requireFull, async (req: Request, res: Response) => {
+  const { title_he, title_en, role_id, default_duration_days, sequence } = req.body ?? {};
+  if (!title_he || typeof title_he !== "string") return res.status(400).json({ error: "title_he is required" });
+  // Confirm the parent template belongs to this org before adding to it.
+  const { data: tpl } = await db.from("smrtplan_templates").select("id").eq("org_id", req.org!.id).eq("id", req.params.id).maybeSingle();
+  if (!tpl) return res.status(404).json({ error: "template not found" });
+  const { validRoleId } = await roleDefaultAssignee(req.org!.id, (role_id as string | null) ?? null);
+  const { data, error } = await db
+    .from("smrtplan_template_items")
+    .insert({
+      org_id: req.org!.id,
+      template_id: req.params.id,
+      title_he: title_he.trim(),
+      title_en: title_en ?? null,
+      role_id: validRoleId,
+      default_duration_days: default_duration_days != null && default_duration_days !== "" ? Number(default_duration_days) : null,
+      sequence: typeof sequence === "number" ? sequence : 0,
+    })
+    .select("id, template_id, title_he, title_en, role_id, default_duration_days, sequence")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ item: data });
+});
+
+router.delete("/plan/template-items/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtplan_template_items").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+router.post("/plan/template-deps", requireFull, async (req: Request, res: Response) => {
+  const { template_id, from_item_id, to_item_id, lag_days } = req.body ?? {};
+  if (!template_id || !from_item_id || !to_item_id) return res.status(400).json({ error: "template_id, from_item_id, to_item_id required" });
+  if (from_item_id === to_item_id) return res.status(400).json({ error: "an item can't depend on itself" });
+  const { data, error } = await db
+    .from("smrtplan_template_deps")
+    .insert({ org_id: req.org!.id, template_id, from_item_id, to_item_id, lag_days: Math.max(0, Math.round(Number(lag_days)) || 0) })
+    .select("id, template_id, from_item_id, to_item_id, lag_days")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ dep: data });
+});
+
+router.delete("/plan/template-deps/:id", requireFull, async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtplan_template_deps").delete().eq("org_id", req.org!.id).eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/** Apply a template → create an effort plan and generate its tasks + deps. */
+router.post("/plan/templates/:id/apply", requireFull, async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { start_date, group_label } = req.body ?? {};
+  const { data: tpl } = await db
+    .from("smrtplan_templates").select("id, name_he, name_en").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (!tpl) return res.status(404).json({ error: "template not found" });
+  const { data: itemRows } = await db
+    .from("smrtplan_template_items")
+    .select("id, title_he, title_en, role_id, default_duration_days, sequence")
+    .eq("org_id", orgId).eq("template_id", req.params.id).order("sequence", { ascending: true });
+  const items = asRows(itemRows);
+  if (items.length === 0) return res.status(400).json({ error: "template has no items" });
+  const { data: depRows } = await db
+    .from("smrtplan_template_deps").select("from_item_id, to_item_id, lag_days").eq("org_id", orgId).eq("template_id", req.params.id);
+  const deps = asRows(depRows);
+
+  // New effort plan (draft) — a rough horizon of ~1 working week per item so the
+  // engine has a window to schedule backward into; the planner refines it.
+  const start = start_date ? new Date(start_date as string) : new Date();
+  const end = new Date(start.getTime() + Math.max(14, items.length * 7) * DAY);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans")
+    .insert({
+      org_id: orgId,
+      created_by: req.user!.id,
+      title_he: tpl.name_he,
+      title_en: tpl.name_en ?? null,
+      kind: "effort",
+      status: "draft",
+      group_label: group_label ?? null,
+      start_date: iso(start),
+      end_date: iso(end),
+    })
+    .select(PLAN_FIELDS)
+    .single();
+  if (planErr || !plan) return res.status(500).json({ error: planErr?.message ?? "failed to create plan" });
+  const newPlanId = (plan as unknown as { id: string }).id;
+
+  // Generate the tasks, staffing each by its role's primary.
+  const taskByItem = new Map<string, string>();
+  for (const it of items) {
+    const { validRoleId, primary } = await roleDefaultAssignee(orgId, (it.role_id as string | null) ?? null);
+    const dur = it.default_duration_days != null ? Number(it.default_duration_days) : null;
+    const { data: task, error: taskErr } = await db
+      .from("tasks")
+      .insert({
+        organization_id: orgId,
+        user_id: req.user!.id,
+        plan_id: newPlanId,
+        title: (it.title_he as string),
+        title_he: (it.title_he as string),
+        status: "inbox",
+        is_private: false,
+        assignment_status: "accepted",
+        duration_days: dur,
+        duration_manual: dur != null,
+        assigned_to_user_id: primary,
+        role_id: validRoleId,
+      })
+      .select("id")
+      .single();
+    if (taskErr) return res.status(500).json({ error: taskErr.message });
+    taskByItem.set(it.id as string, (task as unknown as { id: string }).id);
+  }
+
+  // Wire the dependency edges between the freshly created tasks.
+  const edgeRows = deps
+    .map((d) => ({
+      org_id: orgId,
+      from_type: "task",
+      from_id: taskByItem.get(d.from_item_id as string),
+      to_type: "task",
+      to_id: taskByItem.get(d.to_item_id as string),
+      lag_days: (d.lag_days as number | null) ?? 0,
+    }))
+    .filter((e) => e.from_id && e.to_id);
+  if (edgeRows.length) {
+    const { error: depErr } = await db.from("smrtplan_dependencies").insert(edgeRows);
+    if (depErr) return res.status(500).json({ error: depErr.message });
+  }
+
+  await autoRecompute(orgId);
+  res.status(201).json({ plan });
 });
 
 export default router;

@@ -2037,6 +2037,25 @@
       "depExists": "Dependency already exists",
       "unscheduled": "No date"
     },
+    "templates": {
+      "title": "Plan templates",
+      "hint": "A template is a list of tasks (role + duration) plus a dependency chain. Applying it creates a new plan with the tasks, assignees and dependencies.",
+      "button": "Templates",
+      "empty": "No templates yet",
+      "name": "Template name",
+      "add": "Add",
+      "noItems": "No tasks in this template yet",
+      "itemTitle": "Task name",
+      "role": "Role",
+      "noRole": "No role",
+      "duration": "Duration (days)",
+      "daysUnit": "days",
+      "addItem": "Add task",
+      "needs": "needs",
+      "dependsOn": "Add dependency",
+      "fromTemplate": "From template",
+      "applied": "Template applied"
+    },
     "capacity": {
       "button": "Team & availability",
       "title": "Team availability",

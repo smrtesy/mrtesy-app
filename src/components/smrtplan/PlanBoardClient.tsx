@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
@@ -16,6 +16,7 @@ import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { RolesEditor } from "./RolesEditor";
+import { TemplatesEditor } from "./TemplatesEditor";
 
 const DAY_MS = 86_400_000;
 
@@ -74,6 +75,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [templates, setTemplates] = useState<{ id: string; name_he: string }[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
   // Free-planning (edit) mode: drag bars, drag milestones, add rows inline.
@@ -85,16 +88,18 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
-    const [{ plans }, { access_level }, { milestones }, { holidays }] = await Promise.all([
+    const [{ plans }, { access_level }, { milestones }, { holidays }, { templates }] = await Promise.all([
       api<{ plans: Plan[] }>("/api/plans/board"),
       api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
       api<{ milestones: PlanMilestone[] }>("/api/plans/milestones"),
       api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
+      api<{ templates: { id: string; name_he: string }[] }>("/api/plan/templates").catch(() => ({ templates: [] })),
     ]);
     setPlans(plans ?? []);
     setAccess(access_level ?? "lite");
     setMilestones(milestones ?? []);
     setHolidays(holidays ?? []);
+    setTemplates(templates ?? []);
     if (plans?.length) setSelectedId((cur) => cur ?? plans[0].id);
   }, []);
 
@@ -290,6 +295,21 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     }
   }
 
+  async function quickApplyTemplate(templateId: string) {
+    setAddRowOpen(false);
+    try {
+      const { plan } = await api<{ plan: Plan }>(`/api/plan/templates/${templateId}/apply`, {
+        method: "POST",
+        body: { start_date: isoOf(today) },
+      });
+      await load();
+      if (plan?.id) setSelectedId(plan.id);
+      toast.success(t("templates.applied"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
   // Top edge of the day-strip = below the milestone lane (h-8=32px, only when
   // present) + month band (h-5=20px). Column washes (today, holidays) start here
   // so they don't rise into the header.
@@ -408,6 +428,14 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     <RowKindButton onClick={() => quickAddPlan("effort", false)}>{t("kind.effort")}</RowKindButton>
                     <RowKindButton onClick={() => quickAddPlan("stream", false)}>{t("kind.stream")}</RowKindButton>
                     <RowKindButton onClick={() => quickAddPlan("effort", true)}>{t("capability.field")}</RowKindButton>
+                    {templates.length > 0 && (
+                      <>
+                        <p className="mt-1 border-t px-2 pb-1 pt-1.5 text-[11px] font-bold text-muted-foreground">{t("templates.fromTemplate")}</p>
+                        {templates.map((tpl) => (
+                          <RowKindButton key={tpl.id} onClick={() => quickApplyTemplate(tpl.id)}>{tpl.name_he}</RowKindButton>
+                        ))}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -420,6 +448,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </ControlButton>
             <ControlButton onClick={() => setRolesOpen(true)}>
               <UserCog className="h-3.5 w-3.5" /> {t("roles.button")}
+            </ControlButton>
+            <ControlButton onClick={() => setTemplatesOpen(true)}>
+              <LayoutTemplate className="h-3.5 w-3.5" /> {t("templates.button")}
             </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
@@ -965,6 +996,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onChanged={load}
       />
       <RolesEditor open={rolesOpen} onClose={() => setRolesOpen(false)} />
+      <TemplatesEditor open={templatesOpen} onClose={() => setTemplatesOpen(false)} onChanged={load} />
     </div>
   );
 }
