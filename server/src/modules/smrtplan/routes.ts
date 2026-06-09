@@ -358,6 +358,19 @@ router.get("/plans/board", async (req: Request, res: Response) => {
   res.json({ plans: await withHealth(req.org!.id, await withProgress(req.org!.id, asRows(data))) });
 });
 
+// Stages across the org's board plans — drives the per-stage squares on each
+// row. Returned for every plan so the board can render a square per stage.
+router.get("/plans/board-stages", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_stages")
+    .select("id, plan_id, name_he, name_en, sequence, default_duration_days, start_date, end_date")
+    .eq("org_id", req.org!.id)
+    .order("plan_id", { ascending: true })
+    .order("sequence", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ stages: data ?? [] });
+});
+
 router.get("/plans/milestones", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("smrtplan_milestones")
@@ -663,14 +676,15 @@ router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {
-  const { name_he, name_en, sequence, required_role, default_duration_days } = req.body ?? {};
+  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date } = req.body ?? {};
   if (!name_he) return res.status(400).json({ error: "name_he is required" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .insert({ org_id: req.org!.id, plan_id: req.params.id, name_he, name_en: name_en ?? null,
       sequence: sequence ?? 0, required_role: required_role ?? null,
-      default_duration_days: default_duration_days != null ? Number(default_duration_days) : null })
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days")
+      default_duration_days: default_duration_days != null ? Number(default_duration_days) : null,
+      start_date: start_date ?? null, end_date: end_date ?? null })
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ stage: data });
@@ -903,7 +917,7 @@ router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response
 
 router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
-  for (const k of ["name_he", "name_en", "sequence", "required_role"]) {
+  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
   // A stage's default duration drives every cell that doesn't pin its own.
@@ -917,11 +931,12 @@ router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days")
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  // A stage default-duration change reflows every inheriting cell-task.
-  await autoRecompute(req.org!.id);
+  // Only a default-duration change reflows the schedule; a timeline-window /
+  // rename edit (start_date/end_date/name) doesn't touch the engine.
+  if ("default_duration_days" in (req.body ?? {})) await autoRecompute(req.org!.id);
   res.json({ stage: data });
 });
 

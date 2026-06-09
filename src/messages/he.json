@@ -2046,7 +2046,11 @@
       "actMilestoneAdd": "הוספת ציון דרך",
       "actMilestoneDel": "מחיקת ציון דרך",
       "actRename": "שינוי שם",
-      "actAddRow": "הוספת שורה"
+      "actAddRow": "הוספת שורה",
+      "actStageMove": "הזזת שלב",
+      "actStageAdd": "הוספת שלב",
+      "actStageDel": "מחיקת שלב",
+      "stageShort": "שלב"
     },
     "gantt": {
       "connectHint": "לחץ על אייקון הקישור במשימה, ואז על משימה אחרת — כדי לצייר חץ תלות.",

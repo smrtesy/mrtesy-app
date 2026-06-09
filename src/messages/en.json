@@ -2047,7 +2047,11 @@
       "actMilestoneAdd": "Add milestone",
       "actMilestoneDel": "Delete milestone",
       "actRename": "Rename",
-      "actAddRow": "Add row"
+      "actAddRow": "Add row",
+      "actStageMove": "Move stage",
+      "actStageAdd": "Add stage",
+      "actStageDel": "Delete stage",
+      "stageShort": "Stage"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
