@@ -11,6 +11,14 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+// Strip UNPAIRED UTF-16 surrogates. body_text.substring(0, 3000) below cuts by
+// code unit and can split an emoji's surrogate pair, leaving a lone half;
+// JSON.stringify escapes it to \udXXX and the Anthropic API rejects the body
+// with HTTP 400 "invalid high surrogate in string". Intact emoji are untouched.
+function stripLoneSurrogates(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -99,7 +107,7 @@ Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
         system: "You are a helpful assistant for a personal task management system. Respond in the same language as the original message (Hebrew or English). Be concise and actionable.",
         messages: [{
           role: "user",
-          content: `${context}\n\nAction requested: ${action_label || ""}\nPrompt: ${prompt}`,
+          content: stripLoneSurrogates(`${context}\n\nAction requested: ${action_label || ""}\nPrompt: ${prompt}`),
         }],
       }),
     });
