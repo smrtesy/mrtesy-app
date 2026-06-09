@@ -809,7 +809,9 @@ router.post("/plans/milestones", requireFull, async (req: Request, res: Response
     .select("id, plan_id, milestone_date, label_he, label_en, color, constrains_user_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  await autoRecompute(req.org!.id); // a constraining milestone changes the schedule
+  // Only a worker-constraining milestone shifts the schedule; a plain label
+  // milestone appears instantly with no org-wide reschedule.
+  if (data?.constrains_user_id) await autoRecompute(req.org!.id);
   res.status(201).json({ milestone: data });
 });
 
@@ -827,18 +829,25 @@ router.patch("/plan-milestones/:id", requireFull, async (req: Request, res: Resp
     .select("id, plan_id, milestone_date, label_he, label_en, color, constrains_user_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  await autoRecompute(req.org!.id);
+  // Reschedule only when a worker-constraint is (or was) in play.
+  if (data?.constrains_user_id || "constrains_user_id" in (req.body ?? {})) await autoRecompute(req.org!.id);
   res.json({ milestone: data });
 });
 
 router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Response) => {
+  const { data: existing } = await db
+    .from("smrtplan_milestones")
+    .select("constrains_user_id")
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
   const { error } = await db
     .from("smrtplan_milestones")
     .delete()
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
-  await autoRecompute(req.org!.id);
+  if (existing?.constrains_user_id) await autoRecompute(req.org!.id);
   res.json({ ok: true });
 });
 

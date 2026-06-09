@@ -322,16 +322,25 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     const label_he = label.trim();
     const key = newKey();
     const create = async () => {
+      // Optimistic: show the pin immediately (keyed by the stable key), then swap
+      // in the real id when the POST returns — no full board reload.
+      setMilestones((ms) => [
+        ...ms.filter((m) => m.id !== histResolve(key) && m.id !== key),
+        { id: key, plan_id: planId, milestone_date, label_he, label_en: null, color: null, constrains_user_id: null },
+      ]);
       const { milestone } = await api<{ milestone: { id: string } }>("/api/plans/milestones", {
         method: "POST",
         body: { milestone_date, label_he, plan_id: planId },
       });
-      if (milestone?.id) histBind(key, milestone.id);
-      await load();
+      if (milestone?.id) {
+        histBind(key, milestone.id);
+        setMilestones((ms) => ms.map((m) => (m.id === key ? { ...m, id: milestone.id } : m)));
+      }
     };
     const remove = async () => {
-      await api(`/api/plan-milestones/${histResolve(key)}`, { method: "DELETE" });
-      await load();
+      const live = histResolve(key);
+      setMilestones((ms) => ms.filter((m) => m.id !== live && m.id !== key));
+      await api(`/api/plan-milestones/${live}`, { method: "DELETE" });
     };
     runCmd({ label: t("edit.actMilestoneAdd"), redo: create, undo: remove });
   }
@@ -341,10 +350,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     if (!m) return;
     const key = histKeyOf(id);
     const remove = async () => {
-      await api(`/api/plan-milestones/${histResolve(key)}`, { method: "DELETE" });
-      await load();
+      const live = histResolve(key);
+      setMilestones((ms) => ms.filter((x) => x.id !== live));
+      await api(`/api/plan-milestones/${live}`, { method: "DELETE" });
+      if (m.constrains_user_id) await load(); // a worker-constraint relaxes the schedule
     };
     const recreate = async () => {
+      setMilestones((ms) => [...ms.filter((x) => x.id !== m.id), m]);
       const { milestone } = await api<{ milestone: { id: string } }>("/api/plans/milestones", {
         method: "POST",
         body: {
@@ -356,8 +368,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           constrains_user_id: m.constrains_user_id ?? null,
         },
       });
-      if (milestone?.id) histBind(key, milestone.id);
-      await load();
+      if (milestone?.id) {
+        histBind(key, milestone.id);
+        setMilestones((ms) => ms.map((x) => (x.id === m.id ? { ...x, id: milestone.id } : x)));
+      }
+      if (m.constrains_user_id) await load();
     };
     runCmd({ label: t("edit.actMilestoneDel"), redo: remove, undo: recreate });
   }
