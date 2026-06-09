@@ -30,6 +30,8 @@ function clamp(n: number, lo: number, hi: number): number {
 export interface Timeline {
   t0: Date;
   totalDays: number;
+  /** Pixels per working-day column (zoomable). */
+  colPx: number;
   /** Day-offset (from t0) of each visible working-day column. */
   cols: number[];
   trackWidth: number;
@@ -49,8 +51,9 @@ export interface Timeline {
   offsetAtCol: (i: number) => number;
 }
 
-/** Build the working-day column model for a [t0, t0+totalDays] window. */
-export function useTimeline(t0: Date, totalDays: number): Timeline {
+/** Build the working-day column model for a [t0, t0+totalDays] window.
+ *  `colPx` (default COL_PX) sets the per-column width so the board can zoom. */
+export function useTimeline(t0: Date, totalDays: number, colPx: number = COL_PX): Timeline {
   const cols = useMemo(() => {
     const out: number[] = [];
     for (let o = 0; o <= totalDays; o++) {
@@ -75,7 +78,7 @@ export function useTimeline(t0: Date, totalDays: number): Timeline {
     },
     [cols],
   );
-  const xOf = useCallback((off: number) => colPos(off) * COL_PX, [colPos]);
+  const xOf = useCallback((off: number) => colPos(off) * colPx, [colPos, colPx]);
 
   const inlineCoordAtX = useCallback(
     (clientX: number, rect: DOMRect, locale: string) =>
@@ -84,13 +87,13 @@ export function useTimeline(t0: Date, totalDays: number): Timeline {
   );
   const colUnderX = useCallback(
     (clientX: number, rect: DOMRect, locale: string) =>
-      clamp(Math.floor(inlineCoordAtX(clientX, rect, locale) / COL_PX), 0, Math.max(0, cols.length - 1)),
-    [cols, inlineCoordAtX],
+      clamp(Math.floor(inlineCoordAtX(clientX, rect, locale) / colPx), 0, Math.max(0, cols.length - 1)),
+    [cols, inlineCoordAtX, colPx],
   );
   const colBoundaryAtX = useCallback(
     (clientX: number, rect: DOMRect, locale: string) =>
-      clamp(Math.round(inlineCoordAtX(clientX, rect, locale) / COL_PX), 0, Math.max(0, cols.length - 1)),
-    [cols, inlineCoordAtX],
+      clamp(Math.round(inlineCoordAtX(clientX, rect, locale) / colPx), 0, Math.max(0, cols.length - 1)),
+    [cols, inlineCoordAtX, colPx],
   );
   const offsetAtCol = useCallback(
     (i: number) => cols[clamp(i, 0, Math.max(0, cols.length - 1))] ?? 0,
@@ -100,8 +103,9 @@ export function useTimeline(t0: Date, totalDays: number): Timeline {
   return {
     t0,
     totalDays,
+    colPx,
     cols,
-    trackWidth: cols.length * COL_PX,
+    trackWidth: cols.length * colPx,
     dateAt,
     offsetOf,
     colPos,

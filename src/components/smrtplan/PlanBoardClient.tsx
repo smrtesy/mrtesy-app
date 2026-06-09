@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate, Undo2, Redo2 } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate, Undo2, Redo2, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
-import { useTimeline, COL_PX } from "@/lib/smrtplan/timeline";
+import { useTimeline, COL_PX as COL_BASE } from "@/lib/smrtplan/timeline";
 import { useGanttDrag, spanWidth } from "@/lib/smrtplan/useGanttDrag";
 import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
 import { PlanMatrix } from "./PlanMatrix";
@@ -101,6 +101,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<"list" | "gantt">("list");
   const [pageView, setPageView] = useState<"board" | "table">("board");
+  const [zoom, setZoom] = useState(1); // board timeline column-width multiplier
   const canEdit = access === "full";
   const trackRef = useRef<HTMLDivElement | null>(null);
 
@@ -196,7 +197,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     return { t0: start, totalDays: Math.max(14, daysBetween(start, end) + 7) };
   }, [boardPlans]);
 
-  const tl = useTimeline(t0, totalDays);
+  const colPx = Math.round(COL_BASE * zoom);
+  const tl = useTimeline(t0, totalDays, colPx);
   const { cols, dateAt, offsetOf, xOf, trackWidth } = tl;
   /** Percentage position (for the responsive mobile sparkline that fits its container). */
   const pctOf = (off: number) => `${Math.min(100, Math.max(0, (off / totalDays) * 100))}%`;
@@ -661,6 +663,16 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           <LegendDot color="hsl(var(--status-warn))" label={t("legend.atRisk")} />
           <LegendDot color="hsl(var(--status-late))" label={t("legend.late")} />
         </div>
+        {/* zoom — available in both view and edit modes */}
+        <div className="flex items-center gap-1">
+          <ControlButton onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))} disabled={zoom <= 0.5} title={t("zoomOut")}>
+            <ZoomOut className="h-3.5 w-3.5" />
+          </ControlButton>
+          <span className="w-9 text-center text-[11px] tabular-nums text-muted-foreground">{Math.round(zoom * 100)}%</span>
+          <ControlButton onClick={() => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)))} disabled={zoom >= 2.5} title={t("zoomIn")}>
+            <ZoomIn className="h-3.5 w-3.5" />
+          </ControlButton>
+        </div>
         {canEdit && (
           <div className="ms-auto flex flex-wrap items-center gap-2">
             {editing && (
@@ -970,8 +982,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   key={`hol-${h.start}`}
                   className="pointer-events-none absolute z-[6]"
                   style={{
-                    insetInlineStart: h.start * COL_PX,
-                    width: (h.end - h.start) * COL_PX,
+                    insetInlineStart: h.start * colPx,
+                    width: (h.end - h.start) * colPx,
                     top: laneTop,
                     height: 48, // the h-12 day-strip cell only
                     backgroundImage:
@@ -987,7 +999,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   className="pointer-events-none absolute bottom-0 z-[7]"
                   style={{
                     insetInlineStart: xOf(todayOff),
-                    width: COL_PX,
+                    width: colPx,
                     top: laneTop,
                     background: "rgba(115,115,115,0.15)",
                   }}
@@ -998,7 +1010,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               {milestones.length > 0 && (
                 <div className="relative h-8 border-b bg-secondary/40">
                   {milestones.map((m) => {
-                    const pcol = msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date));
+                    const pcol = msDrag.preview?.id === m.id ? msDrag.preview.startCol * colPx : xOf(offsetOf(m.milestone_date));
                     return (
                       <div key={m.id}>
                         <div
@@ -1041,13 +1053,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   divider) marks every point where either month changes. */}
               <div className="relative h-5 border-b bg-secondary/40">
                 {monthSegments.map((seg) => {
-                  const width = (seg.end - seg.start) * COL_PX;
+                  const width = (seg.end - seg.start) * colPx;
                   return (
                     <div
                       key={seg.start}
                       className="absolute top-0 flex h-full items-center justify-center overflow-hidden whitespace-nowrap px-1 text-[10px] font-semibold text-muted-foreground"
                       style={{
-                        insetInlineStart: seg.start * COL_PX,
+                        insetInlineStart: seg.start * colPx,
                         width,
                         borderInlineStart: seg.start !== 0 ? "2px solid hsl(var(--foreground) / 0.3)" : undefined,
                       }}
@@ -1069,8 +1081,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                       key={o}
                       className="absolute top-0 flex h-full flex-col items-center justify-center gap-0.5 border-e"
                       style={{
-                        insetInlineStart: i * COL_PX,
-                        width: COL_PX,
+                        insetInlineStart: i * colPx,
+                        width: colPx,
                         // Thicker, darker divider before each new week (Monday).
                         ...(weekStart && i !== 0
                           ? { borderInlineStartWidth: 3, borderInlineStartStyle: "solid", borderInlineStartColor: "hsl(var(--foreground) / 0.22)" }
@@ -1090,7 +1102,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                   <div
                     key={m.id}
                     className="absolute inset-y-0 z-[3] w-0 opacity-70"
-                    style={{ insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date))), borderInlineStart: `2px solid ${lineColor(m)}` }}
+                    style={{ insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * colPx : xOf(offsetOf(m.milestone_date))), borderInlineStart: `2px solid ${lineColor(m)}` }}
                   />
                 ))}
               </div>
@@ -1102,8 +1114,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                     const pv = planDrag.preview?.id === p.id ? planDrag.preview : null;
                     const s = p.start_date ? offsetOf(p.start_date) : 0;
                     const e = p.end_date ? offsetOf(p.end_date) : s + 7;
-                    const barStart = pv ? pv.startCol * COL_PX : xOf(s);
-                    const barWidth = pv ? spanWidth(pv.startCol, pv.endCol) : Math.max(COL_PX, xOf(e) - xOf(s));
+                    const barStart = pv ? pv.startCol * colPx : xOf(s);
+                    const barWidth = pv ? spanWidth(pv.startCol, pv.endCol, colPx) : Math.max(colPx, xOf(e) - xOf(s));
                     const progress = p.effective_progress ?? p.progress ?? 0;
                     const isStream = p.kind === "stream";
                     const planStages = stagesByPlan.get(p.id) ?? [];
@@ -1131,8 +1143,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                           // One draggable square per stage along the row.
                           stageWins.map(({ stage, startOff, endOff, derived }) => {
                             const spv = stageDrag.preview?.id === stage.id ? stageDrag.preview : null;
-                            const sStart = spv ? spv.startCol * COL_PX : xOf(startOff);
-                            const sWidth = spv ? spanWidth(spv.startCol, spv.endCol) : Math.max(COL_PX, xOf(endOff) - xOf(startOff));
+                            const sStart = spv ? spv.startCol * colPx : xOf(startOff);
+                            const sWidth = spv ? spanWidth(spv.startCol, spv.endCol, colPx) : Math.max(colPx, xOf(endOff) - xOf(startOff));
                             const stageName = locale === "en" ? stage.name_en || stage.name_he : stage.name_he;
                             return (
                               <div
@@ -1221,7 +1233,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                             key={m.id}
                             className="pointer-events-none absolute inset-y-0 z-[4] w-0 opacity-40"
                             style={{
-                              insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * COL_PX : xOf(offsetOf(m.milestone_date))),
+                              insetInlineStart: (msDrag.preview?.id === m.id ? msDrag.preview.startCol * colPx : xOf(offsetOf(m.milestone_date))),
                               borderInlineStart: `2px dashed ${lineColor(m)}`,
                             }}
                           />

@@ -26,7 +26,7 @@ interface TableTask {
   plan_title_he: string | null;
   plan_title_en: string | null;
   linked_drive_docs?: { url?: string; name?: string; title?: string }[] | null;
-  task_materials?: { url?: string; title?: string }[] | null;
+  task_materials?: { id: string; type: string; title?: string; url?: string }[] | null;
   source_messages?: { source_url: string | null; serial_display: string | null } | null;
   needs: TaskNeed[];
 }
@@ -36,6 +36,8 @@ interface TableStage {
   name_he: string;
   name_en: string | null;
   sequence: number;
+  start_date: string | null;
+  end_date: string | null;
 }
 interface Member {
   user_id: string;
@@ -59,15 +61,6 @@ const cellBase =
   "w-full truncate rounded px-1.5 py-1 text-start text-[12.5px] outline-none focus:ring-2 focus:ring-ring";
 const editBase =
   "w-full rounded border border-input bg-background px-1.5 py-1 text-[12.5px] outline-none focus:ring-2 focus:ring-ring";
-
-/** All link URLs attached to a task — kept verbatim (deep links, not domains). */
-function taskLinks(t: TableTask, sourceLabel: string): { label: string; url: string }[] {
-  const out: { label: string; url: string }[] = [];
-  if (t.source_messages?.source_url) out.push({ label: t.source_messages.serial_display || sourceLabel, url: t.source_messages.source_url });
-  for (const d of t.linked_drive_docs ?? []) if (d.url) out.push({ label: d.name || d.title || "Drive", url: d.url });
-  for (const m of t.task_materials ?? []) if (m.url) out.push({ label: m.title || "link", url: m.url });
-  return out;
-}
 
 export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; canEdit: boolean; onChanged?: () => void }) {
   const t = useTranslations("smrtPlan");
@@ -361,7 +354,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     const seq = (stagesByPlan.get(planId) ?? []).length + 1;
     const key = newKey();
     const create = async () => {
-      setStages((ss) => [...ss.filter((s) => s.id !== histResolve(key) && s.id !== key), { id: key, plan_id: planId, name_he: nm, name_en: null, sequence: seq }]);
+      setStages((ss) => [...ss.filter((s) => s.id !== histResolve(key) && s.id !== key), { id: key, plan_id: planId, name_he: nm, name_en: null, sequence: seq, start_date: null, end_date: null }]);
       const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${planId}/stages`, { method: "POST", body: { name_he: nm, sequence: seq } });
       if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === key ? { ...s, id: stage.id } : s))); }
     };
@@ -382,10 +375,53 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     };
     const recreate = async () => {
       setStages((ss) => [...ss.filter((s) => s.id !== st.id), st]);
-      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${st.plan_id}/stages`, { method: "POST", body: { name_he: st.name_he, name_en: st.name_en, sequence: st.sequence } });
+      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${st.plan_id}/stages`, { method: "POST", body: { name_he: st.name_he, name_en: st.name_en, sequence: st.sequence, start_date: st.start_date, end_date: st.end_date } });
       if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === st.id ? { ...s, id: stage.id } : s))); }
     };
     runCmd({ label: te("actStageDel"), redo: remove, undo: recreate });
+  }
+
+  // Set a stage's start/end date inline (the board shows it as a positioned
+  // square). No reschedule — stage dates don't feed the engine.
+  function editStageDate(st: TableStage, field: "start_date" | "end_date", value: string | null) {
+    if (value === st[field]) return;
+    const key = histKeyOf(st.id);
+    const apply = async (v: string | null) => {
+      const live = histResolve(key);
+      setStages((ss) => ss.map((s) => (s.id === live ? { ...s, [field]: v } : s)));
+      await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { [field]: v } });
+    };
+    runCmd({ label: te("actStageMove"), redo: () => apply(value), undo: () => apply(st[field]) });
+  }
+
+  function renameStage(st: TableStage) {
+    const name = window.prompt(te("name"), st.name_he);
+    if (name == null) return;
+    const v = name.trim();
+    if (!v || v === st.name_he) return;
+    const key = histKeyOf(st.id);
+    const apply = async (val: string) => {
+      const live = histResolve(key);
+      setStages((ss) => ss.map((s) => (s.id === live ? { ...s, name_he: val } : s)));
+      await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
+    };
+    runCmd({ label: te("actRename"), redo: () => apply(v), undo: () => apply(st.name_he) });
+  }
+
+  // Links: stored as task_materials of type "link". Add/remove inline; not a
+  // scheduling field, so optimistic with no refetch.
+  function addLink(task: TableTask) {
+    const url = window.prompt(t("table.linkUrl"));
+    if (!url || !url.trim()) return;
+    const label = (window.prompt(t("table.linkLabel"), url.trim()) ?? url.trim()).trim() || url.trim();
+    const old = task.task_materials ?? [];
+    const next = [...old, { id: newKey(), type: "link", title: label, url: url.trim() }];
+    editField(task.id, { task_materials: next }, { task_materials: old }, { task_materials: next }, { task_materials: old }, t("table.colLinks"), false);
+  }
+  function removeLink(task: TableTask, matId: string) {
+    const old = task.task_materials ?? [];
+    const next = old.filter((m) => m.id !== matId);
+    editField(task.id, { task_materials: next }, { task_materials: old }, { task_materials: next }, { task_materials: old }, t("table.colLinks"), false);
   }
 
   const statusLabel = (s: string) =>
@@ -447,7 +483,11 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                 onAddTask={addTask}
                 onAddStage={addStage}
                 onDeleteStage={deleteStage}
+                onEditStageDate={editStageDate}
+                onRenameStage={renameStage}
                 onDeletePlan={deletePlan}
+                onAddLink={addLink}
+                onRemoveLink={removeLink}
                 getFlatIndex={(taskId) => flatIndexById.get(taskId) ?? -1}
                 active={active}
                 editing={editing}
@@ -484,7 +524,11 @@ function PlanGroup(props: {
   stages: TableStage[];
   onAddStage: (planId: string) => void;
   onDeleteStage: (stage: TableStage) => void;
+  onEditStageDate: (stage: TableStage, field: "start_date" | "end_date", value: string | null) => void;
+  onRenameStage: (stage: TableStage) => void;
   onDeletePlan: (planId: string) => void;
+  onAddLink: (task: TableTask) => void;
+  onRemoveLink: (task: TableTask, matId: string) => void;
   getFlatIndex: (taskId: string) => number;
   active: { r: number; c: number } | null;
   editing: boolean;
@@ -527,14 +571,27 @@ function PlanGroup(props: {
             )}
             <span className="text-[10.5px] font-normal text-muted-foreground">{rows.length}</span>
 
-            {/* stages of this project — chips with delete + add */}
+            {/* stages of this project — name (click to rename) + start/end dates +
+                delete. Dates make the board show the stage as a positioned square. */}
             {stages.map((s) => (
-              <span key={s.id} className="inline-flex items-center gap-0.5 rounded-full border bg-card px-1.5 py-px text-[10.5px] font-normal">
-                {locale === "en" ? s.name_en || s.name_he : s.name_he}
+              <span key={s.id} className="inline-flex items-center gap-1 rounded-full border bg-card px-1.5 py-px text-[10.5px] font-normal">
+                <button
+                  onClick={canEdit ? () => props.onRenameStage(s) : undefined}
+                  className={cn("font-medium", canEdit && "cursor-text rounded px-0.5 hover:bg-accent")}
+                >
+                  {locale === "en" ? s.name_en || s.name_he : s.name_he}
+                </button>
                 {canEdit && (
-                  <button onClick={() => props.onDeleteStage(s)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
-                    <X className="h-2.5 w-2.5" />
-                  </button>
+                  <>
+                    <input type="date" value={s.start_date ?? ""} onChange={(e) => props.onEditStageDate(s, "start_date", e.target.value || null)}
+                      title={te("start")} className="rounded border border-input bg-background px-0.5 text-[10px] outline-none focus:ring-1 focus:ring-ring" />
+                    <span aria-hidden className="text-muted-foreground">–</span>
+                    <input type="date" value={s.end_date ?? ""} onChange={(e) => props.onEditStageDate(s, "end_date", e.target.value || null)}
+                      title={te("end")} className="rounded border border-input bg-background px-0.5 text-[10px] outline-none focus:ring-1 focus:ring-ring" />
+                    <button onClick={() => props.onDeleteStage(s)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </>
                 )}
               </span>
             ))}
@@ -556,7 +613,6 @@ function PlanGroup(props: {
       </tr>
       {rows.map((task) => {
         const r = props.getFlatIndex(task.id);
-        const links = taskLinks(task, t("table.source"));
         const done = DONE.has(task.status);
         const isActive = (c: number) => props.active?.r === r && props.active?.c === c;
         const isEdit = (c: number) => isActive(c) && props.editing;
@@ -644,14 +700,39 @@ function PlanGroup(props: {
               {textCell(4, "duration", task.duration_days != null ? `${task.duration_days} ${te("daysUnit")}` : "", "number")}
             </td>
             <td className="border-b px-2 py-1">
-              <span className="flex flex-wrap gap-1">
-                {links.length === 0 && <span className="text-[11px] text-muted-foreground/40">—</span>}
-                {links.map((l, i) => (
-                  <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
+              <span className="flex flex-wrap items-center gap-1">
+                {/* read-only: the origin deep-link + synced Drive docs */}
+                {task.source_messages?.source_url && (
+                  <a href={task.source_messages.source_url} target="_blank" rel="noopener noreferrer"
                     className="inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border bg-secondary/60 px-1.5 py-px text-[10.5px] hover:bg-accent">
-                    <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{l.label}</span>
+                    <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{task.source_messages.serial_display || t("table.source")}</span>
+                  </a>
+                )}
+                {(task.linked_drive_docs ?? []).filter((d) => d.url).map((d, i) => (
+                  <a key={`d${i}`} href={d.url} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border bg-secondary/60 px-1.5 py-px text-[10.5px] hover:bg-accent">
+                    <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{d.name || d.title || "Drive"}</span>
                   </a>
                 ))}
+                {/* editable: links stored as task_materials */}
+                {(task.task_materials ?? []).filter((m) => m.url).map((m) => (
+                  <span key={m.id} className="inline-flex max-w-[150px] items-center gap-0.5 rounded-full border bg-card px-1.5 py-px text-[10.5px]">
+                    <a href={m.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 truncate hover:underline">
+                      <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{m.title || m.url}</span>
+                    </a>
+                    {canEdit && (
+                      <button onClick={() => props.onRemoveLink(task, m.id)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {canEdit && (
+                  <button onClick={() => props.onAddLink(task)}
+                    className="inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] text-muted-foreground hover:bg-accent hover:text-foreground" title={t("table.addLink")}>
+                    <Plus className="h-2.5 w-2.5" /> {t("table.addLink")}
+                  </button>
+                )}
               </span>
             </td>
             <td className="border-b px-2 py-1">

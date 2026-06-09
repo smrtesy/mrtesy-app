@@ -103,6 +103,6 @@ export function useGanttDrag(
 }
 
 /** Inline-axis pixel width for a [startCol, endCol] span (min one column). */
-export function spanWidth(startCol: number, endCol: number): number {
-  return Math.max(COL_PX, (endCol - startCol) * COL_PX);
+export function spanWidth(startCol: number, endCol: number, colPx: number = COL_PX): number {
+  return Math.max(colPx, (endCol - startCol) * colPx);
 }

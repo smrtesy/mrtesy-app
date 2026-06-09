@@ -2096,7 +2096,10 @@
       "source": "Source",
       "addProject": "New project",
       "deleteProject": "Delete project",
-      "confirmDeleteProject": "Delete this project and all its tasks and stages? This cannot be undone."
+      "confirmDeleteProject": "Delete this project and all its tasks and stages? This cannot be undone.",
+      "addLink": "+ Link",
+      "linkUrl": "Link URL",
+      "linkLabel": "Link label"
     },
     "capacity": {
       "button": "Team & availability",
@@ -2188,7 +2191,9 @@
       "lead": "Pick a worker to see all their tasks across plans — ready/blocked/done",
       "worker": "Worker",
       "empty": "No tasks for this worker"
-    }
+    },
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out"
   },
   "smrtBotWeb": {
     "formTitle": "Let’s start chatting",
