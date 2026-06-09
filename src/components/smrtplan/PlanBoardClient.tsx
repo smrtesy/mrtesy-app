@@ -297,6 +297,20 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     runCmd({ label: t("edit.actRename"), redo: () => setTitle(trimmed), undo: () => setTitle(oldTitle) });
   }
 
+  function setPlanSection(id: string, label: string | null) {
+    const cur = plans.find((p) => p.id === id);
+    if (!cur || (label || null) === (cur.group_label ?? null)) return;
+    const old = cur.group_label ?? null;
+    const key = histKeyOf(id);
+    const apply = async (val: string | null) => {
+      const live = histResolve(key);
+      setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, group_label: val } : p)));
+      await api(`/api/plans/${live}`, { method: "PATCH", body: { group_label: val } });
+      await load();
+    };
+    runCmd({ label: t("table.section"), redo: () => apply(label || null), undo: () => apply(old) });
+  }
+
   function newKey() {
     return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
   }
@@ -468,6 +482,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   }, [milestones]);
   const lineColor = (m: PlanMilestone) => m.color || "hsl(var(--muted-foreground))";
   const mLabel = (m: PlanMilestone) => (locale === "en" ? m.label_en || m.label_he : m.label_he);
+  const sectionOptions = useMemo(
+    () => [...new Set(plans.map((p) => p.group_label).filter((l): l is string => !!l))].sort((a, b) => a.localeCompare(b)),
+    [plans],
+  );
 
   // Group plans by group_label, preserving first-seen order.
   const groups = useMemo(() => {
@@ -821,12 +839,31 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                         )}
                         <StatusBadge status={p.status} t={t} />
                       </span>
-                      <span
-                        className="inline-flex items-center gap-1 whitespace-nowrap text-[10.5px] font-medium"
-                        style={{ color: healthColor[h] }}
-                      >
-                        <span className="h-2 w-2 rounded-full" style={{ background: healthColor[h] }} />
-                        {t(`health.${h}`)}
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className="inline-flex items-center gap-1 whitespace-nowrap text-[10.5px] font-medium"
+                          style={{ color: healthColor[h] }}
+                        >
+                          <span className="h-2 w-2 rounded-full" style={{ background: healthColor[h] }} />
+                          {t(`health.${h}`)}
+                        </span>
+                        {editing && (
+                          <select
+                            value={p.group_label ?? ""}
+                            title={t("table.section")}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === "__new__") { const name = window.prompt(t("table.newSection")); if (name && name.trim()) setPlanSection(p.id, name.trim()); }
+                              else setPlanSection(p.id, v || null);
+                            }}
+                            className="h-5 max-w-[90px] rounded border border-input bg-background px-0.5 text-[9.5px] text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          >
+                            <option value="">{t("table.noSection")}</option>
+                            {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                            <option value="__new__">+ {t("table.newSection")}</option>
+                          </select>
+                        )}
                       </span>
                     </div>
                   );

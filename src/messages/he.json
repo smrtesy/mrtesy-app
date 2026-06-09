@@ -2103,7 +2103,10 @@
       "linkUrl": "כתובת הקישור (URL)",
       "linkLabel": "שם הקישור",
       "stage": "שלב",
-      "noStage": "ללא שלב"
+      "noStage": "ללא שלב",
+      "section": "מדור",
+      "noSection": "ללא מדור",
+      "newSection": "מדור חדש"
     },
     "capacity": {
       "button": "צוות וזמינות",

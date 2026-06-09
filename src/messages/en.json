@@ -2104,7 +2104,10 @@
       "linkUrl": "Link URL",
       "linkLabel": "Link label",
       "stage": "Stage",
-      "noStage": "No stage"
+      "noStage": "No stage",
+      "section": "Section",
+      "noSection": "No section",
+      "newSection": "New section"
     },
     "capacity": {
       "button": "Team & availability",

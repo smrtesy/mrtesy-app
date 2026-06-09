@@ -211,6 +211,27 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     [runCmd, refetch, te],
   );
 
+  // Existing section names (group_label) across the org's plans.
+  const sectionOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of plans) if (p.group_label) set.add(p.group_label);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [plans]);
+
+  // Assign a project to a section (group_label) — board + table group by it.
+  const setPlanSection = useCallback(
+    (planId: string, label: string | null) => {
+      const cur = plans.find((p) => p.id === planId)?.group_label ?? null;
+      if ((label || null) === cur) return;
+      const apply = async (val: string | null) => {
+        setPlans((ps) => ps.map((p) => (p.id === planId ? { ...p, group_label: val } : p)));
+        await api(`/api/plans/${planId}`, { method: "PATCH", body: { group_label: val } });
+      };
+      runCmd({ label: t("table.section"), redo: () => apply(label || null), undo: () => apply(cur) });
+    },
+    [plans, runCmd, t],
+  );
+
   /** Commit the in-progress text/number/date edit of the active cell. */
   const commitDraft = useCallback(
     (task: TableTask, col: NavCol) => {
@@ -477,17 +498,33 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
             </tr>
           </thead>
           <tbody>
-            {groups.map(({ plan, rows, stages: planStages }) => (
-              <PlanGroup
-                key={plan.id}
-                plan={plan}
-                rows={rows}
-                locale={locale}
-                canEdit={canEdit}
-                memberMap={memberMap}
-                members={members}
-                statusLabel={statusLabel}
-                te={te}
+            {(() => {
+              let lastSection: string | null | undefined;
+              return groups.map(({ plan, rows, stages: planStages }) => {
+                const section = plan.group_label || null;
+                const header =
+                  section !== lastSection ? (
+                    <tr key={`sec-${section ?? "none"}`} className="bg-secondary">
+                      <td colSpan={7} className="border-b px-2 py-1 text-[12.5px] font-bold text-foreground/80">
+                        {section || t("table.noSection")}
+                      </td>
+                    </tr>
+                  ) : null;
+                lastSection = section;
+                return (
+                  <Fragment key={plan.id}>
+                    {header}
+                    <PlanGroup
+                      plan={plan}
+                      rows={rows}
+                      locale={locale}
+                      canEdit={canEdit}
+                      memberMap={memberMap}
+                      members={members}
+                      statusLabel={statusLabel}
+                      sectionOptions={sectionOptions}
+                      onSetSection={setPlanSection}
+                      te={te}
                 t={t}
                 stages={planStages}
                 onEditPlanTitle={editPlanTitle}
@@ -511,8 +548,11 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                 onCommitSelect={commitSelect}
                 onMove={moveAfterCommit}
                 onCancel={() => setEditing(false)}
-              />
-            ))}
+                    />
+                  </Fragment>
+                );
+              });
+            })()}
           </tbody>
         </table>
       </div>
@@ -529,6 +569,8 @@ function PlanGroup(props: {
   memberMap: Map<string, string>;
   members: Member[];
   statusLabel: (s: string) => string;
+  sectionOptions: string[];
+  onSetSection: (planId: string, label: string | null) => void;
   te: ReturnType<typeof useTranslations>;
   t: ReturnType<typeof useTranslations>;
   onEditPlanTitle: (planId: string, oldTitle: string, newTitle: string) => void;
@@ -613,6 +655,22 @@ function PlanGroup(props: {
               </span>
             )}
             <span className="text-[10.5px] font-normal text-muted-foreground">{rows.length}</span>
+            {canEdit && (
+              <select
+                value={plan.group_label ?? ""}
+                title={t("table.section")}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "__new__") { const name = window.prompt(t("table.newSection")); if (name && name.trim()) props.onSetSection(plan.id, name.trim()); }
+                  else props.onSetSection(plan.id, v || null);
+                }}
+                className="h-6 rounded border border-input bg-background px-1 text-[10.5px] text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">{t("table.noSection")}</option>
+                {props.sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                <option value="__new__">+ {t("table.newSection")}</option>
+              </select>
+            )}
             {canEdit && (
               <button onClick={() => props.onAddStage(plan.id)}
                 className="inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground" title={te("addStage")}>
