@@ -48,6 +48,7 @@ interface MenuNode {
   action: string | null;
   parent_key: string | null;
   image_url: string | null;
+  button_layout: string | null;
 }
 
 type State = Record<string, unknown> & { lastInteractionMs?: number };
@@ -137,7 +138,7 @@ async function logMsg(
 async function loadNodes(orgId: string, botId: string, env: BotEnv): Promise<MenuNode[]> {
   const { data } = await db
     .from("smrtbot_menu_nodes")
-    .select("id, node_key, type, label, title_he, body_text, buttons, action, parent_key, image_url")
+    .select("id, node_key, type, label, title_he, body_text, buttons, action, parent_key, image_url, button_layout")
     .eq("org_id", orgId)
     .eq("bot_id", botId)
     .eq("env", env)
@@ -182,12 +183,36 @@ async function sendMenuNode(
     await channel.image(node.image_url, bodyText || undefined);
     await logMsg(orgId, botId, phone, "OUT", env, "image", node.image_url, node.node_key);
   }
-  if (buttons.length > 0) {
+
+  if (buttons.length === 0) {
+    if (bodyText && !node.image_url) {
+      await channel.text(bodyText);
+      await logMsg(orgId, botId, phone, "OUT", env, "text", bodyText, node.node_key);
+    }
+    return;
+  }
+
+  // WhatsApp caps interactive buttons at 3. With more than 3 the node either
+  // renders as a single list (default) or splits into several 3-button
+  // messages ('split') — never silently dropping buttons.
+  if (buttons.length <= 3) {
     await channel.buttons(bodyText, buttons);
     await logMsg(orgId, botId, phone, "OUT", env, "buttons", bodyText, node.node_key);
-  } else if (bodyText && !node.image_url) {
-    await channel.text(bodyText);
-    await logMsg(orgId, botId, phone, "OUT", env, "text", bodyText, node.node_key);
+  } else if (node.button_layout === "split" || buttons.length > 10) {
+    // 'split' by choice, or forced when a WhatsApp list (max 10 rows) can't
+    // hold them all — either way no button is dropped.
+    const more = await msg(orgId, botId, env, "more_options", "עוד אפשרויות:");
+    for (let i = 0; i < buttons.length; i += 3) {
+      const chunk = buttons.slice(i, i + 3);
+      const body = i === 0 ? bodyText : more;
+      await channel.buttons(body, chunk);
+      await logMsg(orgId, botId, phone, "OUT", env, "buttons", body, node.node_key);
+    }
+  } else {
+    const label = await msg(orgId, botId, env, "list_button", "בחירה");
+    const rows = buttons.map((b) => ({ id: b.id, title: b.title }));
+    await channel.list(bodyText, label, rows);
+    await logMsg(orgId, botId, phone, "OUT", env, "list", bodyText, node.node_key);
   }
 }
 

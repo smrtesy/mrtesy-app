@@ -18,7 +18,9 @@ const MenuDiagram = dynamic(() => import("./MenuDiagram").then((m) => m.MenuDiag
 export function MenuView({ botId }: { botId: string }) {
   const t = useTranslations("smrtBot");
   const [view, setView] = useState<"diagram" | "table">("diagram");
-  const [env, setEnv] = useState<"test" | "live">("live");
+  // Default to the draft (test) env so edits are staged and then published to
+  // live — editing live directly would bypass the publish workflow.
+  const [env, setEnv] = useState<"test" | "live">("test");
 
   const seg = (active: boolean) =>
     "rounded px-3 py-1 text-sm " + (active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted");

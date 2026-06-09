@@ -1704,7 +1704,17 @@
     "aiModel_claude_haiku": "Claude Haiku (מהיר וזול)",
     "aiModel_claude_sonnet": "Claude Sonnet (מאוזן)",
     "aiModel_claude_opus": "Claude Opus (החכם ביותר)",
-    "aiModel_gemini": "Google Gemini"
+    "aiModel_gemini": "Google Gemini",
+    "menuButtons": "כפתורים",
+    "menuAddButton": "הוסף כפתור",
+    "menuBtnTitle": "טקסט הכפתור",
+    "menuBtnTarget": "יעד…",
+    "menuSplitLabel": "פצל להודעות נפרדות (3 כפתורים בכל אחת) במקום רשימה",
+    "menuNone": "(ללא)",
+    "menuUploadImage": "העלאת תמונה",
+    "menuEditOnTestOnly": "עברו ל-test כדי לערוך (live הוא הגרסה המפורסמת).",
+    "publishPending": "יש שינויים שלא פורסמו",
+    "publishNoDiff": "ללא שינויי תוכן / גרסה מיובאת"
   },
   "smrtVoice": {
     "appName": "smrtVoice",

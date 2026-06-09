@@ -688,25 +688,22 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           {/* scrollable timeline */}
           <div className="flex-1 overflow-x-auto">
             <div ref={trackRef} className="relative" style={{ width: trackWidth }}>
-              {/* holiday (no-work) columns — a diagonal hatch in the brand
-                  indigo so it never clashes with the grey "today" wash. */}
+              {/* holiday (no-work) marker — only on the date cell itself (the
+                  day strip), not down the whole column. Name shown on hover. */}
               {holidaySpans.map((h) => (
                 <div
                   key={`hol-${h.start}`}
-                  className="pointer-events-none absolute bottom-0 z-[6]"
+                  className="pointer-events-none absolute z-[6]"
                   style={{
                     insetInlineStart: h.start * COL_PX,
                     width: (h.end - h.start) * COL_PX,
                     top: laneTop,
+                    height: 48, // the h-12 day-strip cell only
                     backgroundImage:
                       "repeating-linear-gradient(45deg, hsl(var(--primary) / 0.18) 0 3px, transparent 3px 7px)",
                   }}
                   title={h.label}
-                >
-                  <span className="absolute inset-x-0 truncate px-0.5 text-center text-[9px] font-semibold text-primary/80" style={{ top: 50 }}>
-                    {h.label}
-                  </span>
-                </div>
+                />
               ))}
               {/* today column — a translucent grey wash over the whole day,
                   transparent enough to read the bars and labels underneath. */}
