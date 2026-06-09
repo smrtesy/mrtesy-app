@@ -229,7 +229,9 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       id: r.id as string,
       plan_id: (r.plan_id as string | null) ?? null,
       parent_task_id: (r.parent_task_id as string | null) ?? null,
-      duration_days: (r.duration_days as number | null) ?? null,
+      // duration_days is numeric (half-days) — coerce, since a numeric column can
+      // surface as a string and the schedule math / persist expect a number.
+      duration_days: r.duration_days != null ? Number(r.duration_days) : null,
       duration_manual: (r.duration_manual as boolean | null) ?? false,
       estimated_hours: (r.estimated_hours as number | null) ?? null,
       assigned_to_user_id: (r.assigned_to_user_id as string | null) ?? null,
@@ -267,6 +269,29 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     successors.get(provider)!.push(consumer);
     predecessors.get(consumer)!.push(provider);
     edgeLag.set(`${provider}:${consumer}`, (d.lag_days as number | null) ?? 0);
+  }
+
+  // Capability gates: a task that depends on a whole plan (to_type = 'plan')
+  // can't start until that plan/capability is delivered (its end_date). This
+  // gates the forward pass only — a capability does not pull the consumer's
+  // deadline, it pushes the consumer's earliest start after the tool exists.
+  const capGates = new Map<string, { end: Date; lag: number }[]>();
+  {
+    const { data: planDeps } = await db
+      .from("smrtplan_dependencies")
+      .select("from_id, to_id, lag_days")
+      .eq("org_id", orgId)
+      .eq("from_type", "task")
+      .eq("to_type", "plan");
+    for (const d of planDeps ?? []) {
+      const consumer = d.from_id as string;
+      if (!tasks.has(consumer)) continue;
+      const end = planEndOf.get(d.to_id as string);
+      if (!end) continue;
+      const arr = capGates.get(consumer) ?? [];
+      arr.push({ end, lag: (d.lag_days as number | null) ?? 0 });
+      capGates.set(consumer, arr);
+    }
   }
 
   // ── stream structure: episode anchors + stage default durations ────────────
@@ -444,6 +469,12 @@ export async function computeOrgSchedule(orgId: string): Promise<{
         const after = ftfStart > ftsStart ? ftfStart : ftsStart;
         if (after > es) es = after;
       }
+    }
+    // Capability gates: start only after each required plan/capability is
+    // delivered (its end_date), plus any per-edge buffer.
+    for (const g of capGates.get(t.id) ?? []) {
+      const after = addWorkingDays(rollForward(g.end, blocked), 1 + g.lag, blocked);
+      if (after > es) es = after;
     }
     t.earliest_start = rollForward(es, blocked);
     t.earliest_finish = addWorkingDays(t.earliest_start, Math.max(0, t.duration - 1), blocked);

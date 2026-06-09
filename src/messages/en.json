@@ -1929,7 +1929,13 @@
       "constraint": "constraint",
       "rosterNote": "Aggregated view: tasks from other plans by assignee",
       "viewList": "List",
-      "viewGantt": "Timeline"
+      "viewGantt": "Timeline",
+      "basedOn": "Based on",
+      "waitingCap": "Waiting for",
+      "load": "Load",
+      "taskDays": "task-days",
+      "workDays": "work days",
+      "overloaded": "Overloaded"
     },
     "repository": {
       "title": "Idea repository",
@@ -1998,6 +2004,9 @@
       "addNeed": "Add dependency",
       "lagDays": "buffer days",
       "pickTask": "Pick a task…",
+      "samePlan": "Same plan",
+      "otherPlans": "Other plans",
+      "capabilities": "Capabilities",
       "none": "—",
       "statusInbox": "Open",
       "statusInProgress": "In progress",

@@ -85,6 +85,20 @@ export function daysBetween(from: Date, to: Date): number {
   return Math.round((b - a) / DAY_MS);
 }
 
+/** Count working days (Mon–Fri, minus the holiday set) in [from, to] inclusive.
+ *  Used for the roster "load" gauge: available work days vs task-days assigned. */
+export function countWorkingDays(from: Date, to: Date, holidays?: Set<string>): number {
+  let n = 0;
+  const cur = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  while (cur <= end) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6 && !holidays?.has(isoOf(cur))) n++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return n;
+}
+
 export type Urgency = "far" | "soon" | "urgent";
 
 /** Urgency bucket for a due date relative to `today` (default: now). */

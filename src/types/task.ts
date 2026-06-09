@@ -144,6 +144,13 @@ export interface TaskNeed {
   dependency_id: string;
   /** The provider task id (null when the requirement is external, e.g. a Drive file). */
   task_id: string | null;
+  /** "task" (default) or "plan" — a dependency on a whole plan / capability. */
+  provider_kind?: "task" | "plan";
+  /** The provider plan id, when provider_kind === "plan". */
+  plan_id?: string | null;
+  /** For a capability provider: it is done but currently flipped unavailable
+   *  (re-blocks this open dependent). satisfied stays false in that case. */
+  unavailable?: boolean;
   title: string;
   /** Whoever owns the provider (assignee display name / source). */
   source?: string | null;

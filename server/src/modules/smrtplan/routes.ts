@@ -50,7 +50,7 @@ function planHealthFromTasks(
   const tasks = tasksByPlan.get(plan.id as string) ?? [];
   if (tasks.length === 0) return "on_track";
 
-  const weight = (t: Row) => Math.max(1, (t.duration_days as number | null) ?? 1);
+  const weight = (t: Row) => Math.max(1, t.duration_days != null ? Number(t.duration_days) : 1);
   const finishOf = (t: Row) => (t.latest_finish as string | null) ?? (t.due_date as string | null);
 
   let total = 0;
@@ -152,6 +152,47 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
       handoffByTask.set(provider, arr);
     }
   }
+  // Capability (plan) providers: a task can depend on a whole plan/capability
+  // (to_type = 'plan'). It "arrives" when that plan is done AND available; a
+  // done-but-unavailable capability re-blocks the open dependent.
+  const { data: planDepsRaw } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id, to_id, lag_days")
+    .eq("org_id", orgId)
+    .eq("from_type", "task")
+    .eq("to_type", "plan")
+    .in("from_id", ids);
+  const planDeps = asRows(planDepsRaw);
+  if (planDeps.length) {
+    const planIds = [...new Set(planDeps.map((d) => d.to_id as string))];
+    const { data: planRows } = await db
+      .from("smrtplan_plans")
+      .select("id, title_he, title_en, is_capability, status, is_available")
+      .eq("org_id", orgId)
+      .in("id", planIds);
+    const pMap = new Map(asRows(planRows).map((p) => [p.id as string, p]));
+    for (const d of planDeps) {
+      const consumer = d.from_id as string;
+      if (!idSet.has(consumer)) continue;
+      const p = pMap.get(d.to_id as string);
+      const done = (p?.status as string) === "done";
+      const available = (p?.is_available as boolean | null) ?? true;
+      const arr = needsByTask.get(consumer) ?? [];
+      arr.push({
+        dependency_id: d.id,
+        task_id: null,
+        provider_kind: "plan",
+        plan_id: d.to_id,
+        title: (p?.title_he as string) || (p?.title_en as string) || "—",
+        satisfied: done && available,
+        unavailable: !!(p?.is_capability as boolean) && !available,
+        lag_days: (d.lag_days as number | null) ?? 0,
+        source: null,
+      });
+      needsByTask.set(consumer, arr);
+    }
+  }
+
   return taskRows.map((t) => ({
     ...t,
     needs: needsByTask.get(t.id as string) ?? [],
@@ -428,6 +469,41 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
   // Roster tasks live in other plans, so show which plan each is in.
   const enriched = await attachNeedsHandoff(req.org!.id, asRows(tasks));
   res.json({ tasks: plan?.kind === "roster" ? await attachPlanTitles(req.org!.id, enriched) : enriched });
+});
+
+// ── dependency candidates: any org task (cross-plan) + capabilities ──────────
+// Powers the dependency picker so a task can depend on a task in ANOTHER plan,
+// or on a whole capability (a reusable tool plan). The caller filters out the
+// current task and groups by plan.
+router.get("/plans/:id/dep-candidates", requireFull, async (req: Request, res: Response) => {
+  const [{ data: taskRows }, { data: planRows }] = await Promise.all([
+    db
+      .from("tasks")
+      .select("id, title, title_he, plan_id")
+      .eq("organization_id", req.org!.id)
+      .not("plan_id", "is", null)
+      .order("created_at", { ascending: true }),
+    db
+      .from("smrtplan_plans")
+      .select("id, title_he, title_en, is_capability")
+      .eq("org_id", req.org!.id),
+  ]);
+  const planById = new Map(asRows(planRows).map((p) => [p.id as string, p]));
+  const tasks = asRows(taskRows).map((t) => {
+    const p = planById.get(t.plan_id as string);
+    return {
+      id: t.id,
+      title: t.title,
+      title_he: t.title_he,
+      plan_id: t.plan_id,
+      plan_title_he: (p?.title_he as string) ?? null,
+      plan_title_en: (p?.title_en as string) ?? null,
+    };
+  });
+  const capabilities = asRows(planRows)
+    .filter((p) => p.is_capability)
+    .map((p) => ({ id: p.id, title_he: p.title_he, title_en: p.title_en }));
+  res.json({ tasks, capabilities });
 });
 
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──

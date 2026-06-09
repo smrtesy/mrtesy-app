@@ -1928,7 +1928,13 @@
       "constraint": "אילוץ",
       "rosterNote": "מבט מרכז: משימות מתוכניות אחרות לפי אחראי",
       "viewList": "רשימה",
-      "viewGantt": "ציר"
+      "viewGantt": "ציר",
+      "basedOn": "מבוסס על",
+      "waitingCap": "ממתין ל",
+      "load": "עומס",
+      "taskDays": "ימי־משימה",
+      "workDays": "ימי עבודה",
+      "overloaded": "עומס יתר"
     },
     "repository": {
       "title": "מאגר הרעיונות",
@@ -1997,6 +2003,9 @@
       "addNeed": "הוסף תלות",
       "lagDays": "ימי חיץ",
       "pickTask": "בחר משימה…",
+      "samePlan": "באותה תוכנית",
+      "otherPlans": "תוכניות אחרות",
+      "capabilities": "יכולות",
       "none": "—",
       "statusInbox": "פתוח",
       "statusInProgress": "בתהליך",

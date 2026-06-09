@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { ArrowRight, CheckCircle2, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -8,7 +8,7 @@ import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
-import { parseISO, gregShort, hebDate, countdownText, urgencyFor } from "@/lib/smrtplan/dates";
+import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDays } from "@/lib/smrtplan/dates";
 
 type PlanTask = Pick<
   Task,
@@ -60,6 +60,7 @@ export function PlanEffortDetail({
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<PlanTask[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [holidays, setHolidays] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -94,6 +95,33 @@ export function PlanEffortDetail({
     };
   }, [plan.id]);
 
+  // Roster "load": holidays power the available-work-days denominator.
+  useEffect(() => {
+    if (plan.kind !== "roster") return;
+    let alive = true;
+    api<{ holidays: { blocked_date: string }[] }>("/api/plans/holidays")
+      .then((d) => { if (alive) setHolidays(new Set((d.holidays ?? []).map((h) => h.blocked_date))); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [plan.kind]);
+
+  // Load gauge: sum of the person's open task-days vs working days available in
+  // the window (today → their last due/finish), minus weekends + holidays.
+  const rosterLoad = useMemo(() => {
+    if (plan.kind !== "roster") return null;
+    const open = tasks.filter((tk) => zoneOf(tk) !== "done");
+    if (open.length === 0) return null;
+    let busy = 0;
+    let end = today;
+    for (const tk of open) {
+      busy += tk.duration_days != null ? Number(tk.duration_days) : 1;
+      const f = tk.due_date || tk.latest_finish;
+      if (f) { const d = parseISO(f); if (d > end) end = d; }
+    }
+    const available = countWorkingDays(today, end, holidays);
+    return { busy, available, overloaded: busy > available };
+  }, [plan.kind, tasks, holidays, today]);
+
   async function afterMutation() {
     await refetch();
     onChanged?.();
@@ -120,7 +148,24 @@ export function PlanEffortDetail({
             {Math.round(progress * 100)}%
           </p>
           {plan.kind === "roster" && (
-            <p className="mb-3 text-[11.5px] italic text-muted-foreground">{te("rosterNote")}</p>
+            <p className="mb-1.5 text-[11.5px] italic text-muted-foreground">{te("rosterNote")}</p>
+          )}
+          {rosterLoad && (
+            <div
+              className={cn(
+                "mb-3 inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-[11.5px] font-medium",
+                rosterLoad.overloaded ? "bg-status-late-bg text-status-late" : "bg-status-ok-bg text-status-ok",
+              )}
+            >
+              <span>
+                {t("effort.load")}: {rosterLoad.busy} {t("effort.taskDays")} / {rosterLoad.available} {t("effort.workDays")}
+              </span>
+              {rosterLoad.overloaded && (
+                <span className="rounded bg-status-late px-1.5 py-px text-[9px] font-bold text-white">
+                  {t("effort.overloaded")}
+                </span>
+              )}
+            </div>
           )}
         </div>
         {canEdit && plan.kind !== "roster" && (
@@ -146,7 +191,7 @@ export function PlanEffortDetail({
               <EditTaskRow
                 key={task.id}
                 task={task}
-                otherTasks={tasks.filter((x) => x.id !== task.id)}
+                planId={plan.id}
                 members={members}
                 te={te}
                 onClose={() => setEditingId(null)}
@@ -197,6 +242,9 @@ function TaskRow({
     task.latest_finish && task.due_date && task.latest_finish < task.due_date ? task.latest_finish : null;
   const urg = urgencyFor(deadline, today);
   const waiting = (task.needs ?? []).filter((n) => !n.satisfied);
+  // Capability providers drive a "based on" (green, done+available) / "waiting"
+  // (red, flipped unavailable) badge on the row.
+  const capNeeds = (task.needs ?? []).filter((n) => n.provider_kind === "plan");
   return (
     <div className="py-2.5">
       <div className="flex items-center gap-2.5">
@@ -216,6 +264,17 @@ function TaskRow({
             <span className="ms-2 rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
               {t("tags.critical")}
             </span>
+          )}
+          {capNeeds.map((n) =>
+            n.satisfied ? (
+              <span key={n.dependency_id} className="ms-2 rounded bg-status-ok-bg px-1.5 py-px text-[9px] font-bold text-status-ok">
+                ✓ {t("effort.basedOn")} {n.title}
+              </span>
+            ) : n.unavailable ? (
+              <span key={n.dependency_id} className="ms-2 rounded bg-status-late-bg px-1.5 py-px text-[9px] font-bold text-status-late">
+                ⛔ {t("effort.waitingCap")} {n.title}
+              </span>
+            ) : null,
           )}
         </span>
         {task.duration_days != null && (
@@ -350,7 +409,7 @@ function NewTaskRow({
         <option value="archived">{te("statusDone")}</option>
       </select>
       <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
-      <input type="number" min={0} step={1} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
+      <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
         onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       <button onClick={save} disabled={busy || !title.trim()}
         className="rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:opacity-50">
@@ -360,16 +419,25 @@ function NewTaskRow({
   );
 }
 
+interface DepCandidate {
+  id: string;
+  title: string;
+  title_he: string | null;
+  plan_id: string;
+  plan_title_he: string | null;
+  plan_title_en: string | null;
+}
+
 function EditTaskRow({
   task,
-  otherTasks,
+  planId,
   members,
   te,
   onClose,
   onChanged,
 }: {
   task: PlanTask;
-  otherTasks: PlanTask[];
+  planId: string;
   members: Member[];
   te: ReturnType<typeof useTranslations>;
   onClose: () => void;
@@ -381,8 +449,30 @@ function EditTaskRow({
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
+  // Dependency picker value is typed: "task:<id>" or "plan:<id>" (a capability).
   const [provider, setProvider] = useState("");
+  const [candTasks, setCandTasks] = useState<DepCandidate[]>([]);
+  const [candCaps, setCandCaps] = useState<{ id: string; title_he: string; title_en: string | null }[]>([]);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ tasks: DepCandidate[]; capabilities: { id: string; title_he: string; title_en: string | null }[] }>(
+      `/api/plans/${planId}/dep-candidates`,
+    )
+      .then((d) => {
+        if (!alive) return;
+        setCandTasks((d.tasks ?? []).filter((x) => x.id !== task.id));
+        setCandCaps(d.capabilities ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [planId, task.id]);
+
+  const samePlanTasks = candTasks.filter((x) => x.plan_id === planId);
+  const otherPlanTasks = candTasks.filter((x) => x.plan_id !== planId);
 
   async function save() {
     setBusy(true);
@@ -423,10 +513,13 @@ function EditTaskRow({
   }
   async function addNeed() {
     if (!provider) return;
+    const sep = provider.indexOf(":");
+    const kind = provider.slice(0, sep); // "task" | "plan"
+    const id = provider.slice(sep + 1);
     try {
       await api("/api/plan-dependencies", {
         method: "POST",
-        body: { from_type: "task", from_id: task.id, to_type: "task", to_id: provider },
+        body: { from_type: "task", from_id: task.id, to_type: kind, to_id: id },
       });
       setProvider("");
       onChanged();
@@ -471,7 +564,7 @@ function EditTaskRow({
 
       {/* duration in working days */}
       <div className="flex flex-wrap items-center gap-2">
-        <input type="number" min={0} step={1} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
+        <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
           value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       </div>
 
@@ -503,9 +596,29 @@ function EditTaskRow({
         <div className="flex gap-2">
           <select className={`${fieldCls} flex-1`} value={provider} onChange={(e) => setProvider(e.target.value)}>
             <option value="">{te("pickTask")}</option>
-            {otherTasks.map((o) => (
-              <option key={o.id} value={o.id}>{o.title_he || o.title}</option>
-            ))}
+            {samePlanTasks.length > 0 && (
+              <optgroup label={te("samePlan")}>
+                {samePlanTasks.map((o) => (
+                  <option key={o.id} value={`task:${o.id}`}>{o.title_he || o.title}</option>
+                ))}
+              </optgroup>
+            )}
+            {otherPlanTasks.length > 0 && (
+              <optgroup label={te("otherPlans")}>
+                {otherPlanTasks.map((o) => (
+                  <option key={o.id} value={`task:${o.id}`}>
+                    {(o.title_he || o.title)}{o.plan_title_he ? ` · ${o.plan_title_he}` : ""}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {candCaps.length > 0 && (
+              <optgroup label={te("capabilities")}>
+                {candCaps.map((c) => (
+                  <option key={c.id} value={`plan:${c.id}`}>{c.title_he}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
           <button onClick={addNeed} disabled={!provider}
             className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-[12px] hover:bg-accent disabled:opacity-50">
