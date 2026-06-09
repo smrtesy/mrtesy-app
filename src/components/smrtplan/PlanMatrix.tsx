@@ -75,7 +75,10 @@ export function PlanMatrix({
 
   const addStage = () => {
     const name = prompt(te("addStage"));
-    if (name) run(() => api(`/api/plans/${plan.id}/stages`, { method: "POST", body: { name_he: name, sequence: stages.length + 1 } }));
+    if (!name) return;
+    const durStr = prompt(te("stageDefaultDur"), "");
+    const default_duration_days = durStr && durStr.trim() !== "" ? Number(durStr) : null;
+    run(() => api(`/api/plans/${plan.id}/stages`, { method: "POST", body: { name_he: name, sequence: stages.length + 1, default_duration_days } }));
   };
   const addEpisode = () => {
     const name = prompt(te("addEpisode"));
@@ -83,7 +86,12 @@ export function PlanMatrix({
   };
   const renameStage = (s: PlanStageRow) => {
     const name = prompt(te("name"), s.name_he);
-    if (name != null) run(() => api(`/api/plan-stages/${s.id}`, { method: "PATCH", body: { name_he: name } }));
+    if (name == null) return;
+    // Also set the stage's default cell duration (blank clears it).
+    const durStr = prompt(te("stageDefaultDur"), s.default_duration_days != null ? String(s.default_duration_days) : "");
+    const body: Record<string, unknown> = { name_he: name };
+    if (durStr != null) body.default_duration_days = durStr.trim() === "" ? null : Number(durStr);
+    run(() => api(`/api/plan-stages/${s.id}`, { method: "PATCH", body }));
   };
   const delStage = (s: PlanStageRow) => {
     if (confirm(te("confirmDelete"))) run(() => api(`/api/plan-stages/${s.id}`, { method: "DELETE" }));
@@ -172,6 +180,11 @@ export function PlanMatrix({
                 {stages.map((s) => (
                   <th key={s.id} className="border bg-secondary/60 p-1.5 text-[11px] font-bold">
                     {stageName(s, locale)}
+                    {s.default_duration_days != null && (
+                      <span className="ms-1 rounded bg-accent px-1 py-px text-[9px] font-medium text-muted-foreground">
+                        {s.default_duration_days} {te("daysUnit")}
+                      </span>
+                    )}
                     {canEdit && (
                       <span className="mt-0.5 flex items-center justify-center gap-1">
                         <button onClick={() => renameStage(s)} className="text-muted-foreground hover:text-foreground" title={te("edit")}>

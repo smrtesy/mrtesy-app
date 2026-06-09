@@ -65,6 +65,8 @@ export interface PlanStageRow {
   name_en: string | null;
   sequence: number;
   required_role: string | null;
+  /** Default working-day duration inherited by this stage's cells (null = none). */
+  default_duration_days?: number | null;
 }
 
 export interface PlanEpisode {

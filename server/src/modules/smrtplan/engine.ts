@@ -269,6 +269,43 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     edgeLag.set(`${provider}:${consumer}`, (d.lag_days as number | null) ?? 0);
   }
 
+  // ── stream structure: episode anchors + stage default durations ────────────
+  // A cell-task (one matrix cell) anchors on its EPISODE's air/due date and
+  // inherits its STAGE's default duration. Load the cells linked to a task and
+  // resolve both maps, keyed by the executing task id.
+  const episodeDueByTask = new Map<string, string>();
+  const stageDefaultByTask = new Map<string, number>();
+  {
+    const [{ data: episodes }, { data: stages }, { data: cells }] = await Promise.all([
+      db.from("smrtplan_episodes").select("id, due_date").eq("org_id", orgId),
+      db.from("smrtplan_stages").select("id, default_duration_days").eq("org_id", orgId),
+      db
+        .from("smrtplan_episode_stage_status")
+        .select("episode_id, stage_id, task_id")
+        .eq("org_id", orgId)
+        .not("task_id", "is", null),
+    ]);
+    const episodeDue = new Map<string, string>();
+    for (const e of episodes ?? []) if (e.due_date) episodeDue.set(e.id as string, e.due_date as string);
+    const stageDefault = new Map<string, number>();
+    for (const s of stages ?? []) {
+      const d = s.default_duration_days as number | null;
+      if (d != null && Number(d) > 0) stageDefault.set(s.id as string, Number(d));
+    }
+    // A task normally maps to exactly one cell; if it's linked to several, the
+    // last one iterated wins (acceptable — a task shouldn't span cells). Durations
+    // are treated as whole working days here (the numeric column is forward-looking
+    // for the half-day slice; UI prompts integers today).
+    for (const c of cells ?? []) {
+      const taskId = c.task_id as string;
+      if (!tasks.has(taskId)) continue;
+      const due = episodeDue.get(c.episode_id as string);
+      if (due) episodeDueByTask.set(taskId, due);
+      const dur = stageDefault.get(c.stage_id as string);
+      if (dur != null) stageDefaultByTask.set(taskId, dur);
+    }
+  }
+
   // Group sub-tasks by parent (for the equal-split below).
   const childrenByParent = new Map<string, EngineTask[]>();
   for (const t of tasks.values()) {
@@ -281,8 +318,13 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   //    Sub-tasks carry no private duration in planning (fix #2/#3); they get a
   //    staged date by splitting their parent's range below. ───────────────────
   for (const t of tasks.values()) {
+    const stageDefault = stageDefaultByTask.get(t.id);
     if (t.duration_manual && t.duration_days && t.duration_days > 0) {
       t.duration = t.duration_days; // human pin wins
+    } else if (stageDefault && stageDefault > 0) {
+      // Stream cell with no hand-pinned duration inherits its STAGE's default.
+      t.duration = stageDefault;
+      t.durationEstimated = true;
     } else if (t.estimated_hours && t.estimated_hours > 0) {
       const hpd =
         (t.assigned_to_user_id && capacity.get(t.assigned_to_user_id)) || ORG_DEFAULT_HOURS_PER_DAY;
@@ -297,10 +339,13 @@ export async function computeOrgSchedule(orgId: string): Promise<{
   // plan's end_date. The plan end_date is only the gantt bar.
   const dueOf = (t: EngineTask): Date | null => {
     if (t.due_date) return rollBack(parseISO(t.due_date), blocked);
+    // Stream cell-task: anchor on its EPISODE's air/due date (the deliverable
+    // deadline), not the stream plan's window — each episode airs on its own day.
+    const epDue = episodeDueByTask.get(t.id);
+    if (epDue) return rollBack(parseISO(epDue), blocked);
     // Effort-plan tasks inherit the plan's deliverable deadline (its end_date)
     // as their anchor — so the whole plan schedules backward from one date
-    // through the dependency chain, with no per-task due dates. (Streams anchor
-    // per-episode; that needs the episode structure and lands in a follow-up.)
+    // through the dependency chain, with no per-task due dates.
     if (t.plan_id && planKindOf.get(t.plan_id) === "effort") {
       const end = planEndOf.get(t.plan_id);
       if (end) return rollBack(end, blocked);
@@ -328,7 +373,14 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       const s = tasks.get(sId)!;
       if (s.latest_start) {
         const lag = edgeLag.get(`${t.id}:${sId}`) ?? 0;
-        const before = subtractWorkingDays(s.latest_start, 1 + lag, blocked);
+        // The buffer is measured to the consumer's TARGET (finish), not its
+        // start — "translation ready two weeks before the episode airs". The
+        // precedence floor (finish ≥1 working day before the consumer starts)
+        // keeps a lag=0 edge as strict precedence (e.g. video before design):
+        // we take whichever pulls the provider's finish EARLIER.
+        const fts = subtractWorkingDays(s.latest_start, 1, blocked);
+        const ftf = s.latest_finish ? subtractWorkingDays(s.latest_finish, lag, blocked) : fts;
+        const before = ftf < fts ? ftf : fts;
         if (!lf || before < lf) lf = before;
       }
     }
@@ -382,7 +434,14 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       const p = tasks.get(pId)!;
       if (p.earliest_finish) {
         const lag = edgeLag.get(`${pId}:${t.id}`) ?? 0;
-        const after = addWorkingDays(p.earliest_finish, 1 + lag, blocked);
+        // Mirror the backward pass: the consumer starts after the provider
+        // finishes (precedence), AND must FINISH at least `lag` working days
+        // after the provider — converted back to a start via its own duration.
+        // The binding (later) of the two wins.
+        const ftsStart = addWorkingDays(p.earliest_finish, 1, blocked);
+        const ftfFinish = addWorkingDays(p.earliest_finish, lag, blocked);
+        const ftfStart = subtractWorkingDays(ftfFinish, Math.max(0, t.duration - 1), blocked);
+        const after = ftfStart > ftsStart ? ftfStart : ftsStart;
         if (after > es) es = after;
       }
     }

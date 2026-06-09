@@ -1984,6 +1984,7 @@
       "status": "Status",
       "addEpisode": "Add episode",
       "addStage": "Add stage",
+      "stageDefaultDur": "Stage default duration (days, blank = none)",
       "name": "Name",
       "family": "Family",
       "sequence": "Order",

@@ -493,7 +493,7 @@ router.get("/plan/worker-tasks/:userId", requireFull, async (req: Request, res: 
 router.get("/plans/:id/matrix", async (req: Request, res: Response) => {
   const planId = req.params.id;
   const [{ data: stages }, { data: episodes }, { data: cells }] = await Promise.all([
-    db.from("smrtplan_stages").select("id, plan_id, name_he, name_en, sequence, required_role")
+    db.from("smrtplan_stages").select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days")
       .eq("org_id", req.org!.id).eq("plan_id", planId).order("sequence", { ascending: true }),
     db.from("smrtplan_episodes").select("id, plan_id, name_he, name_en, family, due_date, sequence")
       .eq("org_id", req.org!.id).eq("plan_id", planId).order("sequence", { ascending: true }),
@@ -548,13 +548,14 @@ router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {
-  const { name_he, name_en, sequence, required_role } = req.body ?? {};
+  const { name_he, name_en, sequence, required_role, default_duration_days } = req.body ?? {};
   if (!name_he) return res.status(400).json({ error: "name_he is required" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .insert({ org_id: req.org!.id, plan_id: req.params.id, name_he, name_en: name_en ?? null,
-      sequence: sequence ?? 0, required_role: required_role ?? null })
-    .select("id, plan_id, name_he, name_en, sequence, required_role")
+      sequence: sequence ?? 0, required_role: required_role ?? null,
+      default_duration_days: default_duration_days != null ? Number(default_duration_days) : null })
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ stage: data });
@@ -808,15 +809,22 @@ router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response
   for (const k of ["name_he", "name_en", "sequence", "required_role"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
+  // A stage's default duration drives every cell that doesn't pin its own.
+  if ("default_duration_days" in (req.body ?? {})) {
+    const v = req.body.default_duration_days;
+    patch.default_duration_days = v == null || v === "" ? null : Number(v);
+  }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, name_he, name_en, sequence, required_role")
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days")
     .single();
   if (error) return res.status(500).json({ error: error.message });
+  // A stage default-duration change reflows every inheriting cell-task.
+  await autoRecompute(req.org!.id);
   res.json({ stage: data });
 });
 

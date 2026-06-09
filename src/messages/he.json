@@ -1983,6 +1983,7 @@
       "status": "סטטוס",
       "addEpisode": "הוסף פרק",
       "addStage": "הוסף שלב",
+      "stageDefaultDur": "משך ברירת מחדל לשלב (ימים, ריק = ללא)",
       "name": "שם",
       "family": "משפחה",
       "sequence": "סדר",
