@@ -466,6 +466,24 @@ router.patch("/plans/:id", requireFull, async (req: Request, res: Response) => {
 });
 
 router.delete("/plans/:id", requireFull, async (req: Request, res: Response) => {
+  // Opt-in cascade: also remove the plan's tasks (the FK is SET NULL, which would
+  // otherwise orphan them) plus the polymorphic dependency edges that point at
+  // those tasks or at this plan (no FK, so they'd linger). Stages/episodes
+  // cascade via their own FK.
+  if (req.query.cascade === "tasks") {
+    const { data: planTasks } = await db
+      .from("tasks").select("id").eq("organization_id", req.org!.id).eq("plan_id", req.params.id);
+    const ids = asRows(planTasks).map((r) => r.id as string);
+    const refs = [...ids, req.params.id];
+    if (refs.length) {
+      await db
+        .from("smrtplan_dependencies")
+        .delete()
+        .eq("org_id", req.org!.id)
+        .or(`from_id.in.(${refs.join(",")}),to_id.in.(${refs.join(",")})`);
+    }
+    await db.from("tasks").delete().eq("organization_id", req.org!.id).eq("plan_id", req.params.id);
+  }
   const { error } = await db
     .from("smrtplan_plans")
     .delete()

@@ -2093,7 +2093,10 @@
       "colLinks": "Links",
       "colDeps": "Dependencies",
       "empty": "No tasks yet",
-      "source": "Source"
+      "source": "Source",
+      "addProject": "New project",
+      "deleteProject": "Delete project",
+      "confirmDeleteProject": "Delete this project and all its tasks and stages? This cannot be undone."
     },
     "capacity": {
       "button": "Team & availability",

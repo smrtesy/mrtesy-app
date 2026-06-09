@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle } from "lucide-react";
+import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle, X, Trash2 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan } from "@/types/plan";
@@ -30,10 +30,20 @@ interface TableTask {
   source_messages?: { source_url: string | null; serial_display: string | null } | null;
   needs: TaskNeed[];
 }
+interface TableStage {
+  id: string;
+  plan_id: string;
+  name_he: string;
+  name_en: string | null;
+  sequence: number;
+}
 interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+}
+function newKey(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
 }
 function memberName(m: Member): string {
   return m.name || m.email || m.user_id.slice(0, 6);
@@ -64,6 +74,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<TableTask[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [stages, setStages] = useState<TableStage[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<{ r: number; c: number } | null>(null);
@@ -73,15 +84,17 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   const rtl = locale !== "en";
 
   const history = useHistory();
-  const { run: histRun, undo: histUndo, redo: histRedo } = history;
+  const { run: histRun, undo: histUndo, redo: histRedo, reset: histReset, resolve: histResolve, keyOf: histKeyOf, bind: histBind } = history;
 
   const refetch = useCallback(async () => {
-    const [{ tasks }, { plans }] = await Promise.all([
+    const [{ tasks }, { plans }, { stages }] = await Promise.all([
       api<{ tasks: TableTask[] }>("/api/plan/all-tasks"),
       api<{ plans: Plan[] }>("/api/plans"),
+      api<{ stages: TableStage[] }>("/api/plans/board-stages").catch(() => ({ stages: [] })),
     ]);
     setTasks(tasks ?? []);
     setPlans(plans ?? []);
+    setStages(stages ?? []);
     onChanged?.();
   }, [onChanged]);
 
@@ -89,14 +102,16 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     let alive = true;
     (async () => {
       try {
-        const [{ tasks }, { plans }, mem] = await Promise.all([
+        const [{ tasks }, { plans }, { stages }, mem] = await Promise.all([
           api<{ tasks: TableTask[] }>("/api/plan/all-tasks"),
           api<{ plans: Plan[] }>("/api/plans"),
+          api<{ stages: TableStage[] }>("/api/plans/board-stages").catch(() => ({ stages: [] })),
           api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
         ]);
         if (!alive) return;
         setTasks(tasks ?? []);
         setPlans(plans ?? []);
+        setStages(stages ?? []);
         setMembers(mem.members ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
@@ -286,6 +301,93 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     }
   }
 
+  const stagesByPlan = useMemo(() => {
+    const m = new Map<string, TableStage[]>();
+    for (const s of stages) {
+      if (!m.has(s.plan_id)) m.set(s.plan_id, []);
+      m.get(s.plan_id)!.push(s);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.sequence - b.sequence);
+    return m;
+  }, [stages]);
+
+  // Add a project (draft effort plan) — optimistic empty group, swap in real id.
+  function addPlan() {
+    const key = newKey();
+    const start = new Date();
+    const end = new Date(start.getTime() + 14 * 86_400_000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const planObj = (id: string) =>
+      ({ id, title_he: te("newPlan"), title_en: null, group_label: null, kind: "effort", start_date: iso(start), end_date: iso(end) } as unknown as Plan);
+    const create = async () => {
+      setPlans((ps) => [...ps.filter((p) => p.id !== histResolve(key) && p.id !== key), planObj(key)]);
+      const { plan } = await api<{ plan: { id: string } }>("/api/plans", {
+        method: "POST",
+        body: { title_he: te("newPlan"), kind: "effort", status: "draft", start_date: iso(start), end_date: iso(end) },
+      });
+      if (plan?.id) { histBind(key, plan.id); setPlans((ps) => ps.map((p) => (p.id === key ? { ...p, id: plan.id } : p))); }
+    };
+    const remove = async () => {
+      const live = histResolve(key);
+      setPlans((ps) => ps.filter((p) => p.id !== live && p.id !== key));
+      await api(`/api/plans/${live}?cascade=tasks`, { method: "DELETE" });
+    };
+    runCmd({ label: t("table.addProject"), redo: create, undo: remove });
+  }
+
+  // Delete a project + all its tasks (cascade). Destructive + confirmed → not
+  // undoable; the history is reset so a stale redo can't replay against it.
+  async function deletePlan(planId: string) {
+    if (!window.confirm(t("table.confirmDeleteProject"))) return;
+    const before = { plans, tasks, stages };
+    setPlans((ps) => ps.filter((p) => p.id !== planId));
+    setTasks((ts) => ts.filter((x) => x.plan_id !== planId));
+    setStages((ss) => ss.filter((s) => s.plan_id !== planId));
+    histReset();
+    try {
+      await api(`/api/plans/${planId}?cascade=tasks`, { method: "DELETE" });
+    } catch (e) {
+      setPlans(before.plans);
+      setTasks(before.tasks);
+      setStages(before.stages);
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  function addStage(planId: string) {
+    const name = window.prompt(te("name"));
+    if (!name || !name.trim()) return;
+    const nm = name.trim();
+    const seq = (stagesByPlan.get(planId) ?? []).length + 1;
+    const key = newKey();
+    const create = async () => {
+      setStages((ss) => [...ss.filter((s) => s.id !== histResolve(key) && s.id !== key), { id: key, plan_id: planId, name_he: nm, name_en: null, sequence: seq }]);
+      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${planId}/stages`, { method: "POST", body: { name_he: nm, sequence: seq } });
+      if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === key ? { ...s, id: stage.id } : s))); }
+    };
+    const remove = async () => {
+      const live = histResolve(key);
+      setStages((ss) => ss.filter((s) => s.id !== live && s.id !== key));
+      await api(`/api/plan-stages/${live}`, { method: "DELETE" });
+    };
+    runCmd({ label: te("actStageAdd"), redo: create, undo: remove });
+  }
+
+  function deleteStage(st: TableStage) {
+    const key = histKeyOf(st.id);
+    const remove = async () => {
+      const live = histResolve(key);
+      setStages((ss) => ss.filter((s) => s.id !== live));
+      await api(`/api/plan-stages/${live}`, { method: "DELETE" });
+    };
+    const recreate = async () => {
+      setStages((ss) => [...ss.filter((s) => s.id !== st.id), st]);
+      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${st.plan_id}/stages`, { method: "POST", body: { name_he: st.name_he, name_en: st.name_en, sequence: st.sequence } });
+      if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === st.id ? { ...s, id: stage.id } : s))); }
+    };
+    runCmd({ label: te("actStageDel"), redo: remove, undo: recreate });
+  }
+
   const statusLabel = (s: string) =>
     s === "in_progress" ? te("statusInProgress") : DONE.has(s) ? te("statusDone") : te("statusInbox");
 
@@ -297,6 +399,10 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
         <p className="text-[12.5px] text-muted-foreground">{t("table.lead")}</p>
         {canEdit && (
           <div className="flex items-center gap-2">
+            <button onClick={addPlan}
+              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+              <Plus className="h-3.5 w-3.5" /> {t("table.addProject")}
+            </button>
             <button onClick={doUndo} disabled={!history.canUndo} title={history.nextUndoLabel ? `${te("undo")}: ${history.nextUndoLabel}` : te("undo")}
               className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent disabled:opacity-50">
               <Undo2 className="h-3.5 w-3.5" /> {te("undo")}
@@ -336,8 +442,12 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                 statusLabel={statusLabel}
                 te={te}
                 t={t}
+                stages={stagesByPlan.get(plan.id) ?? []}
                 onEditPlanTitle={editPlanTitle}
                 onAddTask={addTask}
+                onAddStage={addStage}
+                onDeleteStage={deleteStage}
+                onDeletePlan={deletePlan}
                 getFlatIndex={(taskId) => flatIndexById.get(taskId) ?? -1}
                 active={active}
                 editing={editing}
@@ -371,6 +481,10 @@ function PlanGroup(props: {
   te: ReturnType<typeof useTranslations>;
   t: ReturnType<typeof useTranslations>;
   onEditPlanTitle: (planId: string, oldTitle: string, newTitle: string) => void;
+  stages: TableStage[];
+  onAddStage: (planId: string) => void;
+  onDeleteStage: (stage: TableStage) => void;
+  onDeletePlan: (planId: string) => void;
   getFlatIndex: (taskId: string) => number;
   active: { r: number; c: number } | null;
   editing: boolean;
@@ -385,7 +499,7 @@ function PlanGroup(props: {
   onCancel: () => void;
   onAddTask: (planId: string) => void;
 }) {
-  const { plan, rows, locale, canEdit, memberMap, members, statusLabel, te, t } = props;
+  const { plan, rows, locale, canEdit, memberMap, members, statusLabel, te, t, stages } = props;
   const [editTitle, setEditTitle] = useState(false);
   const planTitle = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
 
@@ -393,24 +507,51 @@ function PlanGroup(props: {
     <>
       <tr className="bg-secondary/40">
         <td colSpan={7} className="border-b px-2 py-1.5">
-          {canEdit && editTitle ? (
-            <input
-              autoFocus
-              defaultValue={plan.title_he}
-              dir="rtl"
-              onBlur={(e) => { setEditTitle(false); props.onEditPlanTitle(plan.id, plan.title_he, e.target.value); }}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditTitle(false); }}
-              className="rounded border border-input bg-background px-1.5 py-0.5 text-[13px] font-bold outline-none focus:ring-2 focus:ring-ring"
-            />
-          ) : (
-            <span
-              className={cn("text-[13px] font-bold", canEdit && "cursor-text rounded px-0.5 hover:bg-accent")}
-              onClick={canEdit ? () => setEditTitle(true) : undefined}
-            >
-              {planTitle}
-            </span>
-          )}
-          <span className="ms-2 text-[10.5px] font-normal text-muted-foreground">{rows.length}</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {canEdit && editTitle ? (
+              <input
+                autoFocus
+                defaultValue={plan.title_he}
+                dir="rtl"
+                onBlur={(e) => { setEditTitle(false); props.onEditPlanTitle(plan.id, plan.title_he, e.target.value); }}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditTitle(false); }}
+                className="rounded border border-input bg-background px-1.5 py-0.5 text-[13px] font-bold outline-none focus:ring-2 focus:ring-ring"
+              />
+            ) : (
+              <span
+                className={cn("text-[13px] font-bold", canEdit && "cursor-text rounded px-0.5 hover:bg-accent")}
+                onClick={canEdit ? () => setEditTitle(true) : undefined}
+              >
+                {planTitle}
+              </span>
+            )}
+            <span className="text-[10.5px] font-normal text-muted-foreground">{rows.length}</span>
+
+            {/* stages of this project — chips with delete + add */}
+            {stages.map((s) => (
+              <span key={s.id} className="inline-flex items-center gap-0.5 rounded-full border bg-card px-1.5 py-px text-[10.5px] font-normal">
+                {locale === "en" ? s.name_en || s.name_he : s.name_he}
+                {canEdit && (
+                  <button onClick={() => props.onDeleteStage(s)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </span>
+            ))}
+            {canEdit && (
+              <button onClick={() => props.onAddStage(plan.id)}
+                className="inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground" title={te("addStage")}>
+                <Plus className="h-2.5 w-2.5" /> {te("stageShort")}
+              </button>
+            )}
+
+            {canEdit && (
+              <button onClick={() => props.onDeletePlan(plan.id)}
+                className="ms-auto inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-normal text-muted-foreground hover:bg-status-late/10 hover:text-status-late" title={t("table.deleteProject")}>
+                <Trash2 className="h-3 w-3" /> {t("table.deleteProject")}
+              </button>
+            )}
+          </div>
         </td>
       </tr>
       {rows.map((task) => {

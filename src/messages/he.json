@@ -2092,7 +2092,10 @@
       "colLinks": "קישורים",
       "colDeps": "תלויות",
       "empty": "אין עדיין משימות",
-      "source": "מקור"
+      "source": "מקור",
+      "addProject": "פרויקט חדש",
+      "deleteProject": "מחק פרויקט",
+      "confirmDeleteProject": "למחוק את הפרויקט וכל המשימות והשלבים שלו? לא ניתן לבטל."
     },
     "capacity": {
       "button": "צוות וזמינות",
