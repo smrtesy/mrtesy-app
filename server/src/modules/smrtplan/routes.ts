@@ -459,8 +459,9 @@ router.patch("/plans/:id", requireFull, async (req: Request, res: Response) => {
     .select(PLAN_FIELDS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  // Date / horizon changes shift the whole schedule.
-  await autoRecompute(req.org!.id);
+  // Only the plan's window / kind feeds the engine; a title/goal/color/status/
+  // group edit returns immediately without an org-wide reschedule.
+  if ("start_date" in body || "end_date" in body || "kind" in body) await autoRecompute(req.org!.id);
   res.json({ plan: data });
 });
 
@@ -880,6 +881,11 @@ const PLAN_TASK_WRITABLE = new Set([
   "title", "title_he", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
 ]);
+// Fields that change the schedule graph — only these need an engine recompute.
+// A title/status edit returns immediately (no org-wide reschedule). assignee is
+// included because an estimated-hours task's duration = hours / that person's
+// capacity, so reassigning can shift its dates.
+const TASK_SCHED_FIELDS = new Set(["due_date", "duration_days", "duration_manual", "estimated_hours", "parent_task_id", "assigned_to_user_id"]);
 
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
@@ -897,7 +903,7 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  await autoRecompute(req.org!.id);
+  if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
   res.json({ task: data });
 });
 

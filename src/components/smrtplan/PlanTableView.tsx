@@ -148,12 +148,14 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   useEffect(() => { cellRef.current?.focus(); }, [active, editing, flat.length]);
 
   // Edit a single task field, recorded for undo (old → new, both via PATCH).
+  // `reschedules` (due/duration) pulls fresh engine dates; other edits trust the
+  // optimistic update and skip the round-trip — that's the snappy path.
   const editField = useCallback(
-    (taskId: string, body: Record<string, unknown>, undoBody: Record<string, unknown>, patch: Partial<TableTask>, undoPatch: Partial<TableTask>, label: string) => {
+    (taskId: string, body: Record<string, unknown>, undoBody: Record<string, unknown>, patch: Partial<TableTask>, undoPatch: Partial<TableTask>, label: string, reschedules: boolean) => {
       const apply = async (b: Record<string, unknown>, p: Partial<TableTask>) => {
         setTasks((ts) => ts.map((tk) => (tk.id === taskId ? { ...tk, ...p } : tk)));
         await api(`/api/plan-tasks/${taskId}`, { method: "PATCH", body: b });
-        await refetch();
+        if (reschedules) await refetch();
       };
       runCmd({ label, redo: () => apply(body, patch), undo: () => apply(undoBody, undoPatch) });
     },
@@ -181,15 +183,15 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
       if (col === "title") {
         const v = draft.trim();
         if (v && v !== (task.title_he || task.title)) {
-          editField(task.id, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, te("actRename"));
+          editField(task.id, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, te("actRename"), false);
         }
       } else if (col === "due") {
         const v = draft || null;
-        if (v !== task.due_date) editField(task.id, { due_date: v }, { due_date: task.due_date }, { due_date: v }, { due_date: task.due_date }, t("table.colDue"));
+        if (v !== task.due_date) editField(task.id, { due_date: v }, { due_date: task.due_date }, { due_date: v }, { due_date: task.due_date }, t("table.colDue"), true);
       } else if (col === "duration") {
         const v = draft === "" ? null : Number(draft);
         if (v !== task.duration_days) {
-          editField(task.id, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, t("table.colDuration"));
+          editField(task.id, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, t("table.colDuration"), true);
         }
       }
     },
@@ -201,9 +203,11 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     (task: TableTask, col: NavCol, value: string) => {
       if (col === "assignee") {
         const v = value || null;
-        if (v !== task.assigned_to_user_id) editField(task.id, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, t("table.colWorker"));
+        // reschedules=true: an estimated-hours task's duration depends on the
+        // assignee's capacity, so reassigning can shift dates — refetch.
+        if (v !== task.assigned_to_user_id) editField(task.id, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, t("table.colWorker"), true);
       } else if (col === "status") {
-        if (value !== task.status) editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"));
+        if (value !== task.status) editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"), false);
       }
     },
     [editField, t],

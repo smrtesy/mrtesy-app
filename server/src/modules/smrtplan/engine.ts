@@ -175,6 +175,8 @@ interface EngineTask {
   earliest_start?: Date;
   earliest_finish?: Date;
   is_critical?: boolean;
+  // The engine fields as currently persisted — to skip a no-op UPDATE.
+  orig: { earliest_start: string | null; latest_start: string | null; latest_finish: string | null; is_critical: boolean; duration_days: number | null };
 }
 
 // ── computation א + ה: backward scheduling + critical path ───────────────────
@@ -216,7 +218,7 @@ export async function computeOrgSchedule(orgId: string): Promise<{
 
   const { data: taskRows, error: taskErr } = await db
     .from("tasks")
-    .select("id, plan_id, parent_task_id, duration_days, duration_manual, estimated_hours, assigned_to_user_id, due_date, status, created_at")
+    .select("id, plan_id, parent_task_id, duration_days, duration_manual, estimated_hours, assigned_to_user_id, due_date, status, created_at, earliest_start, latest_start, latest_finish, is_critical")
     .eq("organization_id", orgId)
     .not("plan_id", "is", null);
   if (taskErr || !taskRows || taskRows.length === 0) {
@@ -240,6 +242,13 @@ export async function computeOrgSchedule(orgId: string): Promise<{
       created_at: (r.created_at as string) ?? new Date().toISOString(),
       duration: 0,
       durationEstimated: false,
+      orig: {
+        earliest_start: (r.earliest_start as string | null) ?? null,
+        latest_start: (r.latest_start as string | null) ?? null,
+        latest_finish: (r.latest_finish as string | null) ?? null,
+        is_critical: (r.is_critical as boolean | null) ?? false,
+        duration_days: r.duration_days != null ? Number(r.duration_days) : null,
+      },
     });
   }
 
@@ -491,19 +500,30 @@ export async function computeOrgSchedule(orgId: string): Promise<{
     if (t.is_critical) criticalCount++;
   }
 
-  // Persist.
+  // Persist — but only rows whose computed fields actually changed, so a single
+  // edit doesn't rewrite every task (the recompute is org-wide but most rows are
+  // unchanged). This is the difference between O(all-tasks) and O(affected) writes.
   let scheduled = 0;
   for (const t of tasks.values()) {
-    const { error: upErr } = await db
-      .from("tasks")
-      .update({
-        duration_days: t.duration > 0 ? t.duration : null, // sub-tasks/unknown stay NULL
-        earliest_start: t.earliest_start ? toISO(t.earliest_start) : null,
-        latest_start: t.latest_start ? toISO(t.latest_start) : null,
-        latest_finish: t.latest_finish ? toISO(t.latest_finish) : null,
-        is_critical: t.is_critical ?? false,
-      })
-      .eq("id", t.id);
+    const next = {
+      duration_days: t.duration > 0 ? t.duration : null, // sub-tasks/unknown stay NULL
+      earliest_start: t.earliest_start ? toISO(t.earliest_start) : null,
+      latest_start: t.latest_start ? toISO(t.latest_start) : null,
+      latest_finish: t.latest_finish ? toISO(t.latest_finish) : null,
+      is_critical: t.is_critical ?? false,
+    };
+    const o = t.orig;
+    if (
+      o.earliest_start === next.earliest_start &&
+      o.latest_start === next.latest_start &&
+      o.latest_finish === next.latest_finish &&
+      o.is_critical === next.is_critical &&
+      o.duration_days === next.duration_days
+    ) {
+      scheduled++; // unchanged — no write needed
+      continue;
+    }
+    const { error: upErr } = await db.from("tasks").update(next).eq("id", t.id);
     if (!upErr) scheduled++;
   }
 
