@@ -526,6 +526,25 @@ router.get("/plans/:id/dep-candidates", requireFull, async (req: Request, res: R
   res.json({ tasks, capabilities });
 });
 
+// ── all plan tasks across the org (the editable spreadsheet view) ────────────
+// One flat list of every plan-task (incl. drafts) with its plan title, needs/
+// handoff, and assignee — grouped client-side into the cross-plan table.
+router.get("/plan/all-tasks", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("tasks")
+    .select(
+      "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
+        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, " +
+        "linked_drive_docs, task_materials, source_messages(id, source_type, source_url, serial_display)",
+    )
+    .eq("organization_id", req.org!.id)
+    .not("plan_id", "is", null)
+    .order("plan_id", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+});
+
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
 const MY_TASK_FIELDS =
   "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +

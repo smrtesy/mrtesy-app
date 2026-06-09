@@ -2074,6 +2074,23 @@
       "fromTemplate": "From template",
       "applied": "Template applied"
     },
+    "pageView": {
+      "board": "Board",
+      "table": "Table"
+    },
+    "table": {
+      "lead": "Every task in every plan, in one place — click a cell to edit.",
+      "keyboardHint": "Navigate: arrows between cells · Enter/F2 to edit · Enter moves down · Tab moves across · Esc cancels · Ctrl+Z undo",
+      "colTask": "Task",
+      "colWorker": "Assignee",
+      "colStatus": "Status",
+      "colDue": "Due date",
+      "colDuration": "Duration",
+      "colLinks": "Links",
+      "colDeps": "Dependencies",
+      "empty": "No tasks yet",
+      "source": "Source"
+    },
     "capacity": {
       "button": "Team & availability",
       "title": "Team availability",

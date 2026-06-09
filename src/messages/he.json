@@ -2073,6 +2073,23 @@
       "fromTemplate": "מתבנית",
       "applied": "התבנית הוחלה"
     },
+    "pageView": {
+      "board": "לוח",
+      "table": "טבלה"
+    },
+    "table": {
+      "lead": "כל המשימות של כל התוכניות במקום אחד — לחיצה על תא לעריכה.",
+      "keyboardHint": "ניווט: חצים בין תאים · Enter/F2 לעריכה · Enter יורד · Tab זז · Esc ביטול · Ctrl+Z בטל",
+      "colTask": "משימה",
+      "colWorker": "אחראי",
+      "colStatus": "סטטוס",
+      "colDue": "תאריך יעד",
+      "colDuration": "משך",
+      "colLinks": "קישורים",
+      "colDeps": "תלויות",
+      "empty": "אין עדיין משימות",
+      "source": "מקור"
+    },
     "capacity": {
       "button": "צוות וזמינות",
       "title": "זמינות הצוות",

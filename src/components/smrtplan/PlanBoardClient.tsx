@@ -14,6 +14,7 @@ import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanTaskGantt } from "./PlanTaskGantt";
+import { PlanTableView } from "./PlanTableView";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { RolesEditor } from "./RolesEditor";
@@ -85,6 +86,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [addRowOpen, setAddRowOpen] = useState(false);
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<"list" | "gantt">("list");
+  const [pageView, setPageView] = useState<"board" | "table">("board");
   const canEdit = access === "full";
   const trackRef = useRef<HTMLDivElement | null>(null);
 
@@ -476,11 +478,31 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   return (
     <div className="space-y-4">
       {/* header */}
-      <div>
-        <h1 className="text-xl font-bold">{t("title")}</h1>
-        <p className="text-[12.5px] text-muted-foreground">{t("lead")}</p>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold">{t("title")}</h1>
+          <p className="text-[12.5px] text-muted-foreground">{t("lead")}</p>
+        </div>
+        <div className="flex gap-1 rounded-lg border bg-card p-1">
+          {(["board", "table"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setPageView(v)}
+              className={cn(
+                "rounded-md px-3 py-1 text-[12.5px] font-medium transition-colors",
+                pageView === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+              )}
+            >
+              {t(`pageView.${v}`)}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {pageView === "table" ? (
+        <PlanTableView locale={locale} canEdit={canEdit} onChanged={load} />
+      ) : (
+      <>
       {access === "lite" && (
         <div className="rounded-lg border bg-secondary px-3 py-2 text-[12px] text-muted-foreground">
           {t("liteNotice")}
@@ -1095,6 +1117,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       />
       <RolesEditor open={rolesOpen} onClose={() => setRolesOpen(false)} />
       <TemplatesEditor open={templatesOpen} onClose={() => setTemplatesOpen(false)} onChanged={load} />
+      </>
+      )}
     </div>
   );
 }
