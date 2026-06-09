@@ -12,6 +12,8 @@ export interface OrgMember {
   name: string | null;
   /** Per-org display name set by an admin (overrides the auth name in views). */
   display_name: string | null;
+  /** A no-email placeholder employee (added by name; can be given a real email later). */
+  is_placeholder?: boolean;
   /** App slugs explicitly granted to this user (only enforced for role='member'). */
   app_slugs: string[];
 }

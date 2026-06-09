@@ -797,7 +797,13 @@
     "appsLabel": "אפליקציות",
     "allApps": "כל האפליקציות",
     "memberAppsSaveFailed": "המשתמש נוסף אך הקצאת האפליקציות נכשלה, נסה שוב",
-    "displayName": "שם לתצוגה"
+    "displayName": "שם לתצוגה",
+    "noEmailToggle": "עובד ללא אימייל",
+    "employeeName": "שם העובד",
+    "addEmployee": "הוסף עובד",
+    "emailSet": "האימייל נשמר",
+    "noEmailBadge": "ללא אימייל",
+    "setEmailPlaceholder": "הוסף אימייל לכניסה…"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",

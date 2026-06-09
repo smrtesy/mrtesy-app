@@ -797,7 +797,13 @@
     "appsLabel": "Apps",
     "allApps": "All apps",
     "memberAppsSaveFailed": "Member added, but saving app access failed — try again",
-    "displayName": "Display name"
+    "displayName": "Display name",
+    "noEmailToggle": "Employee without email",
+    "employeeName": "Employee name",
+    "addEmployee": "Add employee",
+    "emailSet": "Email saved",
+    "noEmailBadge": "No email",
+    "setEmailPlaceholder": "Add login email…"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",

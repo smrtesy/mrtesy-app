@@ -12,6 +12,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireRole, type Role } from "../../../middleware";
 import { sendInviteEmail } from "../../../lib/email";
@@ -19,6 +20,10 @@ import { sendInviteEmail } from "../../../lib/email";
 const router = Router();
 
 const ROLES: Role[] = ["owner", "admin", "member"];
+/** Synthetic email domain for "no-email" placeholder employees. The org admin
+ *  can later set a real email so they can sign in and see their assignments. */
+const PLACEHOLDER_DOMAIN = "no-email.smrtesy.local";
+const isPlaceholderEmail = (email: string | null | undefined) => !!email && email.endsWith(`@${PLACEHOLDER_DOMAIN}`);
 
 /**
  * Resolve a list of app slugs to {id, slug} rows, keeping only apps that both
@@ -76,16 +81,21 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
     slugsByUser.set(g.user_id as string, arr);
   }
 
-  const members = (data ?? []).map((m) => ({
-    user_id: m.user_id,
-    role: m.role,
-    joined_at: m.joined_at,
-    invited_by: m.invited_by,
-    email: userMap.get(m.user_id)?.email ?? null,
-    name: userMap.get(m.user_id)?.name ?? null,
-    display_name: (m.display_name as string | null) ?? null,
-    app_slugs: slugsByUser.get(m.user_id as string) ?? [],
-  }));
+  const members = (data ?? []).map((m) => {
+    const rawEmail = userMap.get(m.user_id)?.email ?? null;
+    const placeholder = isPlaceholderEmail(rawEmail);
+    return {
+      user_id: m.user_id,
+      role: m.role,
+      joined_at: m.joined_at,
+      invited_by: m.invited_by,
+      email: placeholder ? null : rawEmail,
+      name: userMap.get(m.user_id)?.name ?? null,
+      display_name: (m.display_name as string | null) ?? null,
+      is_placeholder: placeholder,
+      app_slugs: slugsByUser.get(m.user_id as string) ?? [],
+    };
+  });
 
   res.json({ members });
 });
@@ -110,6 +120,87 @@ router.patch("/org/members/:userId/display-name",
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: "member not found" });
     res.json({ member: data });
+  });
+
+/**
+ * POST /org/members/placeholder — add an employee WITHOUT an email. Creates a
+ * placeholder auth user (synthetic, no real inbox; no invite sent) so they can
+ * be assigned tasks/roles right away. Later, PATCH .../email gives them a real
+ * address to sign in with — same user id, so all their assignments are waiting.
+ */
+router.post("/org/members/placeholder",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { name, role = "member", app_slugs } = req.body ?? {};
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    if (!ROLES.includes(role)) return res.status(400).json({ error: `role must be one of: ${ROLES.join(", ")}` });
+    if (role === "owner" && req.member!.role !== "owner") {
+      return res.status(403).json({ error: "only owners can grant the owner role" });
+    }
+    const apps = await resolveOrgApps(req.org!.id, app_slugs);
+
+    const { data: created, error: createErr } = await db.auth.admin.createUser({
+      email: `placeholder.${randomUUID()}@${PLACEHOLDER_DOMAIN}`,
+      email_confirm: true,
+      user_metadata: { full_name: name.trim(), placeholder: true },
+    });
+    if (createErr || !created?.user) {
+      return res.status(500).json({ error: createErr?.message ?? "failed to create placeholder user" });
+    }
+    const uid = created.user.id;
+
+    const { error } = await db.from("org_members").insert({
+      org_id: req.org!.id,
+      user_id: uid,
+      role,
+      invited_by: req.user!.id,
+      display_name: name.trim(),
+    });
+    if (error) return res.status(500).json({ error: error.message });
+
+    let warning: string | undefined;
+    if (apps.length > 0) {
+      const rows = apps.map((a) => ({ org_id: req.org!.id, user_id: uid, app_id: a.id, granted_by: req.user!.id }));
+      const { error: grantErr } = await db.from("user_app_access").insert(rows);
+      if (grantErr) warning = "member added but app access failed to save";
+    }
+    res.status(201).json({ member: { user_id: uid, role, display_name: name.trim(), is_placeholder: true }, ...(warning ? { warning } : {}) });
+  });
+
+/**
+ * PATCH /org/members/:userId/email — set/replace a member's login email (used to
+ * give a no-email placeholder a real address). The person can then sign in with
+ * it and find everything already assigned to them.
+ */
+router.patch("/org/members/:userId/email",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const raw = (req.body ?? {}).email;
+    if (!raw || typeof raw !== "string" || !raw.includes("@")) {
+      return res.status(400).json({ error: "a valid email is required" });
+    }
+    const email = raw.toLowerCase().trim();
+    // Target must be a member of THIS org.
+    const { data: m } = await db
+      .from("org_members").select("user_id").eq("org_id", req.org!.id).eq("user_id", req.params.userId).maybeSingle();
+    if (!m) return res.status(404).json({ error: "member not found" });
+    const { data: userPage } = await db.auth.admin.listUsers({ perPage: 1000 });
+    const target = (userPage?.users ?? []).find((u) => u.id === req.params.userId);
+    // SECURITY: only a no-email placeholder may be given an email here. A real
+    // account is global (could belong to other orgs) — an org admin must never
+    // be able to rewrite a real user's login email and hijack it.
+    if (!target || !isPlaceholderEmail(target.email)) {
+      return res.status(403).json({ error: "can only set an email for a no-email employee" });
+    }
+    // Reject if the email already belongs to someone else.
+    const clash = (userPage?.users ?? []).find((u) => u.email?.toLowerCase() === email && u.id !== req.params.userId);
+    if (clash) return res.status(409).json({ error: "that email is already in use" });
+
+    const { error } = await db.auth.admin.updateUserById(req.params.userId, { email, email_confirm: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true, email });
   });
 
 /**

@@ -47,6 +47,8 @@ export function OrgSettingsClient() {
   const [savingErrorHandler, setSavingErrorHandler] = useState(false);
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [noEmail, setNoEmail] = useState(false);
   const [inviteRole, setInviteRole] = useState<OrgMember["role"]>("member");
   const [inviteApps, setInviteApps] = useState<string[]>([]);
   const [inviting, setInviting] = useState(false);
@@ -117,6 +119,37 @@ export function OrgSettingsClient() {
       toast.error((e as Error).message);
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleAddPlaceholder() {
+    if (!inviteName.trim()) return;
+    setInviting(true);
+    try {
+      const app_slugs = inviteRole === "member" ? inviteApps : [];
+      const result = await api<{ warning?: string }>("/api/org/members/placeholder", {
+        method: "POST",
+        body: { name: inviteName.trim(), role: inviteRole, app_slugs },
+      });
+      if (result.warning) toast.warning(tOrg("memberAppsSaveFailed"));
+      else toast.success(tOrg("memberAdded"));
+      setInviteName("");
+      setInviteApps([]);
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleSetEmail(userId: string, email: string) {
+    try {
+      await api(`/api/org/members/${userId}/email`, { method: "PATCH", body: { email: email.trim() } });
+      toast.success(tOrg("emailSet"));
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   }
 
@@ -257,11 +290,15 @@ export function OrgSettingsClient() {
           {/* Invite form */}
           {canManage && (
             <div className="mb-4 space-y-2">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <input type="checkbox" checked={noEmail} onChange={(e) => { setNoEmail(e.target.checked); setInviteEmail(""); setInviteName(""); }} />
+                {tOrg("noEmailToggle")}
+              </label>
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <Input
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder={tOrg("emailToInvite")}
+                  value={noEmail ? inviteName : inviteEmail}
+                  onChange={(e) => (noEmail ? setInviteName(e.target.value) : setInviteEmail(e.target.value))}
+                  placeholder={noEmail ? tOrg("employeeName") : tOrg("emailToInvite")}
                   className="w-full sm:flex-1"
                   dir="auto"
                 />
@@ -275,10 +312,17 @@ export function OrgSettingsClient() {
                     <option value="admin">{tOrg("roleAdmin")}</option>
                     {isOwner && <option value="owner">{tOrg("roleOwner")}</option>}
                   </select>
-                  <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="gap-2 shrink-0">
-                    {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                    {tOrg("invite")}
-                  </Button>
+                  {noEmail ? (
+                    <Button onClick={handleAddPlaceholder} disabled={inviting || !inviteName.trim()} className="gap-2 shrink-0">
+                      {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                      {tOrg("addEmployee")}
+                    </Button>
+                  ) : (
+                    <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()} className="gap-2 shrink-0">
+                      {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                      {tOrg("invite")}
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -326,7 +370,22 @@ export function OrgSettingsClient() {
                         <Icon className="h-4 w-4" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{m.email || m.name || "—"}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-medium truncate">{m.email || personLabel(m)}</span>
+                          {m.is_placeholder && (
+                            <Badge variant="outline" className="shrink-0 text-[9px]">{tOrg("noEmailBadge")}</Badge>
+                          )}
+                        </div>
+                        {m.is_placeholder && canManage && (
+                          <input
+                            type="email"
+                            placeholder={tOrg("setEmailPlaceholder")}
+                            dir="auto"
+                            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            onBlur={(e) => { if (e.target.value.trim()) { handleSetEmail(m.user_id, e.target.value); e.target.value = ""; } }}
+                            className="mt-1 h-6 w-44 rounded border bg-background px-1.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                        )}
                         <div className="text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
                           {m.name && <span className="truncate max-w-[100px]">{m.name}</span>}
                           {canManage ? (
