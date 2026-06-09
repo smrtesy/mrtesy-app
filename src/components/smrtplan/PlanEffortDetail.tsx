@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { ArrowRight, CheckCircle2, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
+import { createClient } from "@/lib/supabase/client";
+import { useSuperAdmin } from "@/lib/api/use-super-admin";
 import { cn } from "@/lib/utils";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
@@ -66,6 +68,14 @@ export function PlanEffortDetail({
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [myId, setMyId] = useState<string | null>(null);
+  const { isSuperAdmin } = useSuperAdmin();
+
+  useEffect(() => {
+    let alive = true;
+    createClient().auth.getUser().then((r: { data: { user: { id: string } | null } }) => { if (alive) setMyId(r.data.user?.id ?? null); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const memberMap = new Map(members.map((m) => [m.user_id, memberName(m)]));
 
@@ -127,6 +137,18 @@ export function PlanEffortDetail({
   async function afterMutation() {
     await refetch();
     onChanged?.();
+  }
+
+  // Mark complete / reopen — allowed for the assignee + super-admin (not only
+  // full-access planners). The server enforces the same rule.
+  const canComplete = (task: PlanTask) => canEdit || isSuperAdmin || (myId != null && task.assigned_to_user_id === myId);
+  async function toggleDone(task: PlanTask) {
+    try {
+      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: zoneOf(task) !== "done" } });
+      await afterMutation();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
   }
 
   const title = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
@@ -207,6 +229,8 @@ export function PlanEffortDetail({
                 today={today}
                 t={t}
                 canEdit={canEdit}
+                canComplete={canComplete(task)}
+                onToggleDone={() => toggleDone(task)}
                 assignee={task.assigned_to_user_id ? memberMap.get(task.assigned_to_user_id) ?? null : null}
                 onEdit={() => setEditingId(task.id)}
               />
@@ -224,6 +248,8 @@ function TaskRow({
   today,
   t,
   canEdit,
+  canComplete,
+  onToggleDone,
   assignee,
   onEdit,
 }: {
@@ -232,6 +258,8 @@ function TaskRow({
   today: Date;
   t: ReturnType<typeof useTranslations>;
   canEdit: boolean;
+  canComplete: boolean;
+  onToggleDone: () => void;
   assignee: string | null;
   onEdit: () => void;
 }) {
@@ -250,16 +278,21 @@ function TaskRow({
   return (
     <div className="py-2.5">
       <div className="flex items-center gap-2.5">
-        <span
+        <button
+          type="button"
+          disabled={!canComplete}
+          onClick={canComplete ? onToggleDone : undefined}
+          title={zone === "done" ? t("effort.reopen") : t("effort.markDone")}
           className={cn(
             "flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded border text-[11px]",
             zone === "done" && "border-status-ok bg-status-ok text-white",
             zone === "blocked" && "border-dashed border-muted-foreground/40 text-transparent",
             zone === "ready" && "border-muted-foreground/40",
+            canComplete ? "cursor-pointer hover:border-status-ok" : "cursor-default",
           )}
         >
           {zone === "done" ? "✓" : ""}
-        </span>
+        </button>
         <span className={cn("flex-1 text-[13px]", zone === "done" && "text-muted-foreground line-through")}>
           {taskTitle(task, locale)}
           {task.is_critical && (

@@ -1945,7 +1945,9 @@
       "load": "עומס",
       "taskDays": "ימי־משימה",
       "workDays": "ימי עבודה",
-      "overloaded": "עומס יתר"
+      "overloaded": "עומס יתר",
+      "markDone": "סמן כהושלם",
+      "reopen": "פתח מחדש"
     },
     "repository": {
       "title": "מאגר הרעיונות",

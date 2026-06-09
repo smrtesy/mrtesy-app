@@ -25,8 +25,8 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp } from "../../middleware";
-import { computeOrgSchedule } from "./engine";
+import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
+import { computeOrgSchedule, releaseDependents } from "./engine";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
@@ -955,6 +955,38 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .single();
   if (error) return res.status(500).json({ error: error.message });
   if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
+  res.json({ task: data });
+});
+
+/**
+ * PATCH /plan-tasks/:id/done — mark a plan task complete / reopen it. Unlike the
+ * full editor, this is allowed for the task's ASSIGNEE (so a worker can tick off
+ * their own task) and for super-admins (any task), in addition to full-access
+ * planners. Completing releases its dependents.
+ */
+router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
+  const done = !!(req.body ?? {}).done;
+  const { data: task } = await db
+    .from("tasks")
+    .select("id, assigned_to_user_id")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (!task) return res.status(404).json({ error: "task not found" });
+  const level = await resolveAccessLevel(req);
+  const allowed = level === "full" || (task.assigned_to_user_id as string | null) === req.user!.id || (await isSuperAdmin(req.user!));
+  if (!allowed) return res.status(403).json({ error: "not allowed to complete this task" });
+  const { data, error } = await db
+    .from("tasks")
+    .update({ status: done ? "completed" : "inbox" })
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, status")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  if (done) await releaseDependents(req.org!.id, req.params.id); // unblock successors
+  await autoRecompute(req.org!.id);
   res.json({ task: data });
 });
 

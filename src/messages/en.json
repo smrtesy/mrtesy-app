@@ -1946,7 +1946,9 @@
       "load": "Load",
       "taskDays": "task-days",
       "workDays": "work days",
-      "overloaded": "Overloaded"
+      "overloaded": "Overloaded",
+      "markDone": "Mark done",
+      "reopen": "Reopen"
     },
     "repository": {
       "title": "Idea repository",
