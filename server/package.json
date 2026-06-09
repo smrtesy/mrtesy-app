@@ -10,7 +10,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
-    "postinstall": "playwright install chromium --with-deps"
+    "postinstall": "node -e \"if(process.env.INSTALL_CHROMIUM==='1')require('child_process').execSync('playwright install chromium --with-deps',{stdio:'inherit'});else console.log('[postinstall] skipping Chromium download (set INSTALL_CHROMIUM=1 to enable domain-tracker)')\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

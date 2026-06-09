@@ -175,6 +175,11 @@ router.post("/admin/domain-tracker", requireAuth, requireSuperAdmin, async (req:
     }
     const message = err instanceof Error ? err.message : String(err);
     console.error("[domain-tracker] scan failed for", rawUrl, err);
+    // The Chromium download is opt-in to keep deploys fast (INSTALL_CHROMIUM=1).
+    // Give a clear hint when the browser binary just isn't installed here.
+    if (/Executable doesn't exist|playwright install|browserType\.launch/i.test(message)) {
+      return res.status(503).json({ error: "Domain tracker is unavailable: the Chromium browser isn't installed on this server (set INSTALL_CHROMIUM=1 and redeploy)." });
+    }
     return res.status(500).json({ error: `Scan failed: ${message}` });
   }
 });
