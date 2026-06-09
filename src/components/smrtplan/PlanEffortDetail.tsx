@@ -172,7 +172,7 @@ export function PlanEffortDetail({
             {Math.round(progress * 100)}%
           </p>
           {plan.kind === "roster" && (
-            <p className="mb-1.5 text-[11.5px] italic text-muted-foreground">{te("rosterNote")}</p>
+            <p className="mb-1.5 text-[11.5px] italic text-muted-foreground">{t("effort.rosterNote")}</p>
           )}
           {rosterLoad && (
             <div
