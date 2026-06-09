@@ -2098,7 +2098,9 @@
       "confirmDeleteProject": "למחוק את הפרויקט וכל המשימות והשלבים שלו? לא ניתן לבטל.",
       "addLink": "+ קישור",
       "linkUrl": "כתובת הקישור (URL)",
-      "linkLabel": "שם הקישור"
+      "linkLabel": "שם הקישור",
+      "stage": "שלב",
+      "noStage": "ללא שלב"
     },
     "capacity": {
       "button": "צוות וזמינות",

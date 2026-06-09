@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle, X, Trash2 } from "lucide-react";
@@ -23,6 +23,7 @@ interface TableTask {
   duration_days: number | null;
   duration_manual: boolean | null;
   plan_id: string;
+  stage_id: string | null;
   plan_title_he: string | null;
   plan_title_en: string | null;
   linked_drive_docs?: { url?: string; name?: string; title?: string }[] | null;
@@ -117,21 +118,44 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
 
   const memberMap = useMemo(() => new Map(members.map((m) => [m.user_id, memberName(m)])), [members]);
 
-  // Group tasks under their plan, in the plans' board order; plans with no tasks
-  // still show (so you can add the first task). `flat` is the keyboard-nav order.
+  const stagesByPlan = useMemo(() => {
+    const m = new Map<string, TableStage[]>();
+    for (const s of stages) {
+      if (!m.has(s.plan_id)) m.set(s.plan_id, []);
+      m.get(s.plan_id)!.push(s);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.sequence - b.sequence);
+    return m;
+  }, [stages]);
+
+  // Group tasks under their plan (board order), and WITHIN a plan order them by
+  // their stage (banner) so they render grouped under each stage. `flat` is the
+  // keyboard-nav order and must match that render order.
   const groups = useMemo(() => {
     const byPlan = new Map<string, TableTask[]>();
     for (const tk of tasks) {
       if (!byPlan.has(tk.plan_id)) byPlan.set(tk.plan_id, []);
       byPlan.get(tk.plan_id)!.push(tk);
     }
+    const orderByStage = (rows: TableTask[], sts: TableStage[]): TableTask[] => {
+      const seq = new Map(sts.map((s, i) => [s.id, i]));
+      return [...rows].sort((a, b) => {
+        const ai = a.stage_id != null && seq.has(a.stage_id) ? seq.get(a.stage_id)! : Number.MAX_SAFE_INTEGER;
+        const bi = b.stage_id != null && seq.has(b.stage_id) ? seq.get(b.stage_id)! : Number.MAX_SAFE_INTEGER;
+        return ai - bi; // stable sort keeps original order within a stage
+      });
+    };
     const ordered = [...plans].sort((a, b) => (a.group_label || "").localeCompare(b.group_label || ""));
     const seen = new Set(ordered.map((p) => p.id));
-    const out: { plan: Plan; rows: TableTask[] }[] = ordered.map((p) => ({ plan: p, rows: byPlan.get(p.id) ?? [] }));
-    // any tasks whose plan wasn't in the list (defensive)
-    for (const [pid, rows] of byPlan) if (!seen.has(pid)) out.push({ plan: { id: pid, title_he: rows[0]?.plan_title_he ?? "—" } as Plan, rows });
+    const out: { plan: Plan; rows: TableTask[]; stages: TableStage[] }[] = ordered.map((p) => {
+      const sts = stagesByPlan.get(p.id) ?? [];
+      return { plan: p, rows: orderByStage(byPlan.get(p.id) ?? [], sts), stages: sts };
+    });
+    for (const [pid, rows] of byPlan) {
+      if (!seen.has(pid)) out.push({ plan: { id: pid, title_he: rows[0]?.plan_title_he ?? "—" } as Plan, rows, stages: stagesByPlan.get(pid) ?? [] });
+    }
     return out.filter((g) => g.rows.length > 0 || canEdit);
-  }, [tasks, plans, canEdit]);
+  }, [tasks, plans, canEdit, stagesByPlan]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
   const flatIndexById = useMemo(() => {
@@ -285,24 +309,14 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     return () => window.removeEventListener("keydown", onKey);
   }, [canEdit, editing, doUndo, doRedo]);
 
-  async function addTask(planId: string) {
+  async function addTask(planId: string, stageId?: string | null) {
     try {
-      await api(`/api/plans/${planId}/tasks`, { method: "POST", body: { title_he: te("newRowTitle"), status: "inbox" } });
+      await api(`/api/plans/${planId}/tasks`, { method: "POST", body: { title_he: te("newRowTitle"), status: "inbox", stage_id: stageId ?? null } });
       await refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     }
   }
-
-  const stagesByPlan = useMemo(() => {
-    const m = new Map<string, TableStage[]>();
-    for (const s of stages) {
-      if (!m.has(s.plan_id)) m.set(s.plan_id, []);
-      m.get(s.plan_id)!.push(s);
-    }
-    for (const arr of m.values()) arr.sort((a, b) => a.sequence - b.sequence);
-    return m;
-  }, [stages]);
 
   // Add a project (draft effort plan) — optimistic empty group, swap in real id.
   function addPlan() {
@@ -381,17 +395,12 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     runCmd({ label: te("actStageDel"), redo: remove, undo: recreate });
   }
 
-  // Set a stage's start/end date inline (the board shows it as a positioned
-  // square). No reschedule — stage dates don't feed the engine.
-  function editStageDate(st: TableStage, field: "start_date" | "end_date", value: string | null) {
-    if (value === st[field]) return;
-    const key = histKeyOf(st.id);
-    const apply = async (v: string | null) => {
-      const live = histResolve(key);
-      setStages((ss) => ss.map((s) => (s.id === live ? { ...s, [field]: v } : s)));
-      await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { [field]: v } });
-    };
-    runCmd({ label: te("actStageMove"), redo: () => apply(value), undo: () => apply(st[field]) });
+  // Assign a task to a stage (banner) within its plan — moves it under that
+  // banner. Not a scheduling field, so optimistic with no refetch.
+  function setTaskStage(task: TableTask, stageId: string | null) {
+    const v = stageId || null;
+    if (v === (task.stage_id ?? null)) return;
+    editField(task.id, { stage_id: v }, { stage_id: task.stage_id ?? null }, { stage_id: v }, { stage_id: task.stage_id ?? null }, t("table.stage"), false);
   }
 
   function renameStage(st: TableStage) {
@@ -466,7 +475,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
             </tr>
           </thead>
           <tbody>
-            {groups.map(({ plan, rows }) => (
+            {groups.map(({ plan, rows, stages: planStages }) => (
               <PlanGroup
                 key={plan.id}
                 plan={plan}
@@ -478,13 +487,13 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                 statusLabel={statusLabel}
                 te={te}
                 t={t}
-                stages={stagesByPlan.get(plan.id) ?? []}
+                stages={planStages}
                 onEditPlanTitle={editPlanTitle}
                 onAddTask={addTask}
                 onAddStage={addStage}
                 onDeleteStage={deleteStage}
-                onEditStageDate={editStageDate}
                 onRenameStage={renameStage}
+                onSetTaskStage={setTaskStage}
                 onDeletePlan={deletePlan}
                 onAddLink={addLink}
                 onRemoveLink={removeLink}
@@ -524,8 +533,8 @@ function PlanGroup(props: {
   stages: TableStage[];
   onAddStage: (planId: string) => void;
   onDeleteStage: (stage: TableStage) => void;
-  onEditStageDate: (stage: TableStage, field: "start_date" | "end_date", value: string | null) => void;
   onRenameStage: (stage: TableStage) => void;
+  onSetTaskStage: (task: TableTask, stageId: string | null) => void;
   onDeletePlan: (planId: string) => void;
   onAddLink: (task: TableTask) => void;
   onRemoveLink: (task: TableTask, matId: string) => void;
@@ -541,11 +550,43 @@ function PlanGroup(props: {
   onCommitSelect: (task: TableTask, col: NavCol, value: string) => void;
   onMove: (dir: "down" | "next") => void;
   onCancel: () => void;
-  onAddTask: (planId: string) => void;
+  onAddTask: (planId: string, stageId?: string | null) => void;
 }) {
   const { plan, rows, locale, canEdit, memberMap, members, statusLabel, te, t, stages } = props;
   const [editTitle, setEditTitle] = useState(false);
   const planTitle = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
+  const stageName = (s: TableStage) => (locale === "en" ? s.name_en || s.name_he : s.name_he);
+  const stageIds = new Set(stages.map((s) => s.id));
+  const noStageRows = rows.filter((tk) => !tk.stage_id || !stageIds.has(tk.stage_id));
+
+  // One banner row introducing a stage (or the "no stage" group): name (rename),
+  // delete, and "+ task" that creates a task already in that stage.
+  const bannerRow = (s: TableStage | null) => (
+    <tr key={s ? `b-${s.id}` : "b-none"} className="bg-secondary/20">
+      <td colSpan={7} className="border-b px-2 py-1">
+        <span className="flex items-center gap-2">
+          <span
+            className={cn("text-[11.5px] font-bold", s ? "text-foreground/80" : "italic text-muted-foreground", canEdit && s && "cursor-text rounded px-0.5 hover:bg-accent")}
+            onClick={canEdit && s ? () => props.onRenameStage(s) : undefined}
+            title={canEdit && s ? te("edit") : undefined}
+          >
+            {s ? stageName(s) : t("table.noStage")}
+          </span>
+          {canEdit && s && (
+            <button onClick={() => props.onDeleteStage(s)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
+              <X className="h-3 w-3" />
+            </button>
+          )}
+          {canEdit && (
+            <button onClick={() => props.onAddTask(plan.id, s?.id ?? null)}
+              className="inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
+              <Plus className="h-2.5 w-2.5" /> {te("addTask")}
+            </button>
+          )}
+        </span>
+      </td>
+    </tr>
+  );
 
   return (
     <>
@@ -570,38 +611,12 @@ function PlanGroup(props: {
               </span>
             )}
             <span className="text-[10.5px] font-normal text-muted-foreground">{rows.length}</span>
-
-            {/* stages of this project — name (click to rename) + start/end dates +
-                delete. Dates make the board show the stage as a positioned square. */}
-            {stages.map((s) => (
-              <span key={s.id} className="inline-flex items-center gap-1 rounded-full border bg-card px-1.5 py-px text-[10.5px] font-normal">
-                <button
-                  onClick={canEdit ? () => props.onRenameStage(s) : undefined}
-                  className={cn("font-medium", canEdit && "cursor-text rounded px-0.5 hover:bg-accent")}
-                >
-                  {locale === "en" ? s.name_en || s.name_he : s.name_he}
-                </button>
-                {canEdit && (
-                  <>
-                    <input type="date" value={s.start_date ?? ""} onChange={(e) => props.onEditStageDate(s, "start_date", e.target.value || null)}
-                      title={te("start")} className="rounded border border-input bg-background px-0.5 text-[10px] outline-none focus:ring-1 focus:ring-ring" />
-                    <span aria-hidden className="text-muted-foreground">–</span>
-                    <input type="date" value={s.end_date ?? ""} onChange={(e) => props.onEditStageDate(s, "end_date", e.target.value || null)}
-                      title={te("end")} className="rounded border border-input bg-background px-0.5 text-[10px] outline-none focus:ring-1 focus:ring-ring" />
-                    <button onClick={() => props.onDeleteStage(s)} className="rounded text-muted-foreground hover:text-status-late" title={te("delete")}>
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  </>
-                )}
-              </span>
-            ))}
             {canEdit && (
               <button onClick={() => props.onAddStage(plan.id)}
                 className="inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground" title={te("addStage")}>
                 <Plus className="h-2.5 w-2.5" /> {te("stageShort")}
               </button>
             )}
-
             {canEdit && (
               <button onClick={() => props.onDeletePlan(plan.id)}
                 className="ms-auto inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] font-normal text-muted-foreground hover:bg-status-late/10 hover:text-status-late" title={t("table.deleteProject")}>
@@ -611,7 +626,33 @@ function PlanGroup(props: {
           </div>
         </td>
       </tr>
-      {rows.map((task) => {
+      {/* tasks grouped under their stage banner; "no stage" group last */}
+      {stages.map((s) => (
+        <Fragment key={s.id}>
+          {bannerRow(s)}
+          {rows.filter((tk) => tk.stage_id === s.id).map(renderRow)}
+        </Fragment>
+      ))}
+      {(stages.length > 0 ? (noStageRows.length > 0 || canEdit) : true) && (
+        <Fragment>
+          {stages.length > 0 && bannerRow(null)}
+          {noStageRows.map(renderRow)}
+          {stages.length === 0 && canEdit && (
+            <tr>
+              <td colSpan={7} className="border-b px-2 py-1">
+                <button onClick={() => props.onAddTask(plan.id, null)}
+                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
+                  <Plus className="h-3 w-3" /> {te("addTask")}
+                </button>
+              </td>
+            </tr>
+          )}
+        </Fragment>
+      )}
+    </>
+  );
+
+  function renderRow(task: TableTask) {
         const r = props.getFlatIndex(task.id);
         const done = DONE.has(task.status);
         const isActive = (c: number) => props.active?.r === r && props.active?.c === c;
@@ -683,6 +724,17 @@ function PlanGroup(props: {
             <td className="border-b px-1 py-0.5">
               <span className="flex items-center gap-1">
                 {task.is_critical && <AlertTriangle className="h-3 w-3 flex-shrink-0 text-status-late" />}
+                {canEdit && stages.length > 0 && (
+                  <select
+                    value={task.stage_id ?? ""}
+                    onChange={(e) => props.onSetTaskStage(task, e.target.value || null)}
+                    title={t("table.stage")}
+                    className="max-w-[70px] flex-shrink-0 rounded border border-input bg-background px-0.5 text-[9.5px] text-muted-foreground outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="">—</option>
+                    {stages.map((s) => <option key={s.id} value={s.id}>{stageName(s)}</option>)}
+                  </select>
+                )}
                 {textCell(0, "title", task.title_he || task.title, "text")}
               </span>
             </td>
@@ -749,17 +801,5 @@ function PlanGroup(props: {
             </td>
           </tr>
         );
-      })}
-      {canEdit && (
-        <tr>
-          <td colSpan={7} className="border-b px-2 py-1">
-            <button onClick={() => props.onAddTask(plan.id)}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
-              <Plus className="h-3 w-3" /> {te("addTask")}
-            </button>
-          </td>
-        </tr>
-      )}
-    </>
-  );
+  }
 }

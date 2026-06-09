@@ -566,7 +566,7 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
     .from("tasks")
     .select(
       "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, " +
+        "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, " +
         "linked_drive_docs, task_materials, source_messages(id, source_type, source_url, serial_display)",
     )
     .eq("organization_id", req.org!.id)
@@ -872,7 +872,7 @@ router.delete("/plan-milestones/:id", requireFull, async (req: Request, res: Res
 // ── plan tasks (create / edit / delete) ───────────────────────────────────────
 
 router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response) => {
-  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id, status } = req.body ?? {};
+  const { title, title_he, due_date, duration_days, estimated_hours, assigned_to_user_id, parent_task_id, role_id, status, stage_id } = req.body ?? {};
   if (!title && !title_he) return res.status(400).json({ error: "title or title_he is required" });
   // Default staffing: a task with a role but no explicit assignee falls back to
   // the role's primary member. An explicit assignee always wins.
@@ -896,8 +896,9 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
       assigned_to_user_id: assignee,
       parent_task_id: parent_task_id ?? null,
       role_id: validRoleId,
+      stage_id: stage_id ?? null,
     })
-    .select("id, title, title_he, status, due_date, duration_days, estimated_hours, parent_task_id, plan_id, role_id")
+    .select("id, title, title_he, status, due_date, duration_days, estimated_hours, parent_task_id, plan_id, role_id, stage_id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   await autoRecompute(req.org!.id);
@@ -907,7 +908,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 const PLAN_TASK_WRITABLE = new Set([
   "title", "title_he", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
-  "task_materials",
+  "task_materials", "stage_id",
 ]);
 
 // Lightweight validation for task_materials (links/notes attached to a task),

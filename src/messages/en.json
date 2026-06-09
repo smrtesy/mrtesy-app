@@ -2099,7 +2099,9 @@
       "confirmDeleteProject": "Delete this project and all its tasks and stages? This cannot be undone.",
       "addLink": "+ Link",
       "linkUrl": "Link URL",
-      "linkLabel": "Link label"
+      "linkLabel": "Link label",
+      "stage": "Stage",
+      "noStage": "No stage"
     },
     "capacity": {
       "button": "Team & availability",
