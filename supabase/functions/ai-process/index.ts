@@ -1051,14 +1051,26 @@ async function routeWhatsAppMatter(
   candidates: WhatsAppCandidate[],
   sys: SystemParams,
 ): Promise<{ taskId: string | "NEW"; inputTokens: number; outputTokens: number }> {
+  // Surface each candidate's state to the router. A matter the user already
+  // finished (pending_completion/completed) or deliberately hid for later
+  // (snoozed) must NOT silently swallow a distinct new ask — the router may
+  // only pick it on an unmistakable resumption of that exact same matter.
+  const stateLabel = (s: string) =>
+    s === "pending_completion" || s === "completed" ? "DONE/closed"
+      : s === "snoozed" ? "SNOOZED"
+      : "open";
   const list = candidates
-    .map((c, i) => `${i + 1}. id=${c.id} | ${(c.title_he || c.title || "(ללא כותרת)").slice(0, 80)} — ${(c.description || "").replace(/\s+/g, " ").slice(0, 140)}`)
+    .map((c, i) => `${i + 1}. id=${c.id} [${stateLabel(String(c.status))}] | ${(c.title_he || c.title || "(ללא כותרת)").slice(0, 80)} — ${(c.description || "").replace(/\s+/g, " ").slice(0, 140)}`)
     .join("\n");
-  const system = `You route an incoming WhatsApp message to the open matter it continues, or flag it as a NEW distinct matter.
-A single contact can have several unrelated open matters at once. Decide which one the LATEST message in the transcript belongs to.
+  const system = `You route an incoming WhatsApp message to the matter it continues, or flag it as a NEW distinct matter.
+A single contact can have several unrelated matters at once. Decide which one the LATEST message in the transcript belongs to.
+Each listed matter carries a state in [brackets]:
+  • [open]        — actively tracked; the default home for a genuine continuation.
+  • [DONE/closed] — the user already resolved it. Pick it ONLY if the latest message UNMISTAKABLY resumes that exact same matter (same specific action/topic). If it is a different action or a new ask, return NEW — never bury a new matter inside one the user already finished.
+  • [SNOOZED]     — the user deliberately hid it for later. Same high bar as [DONE/closed]: pick it only on an unmistakable continuation of that exact matter; otherwise NEW.
 Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that matter, or {"task_id": "NEW"} if it opens a distinct matter (different action/topic) not covered by any listed task.
-Judge by the LAST message in the transcript. When genuinely unsure, prefer the most recently relevant existing matter over NEW.`;
-  const user = `Open matters for this contact:\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
+Judge by the LAST message in the transcript. When unsure between NEW and an [open] matter, prefer that open matter; when unsure and the only fit is a [DONE/closed] or [SNOOZED] matter, prefer NEW.`;
+  const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
   const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
   try {

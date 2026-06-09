@@ -115,19 +115,34 @@ export function TaskCard({
       )}
       onClick={() => onSelect(task)}
     >
-      {/* Completion / unread banner (above title for visibility) */}
-      {(isPendingCompletion || hasUnread) && (
+      {/* Unread-update + completion banners (above title for visibility).
+          A task can be BOTH pending_completion AND carry an unread update
+          (e.g. a new message landed on a thread already flagged "looks done").
+          Show each banner on its own so the "new update" notice is never
+          masked by the completion notice. */}
+      {hasUnread && (
         <div
           className={cn(
             "mb-2 -mx-1 -mt-1 rounded-md px-2 py-1 text-xs flex items-start gap-2",
-            isPendingCompletion ? "bg-status-ok-bg text-status-ok" : "bg-status-warn-bg text-status-warn",
+            "bg-status-warn-bg text-status-warn",
           )}
         >
           <Bell className="h-3 w-3 mt-0.5 shrink-0" />
           <span dir={locale === "he" ? "rtl" : "ltr"} className="flex-1">
-            {isPendingCompletion
-              ? task.completion_signal_reason || t("completionBanner")
-              : t("hasUnreadUpdate")}
+            {t("hasUnreadUpdate")}
+          </span>
+        </div>
+      )}
+      {isPendingCompletion && (
+        <div
+          className={cn(
+            "mb-2 -mx-1 -mt-1 rounded-md px-2 py-1 text-xs flex items-start gap-2",
+            "bg-status-ok-bg text-status-ok",
+          )}
+        >
+          <Bell className="h-3 w-3 mt-0.5 shrink-0" />
+          <span dir={locale === "he" ? "rtl" : "ltr"} className="flex-1">
+            {task.completion_signal_reason || t("completionBanner")}
           </span>
         </div>
       )}
