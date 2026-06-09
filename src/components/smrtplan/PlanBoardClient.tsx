@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate, Undo2, Redo2 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
 import { useTimeline, COL_PX } from "@/lib/smrtplan/timeline";
 import { useGanttDrag, spanWidth } from "@/lib/smrtplan/useGanttDrag";
+import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanTaskGantt } from "./PlanTaskGantt";
@@ -193,87 +194,162 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
   // ── edit-mode mutations ────────────────────────────────────────────────────
 
+  // Undo/redo for every edit-mode action. Each mutation is recorded as a command
+  // (redo = the action, undo = its inverse); the first run goes through the same
+  // path as redo. histKeyOf/histResolve keep references stable across a
+  // create→undo→redo (which assigns a fresh server id).
+  const history = useHistory();
+  const { run: histRun, undo: histUndo, redo: histRedo, reset: histReset, resolve: histResolve, keyOf: histKeyOf, bind: histBind } = history;
+
+  const runCmd = useCallback(
+    (cmd: HistoryCmd) => histRun(cmd).catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
+    [histRun, load],
+  );
+  const doUndo = useCallback(
+    () => histUndo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
+    [histUndo, load],
+  );
+  const doRedo = useCallback(
+    () => histRedo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
+    [histRedo, load],
+  );
+
+  // Keyboard: ⌘/Ctrl+Z = undo, ⌘/Ctrl+Shift+Z or Ctrl+Y = redo (edit mode only,
+  // and never while typing in a field).
+  useEffect(() => {
+    if (!(editMode && canEdit)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k !== "z" && k !== "y") return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      e.preventDefault();
+      if (k === "y" || (k === "z" && e.shiftKey)) doRedo();
+      else doUndo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editMode, canEdit, doUndo, doRedo]);
+
   // Drag/resize a plan window → pin its start_date/end_date. The engine reruns
   // on the PATCH (autoRecompute) and fills everything we didn't touch.
   const commitPlanDates = useCallback(
     async (id: string, startOff: number, endOff: number) => {
+      const cur = plans.find((p) => p.id === id);
+      if (!cur) return;
+      const oldStart = cur.start_date;
+      const oldEnd = cur.end_date;
       const start_date = isoOf(dateAt(startOff));
       const end_date = isoOf(dateAt(Math.max(startOff, endOff)));
-      const before = plans;
-      // Optimistic: move the bar immediately, then reconcile with the server.
-      setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, start_date, end_date } : p)));
-      try {
-        await api(`/api/plans/${id}`, { method: "PATCH", body: { start_date, end_date } });
+      if (start_date === oldStart && end_date === oldEnd) return;
+      const key = histKeyOf(id);
+      const setDates = async (s: string | null, e: string | null) => {
+        const live = histResolve(key);
+        setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, start_date: s, end_date: e } : p)));
+        await api(`/api/plans/${live}`, { method: "PATCH", body: { start_date: s, end_date: e } });
         await load();
-      } catch (e) {
-        setPlans(before);
-        toast.error(e instanceof Error ? e.message : "Error");
-      }
+      };
+      await runCmd({ label: t("edit.actDates"), redo: () => setDates(start_date, end_date), undo: () => setDates(oldStart, oldEnd) });
     },
-    [dateAt, plans, load],
+    [plans, dateAt, load, histKeyOf, histResolve, runCmd, t],
   );
 
   const commitMilestoneDate = useCallback(
     async (id: string, startOff: number) => {
+      const cur = milestones.find((m) => m.id === id);
+      if (!cur) return;
+      const oldDate = cur.milestone_date;
       const milestone_date = isoOf(dateAt(startOff));
-      const before = milestones;
-      setMilestones((ms) => ms.map((m) => (m.id === id ? { ...m, milestone_date } : m)));
-      try {
-        await api(`/api/plan-milestones/${id}`, { method: "PATCH", body: { milestone_date } });
+      if (milestone_date === oldDate) return;
+      const key = histKeyOf(id);
+      const setDate = async (d: string) => {
+        const live = histResolve(key);
+        setMilestones((ms) => ms.map((m) => (m.id === live ? { ...m, milestone_date: d } : m)));
+        await api(`/api/plan-milestones/${live}`, { method: "PATCH", body: { milestone_date: d } });
         await load();
-      } catch (e) {
-        setMilestones(before);
-        toast.error(e instanceof Error ? e.message : "Error");
-      }
+      };
+      await runCmd({ label: t("edit.actMilestoneMove"), redo: () => setDate(milestone_date), undo: () => setDate(oldDate) });
     },
-    [dateAt, milestones, load],
+    [milestones, dateAt, load, histKeyOf, histResolve, runCmd, t],
   );
 
   const planDrag = useGanttDrag(tl, locale, trackRef, commitPlanDates);
   const msDrag = useGanttDrag(tl, locale, trackRef, (id, startOff) => commitMilestoneDate(id, startOff));
 
-  async function saveTitle(id: string, title: string) {
+  function saveTitle(id: string, title: string) {
     const trimmed = title.trim();
     setEditingTitleId(null);
     const cur = plans.find((p) => p.id === id);
     if (!trimmed || !cur || trimmed === cur.title_he) return;
-    setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, title_he: trimmed } : p)));
-    try {
-      await api(`/api/plans/${id}`, { method: "PATCH", body: { title_he: trimmed } });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
+    const oldTitle = cur.title_he;
+    const key = histKeyOf(id);
+    const setTitle = async (val: string) => {
+      const live = histResolve(key);
+      setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, title_he: val } : p)));
+      await api(`/api/plans/${live}`, { method: "PATCH", body: { title_he: val } });
       await load();
-    }
+    };
+    runCmd({ label: t("edit.actRename"), redo: () => setTitle(trimmed), undo: () => setTitle(oldTitle) });
   }
 
-  async function addMilestoneAt(planId: string | null, off: number) {
+  function newKey() {
+    return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
+  }
+
+  function addMilestoneAt(planId: string | null, off: number) {
     const label = window.prompt(t("edit.mLabel"));
     if (!label || !label.trim()) return;
-    try {
-      await api("/api/plans/milestones", {
+    const milestone_date = isoOf(dateAt(off));
+    const label_he = label.trim();
+    const key = newKey();
+    const create = async () => {
+      const { milestone } = await api<{ milestone: { id: string } }>("/api/plans/milestones", {
         method: "POST",
-        body: { milestone_date: isoOf(dateAt(off)), label_he: label.trim(), plan_id: planId },
+        body: { milestone_date, label_he, plan_id: planId },
       });
+      if (milestone?.id) histBind(key, milestone.id);
       await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
-    }
+    };
+    const remove = async () => {
+      await api(`/api/plan-milestones/${histResolve(key)}`, { method: "DELETE" });
+      await load();
+    };
+    runCmd({ label: t("edit.actMilestoneAdd"), redo: create, undo: remove });
   }
 
-  async function deleteMilestone(id: string) {
-    try {
-      await api(`/api/plan-milestones/${id}`, { method: "DELETE" });
+  function deleteMilestone(id: string) {
+    const m = milestones.find((x) => x.id === id);
+    if (!m) return;
+    const key = histKeyOf(id);
+    const remove = async () => {
+      await api(`/api/plan-milestones/${histResolve(key)}`, { method: "DELETE" });
       await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
-    }
+    };
+    const recreate = async () => {
+      const { milestone } = await api<{ milestone: { id: string } }>("/api/plans/milestones", {
+        method: "POST",
+        body: {
+          milestone_date: m.milestone_date,
+          label_he: m.label_he,
+          label_en: m.label_en,
+          color: m.color,
+          plan_id: m.plan_id,
+          constrains_user_id: m.constrains_user_id ?? null,
+        },
+      });
+      if (milestone?.id) histBind(key, milestone.id);
+      await load();
+    };
+    runCmd({ label: t("edit.actMilestoneDel"), redo: remove, undo: recreate });
   }
 
-  async function quickAddPlan(kind: "effort" | "stream", is_capability: boolean) {
+  function quickAddPlan(kind: "effort" | "stream", is_capability: boolean) {
     setAddRowOpen(false);
     const start = today;
     const end = new Date(today.getTime() + 14 * DAY_MS);
-    try {
+    const key = newKey();
+    const create = async () => {
       const { plan } = await api<{ plan: Plan }>("/api/plans", {
         method: "POST",
         body: {
@@ -285,14 +361,18 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           end_date: isoOf(end),
         },
       });
-      await load();
       if (plan?.id) {
+        histBind(key, plan.id);
         setSelectedId(plan.id);
         setEditingTitleId(plan.id);
       }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
-    }
+      await load();
+    };
+    const remove = async () => {
+      await api(`/api/plans/${histResolve(key)}`, { method: "DELETE" });
+      await load();
+    };
+    runCmd({ label: t("edit.actAddRow"), redo: create, undo: remove });
   }
 
   async function quickApplyTemplate(templateId: string) {
@@ -303,6 +383,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         body: { start_date: isoOf(today) },
       });
       await load();
+      // Applying a template isn't itself undoable; drop any stale redo history so
+      // a later Redo can't replay against the now-changed board.
+      histReset();
       if (plan?.id) setSelectedId(plan.id);
       toast.success(t("templates.applied"));
     } catch (e) {
@@ -418,6 +501,24 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         {canEdit && (
           <div className="ms-auto flex flex-wrap items-center gap-2">
             {editing && (
+              <ControlButton
+                onClick={doUndo}
+                disabled={!history.canUndo}
+                title={history.nextUndoLabel ? `${t("edit.undo")}: ${history.nextUndoLabel}` : t("edit.undo")}
+              >
+                <Undo2 className="h-3.5 w-3.5" /> {t("edit.undo")}
+              </ControlButton>
+            )}
+            {editing && (
+              <ControlButton
+                onClick={doRedo}
+                disabled={!history.canRedo}
+                title={history.nextRedoLabel ? `${t("edit.redo")}: ${history.nextRedoLabel}` : t("edit.redo")}
+              >
+                <Redo2 className="h-3.5 w-3.5" /> {t("edit.redo")}
+              </ControlButton>
+            )}
+            {editing && (
               <div className="relative">
                 <ControlButton onClick={() => setAddRowOpen((o) => !o)}>
                   <Plus className="h-3.5 w-3.5" /> {t("edit.addRow")}
@@ -457,7 +558,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               {recomputing ? t("recomputing") : t("recompute")}
             </ControlButton>
             <button
-              onClick={() => { setEditMode((v) => !v); setAddRowOpen(false); setEditingTitleId(null); }}
+              onClick={() => { setEditMode((v) => !v); setAddRowOpen(false); setEditingTitleId(null); histReset(); }}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-medium transition-colors",
                 editing ? "border-primary bg-primary text-primary-foreground" : "bg-card text-foreground hover:bg-accent",
@@ -1002,15 +1103,18 @@ function ControlButton({
   children,
   onClick,
   disabled,
+  title,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className="inline-flex items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
     >
       {children}

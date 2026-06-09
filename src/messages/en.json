@@ -2039,7 +2039,15 @@
       "editHint": "Edit mode: drag a bar to move it, pull the edges to change date/length, click a title to rename, click an empty row to add a milestone, or add a new row.",
       "addRow": "Add row",
       "pickKind": "Row kind",
-      "newRowTitle": "New row"
+      "newRowTitle": "New row",
+      "undo": "Undo",
+      "redo": "Redo",
+      "actDates": "Change dates",
+      "actMilestoneMove": "Move milestone",
+      "actMilestoneAdd": "Add milestone",
+      "actMilestoneDel": "Delete milestone",
+      "actRename": "Rename",
+      "actAddRow": "Add row"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
