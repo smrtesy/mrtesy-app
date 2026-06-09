@@ -907,7 +907,26 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 const PLAN_TASK_WRITABLE = new Set([
   "title", "title_he", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
+  "task_materials",
 ]);
+
+// Lightweight validation for task_materials (links/notes attached to a task),
+// mirroring the smrtTask route's rules: typed items with id + title, size-capped.
+const MATERIAL_TYPES = new Set(["note", "link", "file", "contact"]);
+function validateTaskMaterials(value: unknown): string | null {
+  if (!Array.isArray(value)) return "task_materials must be an array";
+  if (value.length > 200) return "task_materials exceeds 200 items";
+  if (JSON.stringify(value).length > 64 * 1024) return "task_materials exceeds size limit";
+  for (let i = 0; i < value.length; i++) {
+    const it = value[i] as Record<string, unknown> | null;
+    if (!it || typeof it !== "object") return `task_materials[${i}] must be an object`;
+    if (typeof it.id !== "string" || !it.id) return `task_materials[${i}].id required`;
+    if (typeof it.type !== "string" || !MATERIAL_TYPES.has(it.type)) return `task_materials[${i}].type invalid`;
+    if (typeof it.title !== "string") return `task_materials[${i}].title must be a string`;
+    if (it.url !== undefined && typeof it.url !== "string") return `task_materials[${i}].url must be a string`;
+  }
+  return null;
+}
 // Fields that change the schedule graph — only these need an engine recompute.
 // A title/status edit returns immediately (no org-wide reschedule). assignee is
 // included because an estimated-hours task's duration = hours / that person's
@@ -920,6 +939,10 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     if (PLAN_TASK_WRITABLE.has(k)) patch[k] = v;
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  if ("task_materials" in patch) {
+    const err = validateTaskMaterials(patch.task_materials);
+    if (err) return res.status(400).json({ error: err });
+  }
   // Scope to a task that actually belongs to a plan in this org.
   const { data, error } = await db
     .from("tasks")
@@ -927,7 +950,7 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .not("plan_id", "is", null)
-    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id")
+    .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id, task_materials")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
