@@ -2190,7 +2190,19 @@
       "emptyBlocked": "Nothing blocked",
       "emptyDone": "Nothing completed yet",
       "complete": "Done",
-      "noTasks": "You have no plan tasks yet"
+      "reopen": "Reopen",
+      "noTasks": "You have no plan tasks yet",
+      "detail": {
+        "description": "Description",
+        "noDescription": "No description",
+        "materials": "Materials & files",
+        "checklist": "Checklist",
+        "subtasks": "Subtasks",
+        "source": "Source message",
+        "edit": "Edit",
+        "save": "Save",
+        "cancel": "Cancel"
+      }
     },
     "cell": {
       "title": "Matrix cell",

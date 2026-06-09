@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
+import { TaskDetailDialog } from "./TaskDetailDialog";
 
 interface Member {
   user_id: string;
@@ -26,6 +27,8 @@ export function TeamViewClient({ locale }: { locale: string }) {
   const [userId, setUserId] = useState<string>("");
   const [tasks, setTasks] = useState<PlanZoneTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const today = new Date();
 
   useEffect(() => {
@@ -35,20 +38,40 @@ export function TeamViewClient({ locale }: { locale: string }) {
         if (r.members?.length) setUserId(r.members[0].user_id);
       })
       .catch((e) => toast.error(e instanceof Error ? e.message : "Error"));
+    api<{ access_level: string }>("/api/plans/access")
+      .then((r) => setCanEdit(r.access_level === "full"))
+      .catch(() => setCanEdit(false));
   }, []);
+
+  const load = useCallback(async () => {
+    if (!userId) return;
+    const { tasks } = await api<{ tasks: PlanZoneTask[] }>(`/api/plan/worker-tasks/${userId}`);
+    setTasks(tasks ?? []);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
     let alive = true;
     setLoading(true);
-    api<{ tasks: PlanZoneTask[] }>(`/api/plan/worker-tasks/${userId}`)
-      .then((r) => alive && setTasks(r.tasks ?? []))
-      .catch((e) => toast.error(e instanceof Error ? e.message : "Error"))
+    load()
+      .catch((e) => alive && toast.error(e instanceof Error ? e.message : "Error"))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [userId]);
+  }, [userId, load]);
+
+  // ✓ / un-✓ — the server allows the assignee, full access, or super-admin.
+  async function toggle(id: string, done: boolean) {
+    setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, status: done ? "completed" : "inbox" } : x)));
+    try {
+      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done } });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      await load();
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -77,8 +100,23 @@ export function TeamViewClient({ locale }: { locale: string }) {
           {t("team.empty")}
         </div>
       ) : (
-        <TaskZones tasks={tasks} locale={locale} today={today} />
+        <TaskZones
+          tasks={tasks}
+          locale={locale}
+          today={today}
+          onToggle={toggle}
+          onOpen={(tk) => setOpenTaskId(tk.id)}
+        />
       )}
+
+      <TaskDetailDialog
+        taskId={openTaskId}
+        open={!!openTaskId}
+        onClose={() => setOpenTaskId(null)}
+        locale={locale}
+        canEdit={canEdit}
+        onChanged={() => void load()}
+      />
     </div>
   );
 }
