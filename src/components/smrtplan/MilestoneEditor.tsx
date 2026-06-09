@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,9 @@ interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+  display_name: string | null;
 }
-const memberName = (m: Member) => m.name || m.email || m.user_id.slice(0, 6);
+const memberName = (m: Member) => personLabel(m);
 
 const fieldCls =
   "rounded-md border border-input bg-background px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";

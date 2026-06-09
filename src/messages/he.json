@@ -796,7 +796,8 @@
     "revokeInviteConfirm": "לבטל את ההזמנה?",
     "appsLabel": "אפליקציות",
     "allApps": "כל האפליקציות",
-    "memberAppsSaveFailed": "המשתמש נוסף אך הקצאת האפליקציות נכשלה, נסה שוב"
+    "memberAppsSaveFailed": "המשתמש נוסף אך הקצאת האפליקציות נכשלה, נסה שוב",
+    "displayName": "שם לתצוגה"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",

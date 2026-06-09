@@ -47,7 +47,7 @@ async function resolveOrgApps(orgId: string, slugs: unknown): Promise<{ id: stri
 router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("org_members")
-    .select("user_id, role, joined_at, invited_by")
+    .select("user_id, role, joined_at, invited_by, display_name")
     .eq("org_id", req.org!.id)
     .order("joined_at", { ascending: true });
 
@@ -83,11 +83,34 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
     invited_by: m.invited_by,
     email: userMap.get(m.user_id)?.email ?? null,
     name: userMap.get(m.user_id)?.name ?? null,
+    display_name: (m.display_name as string | null) ?? null,
     app_slugs: slugsByUser.get(m.user_id as string) ?? [],
   }));
 
   res.json({ members });
 });
+
+/** PATCH /org/members/:userId/display-name — org owner/admin sets a member's
+ *  per-org display name (blank clears it → falls back to first name / email). */
+router.patch("/org/members/:userId/display-name",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const raw = (req.body ?? {}).display_name;
+    if (raw !== null && typeof raw !== "string") {
+      return res.status(400).json({ error: "display_name must be a string or null" });
+    }
+    const display_name = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+    const { data, error } = await db
+      .from("org_members")
+      .update({ display_name })
+      .eq("org_id", req.org!.id)
+      .eq("user_id", req.params.userId)
+      .select("user_id, display_name")
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "member not found" });
+    res.json({ member: data });
+  });
 
 /**
  * POST /org/members — add a member by email, optionally with a set of apps.

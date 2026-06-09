@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle, X, Trash2 } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import type { Plan } from "@/types/plan";
 import type { TaskNeed } from "@/types/task";
@@ -44,12 +45,13 @@ interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+  display_name: string | null;
 }
 function newKey(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
 }
 function memberName(m: Member): string {
-  return m.name || m.email || m.user_id.slice(0, 6);
+  return personLabel(m);
 }
 
 /** The keyboard-navigable, inline-editable columns (in display order). */

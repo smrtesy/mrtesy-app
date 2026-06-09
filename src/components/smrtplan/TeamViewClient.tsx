@@ -4,15 +4,17 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
 
 interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+  display_name: string | null;
 }
 function memberName(m: Member) {
-  return m.name || m.email || m.user_id.slice(0, 6);
+  return personLabel(m);
 }
 
 const fieldCls =

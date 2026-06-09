@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Check, Pencil, Plus, Star, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -26,13 +27,14 @@ interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+  display_name: string | null;
 }
 
 const COLORS = ["#534AB7", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#6B7280"];
 
 function memberName(m: Member | undefined, userId: string): string {
   if (!m) return userId.slice(0, 6);
-  return m.name || m.email || m.user_id.slice(0, 6);
+  return personLabel(m);
 }
 
 export function RolesEditor({ open, onClose }: { open: boolean; onClose: () => void }) {

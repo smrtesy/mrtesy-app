@@ -796,7 +796,8 @@
     "revokeInviteConfirm": "Revoke this invitation?",
     "appsLabel": "Apps",
     "allApps": "All apps",
-    "memberAppsSaveFailed": "Member added, but saving app access failed — try again"
+    "memberAppsSaveFailed": "Member added, but saving app access failed — try again",
+    "displayName": "Display name"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",

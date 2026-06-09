@@ -10,6 +10,8 @@ export interface OrgMember {
   invited_by: string | null;
   email: string | null;
   name: string | null;
+  /** Per-org display name set by an admin (overrides the auth name in views). */
+  display_name: string | null;
   /** App slugs explicitly granted to this user (only enforced for role='member'). */
   app_slugs: string[];
 }

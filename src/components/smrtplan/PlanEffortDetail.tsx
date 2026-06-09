@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { ArrowRight, CheckCircle2, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
@@ -19,9 +20,10 @@ interface Member {
   user_id: string;
   email: string | null;
   name: string | null;
+  display_name: string | null;
 }
 function memberName(m: Member): string {
-  return m.name || m.email || m.user_id.slice(0, 6);
+  return personLabel(m);
 }
 
 function taskTitle(t: PlanTask, locale: string) {

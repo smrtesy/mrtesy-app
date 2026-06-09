@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -40,7 +41,7 @@ export function PlanEditDialog({
 }) {
   const t = useTranslations("smrtPlan");
   const te = useTranslations("smrtPlan.edit");
-  const [members, setMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
+  const [members, setMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null; display_name: string | null }>>([]);
   const [form, setForm] = useState({
     title_he: "",
     title_en: "",
@@ -195,7 +196,7 @@ export function PlanEditDialog({
             <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
               <option value="">{te("unassigned")}</option>
               {members.map((m) => (
-                <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id.slice(0, 6)}</option>
+                <option key={m.user_id} value={m.user_id}>{personLabel(m)}</option>
               ))}
             </select>
           </Field>

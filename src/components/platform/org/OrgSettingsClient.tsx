@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X } from "lucide-react";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
+import { personLabel } from "@/lib/smrtplan/people";
 import { useOrgInvites } from "@/lib/api/use-org-invites";
 import { useOrgApps } from "@/lib/api/use-org-apps";
 import { api } from "@/lib/api/client";
@@ -154,6 +155,15 @@ export function OrgSettingsClient() {
       toast.error((e as Error).message);
     } finally {
       setEditingAppsFor(null);
+    }
+  }
+
+  async function handleSaveDisplayName(userId: string, value: string) {
+    try {
+      await api(`/api/org/members/${userId}/display-name`, { method: "PATCH", body: { display_name: value.trim() || null } });
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   }
 
@@ -317,9 +327,21 @@ export function OrgSettingsClient() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate">{m.email || m.name || "—"}</div>
-                        <div className="text-xs text-muted-foreground flex items-center gap-1 min-w-0">
-                          {m.name && m.email && <span className="truncate">{m.name}</span>}
-                          {m.name && m.email && <span>·</span>}
+                        <div className="text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
+                          {m.name && <span className="truncate max-w-[100px]">{m.name}</span>}
+                          {canManage ? (
+                            <input
+                              defaultValue={m.display_name ?? ""}
+                              placeholder={personLabel(m)}
+                              dir="rtl"
+                              title={tOrg("displayName")}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                              onBlur={(e) => { if ((e.target.value.trim() || null) !== (m.display_name ?? null)) handleSaveDisplayName(m.user_id, e.target.value); }}
+                              className="h-6 w-24 shrink-0 rounded border bg-background px-1.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          ) : (
+                            <span className="truncate font-medium text-foreground/80">{personLabel(m)}</span>
+                          )}
                           <code className="font-mono text-[10px] opacity-60 shrink-0">{m.user_id.slice(0, 8)}</code>
                         </div>
                       </div>
