@@ -389,7 +389,8 @@
       "constrainedHint": "A plan constraint pulled the deadline earlier",
       "dialogTitle": "Due date",
       "clear": "Remove date",
-      "save": "Save"
+      "save": "Save",
+      "noDateHint": "Add a due date"
     },
     "row": {
       "blockedHint": "Waiting for: {titles}",
@@ -929,7 +930,8 @@
     "contextNone": "None",
     "contextHome": "Home",
     "contextWork": "Work",
-    "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board"
+    "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board",
+    "savedFlash": "Saved ✓"
   },
   "orgSwitcher": {
     "orgCreated": "Organization created",
@@ -2431,7 +2433,9 @@
     "handoff": "Hands off to",
     "startBy": "Start by",
     "finishBy": "Finish by",
-    "openBoard": "Open the planning board"
+    "openBoard": "Open the planning board",
+    "addCorrection": "Add a note/correction",
+    "addCorrectionHint": "Saved as a correction — included in the log's corrections export"
   },
   "marathon": {
     "progress": "{done} of {total}",

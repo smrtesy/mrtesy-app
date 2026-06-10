@@ -3,11 +3,12 @@
 import { useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { Sparkles, ClipboardList, ExternalLink, CheckCircle2, Clock, ArrowLeft } from "lucide-react";
+import { Sparkles, ClipboardList, ExternalLink, CheckCircle2, Clock, ArrowLeft, MessageSquarePlus } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
 
 /**
@@ -34,6 +35,12 @@ interface TrailResponse {
   log: {
     classification_reason: string | null;
     ai_classification: string | null;
+    ai_model_used: string | null;
+    ai_input_tokens: number | null;
+    ai_output_tokens: number | null;
+    ai_cost_usd: number | null;
+    status: string | null;
+    error_message: string | null;
   } | null;
 }
 
@@ -75,6 +82,9 @@ export function ContextButton({
   const [plan, setPlan] = useState<PlanDetailResponse["task"] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Add a correction" — the SAME flow as the log page: a note + scope saved
+  // to task_corrections, picked up by the log's corrections export.
+  const [correctionDraft, setCorrectionDraft] = useState<CorrectionDraft | null>(null);
 
   const toggle = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -133,9 +143,48 @@ export function ContextButton({
             <PlanPanelBody plan={plan} locale={locale} t={t} />
           )}
 
+          {kind === "ai" && trail && (
+            <div className="pt-1 border-t border-border/40">
+              <button
+                type="button"
+                onClick={() =>
+                  setCorrectionDraft({
+                    source_message_id: task.source_message_id,
+                    task_id: task.id,
+                    log_entry_id: null,
+                    correction_type: "note",
+                    field: null,
+                    old_value: null,
+                    new_value: null,
+                    context: {
+                      source: "context_panel",
+                      task_title: task.title_he || task.title,
+                      classification: trail.log?.ai_classification ?? null,
+                      classification_reason: trail.log?.classification_reason ?? null,
+                      subject: trail.source?.subject ?? null,
+                      sender: trail.source?.sender || trail.source?.sender_email || null,
+                    },
+                  })
+                }
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+                {t("addCorrection")}
+              </button>
+              <span className="ms-2 text-[10px] text-muted-foreground/70">{t("addCorrectionHint")}</span>
+            </div>
+          )}
+
           {footer && <div className="pt-1 border-t border-border/40">{footer}</div>}
         </div>
       )}
+
+      <CorrectionDialog
+        open={!!correctionDraft}
+        draft={correctionDraft}
+        onClose={() => setCorrectionDraft(null)}
+        onSaved={() => setCorrectionDraft(null)}
+      />
     </>
   );
 }
@@ -178,6 +227,20 @@ function AIPanelBody({
         <div>
           <span className="text-muted-foreground/70">{t("reason")}: </span>
           <p className="mt-0.5 whitespace-pre-wrap leading-relaxed">{log.classification_reason}</p>
+        </div>
+      )}
+      {log?.error_message && (
+        <div className="rounded bg-status-late-bg p-2 text-status-late">{log.error_message}</div>
+      )}
+      {/* Scan technicals — same row the log page shows. */}
+      {(log?.ai_model_used || log?.ai_cost_usd != null || log?.status) && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 border-t border-border/40 pt-1 text-[10px] text-muted-foreground/70" dir="ltr">
+          {log.ai_model_used && <span>{log.ai_model_used}</span>}
+          {(log.ai_input_tokens || log.ai_output_tokens) && (
+            <span>{log.ai_input_tokens ?? 0}+{log.ai_output_tokens ?? 0} tok</span>
+          )}
+          {log.ai_cost_usd != null && <span>${Number(log.ai_cost_usd).toFixed(5)}</span>}
+          {log.status && <span>{log.status}</span>}
         </div>
       )}
     </>

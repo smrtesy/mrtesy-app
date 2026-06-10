@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CalendarPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
 import { dueUrgency, type BlockedDays, type DueUrgency } from "@/lib/workdays";
@@ -51,10 +52,6 @@ export function DueDateChip({
   const urgency = deadline ? dueUrgency(deadline, blocked) : null;
   const editable = !!onChange && !locked;
 
-  const label = deadline
-    ? formatDateOnly(deadline, locale, { day: "numeric", month: "short" })
-    : t("noDate");
-
   function open(e: React.MouseEvent) {
     e.stopPropagation();
     if (!editable) return;
@@ -69,25 +66,43 @@ export function DueDateChip({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={open}
-        disabled={!editable}
-        title={locked ? t("lockedHint") : editable ? t("editHint") : undefined}
-        className={cn(
-          "shrink-0 whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-semibold",
-          urgency ? urgencyClasses[urgency] : "bg-secondary text-muted-foreground",
-          editable && "cursor-pointer hover:ring-1 hover:ring-border",
-          !editable && "cursor-default",
-          className,
-        )}
-      >
-        {urgency === "overdue" && <span className="me-0.5">!</span>}
-        {label}
-        {constrained && (
-          <span className="ms-1 text-status-late" title={t("constrainedHint")}>⚠</span>
-        )}
-      </button>
+      {deadline ? (
+        <button
+          type="button"
+          onClick={open}
+          disabled={!editable}
+          title={locked ? t("lockedHint") : editable ? t("editHint") : undefined}
+          className={cn(
+            "shrink-0 whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-semibold",
+            urgency ? urgencyClasses[urgency] : "bg-secondary text-muted-foreground",
+            editable && "cursor-pointer hover:ring-1 hover:ring-border",
+            !editable && "cursor-default",
+            className,
+          )}
+        >
+          {formatDateOnly(deadline, locale, { day: "numeric", month: "short" })}
+          {constrained && (
+            <span className="ms-1 text-status-late" title={t("constrainedHint")}>⚠</span>
+          )}
+        </button>
+      ) : (
+        /* No date — a quiet, low-key calendar icon; click adds one. */
+        <button
+          type="button"
+          onClick={open}
+          disabled={!editable}
+          title={editable ? t("noDateHint") : t("noDate")}
+          aria-label={t("noDate")}
+          className={cn(
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/30 transition-colors",
+            editable && "cursor-pointer hover:text-muted-foreground hover:bg-accent",
+            !editable && "cursor-default",
+            className,
+          )}
+        >
+          <CalendarPlus className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       <Dialog open={editing} onOpenChange={(o) => !o && setEditing(false)}>
         <DialogContent className="sm:max-w-xs" onClick={(e) => e.stopPropagation()}>

@@ -22,23 +22,19 @@ import {
   ExternalLink,
   Pencil,
   X,
-  Folder,
+  Home,
   Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
-import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
-import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
-import { AITrail } from "@/components/smrttask/common/AITrail";
+import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
-import { ProjectCombobox } from "@/components/smrttask/tasks/ProjectCombobox";
-import type { ProjectOption } from "@/components/smrttask/tasks/ProjectCombobox";
 import type { Task } from "@/types/task";
 
 interface TaskDetailProps {
@@ -54,7 +50,9 @@ interface TaskDetailProps {
   initialEditingFields?: boolean;
 }
 
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onQuickAction, onDriveSearch, initialEditingFields }: TaskDetailProps) {
+// onQuickAction is accepted (and ignored) while the AI-actions section is
+// hidden — callers stay unchanged for when the feature returns.
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onDriveSearch, initialEditingFields }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
@@ -65,21 +63,25 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [editingDesc, setEditingDesc] = useState(false);
   const [description, setDescription] = useState("");
 
-  // Task field edit
+  // Task field edit — autosaved (debounced); no save buttons anywhere.
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [editPriority, setEditPriority] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editStatus, setEditStatus] = useState("");
   const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
-  const [editContext, setEditContext] = useState<"" | "home" | "work">("");
-  const [editProjectId, setEditProjectId] = useState("");
+  const [editContext, setEditContext] = useState<"" | "home">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
-  const [selectorProjects, setSelectorProjects] = useState<ProjectOption[]>([]);
   const [selectorMembers, setSelectorMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
+  /** Tiny "saved ✓" flash after an autosave lands. */
+  const [savedFlash, setSavedFlash] = useState(false);
+  /** Suppresses the autosave effect while the form is being (re)seeded. */
+  const seedingRef = useRef(false);
+  const fieldsTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const descTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  /** True once any autosave happened — the parent list refreshes on close. */
+  const dirtyRef = useRef(false);
 
-  const [saving, setSaving] = useState(false);
   const [newUpdate, setNewUpdate] = useState("");
   const [addingUpdate, setAddingUpdate] = useState(false);
   /** IDs of update entries the user clicked to expand. Long content is
@@ -124,6 +126,62 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }
   }, [task?.id]);
 
+  /** Debounced autosave of the field editor — fires ~1.2s after the last
+   *  change. Deliberately does NOT call onUpdate() per save (a list refetch
+   *  mid-typing would snap the form back); the parent refreshes on close. */
+  useEffect(() => {
+    if (!editingFields || seedingRef.current || !task) return;
+    if (fieldsTimerRef.current) clearTimeout(fieldsTimerRef.current);
+    const taskId = task.id;
+    const isPlan = !!task.plan_id;
+    fieldsTimerRef.current = setTimeout(async () => {
+      const body: Record<string, unknown> = {
+        status: editStatus,
+        size: editSize,
+        context: editContext || null,
+        assigned_to_user_id: editAssignedTo || null,
+      };
+      // Plan-task deadlines belong to the plan manager (set via the planning
+      // board); the input is disabled in the UI and skipped here as a backstop.
+      if (!isPlan) body.due_date = editDueDate || null;
+      if (editTitle.trim()) {
+        if (locale === "he") body.title_he = editTitle.trim();
+        else                 body.title = editTitle.trim();
+      }
+      try {
+        const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body });
+        dirtyRef.current = true;
+        if (fresh) setLiveTask(fresh);
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Error");
+      }
+    }, 1200);
+    return () => { if (fieldsTimerRef.current) clearTimeout(fieldsTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTitle, editStatus, editSize, editContext, editDueDate, editAssignedTo, editingFields]);
+
+  /** Debounced autosave for the description — same contract as the fields. */
+  useEffect(() => {
+    if (!editingDesc || !task) return;
+    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    const taskId = task.id;
+    descTimerRef.current = setTimeout(async () => {
+      try {
+        const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body: { description } });
+        dirtyRef.current = true;
+        if (fresh) setLiveTask(fresh);
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Error");
+      }
+    }, 1200);
+    return () => { if (descTimerRef.current) clearTimeout(descTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [description, editingDesc]);
+
   if (!task) return null;
 
   // Resolve which view of the task we're rendering. liveTask wins when
@@ -153,22 +211,16 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
 
   async function startFieldEdit() {
     if (!task) return;
+    seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
-    setEditPriority(task.priority);
     setEditDueDate(task.due_date || "");
     setEditStatus(task.status);
     setEditSize(task.size === "quick" ? "quick" : "regular");
-    setEditContext(task.context === "home" || task.context === "work" ? task.context : "");
-    setEditProjectId(task.project_id || "");
+    setEditContext(task.context === "home" ? "home" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
-    // Fetch projects + org members for selectors (cached after first open)
-    if (selectorProjects.length === 0) {
-      try {
-        const { projects } = await api<{ projects: ProjectOption[] }>("/api/projects");
-        setSelectorProjects(projects ?? []);
-      } catch { /* ignore — ProjectCombobox fetches its own data if list is empty */ }
-    }
+    // Let the seeded values settle before the autosave watcher arms.
+    requestAnimationFrame(() => { seedingRef.current = false; });
     if (selectorMembers.length === 0) {
       try {
         const { members } = await api<{ members: Array<{ user_id: string; email: string | null; name: string | null }> }>("/api/org/members");
@@ -177,51 +229,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }
   }
 
-  async function saveFieldEdit() {
-    if (!task) return;
-    setSaving(true);
-
-    const body: Record<string, unknown> = {
-      priority: editPriority,
-      status: editStatus,
-      size: editSize,
-      context: editContext || null,
-      project_id: editProjectId || null,
-      assigned_to_user_id: editAssignedTo || null,
-    };
-    // Plan-task deadlines belong to the plan manager (set via the planning
-    // board); the input is disabled in the UI and skipped here as a backstop.
-    if (!task.plan_id) body.due_date = editDueDate || null;
-    if (locale === "he") body.title_he = editTitle;
-    else                 body.title = editTitle;
-    // Manually linking a project → mark as 100% confident
-    if (editProjectId && editProjectId !== task.project_id) body.project_confidence = 1;
-
-    try {
-      await api(`/api/tasks/${task.id}`, { method: "PATCH", body });
-      toast.success(tCommon("save"));
-      setEditingFields(false);
+  function handleDialogClose() {
+    // One list refresh for the whole edit session, after typing is done.
+    if (dirtyRef.current) {
+      dirtyRef.current = false;
       onUpdate();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
-    } finally {
-      setSaving(false);
     }
-  }
-
-  async function handleDescSave() {
-    if (!task) return;
-    setSaving(true);
-    try {
-      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { description } });
-      toast.success(t("detail.description"));
-      setEditingDesc(false);
-      onUpdate();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error");
-    } finally {
-      setSaving(false);
-    }
+    onClose();
   }
 
   async function handleComplete() {
@@ -287,7 +301,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const dir = locale === "he" ? "rtl" : "ltr";
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && handleDialogClose()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
@@ -308,40 +322,21 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         >
           {/* Sticky header */}
           <div className="sticky top-0 z-10 bg-background border-b px-4 py-3">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
-              <div className="flex items-center gap-1 shrink-0">
-                <IconButton label={tCommon("edit")} color="primary" onClick={startFieldEdit}>
-                  <Pencil />
-                </IconButton>
-                <IconButton label={tCommon("close")} color="neutral" onClick={onClose}>
-                  <X />
-                </IconButton>
-              </div>
-            </div>
-            {/* Serial + source + linked project — all sourced from the joined data */}
-            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-              <SerialBadge serial={task.serial_display} />
-              <SourceLink source={task.source_messages} />
-              {task.projects && (() => {
-                const proj = task.projects!;
-                const projName = locale === "he" && proj.name_he ? proj.name_he : proj.name;
-                const parentProj = proj.parent_id
-                  ? selectorProjects.find((p) => p.id === proj.parent_id)
-                  : null;
-                return (
-                  <span
-                    className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
-                    style={proj.color ? { borderColor: proj.color, color: proj.color } : undefined}
-                  >
-                    <Folder className="h-3 w-3" />
-                    {parentProj && (
-                      <><span className="opacity-60">{locale === "he" && parentProj.name_he ? parentProj.name_he : parentProj.name}</span><span className="opacity-60">/</span></>
-                    )}
-                    {projName}
-                  </span>
-                );
-              })()}
+              {savedFlash && (
+                <span className="text-[10px] text-status-ok">{tDetail("savedFlash")}</span>
+              )}
+              {/* The same context icon as the rows outside — serial, source
+                  and AI reasoning all live inside its panel (it wraps to a
+                  full-width row below when open). */}
+              <ContextButton task={effectiveTask} locale={locale} />
+              <IconButton label={tCommon("edit")} color="primary" onClick={startFieldEdit}>
+                <Pencil />
+              </IconButton>
+              <IconButton label={tCommon("close")} color="neutral" onClick={handleDialogClose}>
+                <X />
+              </IconButton>
             </div>
           </div>
 
@@ -376,121 +371,106 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               box. */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 overscroll-contain">
             <div className="space-y-4">
-              {/* AI trail — collapsed by default; lazy-fetched on first open.
-                  Only shown for AI-sourced tasks (manual tasks have no trail). */}
-              {task.source_message_id && (
-                <AITrail taskId={task.id} />
-              )}
-
-              {/* Field Editing */}
+              {/* Field editing — compact, autosaved. Same icons and toggles
+                  as the rows outside; no save button (debounced autosave). */}
               {editingFields && (
-                <div className="space-y-3 rounded-lg border p-3 bg-muted/50">
-                  <div>
-                    <label className="text-xs font-medium">{tDetail("titleLabel")}</label>
-                    <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} dir={dir} />
+                <div className="space-y-2 rounded-lg border p-2.5 bg-muted/50" dir={dir}>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      dir={dir}
+                      className="h-8 flex-1 text-sm"
+                      placeholder={tDetail("titleLabel")}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEditingFields(false)}
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
+                      aria-label={tCommon("close")}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs font-medium">{tDetail("priorityLabel")}</label>
-                      <select
-                        value={editPriority}
-                        onChange={(e) => setEditPriority(e.target.value)}
-                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* ⚡/רגיל — the same segmented toggle as the new-task form */}
+                    <div className="flex rounded-lg border p-0.5 bg-background">
+                      <button
+                        type="button"
+                        onClick={() => setEditSize("quick")}
+                        className={cn(
+                          "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                          editSize === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
+                        )}
                       >
-                        <option value="urgent">{t("priority.urgent")}</option>
-                        <option value="high">{t("priority.high")}</option>
-                        <option value="medium">{t("priority.medium")}</option>
-                        <option value="low">{t("priority.low")}</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium">{tDetail("statusLabel")}</label>
-                      <select
-                        value={editStatus}
-                        onChange={(e) => setEditStatus(e.target.value)}
-                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                        <Zap className="h-3 w-3" />
+                        {t("row.sizeQuick")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditSize("regular")}
+                        className={cn(
+                          "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                          editSize === "regular" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                        )}
                       >
-                        <option value="inbox">{t("inbox")}</option>
-                        <option value="in_progress">{t("active")}</option>
-                        <option value="snoozed">{t("actions.snooze")}</option>
-                        <option value="archived">{t("archived")}</option>
-                        <option value="dismissed">{t("dismissed")}</option>
-                      </select>
+                        {t("row.sizeRegular")}
+                      </button>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs font-medium">{tDetail("sizeLabel")}</label>
-                      <select
-                        value={editSize}
-                        onChange={(e) => setEditSize(e.target.value as "quick" | "regular")}
-                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-                      >
-                        <option value="quick">{t("row.sizeQuick")}</option>
-                        <option value="regular">{t("row.sizeRegular")}</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium">{tDetail("contextLabel")}</label>
-                      <select
-                        value={editContext}
-                        onChange={(e) => setEditContext(e.target.value as "" | "home" | "work")}
-                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-                      >
-                        <option value="">{tDetail("contextNone")}</option>
-                        <option value="home">{tDetail("contextHome")}</option>
-                        <option value="work">{tDetail("contextWork")}</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium">{tDetail("dueDateLabel")}</label>
+
+                    {/* 🏠 — the same icon toggle as the rows outside */}
+                    <button
+                      type="button"
+                      onClick={() => setEditContext(editContext === "home" ? "" : "home")}
+                      title={tDetail("contextHome")}
+                      aria-pressed={editContext === "home"}
+                      className={cn(
+                        "flex h-7 w-7 items-center justify-center rounded-md border transition-colors",
+                        editContext === "home"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "bg-background text-muted-foreground/50 hover:text-muted-foreground",
+                      )}
+                    >
+                      <Home className="h-3.5 w-3.5" />
+                    </button>
+
                     <Input
                       type="date"
                       value={editDueDate}
                       onChange={(e) => setEditDueDate(e.target.value)}
                       disabled={!!task.plan_id}
-                      title={task.plan_id ? tDetail("dueDateLockedHint") : undefined}
+                      title={task.plan_id ? tDetail("dueDateLockedHint") : tDetail("dueDateLabel")}
+                      className="h-7 w-36 px-2 text-xs"
+                      dir="ltr"
                     />
-                    {task.plan_id && (
-                      <p className="mt-0.5 text-[11px] text-muted-foreground" dir="auto">{tDetail("dueDateLockedHint")}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium">{tDetail("projectLabel")}</label>
-                    <ProjectCombobox
-                      value={editProjectId}
-                      onChange={setEditProjectId}
-                      locale={locale}
-                      initialProjects={selectorProjects}
-                      onProjectCreated={(p) => setSelectorProjects((prev) => [...prev, p])}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium">{tDetail("assignedToLabel")}</label>
+
+                    <select
+                      value={editStatus}
+                      onChange={(e) => setEditStatus(e.target.value)}
+                      className="h-7 rounded border px-1.5 text-xs bg-background"
+                      title={tDetail("statusLabel")}
+                    >
+                      <option value="inbox">{t("inbox")}</option>
+                      <option value="in_progress">{t("active")}</option>
+                      <option value="snoozed">{t("actions.snooze")}</option>
+                      <option value="archived">{t("archived")}</option>
+                      <option value="dismissed">{t("dismissed")}</option>
+                    </select>
+
                     <select
                       value={editAssignedTo}
                       onChange={(e) => setEditAssignedTo(e.target.value)}
-                      className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                      className="h-7 max-w-40 rounded border px-1.5 text-xs bg-background"
+                      title={tDetail("assignedToLabel")}
                     >
                       <option value="">{tDetail("unassignedOption")}</option>
                       {selectorMembers.map((m) => (
                         <option key={m.user_id} value={m.user_id}>
-                          {m.email
-                            ? m.name ? `${m.email} (${m.name})` : m.email
-                            : m.name || m.user_id.slice(0, 8)}
+                          {m.name || m.email || m.user_id.slice(0, 8)}
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={saveFieldEdit} disabled={saving} className="gap-1">
-                      <Save className="h-3 w-3" />
-                      {saving ? "..." : tDetail("saveButton")}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setEditingFields(false)}>
-                      <X className="h-3 w-3" />
-                    </Button>
                   </div>
                 </div>
               )}
@@ -521,22 +501,22 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                     )}
                   </div>
                   {editingDesc ? (
-                    <div className="space-y-2">
+                    <div className="space-y-1">
                       <Textarea
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         className="min-h-[120px]"
                         dir={dir}
+                        autoFocus
                       />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleDescSave} disabled={saving} className="gap-1">
-                          <Save className="h-3 w-3" />
-                          {saving ? "..." : tDetail("saveButton")}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingDesc(false)}>
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
+                      {/* Autosaved (debounced) — no save button. */}
+                      <button
+                        type="button"
+                        onClick={() => setEditingDesc(false)}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        {tCommon("close")}
+                      </button>
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap text-sm" dir={dir}>
@@ -638,25 +618,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 onChange={onUpdate}
               />
 
-              <Separator />
-
-              {/* AI Actions — functional */}
-              {task.ai_actions && task.ai_actions.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {task.ai_actions.map((action, i) => (
-                    <Button
-                      key={i}
-                      variant="outline"
-                      size="sm"
-                      className="gap-1"
-                      onClick={() => onQuickAction?.(task.id, action)}
-                    >
-                      <Zap className="h-3 w-3" />
-                      {translateActionLabel(action.label, tActions)}
-                    </Button>
-                  ))}
-                </div>
-              )}
+              {/* AI action buttons ("משימות לביצוע") are hidden for now —
+                  the feature still needs development. Restore from git
+                  history (translateActionLabel + onQuickAction) when ready. */}
 
               {/* Updates moved inline into the description block above. */}
 

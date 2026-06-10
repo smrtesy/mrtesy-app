@@ -8,8 +8,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Pencil, Clock, Zap } from "lucide-react";
+import { CheckCircle2, X, Bell, Pencil, Clock, Zap, Home } from "lucide-react";
 import { toast } from "sonner";
+import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
@@ -88,7 +89,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       const { tasks } = await api<{ tasks: Task[] }>(
         "/api/tasks?status=inbox&verified=false&has_source=true&mine=true&limit=1000",
       );
-      const sorted = tasks ?? [];
+      // Urgency order: earliest effective deadline first, undated last,
+      // newest-first within each group.
+      const sorted = [...(tasks ?? [])].sort((a, b) => {
+        const da = effectiveDeadline(a);
+        const db = effectiveDeadline(b);
+        if (da && db && da !== db) return da.localeCompare(db);
+        if (da && !db) return -1;
+        if (!da && db) return 1;
+        return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      });
       setSuggestions(sorted);
       setSelected(new Set());
       // Re-bind editTask to the freshly fetched row so an open TaskDetail
@@ -172,6 +182,17 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     }
   }
 
+  async function handleHomeToggle(task: Task) {
+    const context = task.context === "home" ? null : "home";
+    setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, context } : s)));
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { context } });
+    } catch (e) {
+      toast.error((e as Error).message);
+      fetchSuggestions();
+    }
+  }
+
   async function handleFastDismiss(taskId: string) {
     try {
       await api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" });
@@ -186,7 +207,18 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   async function handleComplete(taskId: string) {
     try {
       await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
-      toast.success(tTasks("actions.complete"));
+      // Undo restores status=inbox; manually_verified is untouched, so the
+      // row comes straight back as a suggestion.
+      toast.success(tTasks("actions.complete"), {
+        action: {
+          label: tTasks("row.undo"),
+          onClick: () => {
+            api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
+              .then(() => { fetchSuggestions(); onUpdate?.(); })
+              .catch((e) => toast.error((e as Error).message));
+          },
+        },
+      });
       fetchSuggestions();
       onUpdate?.();
     } catch (e) {
@@ -281,14 +313,22 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
               <Card
                 key={task.id}
                 ref={isFocused ? focusNodeRef : undefined}
-                className={
+                className={cn(
+                  "relative",
                   isFocused
                     ? "ring-2 ring-status-warn animate-pulse"
                     : isSelected
                     ? "ring-2 ring-primary/50"
-                    : undefined
-                }
+                    : undefined,
+                )}
               >
+                {/* Source chip — pinned to the card's top-LEFT corner, deep
+                    link to the original message. */}
+                {source && (
+                  <span className="absolute top-2 left-2 z-10">
+                    <SourceLink source={source} stopPropagation />
+                  </span>
+                )}
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
                     <input
@@ -317,6 +357,20 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                         >
                           <Zap className="h-3 w-3" />
                           {task.size === "quick" ? tTasks("row.sizeQuick") : tTasks("row.sizeRegular")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleHomeToggle(task)}
+                          title={tTasks("contextFilter.home")}
+                          aria-pressed={task.context === "home"}
+                          className={cn(
+                            "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
+                            task.context === "home"
+                              ? "bg-primary/10 text-primary"
+                              : "text-muted-foreground/40 hover:text-muted-foreground",
+                          )}
+                        >
+                          <Home className="h-3.5 w-3.5" />
                         </button>
                         <DueDateChip
                           deadline={effectiveDeadline(task)}
@@ -515,17 +569,19 @@ function SuggestionActions({
       >
         <CheckCircle2 className="h-4 w-4" />
       </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-9 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok"
+      {/* The unified ✓ — same affordance as task rows: complete in one step,
+          with an undo toast. Replaces the old labeled "complete" button. */}
+      <button
+        type="button"
         onClick={onComplete}
         title={tTasks("actions.complete")}
         aria-label={tTasks("actions.complete")}
+        className="flex h-9 w-9 items-center justify-center"
       >
-        <CheckCircle2 className="h-4 w-4" />
-        <span className="hidden md:inline">{tTasks("actions.complete")}</span>
-      </Button>
+        <span className="flex h-[22px] w-[22px] items-center justify-center rounded-md border-2 border-muted-foreground/40 text-[12px] text-transparent transition-colors hover:border-status-ok hover:text-status-ok">
+          ✓
+        </span>
+      </button>
     </div>
   );
 }

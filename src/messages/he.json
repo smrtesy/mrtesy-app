@@ -389,7 +389,8 @@
       "constrainedHint": "אילוץ בתוכנית הקדים את היעד",
       "dialogTitle": "תאריך יעד",
       "clear": "הסר תאריך",
-      "save": "שמירה"
+      "save": "שמירה",
+      "noDateHint": "הוסף תאריך יעד"
     },
     "row": {
       "blockedHint": "ממתין ל: {titles}",
@@ -929,7 +930,8 @@
     "contextNone": "ללא",
     "contextHome": "בית",
     "contextWork": "עבודה",
-    "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון"
+    "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון",
+    "savedFlash": "נשמר ✓"
   },
   "orgSwitcher": {
     "orgCreated": "ארגון נוצר",
@@ -2430,7 +2432,9 @@
     "handoff": "ממשיך אל",
     "startBy": "להתחיל עד",
     "finishBy": "לסיים עד",
-    "openBoard": "פתח את לוח התכנון"
+    "openBoard": "פתח את לוח התכנון",
+    "addCorrection": "הוסף הערה/תיקון",
+    "addCorrectionHint": "נשמר כתיקון — ייכלל בייצוא התיקונים שבלוג"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",
