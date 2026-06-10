@@ -56,8 +56,8 @@ router.get("/reach/campaigns/:id", async (req: Request, res: Response) => {
   if (!campaign) return res.status(404).json({ error: "campaign not found" });
 
   const [{ data: email }, { data: whatsapp }] = await Promise.all([
-    db.from("smrtreach_campaign_email").select("*").eq("campaign_id", req.params.id).maybeSingle(),
-    db.from("smrtreach_campaign_whatsapp").select("*").eq("campaign_id", req.params.id).maybeSingle(),
+    db.from("smrtreach_campaign_email").select("*").eq("org_id", orgId).eq("campaign_id", req.params.id).maybeSingle(),
+    db.from("smrtreach_campaign_whatsapp").select("*").eq("org_id", orgId).eq("campaign_id", req.params.id).maybeSingle(),
   ]);
 
   res.json({ campaign, email: email ?? null, whatsapp: whatsapp ?? null });
