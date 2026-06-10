@@ -79,6 +79,10 @@ async function renewWatch(userId: string) {
   // makes channelIdNotUnique impossible even if a previous channel is still
   // alive (the 6-day renew cron overlaps the 7-day ttl, and stop is best-effort).
   const channelId = `calendar-${userId}-${Date.now()}`;
+  // Opaque per-watch secret. Google echoes it back on every notification as the
+  // X-Goog-Channel-Token header; the webhook validates it so a forged
+  // X-Goog-Channel-ID alone can't trigger processing for another user.
+  const channelToken = crypto.randomUUID();
   const resp = await fetch(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events/watch",
     {
@@ -91,6 +95,7 @@ async function renewWatch(userId: string) {
         id: channelId,
         type: "web_hook",
         address: webhookUrl,
+        token: channelToken,
         params: { ttl: "604800" }, // 7 days
       }),
     }
@@ -114,6 +119,7 @@ async function renewWatch(userId: string) {
       source: "google_calendar",
       watch_channel_id: channelId,
       watch_resource_id: watch.resourceId,
+      watch_token: channelToken,
       watch_expiration: watch.expiration
         ? new Date(Number(watch.expiration)).toISOString()
         : null,
