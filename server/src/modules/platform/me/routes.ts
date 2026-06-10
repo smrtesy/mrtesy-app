@@ -321,8 +321,12 @@ router.get("/me/drive/folders", requireAuth, async (req: Request, res: Response)
       "mimeType = 'application/vnd.google-apps.folder'",
       "trashed = false",
     ];
-    if (q) clauses.push(`name contains '${q.replace(/'/g, "\\'")}'`);
-    if (parent) clauses.push(`'${parent.replace(/'/g, "\\'")}' in parents`);
+    // Escape backslash first, then single-quote — the order Drive's query
+    // language requires. A trailing backslash in the raw value would otherwise
+    // escape the closing quote and break the whole query.
+    const escapeDriveValue = (v: string) => v.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    if (q) clauses.push(`name contains '${escapeDriveValue(q)}'`);
+    if (parent) clauses.push(`'${escapeDriveValue(parent)}' in parents`);
 
     const result = await drive.files.list({
       q: clauses.join(" and "),

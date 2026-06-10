@@ -17,8 +17,13 @@ export async function GET() {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Use the main user account (which has the tasks)
-  const targetEmail = "chanoch770@gmail.com";
+  // Dev-login target account. No hardcoded default — set DEV_LOGIN_EMAIL in
+  // your local env. Combined with the NODE_ENV guard above, this keeps any
+  // real address out of the source tree and out of production behavior.
+  const targetEmail = process.env.DEV_LOGIN_EMAIL;
+  if (!targetEmail) {
+    return NextResponse.json({ error: "DEV_LOGIN_EMAIL not configured" }, { status: 500 });
+  }
 
   const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
     type: "magiclink",
