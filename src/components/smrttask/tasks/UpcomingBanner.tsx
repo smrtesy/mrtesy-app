@@ -103,8 +103,15 @@ export function UpcomingBanner({ locale }: { locale: string }) {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 60_000);
-    return () => clearInterval(id);
+    // Skip reloads while the tab is hidden (a background tab otherwise polls
+    // around the clock); refresh immediately when the user comes back.
+    const handleVisibility = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", handleVisibility);
+    const id = setInterval(() => { if (!document.hidden) load(); }, 60_000);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(id);
+    };
   }, [load]);
 
   if (items.length === 0) return null;

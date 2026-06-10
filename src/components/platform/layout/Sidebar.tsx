@@ -195,12 +195,18 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     const handleOrgChange = () => fetchCount();
     window.addEventListener("smrtesy:active-org-changed", handleOrgChange);
 
-    pollTimer = setInterval(fetchCount, 30_000);
+    // Realtime above is the primary update path; this poll is only a
+    // fallback, so it runs rarely and never while the tab is hidden —
+    // an idle background tab otherwise polls around the clock.
+    const handleVisibility = () => { if (!document.hidden) fetchCount(); };
+    document.addEventListener("visibilitychange", handleVisibility);
+    pollTimer = setInterval(() => { if (!document.hidden) fetchCount(); }, 180_000);
 
     return () => {
       mounted = false;
       if (channel) supabase.removeChannel(channel);
       authSub.subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("smrtesy:active-org-changed", handleOrgChange);
       window.removeEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
       if (pollTimer) clearInterval(pollTimer);
