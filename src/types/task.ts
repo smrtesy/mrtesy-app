@@ -126,6 +126,11 @@ export interface Task {
   latest_finish?: string | null;
   /** Engine: on the critical path (slack = 0). */
   is_critical?: boolean | null;
+  /** Plan + stage names, attached at runtime by /api/plan/my-tasks (not columns). */
+  plan_title_he?: string | null;
+  plan_title_en?: string | null;
+  stage_name_he?: string | null;
+  stage_name_en?: string | null;
   /** Assignment model: assigned tasks are 'accepted' immediately; peer offers are 'proposed'. */
   assignment_status?: "proposed" | "accepted" | "declined" | null;
   proposed_by?: string | null;

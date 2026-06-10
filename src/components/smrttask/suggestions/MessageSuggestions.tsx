@@ -8,13 +8,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Pencil, Clock, Zap, Home } from "lucide-react";
+import { CheckCircle2, X, Bell, Clock, Zap, Home } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
-import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
@@ -338,15 +337,18 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       className="mt-1.5 shrink-0 h-4 w-4 cursor-pointer"
                       aria-label={t("selectAll")}
                     />
-                    <div className="flex-1 min-w-0">
-                      {/* Title row: title + ✨ + size + deadline. All other
-                          identity (serial, source, reasoning) lives in ✨. */}
+                    {/* Clicking the body (not the inline toggles) opens the
+                        edit window — the ✨/AI panel lives there now, not here. */}
+                    <div
+                      className="flex-1 min-w-0 cursor-pointer"
+                      onClick={() => setEditTask(task)}
+                    >
+                      {/* Title row: title + size + 🏠 + deadline. */}
                       <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-sm font-medium" dir="auto">{title}</h4>
-                        <ContextButton task={task} locale={locale} />
                         <button
                           type="button"
-                          onClick={() => handleSizeToggle(task)}
+                          onClick={(e) => { e.stopPropagation(); handleSizeToggle(task); }}
                           title={task.size === "quick" ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
                           className={cn(
                             "flex h-6 items-center gap-0.5 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
@@ -360,7 +362,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleHomeToggle(task)}
+                          onClick={(e) => { e.stopPropagation(); handleHomeToggle(task); }}
                           title={tTasks("contextFilter.home")}
                           aria-pressed={task.context === "home"}
                           className={cn(
@@ -372,12 +374,14 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                         >
                           <Home className="h-3.5 w-3.5" />
                         </button>
-                        <DueDateChip
-                          deadline={effectiveDeadline(task)}
-                          locale={locale}
-                          blocked={blocked}
-                          onChange={(d) => handleDueChange(task.id, d)}
-                        />
+                        <span onClick={(e) => e.stopPropagation()}>
+                          <DueDateChip
+                            deadline={effectiveDeadline(task)}
+                            locale={locale}
+                            blocked={blocked}
+                            onChange={(d) => handleDueChange(task.id, d)}
+                          />
+                        </span>
                       </div>
                       {task.description ? (
                         <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir="auto">
@@ -406,7 +410,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     onFastDismiss={() => handleFastDismiss(task.id)}
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
-                    onEdit={() => setEditTask(task)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
                     onComplete={() => handleComplete(task.id)}
                   />
@@ -481,8 +484,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
 /**
  * Per-card action row, in RTL display order from start to end:
- *   edit · snooze · save-as-info · [flex] · fast-X (red) · X! (orange) · approve · done
+ *   snooze · save-as-info · [flex] · fast-X (red) · X! (orange) · approve · done
  *
+ * There is no edit button — clicking the card body opens the edit window.
  * "approve" moves the suggestion into the task lists (waiting, or straight to
  * the desk when the deadline is near). "done" closes it in one step.
  */
@@ -493,7 +497,6 @@ function SuggestionActions({
   onFastDismiss,
   onDismissWithReason,
   onApprove,
-  onEdit,
   onSnooze,
   onComplete,
 }: {
@@ -503,26 +506,14 @@ function SuggestionActions({
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
-  onEdit: () => void;
   onSnooze: () => void;
   onComplete: () => void;
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
-  const tCommon = useTranslations("common");
 
   return (
     <div className="flex gap-2 mt-3 items-center">
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-9 w-9"
-        onClick={onEdit}
-        title={tCommon("edit")}
-        aria-label={tCommon("edit")}
-      >
-        <Pencil className="h-4 w-4" />
-      </Button>
       <Button
         size="icon"
         variant="ghost"

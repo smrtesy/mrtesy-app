@@ -44,7 +44,7 @@ interface PlanMeta {
  *   ממתינות   — everything else, sorted by deadline urgency (undated last).
  *   הושלמו    — collapsed, with reopen.
  */
-export function TaskList({ locale }: { locale: string }) {
+export function TaskList({ locale, title }: { locale: string; title?: string }) {
   const t = useTranslations("tasks");
   const supabase = createClient();
   const searchParams = useSearchParams();
@@ -367,16 +367,18 @@ export function TaskList({ locale }: { locale: string }) {
         </div>
       ) : (
         <>
-          {/* Context filter + review banner */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded-lg border p-0.5">
+          {/* Title + context filter on ONE row (filter pushed to the trailing
+              edge — left in RTL). */}
+          <div className="flex items-center gap-3">
+            {title && <h1 className="text-2xl font-bold">{title}</h1>}
+            <div className="ms-auto flex rounded-lg border p-0.5">
               {contextChips.map((chip) => (
                 <button
                   key={chip.key}
                   type="button"
                   onClick={() => setContextFilter(chip.key)}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                    "flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
                     contextFilter === chip.key
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -397,54 +399,51 @@ export function TaskList({ locale }: { locale: string }) {
             onSnooze={(id) => setSnoozeTaskId(id)}
           />
 
-          {/* ── ON THE DESK ──────────────────────────────────────────── */}
-          <section>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {/* Quick column */}
-              <div>
-                <div className="mb-2 flex items-center gap-2">
-                  <h2 className="flex items-center gap-1 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                    <Zap className="h-3.5 w-3.5 text-status-warn" />
-                    {t("desk.quick")}
-                    <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskQuick.length}</span>
-                  </h2>
-                  {deskQuick.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="ms-auto h-7 gap-1 text-xs"
-                      onClick={() => setMarathonOpen(true)}
-                    >
-                      <Play className="h-3 w-3" />
-                      {t("desk.startRun")}
-                    </Button>
-                  )}
-                </div>
-                {deskQuick.length === 0 ? (
-                  <p className="rounded-lg border border-dashed py-4 text-center text-xs text-muted-foreground">
-                    {t("desk.emptyQuick")}
-                  </p>
-                ) : (
-                  <div className="space-y-2">{renderRows(deskQuick, "desk")}</div>
+          {/* ── ON THE DESK — quick stacked above regular (full width each,
+                 so rows never get cramped) ──────────────────────────────── */}
+          <section className="space-y-4">
+            {/* Quick */}
+            <div>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="flex items-center gap-1 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  <Zap className="h-3.5 w-3.5 text-status-warn" />
+                  {t("desk.quick")}
+                  <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskQuick.length}</span>
+                </h2>
+                {deskQuick.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ms-auto h-7 gap-1 text-xs"
+                    onClick={() => setMarathonOpen(true)}
+                  >
+                    <Play className="h-3 w-3" />
+                    {t("desk.startRun")}
+                  </Button>
                 )}
               </div>
+              {deskQuick.length === 0 ? (
+                <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
+                  {t("desk.emptyQuick")}
+                </p>
+              ) : (
+                <div className="space-y-1.5">{renderRows(deskQuick, "desk")}</div>
+              )}
+            </div>
 
-              {/* Regular column */}
-              <div>
-                <div className="mb-2 flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                    {t("desk.regular")}
-                    <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
-                  </h2>
-                </div>
-                {deskRegular.length === 0 ? (
-                  <p className="rounded-lg border border-dashed py-4 text-center text-xs text-muted-foreground">
-                    {t("desk.emptyRegular")}
-                  </p>
-                ) : (
-                  <div className="space-y-2">{renderRows(deskRegular, "desk")}</div>
-                )}
-              </div>
+            {/* Regular */}
+            <div>
+              <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                {t("desk.regular")}
+                <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
+              </h2>
+              {deskRegular.length === 0 ? (
+                <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
+                  {t("desk.emptyRegular")}
+                </p>
+              ) : (
+                <div className="space-y-1.5">{renderRows(deskRegular, "desk")}</div>
+              )}
             </div>
           </section>
 

@@ -14,8 +14,9 @@ export function TasksPageClient({ title }: { title: string }) {
   return (
     <div className="space-y-4">
       <UpcomingBanner locale={locale as string} />
-      <h1 className="text-2xl font-bold">{title}</h1>
-      <TaskList locale={locale as string} />
+      {/* The page title now lives inside TaskList, on the same row as the
+          context filter. */}
+      <TaskList locale={locale as string} title={title} />
     </div>
   );
 }
