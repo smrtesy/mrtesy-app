@@ -207,7 +207,17 @@ export function PlanEffortDetail({
       )}
 
       {tasks.length === 0 && !adding ? (
-        <p className="py-6 text-center text-[12.5px] italic text-muted-foreground">{t("effort.empty")}</p>
+        <div className="rounded-lg border border-dashed py-8 text-center">
+          <p className="text-[12.5px] font-medium">{t("effort.empty")}</p>
+          {canEdit && plan.kind !== "roster" && (
+            <button
+              onClick={() => setAdding(true)}
+              className="mt-3 inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-3.5 w-3.5" /> {te("addTask")}
+            </button>
+          )}
+        </div>
       ) : (
         <div className="divide-y">
           {tasks.map((task) =>

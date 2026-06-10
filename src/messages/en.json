@@ -1908,11 +1908,30 @@
       "stream": "Stream",
       "roster": "Roster"
     },
+    "kindCards": {
+      "effort": {
+        "desc": "A one-off project with a deadline — a task list with dependencies and a schedule.",
+        "example": "e.g. a product launch, an event, building a tool"
+      },
+      "stream": {
+        "desc": "A repeating process — an episodes × stages table, every episode passes the same stations.",
+        "example": "e.g. a podcast, a weekly newsletter, a lesson series"
+      },
+      "roster": {
+        "desc": "A per-worker load view — gathers one person's tasks from every plan.",
+        "example": "e.g. how loaded the editor is next month"
+      }
+    },
+    "settings": {
+      "button": "Planning settings",
+      "title": "Planning settings"
+    },
     "board": {
       "expected": "expected",
       "progress": "Progress",
       "empty": "No plans on the timeline yet",
-      "emptyHint": "Plans with a start date will appear here on the timeline",
+      "emptyHint": "A plan is a project with a deadline (effort) or a process that repeats episode after episode (stream). Create your first plan to see it on the timeline.",
+      "emptyCta": "Create your first plan",
       "goal": "Goal",
       "period": "Range",
       "owner": "Owner",
@@ -1927,6 +1946,7 @@
       "ready": "Ready",
       "passed": "past",
       "empty": "No stages or episodes defined for this stream yet",
+      "emptyHint": "An episode = one deliverable (e.g. a podcast episode). A stage = a station every episode passes through (transcribe, edit, publish).",
       "cell": {
         "todo": "To do",
         "prog": "In progress",
@@ -2009,6 +2029,8 @@
       "status": "Status",
       "addEpisode": "Add episode",
       "addStage": "Add stage",
+      "editEpisode": "Edit episode",
+      "editStage": "Edit stage",
       "stageDefaultDur": "Stage default duration (days, blank = none)",
       "name": "Name",
       "family": "Family",
@@ -2118,7 +2140,7 @@
     "capacity": {
       "button": "Team & availability",
       "title": "Team availability",
-      "hint": "Set each workers work days and hours/day — to estimate how many days a task needs.",
+      "hint": "Each worker's work days and hours per day. Hours per day is what the engine uses to turn estimated hours into a duration in days.",
       "hoursPerDay": "Hours/day",
       "days": [
         "Su",

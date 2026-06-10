@@ -8,7 +8,13 @@ import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanStageRow, PlanEpisode, EpisodeStageStatus, CellStatus } from "@/types/plan";
 import { parseISO, gregShort, daysBetween } from "@/lib/smrtplan/dates";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { CellSheet } from "./CellSheet";
+
+const fieldCls =
+  "w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 interface LinkedTask {
   id: string;
@@ -48,6 +54,9 @@ export function PlanMatrix({
   const [cells, setCells] = useState<Record<string, EpisodeStageStatus>>({});
   const [linkedTasks, setLinkedTasks] = useState<Record<string, LinkedTask>>({});
   const [sheet, setSheet] = useState<{ episode: PlanEpisode; stage: PlanStageRow } | null>(null);
+  // null = closed; { stage: null } = add; { stage } = edit. Same for episodes.
+  const [stageDialog, setStageDialog] = useState<{ stage: PlanStageRow | null } | null>(null);
+  const [episodeDialog, setEpisodeDialog] = useState<{ episode: PlanEpisode | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function refetch() {
@@ -73,34 +82,28 @@ export function PlanMatrix({
     }
   }
 
-  const addStage = () => {
-    const name = prompt(te("addStage"));
-    if (!name) return;
-    const durStr = prompt(te("stageDefaultDur"), "");
-    const default_duration_days = durStr && durStr.trim() !== "" ? Number(durStr) : null;
-    run(() => api(`/api/plans/${plan.id}/stages`, { method: "POST", body: { name_he: name, sequence: stages.length + 1, default_duration_days } }));
+  // Close the dialog only after the request succeeds — on failure the user
+  // keeps their typed values (the error shows as a toast).
+  const saveStage = async (values: { name_he: string; default_duration_days: number | null }, stage: PlanStageRow | null) => {
+    if (stage) {
+      await api(`/api/plan-stages/${stage.id}`, { method: "PATCH", body: values });
+    } else {
+      await api(`/api/plans/${plan.id}/stages`, { method: "POST", body: { ...values, sequence: stages.length + 1 } });
+    }
+    setStageDialog(null);
+    await refetch();
   };
-  const addEpisode = () => {
-    const name = prompt(te("addEpisode"));
-    if (name) run(() => api(`/api/plans/${plan.id}/episodes`, { method: "POST", body: { name_he: name, sequence: episodes.length + 1 } }));
-  };
-  const renameStage = (s: PlanStageRow) => {
-    const name = prompt(te("name"), s.name_he);
-    if (name == null) return;
-    // Also set the stage's default cell duration (blank clears it).
-    const durStr = prompt(te("stageDefaultDur"), s.default_duration_days != null ? String(s.default_duration_days) : "");
-    const body: Record<string, unknown> = { name_he: name };
-    if (durStr != null) body.default_duration_days = durStr.trim() === "" ? null : Number(durStr);
-    run(() => api(`/api/plan-stages/${s.id}`, { method: "PATCH", body }));
+  const saveEpisode = async (values: { name_he: string; family: string | null; due_date: string | null }, episode: PlanEpisode | null) => {
+    if (episode) {
+      await api(`/api/plan-episodes/${episode.id}`, { method: "PATCH", body: values });
+    } else {
+      await api(`/api/plans/${plan.id}/episodes`, { method: "POST", body: { ...values, sequence: episodes.length + 1 } });
+    }
+    setEpisodeDialog(null);
+    await refetch();
   };
   const delStage = (s: PlanStageRow) => {
     if (confirm(te("confirmDelete"))) run(() => api(`/api/plan-stages/${s.id}`, { method: "DELETE" }));
-  };
-  const editEpisode = (ep: PlanEpisode) => {
-    const name = prompt(te("name"), ep.name_he);
-    if (name == null) return;
-    const due = prompt(te("due"), ep.due_date ?? "");
-    run(() => api(`/api/plan-episodes/${ep.id}`, { method: "PATCH", body: { name_he: name, due_date: due || null } }));
   };
   const delEpisode = (ep: PlanEpisode) => {
     if (confirm(te("confirmDelete"))) run(() => api(`/api/plan-episodes/${ep.id}`, { method: "DELETE" }));
@@ -156,19 +159,36 @@ export function PlanMatrix({
       </h2>
       <p className="mb-3 mt-0.5 text-[12.5px] text-muted-foreground">{t("matrix.sub")}</p>
 
-      {canEdit && (
+      {canEdit && (stages.length > 0 || episodes.length > 0) && (
         <div className="mb-3 flex flex-wrap gap-2">
-          <button onClick={addEpisode} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+          <button onClick={() => setEpisodeDialog({ episode: null })} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
             <Plus className="h-3.5 w-3.5" /> {te("addEpisode")}
           </button>
-          <button onClick={addStage} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+          <button onClick={() => setStageDialog({ stage: null })} className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
             <Plus className="h-3.5 w-3.5" /> {te("addStage")}
           </button>
         </div>
       )}
 
       {stages.length === 0 || episodes.length === 0 ? (
-        <p className="py-6 text-center text-[12.5px] italic text-muted-foreground">{t("matrix.empty")}</p>
+        <div className="rounded-lg border border-dashed py-8 text-center">
+          <p className="text-[12.5px] font-medium">{t("matrix.empty")}</p>
+          <p className="mx-auto mt-1 max-w-sm text-[12px] text-muted-foreground">{t("matrix.emptyHint")}</p>
+          {canEdit && (
+            <div className="mt-3 flex justify-center gap-2">
+              {episodes.length === 0 && (
+                <button onClick={() => setEpisodeDialog({ episode: null })} className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90">
+                  <Plus className="h-3.5 w-3.5" /> {te("addEpisode")}
+                </button>
+              )}
+              {stages.length === 0 && (
+                <button onClick={() => setStageDialog({ stage: null })} className="inline-flex items-center gap-1 rounded-md border bg-card px-3 py-1.5 text-[12.5px] font-medium hover:bg-accent">
+                  <Plus className="h-3.5 w-3.5" /> {te("addStage")}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-[12px]">
@@ -187,7 +207,7 @@ export function PlanMatrix({
                     )}
                     {canEdit && (
                       <span className="mt-0.5 flex items-center justify-center gap-1">
-                        <button onClick={() => renameStage(s)} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
+                        <button onClick={() => setStageDialog({ stage: s })} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
                           <Pencil className="h-3 w-3" />
                         </button>
                         <button onClick={() => delStage(s)} className="text-muted-foreground hover:text-status-late" title={te("delete")}>
@@ -212,7 +232,7 @@ export function PlanMatrix({
                         <span className="flex-1">{epName(ep, locale)}</span>
                         {canEdit && (
                           <>
-                            <button onClick={() => editEpisode(ep)} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
+                            <button onClick={() => setEpisodeDialog({ episode: ep })} className="text-muted-foreground hover:text-foreground" title={te("edit")}>
                               <Pencil className="h-3 w-3" />
                             </button>
                             <button onClick={() => delEpisode(ep)} className="text-muted-foreground hover:text-status-late" title={te("delete")}>
@@ -275,6 +295,21 @@ export function PlanMatrix({
         </div>
       )}
 
+      {stageDialog && (
+        <StageDialog
+          stage={stageDialog.stage}
+          onClose={() => setStageDialog(null)}
+          onSave={(values) => saveStage(values, stageDialog.stage)}
+        />
+      )}
+      {episodeDialog && (
+        <EpisodeDialog
+          episode={episodeDialog.episode}
+          onClose={() => setEpisodeDialog(null)}
+          onSave={(values) => saveEpisode(values, episodeDialog.episode)}
+        />
+      )}
+
       {sheet && (
         <CellSheet
           open={!!sheet}
@@ -291,5 +326,120 @@ export function PlanMatrix({
         />
       )}
     </div>
+  );
+}
+
+/** Add/edit a stage (a step every episode passes through): name + optional
+ *  default duration in working days. Replaces the old chained prompt()s. */
+function StageDialog({
+  stage,
+  onClose,
+  onSave,
+}: {
+  stage: PlanStageRow | null;
+  onClose: () => void;
+  onSave: (values: { name_he: string; default_duration_days: number | null }) => Promise<void>;
+}) {
+  const te = useTranslations("smrtPlan.edit");
+  const [name, setName] = useState(stage?.name_he ?? "");
+  const [dur, setDur] = useState(stage?.default_duration_days != null ? String(stage.default_duration_days) : "");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await onSave({ name_he: name.trim(), default_duration_days: dur.trim() !== "" ? Number(dur) : null });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{stage ? te("editStage") : te("addStage")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("name")}</span>
+            <Input value={name} onChange={(e) => setName(e.target.value)} dir="rtl" autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("stageDefaultDur")}</span>
+            <input type="number" min={0} step={0.5} className={fieldCls} value={dur}
+              onChange={(e) => setDur(e.target.value)} />
+          </label>
+        </div>
+        <DialogFooter className="mt-2 flex gap-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>{te("cancel")}</Button>
+          <Button onClick={save} disabled={busy || !name.trim()}>{te("save")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Add/edit an episode (a deliverable row): name + optional family + due date. */
+function EpisodeDialog({
+  episode,
+  onClose,
+  onSave,
+}: {
+  episode: PlanEpisode | null;
+  onClose: () => void;
+  onSave: (values: { name_he: string; family: string | null; due_date: string | null }) => Promise<void>;
+}) {
+  const te = useTranslations("smrtPlan.edit");
+  const [name, setName] = useState(episode?.name_he ?? "");
+  const [family, setFamily] = useState(episode?.family ?? "");
+  const [due, setDue] = useState(episode?.due_date ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await onSave({ name_he: name.trim(), family: family.trim() || null, due_date: due || null });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{episode ? te("editEpisode") : te("addEpisode")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("name")}</span>
+            <Input value={name} onChange={(e) => setName(e.target.value)} dir="rtl" autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("family")}</span>
+              <Input value={family} onChange={(e) => setFamily(e.target.value)} dir="rtl" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("due")}</span>
+              <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} />
+            </label>
+          </div>
+        </div>
+        <DialogFooter className="mt-2 flex gap-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>{te("cancel")}</Button>
+          <Button onClick={save} disabled={busy || !name.trim()}>{te("save")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

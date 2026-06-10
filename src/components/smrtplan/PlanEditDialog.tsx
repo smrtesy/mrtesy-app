@@ -140,6 +140,36 @@ export function PlanEditDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {/* Creating: the kind decides the whole structure, so pick it first —
+              as self-explanatory cards, not a bare dropdown. */}
+          {!plan?.id && (
+            <Field label={te("kind")}>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {(["effort", "stream", "roster"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => set("kind", k)}
+                    className={cn(
+                      "rounded-lg border p-2.5 text-start transition-colors",
+                      form.kind === k
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
+                        : "border-input bg-background hover:bg-accent",
+                    )}
+                  >
+                    <span className="block text-[13px] font-bold">{t(`kind.${k}`)}</span>
+                    <span className="mt-0.5 block text-[11.5px] leading-snug text-muted-foreground">
+                      {t(`kindCards.${k}.desc`)}
+                    </span>
+                    <span className="mt-1 block text-[10.5px] italic text-muted-foreground/80">
+                      {t(`kindCards.${k}.example`)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
+
           <Field label={te("titleHe")}>
             <Input value={form.title_he} onChange={(e) => set("title_he", e.target.value)} dir="rtl" />
           </Field>
@@ -154,13 +184,17 @@ export function PlanEditDialog({
             <Field label={te("group")}>
               <Input value={form.group_label} onChange={(e) => set("group_label", e.target.value)} />
             </Field>
-            <Field label={te("kind")}>
-              <select className={fieldCls} value={form.kind} onChange={(e) => set("kind", e.target.value as PlanKind)}>
-                <option value="effort">{t("kind.effort")}</option>
-                <option value="stream">{t("kind.stream")}</option>
-                <option value="roster">{t("kind.roster")}</option>
-              </select>
-            </Field>
+            {plan?.id ? (
+              <Field label={te("kind")}>
+                <select className={fieldCls} value={form.kind} onChange={(e) => set("kind", e.target.value as PlanKind)}>
+                  <option value="effort">{t("kind.effort")}</option>
+                  <option value="stream">{t("kind.stream")}</option>
+                  <option value="roster">{t("kind.roster")}</option>
+                </select>
+              </Field>
+            ) : (
+              <span />
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

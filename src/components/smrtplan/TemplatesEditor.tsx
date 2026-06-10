@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -41,7 +40,9 @@ interface Role {
 const fieldCls =
   "rounded-md border border-input bg-background px-2 py-1 text-[12.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-export function TemplatesEditor({ open, onClose, onChanged }: { open: boolean; onClose: () => void; onChanged?: () => void }) {
+/** Reusable plan templates — rendered inside the plan-settings hub. Loads on
+ *  mount; onChanged lets the board refresh its quick-add template list. */
+export function TemplatesSection({ onChanged }: { onChanged?: () => void }) {
   const t = useTranslations("smrtPlan.templates");
   const [templates, setTemplates] = useState<Template[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -56,23 +57,26 @@ export function TemplatesEditor({ open, onClose, onChanged }: { open: boolean; o
   }
 
   useEffect(() => {
-    if (!open) return;
-    setLoading(true);
+    let alive = true;
     (async () => {
       try {
         const [{ templates }, { roles }] = await Promise.all([
           api<{ templates: Template[] }>("/api/plan/templates"),
           api<{ roles: Role[] }>("/api/plan/roles"),
         ]);
+        if (!alive) return;
         setTemplates(templates ?? []);
         setRoles(roles ?? []);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Error");
+        if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     })();
-  }, [open]);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const roleName = (id: string | null) => (id ? roles.find((r) => r.id === id)?.name_he ?? "" : "");
 
@@ -97,33 +101,28 @@ export function TemplatesEditor({ open, onClose, onChanged }: { open: boolean; o
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{t("title")}</DialogTitle>
-        </DialogHeader>
-        <p className="text-[12px] text-muted-foreground">{t("hint")}</p>
+    <div className="space-y-3">
+      <p className="text-[12px] text-muted-foreground">{t("hint")}</p>
 
-        {loading ? (
-          <div className="h-24 animate-pulse rounded-lg bg-muted" />
-        ) : (
-          <div className="space-y-3">
-            {templates.length === 0 && <p className="p-4 text-center italic text-muted-foreground">{t("empty")}</p>}
-            {templates.map((tpl) => (
-              <TemplateCard key={tpl.id} tpl={tpl} roles={roles} roleName={roleName} busy={busy} run={run} t={t} />
-            ))}
-          </div>
-        )}
-
-        {/* add template */}
-        <div className="mt-2 flex items-center gap-2 rounded-lg border bg-secondary/40 p-2">
-          <Input placeholder={t("name")} value={draftName} onChange={(e) => setDraftName(e.target.value)} className="h-9 flex-1" dir="rtl" />
-          <Button onClick={addTemplate} disabled={busy || !draftName.trim()} className="gap-1">
-            <Plus className="h-4 w-4" /> {t("add")}
-          </Button>
+      {loading ? (
+        <div className="h-24 animate-pulse rounded-lg bg-muted" />
+      ) : (
+        <div className="space-y-3">
+          {templates.length === 0 && <p className="p-4 text-center italic text-muted-foreground">{t("empty")}</p>}
+          {templates.map((tpl) => (
+            <TemplateCard key={tpl.id} tpl={tpl} roles={roles} roleName={roleName} busy={busy} run={run} t={t} />
+          ))}
         </div>
-      </DialogContent>
-    </Dialog>
+      )}
+
+      {/* add template */}
+      <div className="mt-2 flex items-center gap-2 rounded-lg border bg-secondary/40 p-2">
+        <Input placeholder={t("name")} value={draftName} onChange={(e) => setDraftName(e.target.value)} className="h-9 flex-1" dir="rtl" />
+        <Button onClick={addTemplate} disabled={busy || !draftName.trim()} className="gap-1">
+          <Plus className="h-4 w-4" /> {t("add")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
