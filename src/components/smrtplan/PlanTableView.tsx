@@ -3,10 +3,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle, X, Trash2 } from "lucide-react";
+import { Undo2, Redo2, Plus, ExternalLink, Link2, AlertTriangle, X, Trash2, EyeOff } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import type { Plan } from "@/types/plan";
 import type { TaskNeed } from "@/types/task";
 import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
@@ -76,6 +79,10 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   const [active, setActive] = useState<{ r: number; c: number } | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [hideDone, setHideDone] = useState(false);
+  // A just-created task to drop straight into title editing once it renders.
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
+  const [fieldDialog, setFieldDialog] = useState<{ title: string; fields: FieldSpec[]; onSave: (v: Record<string, string>) => void } | null>(null);
   const cellRef = useRef<HTMLElement | null>(null);
   const rtl = locale !== "en";
 
@@ -134,20 +141,35 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   // their stage (banner) so they render grouped under each stage. `flat` is the
   // keyboard-nav order and must match that render order.
   const groups = useMemo(() => {
+    const visible = hideDone ? tasks.filter((tk) => !DONE.has(tk.status)) : tasks;
     const byPlan = new Map<string, TableTask[]>();
-    for (const tk of tasks) {
+    for (const tk of visible) {
       if (!byPlan.has(tk.plan_id)) byPlan.set(tk.plan_id, []);
       byPlan.get(tk.plan_id)!.push(tk);
     }
+    // Within a stage, order tasks by their deadline (set or engine-computed),
+    // undated last.
+    const deadline = (tk: TableTask) => tk.due_date ?? tk.latest_finish ?? "9999-12-31";
     const orderByStage = (rows: TableTask[], sts: TableStage[]): TableTask[] => {
       const seq = new Map(sts.map((s, i) => [s.id, i]));
       return [...rows].sort((a, b) => {
         const ai = a.stage_id != null && seq.has(a.stage_id) ? seq.get(a.stage_id)! : Number.MAX_SAFE_INTEGER;
         const bi = b.stage_id != null && seq.has(b.stage_id) ? seq.get(b.stage_id)! : Number.MAX_SAFE_INTEGER;
-        return ai - bi; // stable sort keeps original order within a stage
+        if (ai !== bi) return ai - bi;
+        const ad = deadline(a);
+        const bd = deadline(b);
+        return ad < bd ? -1 : ad > bd ? 1 : 0; // stable for equal deadlines
       });
     };
-    const ordered = [...plans].sort((a, b) => (a.group_label || "").localeCompare(b.group_label || ""));
+    // Section A→Z, then plans by start date (like the board), undated last.
+    const ordered = [...plans].sort((a, b) => {
+      const g = (a.group_label || "").localeCompare(b.group_label || "");
+      if (g !== 0) return g;
+      const as = a.start_date ?? "9999-12-31";
+      const bs = b.start_date ?? "9999-12-31";
+      if (as !== bs) return as < bs ? -1 : 1;
+      return (a.title_he || "").localeCompare(b.title_he || "");
+    });
     const seen = new Set(ordered.map((p) => p.id));
     const out: { plan: Plan; rows: TableTask[]; stages: TableStage[] }[] = ordered.map((p) => {
       const sts = stagesByPlan.get(p.id) ?? [];
@@ -157,7 +179,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
       if (!seen.has(pid)) out.push({ plan: { id: pid, title_he: rows[0]?.plan_title_he ?? "—" } as Plan, rows, stages: stagesByPlan.get(pid) ?? [] });
     }
     return out.filter((g) => g.rows.length > 0 || canEdit);
-  }, [tasks, plans, canEdit, stagesByPlan]);
+  }, [tasks, plans, canEdit, stagesByPlan, hideDone]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
   const flatIndexById = useMemo(() => {
@@ -262,7 +284,10 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
         // assignee's capacity, so reassigning can shift dates — refetch.
         if (v !== task.assigned_to_user_id) editField(task.id, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, { assigned_to_user_id: v }, { assigned_to_user_id: task.assigned_to_user_id }, t("table.colWorker"), true);
       } else if (col === "status") {
-        if (value !== task.status) editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"), false);
+        // Crossing the done boundary releases dependents + recomputes on the
+        // server — refetch so needs/critical/dates on other rows stay fresh.
+        const crossesDone = DONE.has(value) !== DONE.has(task.status);
+        if (value !== task.status) editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"), crossesDone);
       }
     },
     [editField, t],
@@ -334,12 +359,27 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
 
   async function addTask(planId: string, stageId?: string | null) {
     try {
-      await api(`/api/plans/${planId}/tasks`, { method: "POST", body: { title_he: te("newRowTitle"), status: "inbox", stage_id: stageId ?? null } });
+      const { task } = await api<{ task: { id: string } }>(`/api/plans/${planId}/tasks`, {
+        method: "POST",
+        body: { title_he: te("newRowTitle"), status: "inbox", stage_id: stageId ?? null },
+      });
       await refetch();
+      if (task?.id) setPendingFocusId(task.id); // drop straight into title editing
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     }
   }
+
+  // Once the new task is in the grid, open its title cell with an empty draft
+  // so the user just types the name.
+  useEffect(() => {
+    if (!pendingFocusId) return;
+    const idx = flatIndexById.get(pendingFocusId);
+    setPendingFocusId(null); // one-shot — never steal focus on a later refetch
+    if (idx == null) return;
+    enterEdit(idx, 0);
+    setDraft("");
+  }, [pendingFocusId, flatIndexById, enterEdit]);
 
   // Add a project (draft effort plan) — optimistic empty group, swap in real id.
   function addPlan() {
@@ -385,22 +425,27 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   }
 
   function addStage(planId: string) {
-    const name = window.prompt(te("name"));
-    if (!name || !name.trim()) return;
-    const nm = name.trim();
-    const seq = (stagesByPlan.get(planId) ?? []).length + 1;
-    const key = newKey();
-    const create = async () => {
-      setStages((ss) => [...ss.filter((s) => s.id !== histResolve(key) && s.id !== key), { id: key, plan_id: planId, name_he: nm, name_en: null, sequence: seq, start_date: null, end_date: null }]);
-      const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${planId}/stages`, { method: "POST", body: { name_he: nm, sequence: seq } });
-      if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === key ? { ...s, id: stage.id } : s))); }
-    };
-    const remove = async () => {
-      const live = histResolve(key);
-      setStages((ss) => ss.filter((s) => s.id !== live && s.id !== key));
-      await api(`/api/plan-stages/${live}`, { method: "DELETE" });
-    };
-    runCmd({ label: te("actStageAdd"), redo: create, undo: remove });
+    setFieldDialog({
+      title: te("addStage"),
+      fields: [{ key: "name", label: te("name"), required: true }],
+      onSave: ({ name }) => {
+        setFieldDialog(null);
+        const nm = name;
+        const seq = (stagesByPlan.get(planId) ?? []).length + 1;
+        const key = newKey();
+        const create = async () => {
+          setStages((ss) => [...ss.filter((s) => s.id !== histResolve(key) && s.id !== key), { id: key, plan_id: planId, name_he: nm, name_en: null, sequence: seq, start_date: null, end_date: null }]);
+          const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${planId}/stages`, { method: "POST", body: { name_he: nm, sequence: seq } });
+          if (stage?.id) { histBind(key, stage.id); setStages((ss) => ss.map((s) => (s.id === key ? { ...s, id: stage.id } : s))); }
+        };
+        const remove = async () => {
+          const live = histResolve(key);
+          setStages((ss) => ss.filter((s) => s.id !== live && s.id !== key));
+          await api(`/api/plan-stages/${live}`, { method: "DELETE" });
+        };
+        runCmd({ label: te("actStageAdd"), redo: create, undo: remove });
+      },
+    });
   }
 
   function deleteStage(st: TableStage) {
@@ -427,28 +472,51 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   }
 
   function renameStage(st: TableStage) {
-    const name = window.prompt(te("name"), st.name_he);
-    if (name == null) return;
-    const v = name.trim();
-    if (!v || v === st.name_he) return;
-    const key = histKeyOf(st.id);
-    const apply = async (val: string) => {
-      const live = histResolve(key);
-      setStages((ss) => ss.map((s) => (s.id === live ? { ...s, name_he: val } : s)));
-      await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
-    };
-    runCmd({ label: te("actRename"), redo: () => apply(v), undo: () => apply(st.name_he) });
+    setFieldDialog({
+      title: te("editStage"),
+      fields: [{ key: "name", label: te("name"), value: st.name_he, required: true }],
+      onSave: ({ name }) => {
+        setFieldDialog(null);
+        if (name === st.name_he) return;
+        const key = histKeyOf(st.id);
+        const apply = async (val: string) => {
+          const live = histResolve(key);
+          setStages((ss) => ss.map((s) => (s.id === live ? { ...s, name_he: val } : s)));
+          await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
+        };
+        runCmd({ label: te("actRename"), redo: () => apply(name), undo: () => apply(st.name_he) });
+      },
+    });
   }
 
-  // Links: stored as task_materials of type "link". Add/remove inline; not a
-  // scheduling field, so optimistic with no refetch.
+  // Links: stored as task_materials of type "link". One dialog for URL + label
+  // (was two chained prompts); not a scheduling field, so optimistic, no refetch.
   function addLink(task: TableTask) {
-    const url = window.prompt(t("table.linkUrl"));
-    if (!url || !url.trim()) return;
-    const label = (window.prompt(t("table.linkLabel"), url.trim()) ?? url.trim()).trim() || url.trim();
-    const old = task.task_materials ?? [];
-    const next = [...old, { id: newKey(), type: "link", title: label, url: url.trim() }];
-    editField(task.id, { task_materials: next }, { task_materials: old }, { task_materials: next }, { task_materials: old }, t("table.colLinks"), false);
+    setFieldDialog({
+      title: t("table.addLinkTitle"),
+      fields: [
+        { key: "url", label: t("table.linkUrl"), dir: "ltr", required: true },
+        { key: "label", label: t("table.linkLabel") },
+      ],
+      onSave: ({ url, label }) => {
+        setFieldDialog(null);
+        const old = task.task_materials ?? [];
+        const next = [...old, { id: newKey(), type: "link", title: label || url, url }];
+        editField(task.id, { task_materials: next }, { task_materials: old }, { task_materials: next }, { task_materials: old }, t("table.colLinks"), false);
+      },
+    });
+  }
+
+  // "+ new section" from a plan header's section select.
+  function requestNewSection(planId: string) {
+    setFieldDialog({
+      title: t("table.newSection"),
+      fields: [{ key: "name", label: te("name"), required: true }],
+      onSave: ({ name }) => {
+        setFieldDialog(null);
+        setPlanSection(planId, name);
+      },
+    });
   }
   function removeLink(task: TableTask, matId: string) {
     const old = task.task_materials ?? [];
@@ -465,25 +533,45 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[12.5px] text-muted-foreground">{t("table.lead")}</p>
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <button onClick={addPlan}
-              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
-              <Plus className="h-3.5 w-3.5" /> {t("table.addProject")}
-            </button>
-            <button onClick={doUndo} disabled={!history.canUndo} title={history.nextUndoLabel ? `${te("undo")}: ${history.nextUndoLabel}` : te("undo")}
-              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent disabled:opacity-50">
-              <Undo2 className="h-3.5 w-3.5" /> {te("undo")}
-            </button>
-            <button onClick={doRedo} disabled={!history.canRedo} title={history.nextRedoLabel ? `${te("redo")}: ${history.nextRedoLabel}` : te("redo")}
-              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent disabled:opacity-50">
-              <Redo2 className="h-3.5 w-3.5" /> {te("redo")}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setHideDone((v) => !v)}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
+              hideDone ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent",
+            )}>
+            <EyeOff className="h-3.5 w-3.5" /> {t("table.hideDone")}
+          </button>
+          {canEdit && (
+            <>
+              <button onClick={addPlan}
+                className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent">
+                <Plus className="h-3.5 w-3.5" /> {t("table.addProject")}
+              </button>
+              <button onClick={doUndo} disabled={!history.canUndo} title={history.nextUndoLabel ? `${te("undo")}: ${history.nextUndoLabel}` : te("undo")}
+                className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent disabled:opacity-50">
+                <Undo2 className="h-3.5 w-3.5" /> {te("undo")}
+              </button>
+              <button onClick={doRedo} disabled={!history.canRedo} title={history.nextRedoLabel ? `${te("redo")}: ${history.nextRedoLabel}` : te("redo")}
+                className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent disabled:opacity-50">
+                <Redo2 className="h-3.5 w-3.5" /> {te("redo")}
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {canEdit && <p className="text-[11px] text-muted-foreground">{t("table.keyboardHint")}</p>}
 
+      {groups.length === 0 ? (
+        <div className="rounded-xl border bg-card p-10 text-center">
+          <p className="text-sm font-medium">{t("table.empty")}</p>
+          {canEdit && (
+            <button onClick={addPlan}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground hover:bg-primary/90">
+              <Plus className="h-4 w-4" /> {t("table.addProject")}
+            </button>
+          )}
+        </div>
+      ) : (
       <div className="overflow-x-auto rounded-xl border" onKeyDown={onGridKey}>
         <table className="w-full min-w-[920px] border-collapse text-[12.5px]">
           <thead className="sticky top-0 z-[2] bg-secondary/70 text-[11px] font-bold text-muted-foreground">
@@ -492,18 +580,21 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
               <th className="border-b px-2 py-1.5 text-start" style={{ width: "12%" }}>{t("table.colWorker")}</th>
               <th className="border-b px-2 py-1.5 text-start" style={{ width: "10%" }}>{t("table.colStatus")}</th>
               <th className="border-b px-2 py-1.5 text-start" style={{ width: "14%" }}>{t("table.colDue")}</th>
-              <th className="border-b px-2 py-1.5 text-start" style={{ width: "8%" }}>{t("table.colDuration")}</th>
-              <th className="border-b px-2 py-1.5 text-start" style={{ width: "18%" }}>{t("table.colLinks")}</th>
-              <th className="border-b px-2 py-1.5 text-start" style={{ width: "12%" }}>{t("table.colDeps")}</th>
+              <th className="border-b px-2 py-1.5 text-start" style={{ width: "9%" }}>{t("table.colDuration")}</th>
+              <th className="border-b px-2 py-1.5 text-start" style={{ width: "16%" }}>{t("table.colLinks")}</th>
+              <th className="border-b px-2 py-1.5 text-start" style={{ width: "13%" }}>{t("table.colDeps")}</th>
             </tr>
           </thead>
           <tbody>
             {(() => {
+              // Section header rows only when at least one plan actually has a
+              // section — an org that doesn't use sections gets no noise row.
+              const showSections = groups.some((g) => g.plan.group_label);
               let lastSection: string | null | undefined;
               return groups.map(({ plan, rows, stages: planStages }) => {
                 const section = plan.group_label || null;
                 const header =
-                  section !== lastSection ? (
+                  showSections && section !== lastSection ? (
                     <tr key={`sec-${section ?? "none"}`} className="bg-secondary">
                       <td colSpan={7} className="border-b px-2 py-1 text-[12.5px] font-bold text-foreground/80">
                         {section || t("table.noSection")}
@@ -524,6 +615,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                       statusLabel={statusLabel}
                       sectionOptions={sectionOptions}
                       onSetSection={setPlanSection}
+                      onRequestNewSection={requestNewSection}
                       te={te}
                 t={t}
                 stages={planStages}
@@ -556,8 +648,71 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
           </tbody>
         </table>
       </div>
-      {groups.length === 0 && <p className="py-8 text-center text-[12.5px] italic text-muted-foreground">{t("table.empty")}</p>}
+      )}
+
+      {fieldDialog && (
+        <FieldDialog title={fieldDialog.title} fields={fieldDialog.fields} onClose={() => setFieldDialog(null)} onSave={fieldDialog.onSave} />
+      )}
     </div>
+  );
+}
+
+interface FieldSpec {
+  key: string;
+  label: string;
+  value?: string;
+  dir?: "rtl" | "ltr";
+  required?: boolean;
+}
+
+/** Small one-shot form dialog (stage name, link URL+label, new section) —
+ *  replaces window.prompt chains with one clean screen. */
+function FieldDialog({
+  title,
+  fields,
+  onClose,
+  onSave,
+}: {
+  title: string;
+  fields: FieldSpec[];
+  onClose: () => void;
+  onSave: (values: Record<string, string>) => void;
+}) {
+  const te = useTranslations("smrtPlan.edit");
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((f) => [f.key, f.value ?? ""])));
+  const valid = fields.every((f) => !f.required || values[f.key]?.trim());
+
+  function save() {
+    if (!valid) return;
+    onSave(Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.trim()])));
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          {fields.map((f, i) => (
+            <label key={f.key} className="block">
+              <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{f.label}</span>
+              <Input
+                autoFocus={i === 0}
+                dir={f.dir ?? "auto"}
+                value={values[f.key]}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+              />
+            </label>
+          ))}
+        </div>
+        <DialogFooter className="mt-2 flex gap-2">
+          <Button variant="outline" onClick={onClose}>{te("cancel")}</Button>
+          <Button onClick={save} disabled={!valid}>{te("save")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -571,6 +726,7 @@ function PlanGroup(props: {
   statusLabel: (s: string) => string;
   sectionOptions: string[];
   onSetSection: (planId: string, label: string | null) => void;
+  onRequestNewSection: (planId: string) => void;
   te: ReturnType<typeof useTranslations>;
   t: ReturnType<typeof useTranslations>;
   onEditPlanTitle: (planId: string, oldTitle: string, newTitle: string) => void;
@@ -599,6 +755,9 @@ function PlanGroup(props: {
   const { plan, rows, locale, canEdit, memberMap, members, statusLabel, te, t, stages } = props;
   const [editTitle, setEditTitle] = useState(false);
   const planTitle = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
+  // The plan's color (same as its board bar) runs down the group's start edge,
+  // so the plan → stage → task hierarchy reads at a glance.
+  const planColor = plan.color || "#534AB7";
   const stageName = (s: TableStage) => (locale === "en" ? s.name_en || s.name_he : s.name_he);
   const stageIds = new Set(stages.map((s) => s.id));
   const noStageRows = rows.filter((tk) => !tk.stage_id || !stageIds.has(tk.stage_id));
@@ -607,7 +766,7 @@ function PlanGroup(props: {
   // delete, and "+ task" that creates a task already in that stage.
   const bannerRow = (s: TableStage | null) => (
     <tr key={s ? `b-${s.id}` : "b-none"} className="bg-secondary/20">
-      <td colSpan={7} className="border-b px-2 py-1">
+      <td colSpan={7} className="border-b px-2 py-1 ps-3" style={{ borderInlineStart: `3px solid ${planColor}55` }}>
         <span className="flex items-center gap-2">
           <span
             className={cn("text-[11.5px] font-bold", s ? "text-foreground/80" : "italic text-muted-foreground", canEdit && s && "cursor-text rounded px-0.5 hover:bg-accent")}
@@ -635,8 +794,9 @@ function PlanGroup(props: {
   return (
     <>
       <tr className="bg-secondary/40">
-        <td colSpan={7} className="border-b px-2 py-1.5">
+        <td colSpan={7} className="border-b px-2 py-1.5" style={{ borderInlineStart: `3px solid ${planColor}` }}>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: planColor }} />
             {canEdit && editTitle ? (
               <input
                 autoFocus
@@ -661,7 +821,7 @@ function PlanGroup(props: {
                 title={t("table.section")}
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (v === "__new__") { const name = window.prompt(t("table.newSection")); if (name && name.trim()) props.onSetSection(plan.id, name.trim()); }
+                  if (v === "__new__") props.onRequestNewSection(plan.id);
                   else props.onSetSection(plan.id, v || null);
                 }}
                 className="h-6 rounded border border-input bg-background px-1 text-[10.5px] text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -718,7 +878,7 @@ function PlanGroup(props: {
         const isActive = (c: number) => props.active?.r === r && props.active?.c === c;
         const isEdit = (c: number) => isActive(c) && props.editing;
 
-        const textCell = (c: number, col: NavCol, display: string, kind: "text" | "date" | "number") => {
+        const textCell = (c: number, col: NavCol, display: string, kind: "text" | "date" | "number", opts?: { cls?: string; tooltip?: string }) => {
           if (isEdit(c)) {
             return (
               <input
@@ -742,9 +902,10 @@ function PlanGroup(props: {
             <button
               ref={isActive(c) ? (el) => { props.cellRef.current = el; } : undefined}
               tabIndex={isActive(c) ? 0 : -1}
+              title={opts?.tooltip}
               onFocus={() => props.onActivate(r, c)}
               onClick={() => (canEdit ? props.onEnterEdit(r, c) : props.onActivate(r, c))}
-              className={cn(cellBase, isActive(c) && "bg-accent/60", !display && "text-muted-foreground/50")}
+              className={cn(cellBase, isActive(c) && "bg-accent/60", !display && "text-muted-foreground/50", opts?.cls)}
             >
               {display || "—"}
             </button>
@@ -780,22 +941,28 @@ function PlanGroup(props: {
         };
 
         return (
-          <tr key={task.id} className={cn("hover:bg-accent/20", done && "text-muted-foreground")}>
-            <td className="border-b px-1 py-0.5">
+          <tr key={task.id} className={cn("group hover:bg-accent/20", done && "text-muted-foreground")}>
+            <td className="border-b px-1 py-0.5 ps-3" style={{ borderInlineStart: `3px solid ${planColor}2e` }}>
               <span className="flex items-center gap-1">
                 {task.is_critical && <AlertTriangle className="h-3 w-3 flex-shrink-0 text-status-late" />}
+                {/* The stage banner already shows the grouping — the per-row
+                    mover only appears on hover / on the active row. */}
                 {canEdit && stages.length > 0 && (
                   <select
                     value={task.stage_id ?? ""}
                     onChange={(e) => props.onSetTaskStage(task, e.target.value || null)}
                     title={t("table.stage")}
-                    className="max-w-[70px] flex-shrink-0 rounded border border-input bg-background px-0.5 text-[9.5px] text-muted-foreground outline-none focus:ring-1 focus:ring-ring"
+                    className={cn(
+                      "max-w-[70px] flex-shrink-0 rounded border border-input bg-background px-0.5 text-[9.5px] text-muted-foreground outline-none focus:ring-1 focus:ring-ring",
+                      "opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100",
+                      props.active?.r === r && "opacity-100",
+                    )}
                   >
                     <option value="">—</option>
                     {stages.map((s) => <option key={s.id} value={s.id}>{stageName(s)}</option>)}
                   </select>
                 )}
-                {textCell(0, "title", task.title_he || task.title, "text")}
+                {textCell(0, "title", task.title_he || task.title, "text", { cls: done ? "line-through" : undefined })}
               </span>
             </td>
             <td className="border-b px-1 py-0.5">
@@ -809,7 +976,11 @@ function PlanGroup(props: {
               {textCell(3, "due", task.due_date ? `${gregShort(parseISO(task.due_date))} · ${hebDate(parseISO(task.due_date))}` : "", "date")}
             </td>
             <td className="border-b px-1 py-0.5">
-              {textCell(4, "duration", task.duration_days != null ? `${task.duration_days} ${te("daysUnit")}` : "", "number")}
+              {/* "~" marks an engine-estimated duration (a typed value pins it). */}
+              {textCell(4, "duration",
+                task.duration_days != null ? `${task.duration_manual ? "" : "~"}${task.duration_days} ${te("daysUnit")}` : "",
+                "number",
+                task.duration_days != null ? { tooltip: task.duration_manual ? te("durManual") : te("durEstimated") } : undefined)}
             </td>
             <td className="border-b px-2 py-1">
               <span className="flex flex-wrap items-center gap-1">

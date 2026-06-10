@@ -953,6 +953,12 @@ function validateTaskMaterials(value: unknown): string | null {
 // capacity, so reassigning can shift its dates.
 const TASK_SCHED_FIELDS = new Set(["due_date", "duration_days", "duration_manual", "estimated_hours", "parent_task_id", "assigned_to_user_id"]);
 
+// Statuses that count as "done" (matches the SQL progress/health views). A
+// status flip INTO this set via the generic PATCH must behave exactly like
+// /plan-tasks/:id/done — release dependents + recompute — otherwise successor
+// tasks stay blocked and matrix cells never flip.
+const TASK_DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
+
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(req.body ?? {})) {
@@ -962,6 +968,21 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
   if ("task_materials" in patch) {
     const err = validateTaskMaterials(patch.task_materials);
     if (err) return res.status(400).json({ error: err });
+  }
+  // When the status changes, read the current one first to detect a
+  // done-transition (in either direction).
+  let wasDone: boolean | null = null;
+  if (typeof patch.status === "string") {
+    const { data: cur, error: curErr } = await db
+      .from("tasks")
+      .select("status")
+      .eq("organization_id", req.org!.id)
+      .eq("id", req.params.id)
+      .not("plan_id", "is", null)
+      .maybeSingle();
+    if (curErr) return res.status(500).json({ error: curErr.message });
+    if (!cur) return res.status(404).json({ error: "task not found" });
+    wasDone = TASK_DONE_STATUSES.has(cur.status as string);
   }
   // Scope to a task that actually belongs to a plan in this org.
   const { data, error } = await db
@@ -973,7 +994,13 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id, task_materials")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
+  const nowDone = typeof patch.status === "string" ? TASK_DONE_STATUSES.has(patch.status) : null;
+  const becameDone = wasDone === false && nowDone === true;
+  const reopened = wasDone === true && nowDone === false;
+  if (becameDone) await releaseDependents(req.org!.id, req.params.id); // unblock successors
+  if (becameDone || reopened || Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) {
+    await autoRecompute(req.org!.id);
+  }
   res.json({ task: data });
 });
 
