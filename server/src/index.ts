@@ -208,8 +208,37 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 // Sonnet bill. Manual/on-demand runs still go through routes/sync.ts.
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Ensure the Chromium browser used by the admin domain-tracker is present —
+ * downloaded once into PLAYWRIGHT_BROWSERS_PATH (a persistent Railway volume),
+ * NOT during the build. `playwright install` is idempotent: it skips when the
+ * right version is already there, so this only actually downloads on first boot
+ * after a fresh volume or a Playwright upgrade. The OS libraries come from the
+ * image (build step). Best-effort + non-blocking — never delays/crashes boot.
+ */
+function ensureChromium(): void {
+  if (process.env.INSTALL_CHROMIUM !== "1") return;
+  void (async () => {
+    try {
+      const { execFile } = await import("node:child_process");
+      const path = await import("node:path");
+      // Resolve the playwright CLI via its package dir (subpath imports are
+      // blocked by the package's "exports"); run it from there.
+      const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
+      execFile(process.execPath, [cli, "install", "chromium"], { env: process.env }, (err, stdout) => {
+        if (err) console.error("[chromium] install failed (domain-tracker may be unavailable):", err.message);
+        else console.log("[chromium] ready:", (stdout || "").toString().trim().split("\n").pop() || "ok");
+      });
+    } catch (e) {
+      console.error("[chromium] ensure skipped:", e instanceof Error ? e.message : e);
+    }
+  })();
+}
+
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
+  ensureChromium();
   // Resume any unofficial WhatsApp (Baileys) connections that were already
   // paired. Best-effort — a failure here must never crash boot. Assumes a
   // single replica (two sockets on one number get logged out by WhatsApp).
