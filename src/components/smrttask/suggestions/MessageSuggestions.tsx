@@ -5,16 +5,17 @@ import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { api } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { IconButton } from "@/components/ui/icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Clock, Zap, Home } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
+import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { DismissDialog } from "./DismissDialog";
@@ -313,7 +314,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                 key={task.id}
                 ref={isFocused ? focusNodeRef : undefined}
                 className={cn(
-                  "relative",
                   isFocused
                     ? "ring-2 ring-status-warn animate-pulse"
                     : isSelected
@@ -321,92 +321,68 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     : undefined,
                 )}
               >
-                {/* Source chip — pinned to the card's top-LEFT corner, deep
-                    link to the original message. */}
-                {source && (
-                  <span className="absolute top-2 left-2 z-10">
-                    <SourceLink source={source} stopPropagation />
-                  </span>
-                )}
                 <CardContent className="p-4">
-                  <div className="flex items-start gap-3">
+                  {/* Top row: select · title (click → edit) · source + date
+                      cluster pinned to the trailing (left in RTL) edge. */}
+                  <div className="flex items-start gap-2">
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelect(task.id)}
-                      className="mt-1.5 shrink-0 h-4 w-4 cursor-pointer"
+                      className="mt-1 shrink-0 h-4 w-4 cursor-pointer"
                       aria-label={t("selectAll")}
                     />
-                    {/* Clicking the body (not the inline toggles) opens the
-                        edit window — the ✨/AI panel lives there now, not here. */}
-                    <div
-                      className="flex-1 min-w-0 cursor-pointer"
+                    <h4
+                      className="flex-1 min-w-0 text-sm font-medium cursor-pointer"
+                      dir="auto"
                       onClick={() => setEditTask(task)}
                     >
-                      {/* Title row: title + size + 🏠 + deadline. */}
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-sm font-medium" dir="auto">{title}</h4>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleSizeToggle(task); }}
-                          title={task.size === "quick" ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
-                          className={cn(
-                            "flex h-6 items-center gap-0.5 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
-                            task.size === "quick"
-                              ? "bg-status-warn-bg text-status-warn"
-                              : "bg-secondary text-muted-foreground hover:text-foreground",
-                          )}
-                        >
-                          <Zap className="h-3 w-3" />
-                          {task.size === "quick" ? tTasks("row.sizeQuick") : tTasks("row.sizeRegular")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleHomeToggle(task); }}
-                          title={tTasks("contextFilter.home")}
-                          aria-pressed={task.context === "home"}
-                          className={cn(
-                            "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
-                            task.context === "home"
-                              ? "bg-primary/10 text-primary"
-                              : "text-muted-foreground/40 hover:text-muted-foreground",
-                          )}
-                        >
-                          <Home className="h-3.5 w-3.5" />
-                        </button>
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <DueDateChip
-                            deadline={effectiveDeadline(task)}
-                            locale={locale}
-                            blocked={blocked}
-                            onChange={(d) => handleDueChange(task.id, d)}
-                          />
-                        </span>
-                      </div>
-                      {task.description ? (
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir="auto">
-                          {task.description}
-                        </p>
-                      ) : null}
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        {task.related_contact && (
-                          <Badge variant="outline" className="text-[10px]">
-                            {task.related_contact}
-                          </Badge>
-                        )}
-                        {(task.tags ?? []).slice(0, 2).map((tag) => (
-                          <Badge key={tag} variant="outline" className="text-[10px] capitalize">
-                            {tag}
-                          </Badge>
-                        ))}
-                      </div>
+                      {title}
+                    </h4>
+                    <div dir="ltr" className="flex shrink-0 items-center gap-1">
+                      {source && <SourceLink source={source} stopPropagation />}
+                      <DueDateChip
+                        deadline={effectiveDeadline(task)}
+                        locale={locale}
+                        blocked={blocked}
+                        onChange={(d) => handleDueChange(task.id, d)}
+                      />
                     </div>
                   </div>
 
+                  {task.description ? (
+                    <p
+                      className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words cursor-pointer"
+                      dir="auto"
+                      onClick={() => setEditTask(task)}
+                    >
+                      {task.description}
+                    </p>
+                  ) : null}
+
+                  {(task.related_contact || (task.tags ?? []).length > 0) && (
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {task.related_contact && (
+                        <Badge variant="outline" className="text-[10px]">
+                          {task.related_contact}
+                        </Badge>
+                      )}
+                      {(task.tags ?? []).slice(0, 2).map((tag) => (
+                        <Badge key={tag} variant="outline" className="text-[10px] capitalize">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+
                   <SuggestionActions
+                    task={task}
+                    locale={locale}
                     infoProjectId={task.project_id}
                     infoTitle={title}
                     infoBody={task.description}
+                    onSizeToggle={() => handleSizeToggle(task)}
+                    onHomeToggle={() => handleHomeToggle(task)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
@@ -483,26 +459,36 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 }
 
 /**
- * Per-card action row, in RTL display order from start to end:
- *   snooze · save-as-info · [flex] · fast-X (red) · X! (orange) · approve · done
+ * Per-card action row — one unified icon-button style throughout. In RTL,
+ * start (right) to end (left):
+ *   meta:   ✨ AI · ⚡ size (filled=quick) · 🏠 home (filled=home) · ⏰ snooze · 📄 save-info
+ *   [flex]
+ *   decide: ✗ dismiss · 👎 dismiss+learn · ＋ convert-to-task · ✓ done
  *
- * There is no edit button — clicking the card body opens the edit window.
- * "approve" moves the suggestion into the task lists (waiting, or straight to
- * the desk when the deadline is near). "done" closes it in one step.
+ * No edit button — clicking the card body opens the edit window. "convert to
+ * task" moves the suggestion into the task lists; "done" closes it in one step.
  */
 function SuggestionActions({
+  task,
+  locale,
   infoProjectId,
   infoTitle,
   infoBody,
+  onSizeToggle,
+  onHomeToggle,
   onFastDismiss,
   onDismissWithReason,
   onApprove,
   onSnooze,
   onComplete,
 }: {
+  task: Task;
+  locale: string;
   infoProjectId: string | null;
   infoTitle: string;
   infoBody: string | null;
+  onSizeToggle: () => void;
+  onHomeToggle: () => void;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
@@ -511,68 +497,54 @@ function SuggestionActions({
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
+  const isQuick = task.size === "quick";
+  const isHome = task.context === "home";
 
   return (
-    <div className="flex gap-2 mt-3 items-center">
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-9 w-9"
-        onClick={onSnooze}
-        title={tTasks("actions.snooze")}
-        aria-label={tTasks("actions.snooze")}
+    <div className="flex gap-1 mt-3 items-center flex-wrap">
+      {/* ── meta ───────────────────────────────────────────────────────── */}
+      <ContextButton task={task} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
+      <IconButton
+        label={isQuick ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
+        color="amber"
+        className={isQuick ? "text-status-warn" : undefined}
+        onClick={onSizeToggle}
       >
-        <Clock className="h-4 w-4" />
-      </Button>
+        <Zap className={isQuick ? "fill-current" : undefined} />
+      </IconButton>
+      <IconButton
+        label={tTasks("contextFilter.home")}
+        color="primary"
+        className={isHome ? "text-primary" : undefined}
+        aria-pressed={isHome}
+        onClick={onHomeToggle}
+      >
+        <Home className={isHome ? "fill-current" : undefined} />
+      </IconButton>
+      <IconButton label={tTasks("actions.snooze")} color="amber" onClick={onSnooze}>
+        <Clock />
+      </IconButton>
       <SaveAsInfoButton
         defaultProjectId={infoProjectId}
         defaultTitle={infoTitle}
         defaultBody={infoBody}
       />
+
       <div className="flex-1" />
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-9 w-9 text-status-late hover:bg-status-late-bg"
-        onClick={onFastDismiss}
-        title={t("fastDismiss")}
-        aria-label={t("fastDismiss")}
-      >
-        <X className="h-4 w-4" />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-9 w-9 text-status-warn hover:bg-status-warn-bg font-semibold"
-        onClick={onDismissWithReason}
-        title={t("dismissWithReason")}
-        aria-label={t("dismissWithReason")}
-      >
-        <X className="h-4 w-4" />
-        <span className="text-sm leading-none -ms-0.5">!</span>
-      </Button>
-      <Button
-        size="icon"
-        className="h-9 w-9"
-        onClick={onApprove}
-        title={t("approve")}
-        aria-label={t("approve")}
-      >
-        <CheckCircle2 className="h-4 w-4" />
-      </Button>
-      {/* The unified ✓ — same affordance as task rows: complete in one step,
-          with an undo toast. Replaces the old labeled "complete" button. */}
-      <button
-        type="button"
-        onClick={onComplete}
-        title={tTasks("actions.complete")}
-        aria-label={tTasks("actions.complete")}
-        className="flex h-9 w-9 items-center justify-center"
-      >
-        <span className="flex h-[22px] w-[22px] items-center justify-center rounded-md border-2 border-muted-foreground/40 text-[12px] text-transparent transition-colors hover:border-status-ok hover:text-status-ok">
-          ✓
-        </span>
-      </button>
+
+      {/* ── decide ─────────────────────────────────────────────────────── */}
+      <IconButton label={t("fastDismiss")} color="red" onClick={onFastDismiss}>
+        <X />
+      </IconButton>
+      <IconButton label={t("dismissWithReason")} color="violet" onClick={onDismissWithReason}>
+        <ThumbsDown />
+      </IconButton>
+      <IconButton label={t("approve")} color="blue" onClick={onApprove}>
+        <ListPlus />
+      </IconButton>
+      <IconButton label={tTasks("actions.complete")} color="green" onClick={onComplete}>
+        <Check />
+      </IconButton>
     </div>
   );
 }
