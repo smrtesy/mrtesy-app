@@ -275,6 +275,35 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     [draft, editField, t, te],
   );
 
+  // Reopening doesn't silently re-block dependents that were already released —
+  // surface what kept running with a one-click re-block of the not-yet-started.
+  const notifyReopen = useCallback(
+    async (taskId: string) => {
+      try {
+        const { dependents } = await api<{ dependents: { id: string }[] }>(`/api/plan-tasks/${taskId}/released-dependents`);
+        if (!dependents || dependents.length === 0) return;
+        toast.warning(t("effort.reopenReleased", { n: dependents.length }), {
+          duration: 10000,
+          action: {
+            label: t("effort.reblockAction"),
+            onClick: async () => {
+              try {
+                const { reblocked } = await api<{ reblocked: number }>(`/api/plan-tasks/${taskId}/reblock`, { method: "POST" });
+                toast.success(t("effort.reblocked", { n: reblocked }));
+                await refetch();
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Error");
+              }
+            },
+          },
+        });
+      } catch {
+        /* informational only */
+      }
+    },
+    [t, refetch],
+  );
+
   // Selects (assignee/status) commit immediately on change.
   const commitSelect = useCallback(
     (task: TableTask, col: NavCol, value: string) => {
@@ -287,10 +316,13 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
         // Crossing the done boundary releases dependents + recomputes on the
         // server — refetch so needs/critical/dates on other rows stay fresh.
         const crossesDone = DONE.has(value) !== DONE.has(task.status);
-        if (value !== task.status) editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"), crossesDone);
+        if (value !== task.status) {
+          editField(task.id, { status: value }, { status: task.status }, { status: value }, { status: task.status }, t("table.colStatus"), crossesDone);
+          if (DONE.has(task.status) && !DONE.has(value)) void notifyReopen(task.id);
+        }
       }
     },
-    [editField, t],
+    [editField, t, notifyReopen],
   );
 
   const enterEdit = useCallback(
@@ -1023,9 +1055,10 @@ function PlanGroup(props: {
                 {(task.needs ?? []).length === 0 && <span className="text-[11px] text-muted-foreground/40">—</span>}
                 {(task.needs ?? []).map((n) => (
                   <span key={n.dependency_id}
+                    title={n.provider_reopened ? t("effort.inputReopened") : undefined}
                     className={cn("inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border px-1.5 py-px text-[10.5px]",
-                      n.satisfied ? "bg-status-ok-bg text-status-ok" : "bg-secondary/60")}>
-                    <Link2 className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{n.title}</span>
+                      n.provider_reopened ? "bg-status-warn-bg text-status-warn" : n.satisfied ? "bg-status-ok-bg text-status-ok" : "bg-secondary/60")}>
+                    {n.provider_reopened ? "⚠" : <Link2 className="h-2.5 w-2.5 flex-shrink-0" />} <span className="truncate">{n.title}</span>
                   </span>
                 ))}
               </span>

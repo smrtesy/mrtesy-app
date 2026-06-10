@@ -92,6 +92,9 @@ async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
 /** Resolve "what's needed to start" (needs) and downstream "handoff" for a set
  *  of tasks from smrtplan_dependencies (task→task). Shared by the plan-tasks
  *  and my-tasks endpoints. */
+// Statuses that count as "done" (matches the SQL progress/health views).
+const TASK_DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
+
 async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]> {
   const ids = taskRows.map((t) => t.id as string);
   if (ids.length === 0) return taskRows.map((t) => ({ ...t, needs: [], handoff: [] }));
@@ -131,11 +134,16 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
     if (idSet.has(consumer)) {
       const p = refMap.get(provider);
       const arr = needsByTask.get(consumer) ?? [];
+      const satisfied = (d.satisfied as boolean) ?? false;
       arr.push({
         dependency_id: d.id,
         task_id: provider,
         title: (p?.title_he as string) || (p?.title as string) || "—",
-        satisfied: (d.satisfied as boolean) ?? false,
+        satisfied,
+        // satisfied only flips on completion; a satisfied edge whose provider
+        // is no longer done means the provider was reopened — the consumer is
+        // working off an input that's back in progress.
+        provider_reopened: satisfied && !!p && !TASK_DONE_STATUSES.has(p.status as string),
         lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
       });
@@ -953,12 +961,9 @@ function validateTaskMaterials(value: unknown): string | null {
 // capacity, so reassigning can shift its dates.
 const TASK_SCHED_FIELDS = new Set(["due_date", "duration_days", "duration_manual", "estimated_hours", "parent_task_id", "assigned_to_user_id"]);
 
-// Statuses that count as "done" (matches the SQL progress/health views). A
-// status flip INTO this set via the generic PATCH must behave exactly like
-// /plan-tasks/:id/done — release dependents + recompute — otherwise successor
-// tasks stay blocked and matrix cells never flip.
-const TASK_DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
-
+// A status flip INTO the done set via the generic PATCH must behave exactly
+// like /plan-tasks/:id/done — release dependents + recompute — otherwise
+// successor tasks stay blocked and matrix cells never flip.
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(req.body ?? {})) {
@@ -1069,6 +1074,90 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
   if (done) await releaseDependents(req.org!.id, req.params.id); // unblock successors
   await autoRecompute(req.org!.id);
   res.json({ task: data });
+});
+
+/**
+ * GET /plan-tasks/:id/released-dependents — the consumer tasks whose dependency
+ * on this task was already released (satisfied = true). Surfaced after a
+ * reopen so the planner sees what kept running and can decide to re-block.
+ */
+router.get("/plan-tasks/:id/released-dependents", async (req: Request, res: Response) => {
+  const { data: edges, error } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id")
+    .eq("org_id", req.org!.id)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .eq("to_id", req.params.id)
+    .eq("satisfied", true);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!edges || edges.length === 0) return res.json({ dependents: [] });
+  const { data: consumers, error: cErr } = await db
+    .from("tasks")
+    .select("id, title, title_he, status")
+    .eq("organization_id", req.org!.id)
+    .in("id", edges.map((e) => e.from_id as string));
+  if (cErr) return res.status(500).json({ error: cErr.message });
+  res.json({ dependents: consumers ?? [] });
+});
+
+/**
+ * POST /plan-tasks/:id/reblock — after a reopen, flip satisfied back to false
+ * on this task's released edges, but ONLY for consumers that haven't started
+ * yet (status inbox). In-progress and done consumers are never yanked back —
+ * the human decides those case by case. Allowed for the same actors as /done
+ * (full planner, the task's assignee, super-admin), since it's the follow-up
+ * to their own reopen.
+ */
+router.post("/plan-tasks/:id/reblock", async (req: Request, res: Response) => {
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, assigned_to_user_id, status")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found" });
+  const level = await resolveAccessLevel(req);
+  const allowed = level === "full" || (task.assigned_to_user_id as string | null) === req.user!.id || (await isSuperAdmin(req.user!));
+  if (!allowed) return res.status(403).json({ error: "not allowed to re-block" });
+  // The provider may have been re-completed while the toast was on screen —
+  // re-blocking edges of a DONE provider would wrongly block its consumers.
+  if (TASK_DONE_STATUSES.has(task.status as string)) return res.json({ reblocked: 0 });
+
+  const { data: edges, error } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id")
+    .eq("org_id", req.org!.id)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .eq("to_id", req.params.id)
+    .eq("satisfied", true);
+  if (error) return res.status(500).json({ error: error.message });
+  let reblocked = 0;
+  if (edges && edges.length > 0) {
+    const { data: notStarted, error: nErr } = await db
+      .from("tasks")
+      .select("id")
+      .eq("organization_id", req.org!.id)
+      .in("id", edges.map((e) => e.from_id as string))
+      .eq("status", "inbox");
+    if (nErr) return res.status(500).json({ error: nErr.message });
+    const ids = new Set((notStarted ?? []).map((r) => r.id as string));
+    const edgeIds = edges.filter((e) => ids.has(e.from_id as string)).map((e) => e.id as string);
+    if (edgeIds.length > 0) {
+      const { error: uErr } = await db
+        .from("smrtplan_dependencies")
+        .update({ satisfied: false })
+        .eq("org_id", req.org!.id)
+        .in("id", edgeIds);
+      if (uErr) return res.status(500).json({ error: uErr.message });
+      reblocked = edgeIds.length;
+      await autoRecompute(req.org!.id);
+    }
+  }
+  res.json({ reblocked });
 });
 
 router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
