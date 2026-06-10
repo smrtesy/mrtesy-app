@@ -146,10 +146,10 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
       });
 
       // "Learn from this": file the custom explanation as a correction so it
-      // rides the next corrections export to the AI. Best-effort — the
-      // dismissal already succeeded.
+      // rides the next corrections export to the AI. Fire-and-forget — the
+      // dismissal already succeeded, so don't make the user wait for it.
       if (selectedCode === "custom" && learn && customText.trim()) {
-        await api("/api/corrections", {
+        void api("/api/corrections", {
           method: "POST",
           body: {
             task_id: taskId,

@@ -724,12 +724,17 @@ async function refreshTaskDescription(opts: {
 ציטוט מילולי של דברי אדם ("אמר שיתקשר מחר") מותר — זה דיווח על מה שנאמר,
 לא קביעת מועד.
 
+בנוסף לתיאור, עדכן גם את כותרת המשימה כך שתשקף את הצעד הבא הנדרש עכשיו:
+- כותרת בעברית בלבד, מתחילה בפועל פעולה (לענות / לאשר / להתקשר / לבדוק /
+  לשלם / לתאם / להגיש...), קצרה (עד ~60 תווים).
+- אם הצעד הבא לא השתנה — החזר את הכותרת הקודמת כמות שהיא.
+- אל תמציא פעולה שלא עולה מהעדכונים; בספק שמור על הכותרת הקודמת.
+
 כללים נוספים:
 - שמור על URLs מלאים מהמקור verbatim, אל תקצר לדומיין בלבד.
-- אל תוסיף הקדמות כמו "כאן התיאור המעודכן" — החזר רק את הטקסט.
-- אל תוסיף שורות חדשות שאינן נחוצות.
+- אל תוסיף הקדמות.
 
-החזר טקסט בלבד, בלי JSON, בלי גרשיים מסביב.`;
+החזר JSON בלבד בפורמט: {"title": "<כותרת מעודכנת>", "description": "<תיאור מעודכן>"}`;
 
   const userMessage = `כותרת המשימה: ${opts.title}
 מועד המשימה (due_date): ${opts.dueDate || "(לא נקבע)"}
@@ -740,22 +745,44 @@ ${opts.currentDescription || "(ריק)"}
 העדכונים שנכנסו לפי הסדר:
 ${recent || "(אין עדכונים)"}
 
-שכתב את התיאור.`;
+שכתב את הכותרת והתיאור.`;
 
   const { content } = await simpleCall(
     "haiku",
     systemPrompt,
     userMessage,
-    600,
-    { component: "smrttask.tasks.update.refresh_description", userId: opts.userId },
+    700,
+    { component: "smrttask.tasks.update.refresh_summary", userId: opts.userId },
   );
 
-  const cleaned = content.trim().replace(/^["'`]+|["'`]+$/g, "");
-  if (!cleaned) return;
+  // Expect { title, description }. Be tolerant: if the model returns plain
+  // text (no JSON), treat it as the description and leave the title as-is.
+  let title: string | null = null;
+  let description: string | null = null;
+  try {
+    const parsed = parseJsonResponse<{ title?: string; description?: string }>(content);
+    if (parsed && typeof parsed === "object") {
+      title = typeof parsed.title === "string" ? parsed.title.trim() : null;
+      description = typeof parsed.description === "string" ? parsed.description.trim() : null;
+    }
+  } catch { /* fall through to plain-text handling */ }
+  if (description === null && title === null) {
+    description = content.trim().replace(/^["'`]+|["'`]+$/g, "");
+  }
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (description) patch.description = description.slice(0, 1000);
+  if (title) {
+    // Bilingual title columns: the UI shows title_he in Hebrew, falling back
+    // to title. Keep both in sync with the AI-refreshed Hebrew title.
+    patch.title_he = title.slice(0, 200);
+    patch.title = title.slice(0, 200);
+  }
+  if (!("description" in patch) && !("title_he" in patch)) return;
 
   await db
     .from("tasks")
-    .update({ description: cleaned.slice(0, 1000), updated_at: new Date().toISOString() })
+    .update(patch)
     .eq("organization_id", opts.orgId)
     .eq("id", opts.taskId);
 }

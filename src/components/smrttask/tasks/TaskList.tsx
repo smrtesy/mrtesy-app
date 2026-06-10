@@ -229,6 +229,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }, []);
 
   async function handleToggleDone(task: Task, done: boolean) {
+    // Optimistically drop the row so the ✓ feels instant; the API call +
+    // realtime refetch reconcile, and on failure we refetch to restore.
+    if (done) setTasks((prev) => prev.filter((row) => row.id !== task.id));
     try {
       if (done) {
         await completeTask(task);

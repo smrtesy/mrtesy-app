@@ -285,6 +285,19 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         };
       });
       onUpdate();
+      // The server refreshes title + description from the new update via Haiku
+      // (fire-and-forget, ~1-3s). Pull the task once after a short delay so the
+      // open panel shows the refreshed title/description without a manual reopen.
+      const refreshId = task.id;
+      window.setTimeout(async () => {
+        try {
+          const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${refreshId}`);
+          if (fresh) {
+            setLiveTask((prev) => (prev && prev.id === refreshId ? { ...prev, title: fresh.title, title_he: fresh.title_he, description: fresh.description } : prev));
+            dirtyRef.current = true;
+          }
+        } catch { /* best-effort */ }
+      }, 3000);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     } finally {
@@ -401,51 +414,27 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                     </button>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* ⚡/רגיל — the same segmented toggle as the new-task form */}
-                    <div className="flex rounded-lg border p-0.5 bg-background">
-                      <button
-                        type="button"
-                        onClick={() => setEditSize("quick")}
-                        className={cn(
-                          "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-                          editSize === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
-                        )}
-                      >
-                        <Zap className="h-3 w-3" />
-                        {t("row.sizeQuick")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditSize("regular")}
-                        className={cn(
-                          "rounded-md px-2 py-1 text-xs font-medium transition-colors",
-                          editSize === "regular" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
-                        )}
-                      >
-                        {t("row.sizeRegular")}
-                      </button>
-                    </div>
-
-                    {/* 🏠 — the same icon toggle as the rows outside */}
-                    <button
-                      type="button"
-                      onClick={() => setEditContext(editContext === "home" ? "" : "home")}
-                      title={tDetail("contextHome")}
-                      aria-pressed={editContext === "home"}
-                      className={cn(
-                        "flex h-7 w-7 items-center justify-center rounded-md border transition-colors",
-                        editContext === "home"
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "bg-background text-muted-foreground/50 hover:text-muted-foreground",
-                      )}
+                  {/* Same borderless IconButtons as the cards outside:
+                      ⚡ size (filled=quick), 🏠 home (filled=home), 👤 assignee.
+                      Due date lives in the header chip; status is gone. */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    <IconButton
+                      label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
+                      color="amber"
+                      className={editSize === "quick" ? "text-status-warn" : undefined}
+                      onClick={() => setEditSize(editSize === "quick" ? "regular" : "quick")}
                     >
-                      <Home className="h-3.5 w-3.5" />
-                    </button>
-
-                    {/* Due date lives in the header chip; status is gone (the
-                        ✓ / ⏰ / desk drive state). Assignment is a person-icon,
-                        manager-only. */}
+                      <Zap className={editSize === "quick" ? "fill-current" : undefined} />
+                    </IconButton>
+                    <IconButton
+                      label={tDetail("contextHome")}
+                      color="primary"
+                      aria-pressed={editContext === "home"}
+                      className={editContext === "home" ? "text-primary" : undefined}
+                      onClick={() => setEditContext(editContext === "home" ? "" : "home")}
+                    >
+                      <Home className={editContext === "home" ? "fill-current" : undefined} />
+                    </IconButton>
                     <AssigneeButton
                       assignedTo={editAssignedTo || null}
                       onAssign={(uid) => setEditAssignedTo(uid ?? "")}

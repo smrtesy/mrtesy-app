@@ -151,15 +151,24 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
   function clearSelection() { setSelected(new Set()); }
 
-  async function handleApprove(taskId: string) {
-    try {
-      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
-      toast.success(t("approve"));
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+  // Optimistically drop card(s) from the list so an action feels instant; the
+  // API call + background refetch reconcile. On failure we refetch to restore.
+  function removeLocal(ids: string[]) {
+    const set = new Set(ids);
+    setSuggestions((prev) => prev.filter((s) => !set.has(s.id)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }
+
+  function handleApprove(taskId: string) {
+    removeLocal([taskId]);
+    toast.success(t("approve"));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
   async function handleSizeToggle(task: Task) {
@@ -204,78 +213,61 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     }
   }
 
-  async function handleFastDismiss(taskId: string) {
-    try {
-      await api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" });
-      toast.success(t("fastDismissed"));
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+  function handleFastDismiss(taskId: string) {
+    removeLocal([taskId]);
+    toast.success(t("fastDismissed"));
+    api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleComplete(taskId: string) {
-    try {
-      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
-      // Undo restores status=inbox; manually_verified is untouched, so the
-      // row comes straight back as a suggestion.
-      toast.success(tTasks("actions.complete"), {
-        action: {
-          label: tTasks("row.undo"),
-          onClick: () => {
-            api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
-              .then(() => { fetchSuggestions(); onUpdate?.(); })
-              .catch((e) => toast.error((e as Error).message));
-          },
+  function handleComplete(taskId: string) {
+    removeLocal([taskId]);
+    // Undo restores status=inbox; manually_verified is untouched, so the
+    // row comes straight back as a suggestion.
+    toast.success(tTasks("actions.complete"), {
+      action: {
+        label: tTasks("row.undo"),
+        onClick: () => {
+          api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
+            .then(() => { fetchSuggestions(); onUpdate?.(); })
+            .catch((e) => toast.error((e as Error).message));
         },
-      });
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+      },
+    });
+    api(`/api/tasks/${taskId}/complete`, { method: "POST" })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleSnoozeConfirm(untilIso: string) {
+  function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
-    try {
-      await api(`/api/tasks/${snoozeTaskId}/snooze`, {
-        method: "POST",
-        body: { until: untilIso },
-      });
-      toast.success(tTasks("actions.snooze"));
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+    const id = snoozeTaskId;
+    removeLocal([id]);
+    toast.success(tTasks("actions.snooze"));
+    api(`/api/tasks/${id}/snooze`, { method: "POST", body: { until: untilIso } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleBulkApprove() {
+  function handleBulkApprove() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    try {
-      await api(`/api/tasks/bulk-approve`, { method: "POST", body: { task_ids: ids } });
-      toast.success(t("approve"));
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+    removeLocal(ids);
+    toast.success(t("approve"));
+    api(`/api/tasks/bulk-approve`, { method: "POST", body: { task_ids: ids } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
   async function handleBulkDismissFast() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    try {
-      await api(`/api/tasks/bulk-dismiss-fast`, { method: "POST", body: { task_ids: ids } });
-      toast.success(t("fastDismissed"));
-      fetchSuggestions();
-      onUpdate?.();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+    removeLocal(ids);
+    toast.success(t("fastDismissed"));
+    api(`/api/tasks/bulk-dismiss-fast`, { method: "POST", body: { task_ids: ids } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
   function openDismissDialog(taskId: string, title: string, sourceType: string | null) {
@@ -422,7 +414,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         sourceType={dismissTarget?.sourceType ?? null}
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
-        onDismissed={() => { fetchSuggestions(); onUpdate?.(); }}
+        onDismissed={() => {
+          // Drop the card instantly; refetch in the background to also catch
+          // any cascaded dismissals of sibling suggestions.
+          if (dismissTarget) removeLocal([dismissTarget.id]);
+          fetchSuggestions();
+          onUpdate?.();
+        }}
       />
 
       <TaskDetail
