@@ -12,18 +12,17 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   Zap,
-  MessageCircle,
   FolderSearch,
   Clock,
   Check,
-  Save,
   ChevronDown,
   ChevronUp,
   ExternalLink,
-  Pencil,
   X,
   Home,
   Trash2,
+  ThumbsDown,
+  ListPlus,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -31,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
@@ -51,18 +51,27 @@ interface TaskDetailProps {
   onDelete?: (taskId: string) => void;
   onQuickAction?: (taskId: string, action: { label: string; prompt: string }) => void;
   onDriveSearch?: (taskId: string, description: string) => void;
-  /** When the sheet first opens for this task, expand the field editor immediately. */
+  /** Legacy — the editor is now always on; accepted so callers stay unchanged. */
   initialEditingFields?: boolean;
+  /**
+   * Suggestion-mode decide cluster: when these are provided (the inbox), the
+   * footer shows ✗ dismiss · 👎 dismiss+learn · ＋ convert · ✓ done — exactly
+   * like the card outside. Without them (the tasks page) it shows 🗑 + ✓.
+   */
+  onFastDismiss?: (taskId: string) => void;
+  onDismissWithReason?: (taskId: string) => void;
+  onApprove?: (taskId: string) => void;
 }
 
-// onQuickAction is accepted (and ignored) while the AI-actions section is
-// hidden — callers stay unchanged for when the feature returns.
-export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onDriveSearch, initialEditingFields }: TaskDetailProps) {
+// onQuickAction/onDriveSearch are accepted (and ignored) while those features
+// are hidden — callers stay unchanged for when they return.
+export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, onFastDismiss, onDismissWithReason, onApprove }: TaskDetailProps) {
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const tDetail = useTranslations("taskDetailExt");
   const tActions = useTranslations("tasks.actions");
   const tMerge = useTranslations("merge");
+  const tSuggestions = useTranslations("suggestions");
   const blocked = useWorkCalendar();
 
   // Description edit
@@ -104,20 +113,20 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
    *  appear immediately. Cleared when the prop's task.id changes. */
   const [liveTask, setLiveTask] = useState<Task | null>(null);
 
-  // Auto-expand the field editor when the dialog opens with initialEditingFields=true.
-  // The ref is reset when the dialog closes so the next open always re-triggers edit mode.
+  // The editor (title + footer toggles) is ALWAYS on — there is no pencil.
+  // Seed it whenever the dialog opens for a (possibly different) task.
   const autoEditedTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) {
       autoEditedTaskIdRef.current = null;
       return;
     }
-    if (!initialEditingFields || !task) return;
+    if (!task) return;
     if (autoEditedTaskIdRef.current === task.id) return;
     autoEditedTaskIdRef.current = task.id;
-    void startFieldEdit();
+    startFieldEdit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task?.id, initialEditingFields]);
+  }, [open, task?.id]);
 
   // Reset the local override whenever the parent opens us with a
   // different task so we don't bleed state across selections.
@@ -327,20 +336,14 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           )}
         >
-          {/* Sticky header */}
+          {/* Sticky header — title, the X, and the source+date chips. ALL
+              action icons live in the bottom row, mirroring the cards. */}
           <div className="sticky top-0 z-10 bg-background border-b px-4 py-3 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
               {savedFlash && (
                 <span className="text-[10px] text-status-ok">{tDetail("savedFlash")}</span>
               )}
-              {/* The same context icon as the rows outside — serial and AI
-                  reasoning live inside its panel (wraps to a full-width row
-                  below when open). */}
-              <ContextButton task={effectiveTask} locale={locale} />
-              <IconButton label={tCommon("edit")} color="primary" onClick={startFieldEdit}>
-                <Pencil />
-              </IconButton>
               <IconButton label={tCommon("close")} color="neutral" onClick={handleDialogClose}>
                 <X />
               </IconButton>
@@ -392,55 +395,16 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               box. */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 overscroll-contain">
             <div className="space-y-4">
-              {/* Field editing — compact, autosaved. Same icons and toggles
-                  as the rows outside; no save button (debounced autosave). */}
+              {/* Title — always editable, autosaved (debounced). All toggles
+                  (⚡/🏠/👤/…) live in the bottom action row, like the cards. */}
               {editingFields && (
-                <div className="space-y-2 rounded-lg border p-2.5 bg-muted/50" dir={dir}>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      dir={dir}
-                      className="h-8 flex-1 text-sm"
-                      placeholder={tDetail("titleLabel")}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setEditingFields(false)}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
-                      aria-label={tCommon("close")}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-
-                  {/* Same borderless IconButtons as the cards outside:
-                      ⚡ size (filled=quick), 🏠 home (filled=home), 👤 assignee.
-                      Due date lives in the header chip; status is gone. */}
-                  <div className="flex flex-wrap items-center gap-1">
-                    <IconButton
-                      label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
-                      color="amber"
-                      className={editSize === "quick" ? "text-status-warn" : undefined}
-                      onClick={() => setEditSize(editSize === "quick" ? "regular" : "quick")}
-                    >
-                      <Zap className={editSize === "quick" ? "fill-current" : undefined} />
-                    </IconButton>
-                    <IconButton
-                      label={tDetail("contextHome")}
-                      color="primary"
-                      aria-pressed={editContext === "home"}
-                      className={editContext === "home" ? "text-primary" : undefined}
-                      onClick={() => setEditContext(editContext === "home" ? "" : "home")}
-                    >
-                      <Home className={editContext === "home" ? "fill-current" : undefined} />
-                    </IconButton>
-                    <AssigneeButton
-                      assignedTo={editAssignedTo || null}
-                      onAssign={(uid) => setEditAssignedTo(uid ?? "")}
-                    />
-                  </div>
-                </div>
+                <Input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  dir={dir}
+                  className="h-8 text-sm"
+                  placeholder={tDetail("titleLabel")}
+                />
               )}
 
               {/* Description + Updates — unified block. The description
@@ -451,45 +415,30 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               <div className="rounded border overflow-hidden">
                 {/* Description (canonical) */}
                 <div className="p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      {t("detail.description")}
-                    </h4>
-                    {!editingDesc && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDescription(task.description || "");
-                          setEditingDesc(true);
-                        }}
-                        className="text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        {tDetail("saveButton") === "Save" ? "Edit" : "ערוך"}
-                      </button>
-                    )}
-                  </div>
+                  <h4 className="mb-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {t("detail.description")}
+                  </h4>
                   {editingDesc ? (
-                    <div className="space-y-1">
-                      <Textarea
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        className="min-h-[120px]"
-                        dir={dir}
-                        autoFocus
-                      />
-                      {/* Autosaved (debounced) — no save button. */}
-                      <button
-                        type="button"
-                        onClick={() => setEditingDesc(false)}
-                        className="text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        {tCommon("close")}
-                      </button>
-                    </div>
+                    <Textarea
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      onBlur={() => setEditingDesc(false)}
+                      className="min-h-[120px]"
+                      dir={dir}
+                      autoFocus
+                    />
                   ) : (
-                    <div className="whitespace-pre-wrap text-sm" dir={dir}>
-                      {task.description ? (
-                        <LinkifiedText>{task.description}</LinkifiedText>
+                    /* Click the text to edit — autosaved (debounced), no buttons. */
+                    <div
+                      className="whitespace-pre-wrap text-sm cursor-text"
+                      dir={dir}
+                      onClick={() => {
+                        setDescription(effectiveTask.description || "");
+                        setEditingDesc(true);
+                      }}
+                    >
+                      {effectiveTask.description ? (
+                        <LinkifiedText>{effectiveTask.description}</LinkifiedText>
                       ) : (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
@@ -506,8 +455,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       value={newUpdate}
                       onChange={(e) => setNewUpdate(e.target.value)}
                       onKeyDown={(e) => {
-                        // Cmd/Ctrl+Enter submits — common pattern in chat UIs.
-                        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && newUpdate.trim()) {
+                        // Enter saves (Shift+Enter for a newline) — no save button.
+                        if (e.key === "Enter" && !e.shiftKey && !addingUpdate && newUpdate.trim()) {
                           e.preventDefault();
                           handleAddUpdate();
                         }
@@ -517,15 +466,6 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       dir={dir}
                       rows={1}
                     />
-                    <Button
-                      size="sm"
-                      onClick={handleAddUpdate}
-                      disabled={addingUpdate || !newUpdate.trim()}
-                      className="shrink-0 self-start"
-                      title="Cmd/Ctrl+Enter"
-                    >
-                      <Save className="h-3 w-3" />
-                    </Button>
                   </div>
 
                   {/* Timeline */}
@@ -669,31 +609,69 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             </div>
           </div>
 
-          {/* Sticky bottom actions */}
-          <div className="border-t bg-background px-4 py-3 flex items-center justify-between pb-[max(12px,env(safe-area-inset-bottom))]">
-            <div className="flex gap-1">
-              <IconButton
-                label={t("actions.aiChat")}
-                color="blue"
-                onClick={() => window.open(
-                  `https://claude.ai/new?q=${encodeURIComponent(task.description || title)}`,
-                  "_blank"
-                )}
-              >
-                <MessageCircle />
-              </IconButton>
-              <IconButton
-                label={t("actions.searchDocs")}
-                color="green"
-                onClick={() => onDriveSearch?.(task.id, task.description || title)}
-                disabled={!onDriveSearch}
-              >
-                <FolderSearch />
-              </IconButton>
-              <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
-                <Clock />
-              </IconButton>
-              {onDelete && (
+          {/* Sticky bottom actions — EXACTLY the card's icon row:
+                meta:   ℹ️/📋 context · ⚡ size · 🏠 home · ⏰ snooze · 📄 info · 👤 assign
+                decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
+          <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
+            <ContextButton task={effectiveTask} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
+            <IconButton
+              label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
+              color="amber"
+              className={editSize === "quick" ? "text-status-warn" : undefined}
+              onClick={() => setEditSize(editSize === "quick" ? "regular" : "quick")}
+            >
+              <Zap className={editSize === "quick" ? "fill-current" : undefined} />
+            </IconButton>
+            <IconButton
+              label={tDetail("contextHome")}
+              color="primary"
+              aria-pressed={editContext === "home"}
+              className={editContext === "home" ? "text-primary" : undefined}
+              onClick={() => setEditContext(editContext === "home" ? "" : "home")}
+            >
+              <Home className={editContext === "home" ? "fill-current" : undefined} />
+            </IconButton>
+            <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
+              <Clock />
+            </IconButton>
+            <SaveAsInfoButton
+              defaultProjectId={effectiveTask.project_id}
+              defaultTitle={title}
+              defaultBody={effectiveTask.description}
+            />
+            <AssigneeButton
+              assignedTo={editAssignedTo || null}
+              onAssign={(uid) => setEditAssignedTo(uid ?? "")}
+            />
+
+            <div className="flex-1" />
+
+            {onFastDismiss && onDismissWithReason && onApprove ? (
+              <>
+                <IconButton
+                  label={tSuggestions("fastDismiss")}
+                  color="red"
+                  onClick={() => { onFastDismiss(task.id); onClose(); }}
+                >
+                  <X />
+                </IconButton>
+                <IconButton
+                  label={tSuggestions("dismissWithReason")}
+                  color="violet"
+                  onClick={() => { onDismissWithReason(task.id); onClose(); }}
+                >
+                  <ThumbsDown />
+                </IconButton>
+                <IconButton
+                  label={tSuggestions("approve")}
+                  color="blue"
+                  onClick={() => { onApprove(task.id); onClose(); }}
+                >
+                  <ListPlus />
+                </IconButton>
+              </>
+            ) : (
+              onDelete && (
                 <IconButton
                   label={t("actions.delete")}
                   color="red"
@@ -701,9 +679,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 >
                   <Trash2 />
                 </IconButton>
-              )}
-            </div>
-            {/* The unified ✓ done — same icon style as the rows/cards. */}
+              )
+            )}
             <IconButton label={t("actions.complete")} color="green" onClick={handleComplete}>
               <Check />
             </IconButton>

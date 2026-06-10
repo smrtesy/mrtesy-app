@@ -430,6 +430,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         onClose={() => setEditTask(null)}
         onUpdate={fetchSuggestions}
         initialEditingFields
+        onFastDismiss={handleFastDismiss}
+        onDismissWithReason={(taskId) => {
+          const s = suggestions.find((row) => row.id === taskId);
+          const sTitle = s ? (locale === "he" && s.title_he ? s.title_he : s.title) : "";
+          openDismissDialog(taskId, sTitle, s?.source_messages?.source_type ?? null);
+        }}
+        onApprove={handleApprove}
       />
 
       <SnoozeDialog

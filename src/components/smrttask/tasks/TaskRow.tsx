@@ -125,7 +125,7 @@ export function TaskRow({
           <AlarmClockCheck className="h-3 w-3 shrink-0 text-status-warn" aria-label={t("row.wokeHint")} />
         )}
         {planLabel && (
-          <span className="shrink-0 truncate max-w-[8rem] rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground" title={planLabel}>
+          <span className="shrink-0 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground">
             {planLabel}
           </span>
         )}
@@ -160,9 +160,10 @@ export function TaskRow({
         )}
       </span>
 
-      {/* Deadline chip — fixed column, right-aligned so dates line up */}
+      {/* Deadline chip — fixed column with breathing room from the ⚡ slot,
+          end-aligned so dates line up down the list. */}
       {!isDone && (
-        <span className="flex w-[72px] shrink-0 justify-end">
+        <span className="ms-2 flex w-[110px] shrink-0 justify-end">
           <DueDateChip
             deadline={deadline}
             locale={locale}
@@ -174,10 +175,9 @@ export function TaskRow({
         </span>
       )}
 
-      {/* Hover actions — fixed-width slot, reserved via opacity so the date
-          column never shifts on hover. */}
+      {/* Snooze / move — always visible but faint; full strength on hover. */}
       {!isDone && (
-        <span className="flex w-12 shrink-0 items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <span className="flex w-12 shrink-0 items-center justify-end gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           {onSnooze && (
             <button
               type="button"

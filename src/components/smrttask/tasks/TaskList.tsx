@@ -362,6 +362,29 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   return (
     <>
+    {/* Title + context filter — ABOVE the search row (which CombinedSearch
+        renders right under this). */}
+    <div className="mb-3 flex items-center gap-3">
+      {title && <h1 className="text-2xl font-bold">{title}</h1>}
+      <div className="ms-auto flex rounded-lg border p-0.5">
+        {contextChips.map((chip) => (
+          <button
+            key={chip.key}
+            type="button"
+            onClick={() => setContextFilter(chip.key)}
+            className={cn(
+              "flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
+              contextFilter === chip.key
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {chip.icon && <chip.icon className="h-3 w-3" />}
+            {chip.label}
+          </button>
+        ))}
+      </div>
+    </div>
     <CombinedSearch locale={locale} onUpdate={fetchTasks}>
     <div className="space-y-6">
       {loading ? (
@@ -370,30 +393,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         </div>
       ) : (
         <>
-          {/* Title + context filter on ONE row (filter pushed to the trailing
-              edge — left in RTL). */}
-          <div className="flex items-center gap-3">
-            {title && <h1 className="text-2xl font-bold">{title}</h1>}
-            <div className="ms-auto flex rounded-lg border p-0.5">
-              {contextChips.map((chip) => (
-                <button
-                  key={chip.key}
-                  type="button"
-                  onClick={() => setContextFilter(chip.key)}
-                  className={cn(
-                    "flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
-                    contextFilter === chip.key
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {chip.icon && <chip.icon className="h-3 w-3" />}
-                  {chip.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <ReviewBanner
             candidates={reviewCandidates}
             locale={locale}

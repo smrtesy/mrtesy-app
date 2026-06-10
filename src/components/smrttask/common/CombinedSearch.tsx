@@ -184,17 +184,18 @@ export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchPro
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <div className="relative">
-          <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      {/* One compact row: a small search field + the archive toggle beside it. */}
+      <div className="flex items-center gap-3">
+        <div className="relative w-full max-w-xs">
+          <Search className="absolute start-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={query}
             onChange={(e) => handleChange(e.target.value)}
             placeholder={t("placeholder")}
-            className="ps-10 min-h-[48px] text-start"
+            className="ps-8 h-8 text-sm text-start"
           />
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
           <input
             type="checkbox"
             checked={includeArchive}

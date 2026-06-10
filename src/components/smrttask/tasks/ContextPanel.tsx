@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { Sparkles, ClipboardList, ExternalLink, CheckCircle2, Clock, ArrowLeft, MessageSquarePlus } from "lucide-react";
+import { Info, ClipboardList, ExternalLink, CheckCircle2, Clock, ArrowLeft, MessageSquarePlus } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
@@ -112,7 +112,9 @@ export function ContextButton({
 
   if (!kind) return null;
 
-  const Icon = kind === "ai" ? Sparkles : ClipboardList;
+  // Info icon (not sparkles): this is "why the AI classified it this way" —
+  // information, in the same quiet style as the rest of the icon row.
+  const Icon = kind === "ai" ? Info : ClipboardList;
 
   return (
     <>
