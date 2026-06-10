@@ -125,7 +125,12 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
         try {
           const jsonMatch = text.match(/\[[\s\S]*\]/);
           if (jsonMatch) suggestions = JSON.parse(jsonMatch[0]);
-        } catch (_e) { /* ignore parse errors */ }
+        } catch (e) {
+          // Don't swallow silently — a parse failure means zero suggestions
+          // are returned and the run looks successful. Log it so the failure
+          // is visible in function logs.
+          console.error("[project-detection] failed to parse suggestions JSON:", e);
+        }
       }
 
       // Create suggestion tasks for each new project

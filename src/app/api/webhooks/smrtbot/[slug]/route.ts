@@ -14,11 +14,20 @@
  *        (menu/game/FAQ reply) is dispatched from here once ported; until then
  *        inbound is recorded and acknowledged so Meta does not retry.
  */
+import crypto from "crypto";
 import { NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Constant-time string compare; false (not a throw) on length mismatch. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -117,10 +126,10 @@ export async function GET(request: NextRequest, { params }: Params): Promise<Res
   const bot = await loadBot(slug);
   if (!bot) return new Response("not found", { status: 404 });
 
-  const valid =
-    token === bot.verify_token ||
-    token === bot.test_verify_token ||
-    token === bot.live_verify_token;
+  const candidates = [bot.verify_token, bot.test_verify_token, bot.live_verify_token].filter(
+    (t): t is string => !!t,
+  );
+  const valid = candidates.some((c) => timingSafeEqualStr(token, c));
 
   if (valid) {
     return new Response(challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
@@ -149,9 +158,34 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     const bot = await loadBot(slug);
     if (!bot) return new Response("ok", { status: 200 });
 
-    const payload = (await request.json().catch(() => null)) as
-      | { entry?: { changes?: { value?: MetaValue }[] }[] }
-      | null;
+    // Read the RAW body once — HMAC must run over the exact bytes Meta signed.
+    const raw = await request.text();
+
+    // Verify Meta's X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret).
+    // Backward-compatible: only enforced when META_APP_SECRET is configured.
+    // Until a bot goes live and the secret is set, this is a no-op so nothing
+    // breaks. (Mirrors the smrtTask /webhooks/whatsapp handler. If bots ever
+    // span multiple Meta apps with different secrets, add a per-bot secret
+    // column and resolve it here instead of the single platform env.)
+    const appSecret = process.env.META_APP_SECRET ?? null;
+    if (appSecret) {
+      const sig = request.headers.get("x-hub-signature-256") ?? "";
+      const expected =
+        "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex");
+      if (!sig || !timingSafeEqualStr(sig, expected)) {
+        console.warn("[smrtbot-webhook] signature mismatch — rejecting");
+        // Ack 200 (so Meta doesn't retry a forged/garbage request) but do not process.
+        return new Response("ok", { status: 200 });
+      }
+    }
+
+    const payload = (() => {
+      try {
+        return JSON.parse(raw) as { entry?: { changes?: { value?: MetaValue }[] }[] };
+      } catch {
+        return null;
+      }
+    })();
     if (!payload?.entry) return new Response("ok", { status: 200 });
 
     for (const entry of payload.entry) {

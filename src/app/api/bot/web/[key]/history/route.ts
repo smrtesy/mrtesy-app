@@ -37,7 +37,11 @@ export async function GET(request: NextRequest, { params }: Params): Promise<Res
   }
 
   const url = new URL(request.url);
-  const sessionToken = url.searchParams.get("session_token");
+  // Prefer the token in a header (keeps it out of URLs, access logs and the
+  // Referer header). Fall back to the query param so widgets with cached JS
+  // that still send ?session_token= keep working.
+  const sessionToken =
+    request.headers.get("x-session-token") ?? url.searchParams.get("session_token");
   const since = url.searchParams.get("since");
   if (!sessionToken) {
     return jsonWithCors({ error: "session_token is required" }, 400, origin, allowed);
