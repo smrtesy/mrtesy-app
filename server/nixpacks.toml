@@ -3,7 +3,7 @@
 # auto-detected Node.js packages rather than extending them.
 #
 # We do NOT list any Chromium-related nix packages here.
-# playwright's postinstall hook runs "playwright install chromium --with-deps"
+# playwright's postinstall hook runs "playwright install-deps chromium"
 # which uses apt-get to install Chromium's system dependencies in standard
 # Ubuntu library paths (/usr/lib/...) where the playwright-downloaded binary
 # can actually find them.  Nix packages live in /nix/store/... and are not
@@ -11,3 +11,21 @@
 nixPkgs = [
   "nodejs_22",
 ]
+
+# Dependency install runs in its OWN cached layer, keyed only on the lockfiles.
+# `onlyIncludeFiles` means this layer's cache is invalidated ONLY when
+# package.json / package-lock.json change — i.e. when a dependency (including
+# playwright) is added or upgraded. A plain source-code push does NOT
+# re-run it, so the heavy `postinstall` step (apt-get of Chromium's ~100
+# system libs, gated behind INSTALL_CHROMIUM=1) is skipped and the cached
+# node_modules + apt layer is reused.
+#
+# This is the speed fix: previously the install also ran in the BUILD phase
+# (via railway.toml's old `npm install && npm run build`), where every source
+# change busted the cache and forced the apt step to re-run on every deploy.
+# We keep playwright's own distro-aware `install-deps` (it resolves the right
+# Ubuntu package names, incl. the 24.04 `t64` renames) rather than hardcoding
+# an apt list here, so a base-image change can never break the build.
+[phases.install]
+onlyIncludeFiles = ["package.json", "package-lock.json"]
+cmds = ["npm install --include=dev"]
