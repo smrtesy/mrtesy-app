@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
-import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireAuth, requireOrg, requireApp, rateLimit } from "../../../middleware";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
 import { runPart4 } from "../parts/part4-projects";
@@ -18,6 +18,16 @@ const router = Router();
 
 // Every smrtTask route runs through this chain (except the cron webhook below).
 const smrttaskGate = [requireAuth, requireOrg, requireApp("smrttask")];
+
+// Per-user cap on the heavy ingest/LLM endpoints. A genuine user never needs to
+// kick off a full sync or project-brief build more than a handful of times a
+// minute; this stops a runaway client or abuse from exhausting Google quota and
+// burning LLM tokens. Keyed by user id (req.user is set by requireAuth above).
+const heavySyncLimit = rateLimit({
+  windowMs: 60_000,
+  max: 6,
+  message: "Too many sync requests — please wait a moment before retrying.",
+});
 
 // ── Calendars list ────────────────────────────────────────────────────────
 router.get("/calendars", ...smrttaskGate, async (req: Request, res: Response) => {
@@ -30,7 +40,7 @@ router.get("/calendars", ...smrttaskGate, async (req: Request, res: Response) =>
 });
 
 // ── Part 0: style learner ─────────────────────────────────────────────────
-router.post("/part0", ...smrttaskGate, async (req: Request, res: Response) => {
+router.post("/part0", ...smrttaskGate, heavySyncLimit, async (req: Request, res: Response) => {
   const { language = "he" } = req.body ?? {};
   try {
     const result = await runPart0({ userId: req.user!.id, language });
@@ -41,7 +51,7 @@ router.post("/part0", ...smrttaskGate, async (req: Request, res: Response) => {
 });
 
 // ── Part 1: collector (Gmail/Drive/Calendar) ──────────────────────────────
-router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
+router.post("/part1", ...smrttaskGate, heavySyncLimit, async (req: Request, res: Response) => {
   const { gmail_days, drive_hours, cal_months, drive_folder_id } = req.body ?? {};
   try {
     const result = await runPart1({
@@ -65,7 +75,7 @@ router.post("/part1", ...smrttaskGate, async (req: Request, res: Response) => {
 // by the ai-process edge function running every minute via pg_cron.
 
 // ── Part 4: project suggester + brief builder ─────────────────────────────
-router.post("/part4/suggest", ...smrttaskGate, async (req: Request, res: Response) => {
+router.post("/part4/suggest", ...smrttaskGate, heavySyncLimit, async (req: Request, res: Response) => {
   try {
     const result = await runPart4({
       userId: req.user!.id,
@@ -78,7 +88,7 @@ router.post("/part4/suggest", ...smrttaskGate, async (req: Request, res: Respons
   }
 });
 
-router.post("/part4/build_brief", ...smrttaskGate, async (req: Request, res: Response) => {
+router.post("/part4/build_brief", ...smrttaskGate, heavySyncLimit, async (req: Request, res: Response) => {
   const { project_id } = req.body ?? {};
   if (!project_id) return res.status(400).json({ error: "project_id required" });
   try {

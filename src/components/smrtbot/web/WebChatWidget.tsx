@@ -155,7 +155,7 @@ export default function WebChatWidget({
         // Catch up on any replies that landed during the subscription
         // handshake; appendMessages dedups by id, so overlap is harmless.
         if (status === "SUBSCRIBED") {
-          fetch(`/api/bot/web/${botKey}/history?session_token=${encodeURIComponent(token)}`)
+          fetch(`/api/bot/web/${botKey}/history`, { headers: { "X-Session-Token": token } })
             .then((r) => (r.ok ? r.json() : null))
             .then((d: { messages?: WebMessage[] } | null) => {
               if (d?.messages) appendMessages(d.messages);
@@ -177,7 +177,9 @@ export default function WebChatWidget({
     if (!saved) return;
     (async () => {
       try {
-        const resp = await fetch(`/api/bot/web/${botKey}/history?session_token=${encodeURIComponent(saved)}`);
+        const resp = await fetch(`/api/bot/web/${botKey}/history`, {
+          headers: { "X-Session-Token": saved },
+        });
         if (!resp.ok) {
           window.localStorage.removeItem(sessionKey(botKey));
           return;
