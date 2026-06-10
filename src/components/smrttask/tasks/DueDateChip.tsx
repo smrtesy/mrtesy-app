@@ -7,8 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CalendarPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDateOnly } from "@/lib/date";
 import { dueUrgency, type BlockedDays, type DueUrgency } from "@/lib/workdays";
+import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
+
+/** The system-wide due-date label: "M/D - <hebrew day letters> <hebrew month>",
+ *  e.g. "6/9 - כ״ה סיון". Falls back to the Gregorian part alone when the
+ *  runtime lacks the Hebrew calendar. */
+function dueLabel(iso: string): string {
+  const d = parseISO(iso);
+  const heb = hebDate(d);
+  return heb ? `${gregShort(d)} - ${heb}` : gregShort(d);
+}
 
 const urgencyClasses: Record<DueUrgency, string> = {
   overdue: "bg-status-late-bg text-status-late",
@@ -30,7 +39,6 @@ const urgencyClasses: Record<DueUrgency, string> = {
  */
 export function DueDateChip({
   deadline,
-  locale,
   blocked,
   locked,
   constrained,
@@ -38,7 +46,8 @@ export function DueDateChip({
   className,
 }: {
   deadline: string | null;
-  locale: string;
+  /** Accepted for call-site symmetry; the label format is locale-independent. */
+  locale?: string;
   blocked: BlockedDays;
   locked?: boolean;
   constrained?: boolean;
@@ -80,7 +89,7 @@ export function DueDateChip({
             className,
           )}
         >
-          {formatDateOnly(deadline, locale, { day: "numeric", month: "short" })}
+          {dueLabel(deadline)}
           {constrained && (
             <span className="ms-1 text-status-late" title={t("constrainedHint")}>⚠</span>
           )}

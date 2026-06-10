@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check } from "lucide-react";
 import { api } from "@/lib/api/client";
@@ -22,6 +21,8 @@ interface TaskChecklistProps {
 export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChecklistProps) {
   const t = useTranslations("tasks.checklist");
   const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+  const addInputRef = useRef<HTMLInputElement | null>(null);
   const [saving, setSaving] = useState(false);
   // Mirror the prop locally so rapid toggles on DIFFERENT items don't race
   // against a not-yet-arrived parent refetch (which would re-read stale `items`).
@@ -72,6 +73,15 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
     };
     setDraft("");
     await persist([...localItems, newItem]);
+    // Stay in add-mode and refocus so the user can rattle off items one after
+    // another, each saved on Enter.
+    setAdding(true);
+    requestAnimationFrame(() => addInputRef.current?.focus());
+  }
+
+  function openAdd() {
+    setAdding(true);
+    requestAnimationFrame(() => addInputRef.current?.focus());
   }
 
   async function handleToggle(id: string) {
@@ -181,10 +191,18 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
 
   return (
     <div dir={dir}>
-      <h4 className="text-xs font-medium mb-1.5 flex items-center justify-between text-muted-foreground uppercase tracking-wide">
+      <h4 className="text-xs font-medium mb-1.5 flex items-center gap-1.5 text-muted-foreground uppercase tracking-wide">
         <span>{t("title")}</span>
+        <IconButton
+          label={t("addButton")}
+          color="primary"
+          className="h-6 w-6 min-h-0 min-w-0 [&_svg]:size-3.5"
+          onClick={openAdd}
+        >
+          <Plus />
+        </IconButton>
         {total > 0 && (
-          <span className="text-[11px] font-normal normal-case">
+          <span className="ms-auto text-[11px] font-normal normal-case">
             {t("progress", { done, total })}
           </span>
         )}
@@ -303,32 +321,29 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
           );
         })}
 
-        <div className="flex gap-1.5">
+        {/* Add row — revealed by the + next to the heading. Enter saves and
+            keeps the row open for the next item; empty Enter / Escape / blur
+            closes it. */}
+        {adding && (
           <Input
+            ref={addInputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                handleAdd();
+                if (draft.trim()) handleAdd();
+                else setAdding(false);
               }
+              if (e.key === "Escape") { e.preventDefault(); setDraft(""); setAdding(false); }
             }}
+            onBlur={() => { if (!draft.trim()) setAdding(false); }}
             placeholder={t("addPlaceholder")}
             dir="auto"
             className="h-8 text-sm"
             disabled={saving}
           />
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 px-2 gap-1 shrink-0"
-            onClick={handleAdd}
-            disabled={saving || !draft.trim()}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("addButton")}
-          </Button>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -324,6 +324,15 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "nothing to update" });
   }
 
+  // Assigning a task to someone is a manager-only action (org owner/admin).
+  // A non-manager PATCH may not touch assigned_to_user_id.
+  if ("assigned_to_user_id" in updates) {
+    const role = req.member!.role;
+    if (role !== "owner" && role !== "admin") {
+      return res.status(403).json({ error: "only an org manager can assign tasks" });
+    }
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
   updates.updated_at = new Date().toISOString();
@@ -856,7 +865,9 @@ router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
       .maybeSingle(),
     db
       .from("log_entries")
-      .select("classification_reason, ai_classification, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, status, error_message, created_at")
+      // Full set, matching the smrtTask log page so the ✨ panel can show the
+      // same detail: pre-classification, confidences (in `details`), duration.
+      .select("classification_reason, ai_classification, pre_classification, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, details, status, error_message, created_at")
       .eq("source_message_id", task.source_message_id)
       .order("created_at", { ascending: false })
       .limit(1),

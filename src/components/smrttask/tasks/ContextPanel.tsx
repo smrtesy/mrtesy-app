@@ -35,10 +35,13 @@ interface TrailResponse {
   log: {
     classification_reason: string | null;
     ai_classification: string | null;
+    pre_classification: string | null;
     ai_model_used: string | null;
     ai_input_tokens: number | null;
     ai_output_tokens: number | null;
     ai_cost_usd: number | null;
+    processing_duration_ms: number | null;
+    details: Record<string, unknown> | null;
     status: string | null;
     error_message: string | null;
   } | null;
@@ -199,12 +202,17 @@ function AIPanelBody({
 }) {
   const source = trail.source;
   const log = trail.log;
+  const details = (log?.details ?? null) as Record<string, unknown> | null;
+  const classConf = typeof details?.classification_confidence === "string" ? details.classification_confidence : null;
+  const taskConf = typeof details?.task_confidence === "string" ? details.task_confidence : null;
+  const dtFmt = locale === "he" ? "he-IL" : "en-US";
+
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
         {task.serial_display && <span className="font-mono">{task.serial_display}</span>}
         {source?.source_type && <span>· {source.source_type}</span>}
-        {source?.received_at && <span>· {new Date(source.received_at).toLocaleString(locale === "he" ? "he-IL" : "en-US")}</span>}
+        {source?.received_at && <span>· {new Date(source.received_at).toLocaleString(dtFmt)}</span>}
         <SourceLink source={task.source_messages ?? null} stopPropagation />
       </div>
       {source?.subject && (
@@ -216,8 +224,23 @@ function AIPanelBody({
           {source.sender || source.sender_email}
         </div>
       )}
+      {log?.pre_classification && (
+        <div><span className="text-muted-foreground/70">{t("preClassification")}: </span><span className="font-mono text-[11px]">{log.pre_classification}</span></div>
+      )}
       {log?.ai_classification && (
         <div><span className="text-muted-foreground/70">{t("classification")}: </span><span className="font-medium">{log.ai_classification}</span></div>
+      )}
+      {classConf && (
+        <div>
+          <span className="text-muted-foreground/70">{t("classConfidence")}: </span>
+          <span className={cn("uppercase font-medium", classConf === "low" && "text-status-warn")}>{classConf}</span>
+        </div>
+      )}
+      {taskConf && (
+        <div>
+          <span className="text-muted-foreground/70">{t("taskConfidence")}: </span>
+          <span className={cn("uppercase font-medium", taskConf === "low" && "text-status-warn")}>{taskConf}</span>
+        </div>
       )}
       <div>
         <span className="text-muted-foreground/70">{t("size")}: </span>
@@ -232,14 +255,24 @@ function AIPanelBody({
       {log?.error_message && (
         <div className="rounded bg-status-late-bg p-2 text-status-late">{log.error_message}</div>
       )}
+      {/* Raw additional details — the same "פרטים נוספים" block as the log. */}
+      {details && Object.keys(details).length > 0 && (
+        <details className="text-[11px]">
+          <summary className="cursor-pointer text-muted-foreground/70">{t("rawDetails")}</summary>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-[10px]" dir="ltr">
+            {JSON.stringify(details, null, 2)}
+          </pre>
+        </details>
+      )}
       {/* Scan technicals — same row the log page shows. */}
-      {(log?.ai_model_used || log?.ai_cost_usd != null || log?.status) && (
+      {(log?.ai_model_used || log?.ai_cost_usd != null || log?.processing_duration_ms != null || log?.status) && (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 border-t border-border/40 pt-1 text-[10px] text-muted-foreground/70" dir="ltr">
           {log.ai_model_used && <span>{log.ai_model_used}</span>}
           {(log.ai_input_tokens || log.ai_output_tokens) && (
             <span>{log.ai_input_tokens ?? 0}+{log.ai_output_tokens ?? 0} tok</span>
           )}
           {log.ai_cost_usd != null && <span>${Number(log.ai_cost_usd).toFixed(5)}</span>}
+          {log.processing_duration_ms != null && <span>{log.processing_duration_ms}ms</span>}
           {log.status && <span>{log.status}</span>}
         </div>
       )}

@@ -16,6 +16,7 @@ import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton"
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
+import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { DismissDialog } from "./DismissDialog";
@@ -187,6 +188,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, context } : s)));
     try {
       await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { context } });
+    } catch (e) {
+      toast.error((e as Error).message);
+      fetchSuggestions();
+    }
+  }
+
+  async function handleAssign(taskId: string, userId: string | null) {
+    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, assigned_to_user_id: userId } : s)));
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { assigned_to_user_id: userId } });
     } catch (e) {
       toast.error((e as Error).message);
       fetchSuggestions();
@@ -383,6 +394,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoBody={task.description}
                     onSizeToggle={() => handleSizeToggle(task)}
                     onHomeToggle={() => handleHomeToggle(task)}
+                    onAssign={(uid) => handleAssign(task.id, uid)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
@@ -476,6 +488,7 @@ function SuggestionActions({
   infoBody,
   onSizeToggle,
   onHomeToggle,
+  onAssign,
   onFastDismiss,
   onDismissWithReason,
   onApprove,
@@ -489,6 +502,7 @@ function SuggestionActions({
   infoBody: string | null;
   onSizeToggle: () => void;
   onHomeToggle: () => void;
+  onAssign: (userId: string | null) => void;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
@@ -529,6 +543,8 @@ function SuggestionActions({
         defaultTitle={infoTitle}
         defaultBody={infoBody}
       />
+      {/* Assign to a teammate — manager-only (renders nothing otherwise). */}
+      <AssigneeButton assignedTo={task.assigned_to_user_id} onAssign={onAssign} />
 
       <div className="flex-1" />
 

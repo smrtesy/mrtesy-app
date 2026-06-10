@@ -931,7 +931,9 @@
     "contextHome": "Home",
     "contextWork": "Work",
     "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board",
-    "savedFlash": "Saved ✓"
+    "savedFlash": "Saved ✓",
+    "assignLabel": "Assign to a teammate",
+    "assignedTo": "Assigned to {name}"
   },
   "orgSwitcher": {
     "orgCreated": "Organization created",
@@ -2435,7 +2437,11 @@
     "finishBy": "Finish by",
     "openBoard": "Open the planning board",
     "addCorrection": "Add a note/correction",
-    "addCorrectionHint": "Saved as a correction — included in the log's corrections export"
+    "addCorrectionHint": "Saved as a correction — included in the log's corrections export",
+    "preClassification": "Pre-classification",
+    "classConfidence": "Classification confidence",
+    "taskConfidence": "Task-writing confidence",
+    "rawDetails": "Additional details"
   },
   "marathon": {
     "progress": "{done} of {total}",

@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
+import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 export default async function InboxPage({
   params,
@@ -57,7 +58,16 @@ export default async function InboxPage({
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">{t("title")}</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        {/* Same corrections export as the log page, pinned to the trailing
+            (left in RTL) edge of the title row. */}
+        {hasSmrtTask && (
+          <div className="ms-auto">
+            <CorrectionsExportButton refreshKey={0} />
+          </div>
+        )}
+      </div>
       <InboxTabs locale={locale} hasSmrtTask={hasSmrtTask} />
     </div>
   );

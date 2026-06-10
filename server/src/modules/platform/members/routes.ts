@@ -100,6 +100,17 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
   res.json({ members });
 });
 
+/** GET /org/me — the requesting user's role in the active org. Lightweight,
+ *  for the UI to decide manager-only affordances (e.g. assigning tasks). */
+router.get("/org/me", requireAuth, requireOrg, async (req: Request, res: Response) => {
+  const role = req.member!.role;
+  res.json({
+    user_id: req.user!.id,
+    role,
+    is_manager: role === "owner" || role === "admin",
+  });
+});
+
 /** PATCH /org/members/:userId/display-name — org owner/admin sets a member's
  *  per-org display name (blank clears it → falls back to first name / email). */
 router.patch("/org/members/:userId/display-name",

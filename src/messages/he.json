@@ -358,7 +358,7 @@
       "removeItem": "מחק"
     },
     "checklist": {
-      "title": "צ׳קליסט",
+      "title": "משימות משנה",
       "progress": "הושלמו {done} מתוך {total}",
       "addPlaceholder": "הוסף פריט...",
       "addButton": "הוסף",
@@ -931,7 +931,9 @@
     "contextHome": "בית",
     "contextWork": "עבודה",
     "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון",
-    "savedFlash": "נשמר ✓"
+    "savedFlash": "נשמר ✓",
+    "assignLabel": "שייך לעובד",
+    "assignedTo": "משויך ל-{name}"
   },
   "orgSwitcher": {
     "orgCreated": "ארגון נוצר",
@@ -1379,7 +1381,7 @@
     "body_truncate_task": "חיתוך גוף הודעה — יצירת משימה (תווים)"
   },
   "inbox": {
-    "title": "תיבה",
+    "title": "נכנס",
     "tabSuggestions": "הצעות",
     "tabNotifications": "התראות",
     "noNotifications": "אין התראות חדשות",
@@ -2434,7 +2436,11 @@
     "finishBy": "לסיים עד",
     "openBoard": "פתח את לוח התכנון",
     "addCorrection": "הוסף הערה/תיקון",
-    "addCorrectionHint": "נשמר כתיקון — ייכלל בייצוא התיקונים שבלוג"
+    "addCorrectionHint": "נשמר כתיקון — ייכלל בייצוא התיקונים שבלוג",
+    "preClassification": "סיווג מוקדם",
+    "classConfidence": "ביטחון סיווג",
+    "taskConfidence": "ביטחון כתיבת משימה",
+    "rawDetails": "פרטים נוספים"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",

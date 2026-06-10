@@ -40,6 +40,12 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
   const [time, setTime] = useState("09:00");
   const [submitting, setSubmitting] = useState(false);
 
+  // Only a FUTURE deadline caps the snooze. If the deadline already passed
+  // (or is today), capping would block every selectable date — snoozing an
+  // overdue task is legitimate, so drop the cap in that case.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const effMax = maxDate && maxDate > todayStr ? maxDate : null;
+
   // Re-seed each time the dialog opens so reopening after a previous
   // snooze doesn't keep the stale date around.
   useEffect(() => {
@@ -47,10 +53,10 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     let seed = tomorrow.toISOString().slice(0, 10);
-    if (maxDate && seed > maxDate) seed = maxDate;
+    if (effMax && seed > effMax) seed = effMax;
     setDate(seed);
     setTime("09:00");
-  }, [open, maxDate]);
+  }, [open, effMax]);
 
   function presetDate(daysAhead: number): string {
     const d = new Date();
@@ -59,7 +65,7 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
   }
 
   function presetBlocked(daysAhead: number): boolean {
-    return !!maxDate && presetDate(daysAhead) > maxDate;
+    return !!effMax && presetDate(daysAhead) > effMax;
   }
 
   function setPreset(daysAhead: number, hour: number) {
@@ -67,7 +73,7 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
     setTime(`${String(hour).padStart(2, "0")}:00`);
   }
 
-  const pastDeadline = !!maxDate && !!date && date > maxDate;
+  const pastDeadline = !!effMax && !!date && date > effMax;
 
   async function handleConfirm() {
     if (!date) return;

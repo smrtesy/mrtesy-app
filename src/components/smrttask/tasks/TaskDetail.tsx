@@ -15,7 +15,7 @@ import {
   MessageCircle,
   FolderSearch,
   Clock,
-  CheckCircle2,
+  Check,
   Save,
   ChevronDown,
   ChevronUp,
@@ -30,11 +30,16 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
+import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
+import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
+import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { effectiveDeadline } from "@/lib/workdays";
 import type { Task } from "@/types/task";
 
 interface TaskDetailProps {
@@ -58,6 +63,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tDetail = useTranslations("taskDetailExt");
   const tActions = useTranslations("tasks.actions");
   const tMerge = useTranslations("merge");
+  const blocked = useWorkCalendar();
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -66,13 +72,10 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   // Task field edit — autosaved (debounced); no save buttons anywhere.
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [editDueDate, setEditDueDate] = useState("");
-  const [editStatus, setEditStatus] = useState("");
   const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
   const [editContext, setEditContext] = useState<"" | "home">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
-  const [selectorMembers, setSelectorMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null }>>([]);
   /** Tiny "saved ✓" flash after an autosave lands. */
   const [savedFlash, setSavedFlash] = useState(false);
   /** Suppresses the autosave effect while the form is being (re)seeded. */
@@ -136,14 +139,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     const isPlan = !!task.plan_id;
     fieldsTimerRef.current = setTimeout(async () => {
       const body: Record<string, unknown> = {
-        status: editStatus,
         size: editSize,
         context: editContext || null,
         assigned_to_user_id: editAssignedTo || null,
       };
-      // Plan-task deadlines belong to the plan manager (set via the planning
-      // board); the input is disabled in the UI and skipped here as a backstop.
-      if (!isPlan) body.due_date = editDueDate || null;
+      // due_date is edited via the header chip (its own PATCH), not here.
+      void isPlan;
       if (editTitle.trim()) {
         if (locale === "he") body.title_he = editTitle.trim();
         else                 body.title = editTitle.trim();
@@ -160,7 +161,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }, 1200);
     return () => { if (fieldsTimerRef.current) clearTimeout(fieldsTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editTitle, editStatus, editSize, editContext, editDueDate, editAssignedTo, editingFields]);
+  }, [editTitle, editSize, editContext, editAssignedTo, editingFields]);
 
   /** Debounced autosave for the description — same contract as the fields. */
   useEffect(() => {
@@ -209,24 +210,17 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     }
   }
 
-  async function startFieldEdit() {
+  function startFieldEdit() {
     if (!task) return;
     seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
-    setEditDueDate(task.due_date || "");
-    setEditStatus(task.status);
     setEditSize(task.size === "quick" ? "quick" : "regular");
     setEditContext(task.context === "home" ? "home" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
     // Let the seeded values settle before the autosave watcher arms.
     requestAnimationFrame(() => { seedingRef.current = false; });
-    if (selectorMembers.length === 0) {
-      try {
-        const { members } = await api<{ members: Array<{ user_id: string; email: string | null; name: string | null }> }>("/api/org/members");
-        setSelectorMembers(members ?? []);
-      } catch { /* ignore */ }
-    }
+    // The member list is loaded lazily by AssigneeButton itself.
   }
 
   function handleDialogClose() {
@@ -321,15 +315,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
           )}
         >
           {/* Sticky header */}
-          <div className="sticky top-0 z-10 bg-background border-b px-4 py-3">
+          <div className="sticky top-0 z-10 bg-background border-b px-4 py-3 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
               {savedFlash && (
                 <span className="text-[10px] text-status-ok">{tDetail("savedFlash")}</span>
               )}
-              {/* The same context icon as the rows outside — serial, source
-                  and AI reasoning all live inside its panel (it wraps to a
-                  full-width row below when open). */}
+              {/* The same context icon as the rows outside — serial and AI
+                  reasoning live inside its panel (wraps to a full-width row
+                  below when open). */}
               <ContextButton task={effectiveTask} locale={locale} />
               <IconButton label={tCommon("edit")} color="primary" onClick={startFieldEdit}>
                 <Pencil />
@@ -337,6 +331,20 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               <IconButton label={tCommon("close")} color="neutral" onClick={handleDialogClose}>
                 <X />
               </IconButton>
+            </div>
+            {/* Source + editable due date — same cluster as on the cards. */}
+            <div dir="ltr" className="flex items-center gap-1.5">
+              {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
+              <DueDateChip
+                deadline={effectiveDeadline(effectiveTask)}
+                blocked={blocked}
+                locked={!!effectiveTask.plan_id}
+                onChange={effectiveTask.plan_id ? undefined : (d) => {
+                  api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: d } })
+                    .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, due_date: d } : p); })
+                    .catch((e) => toast.error((e as Error).message));
+                }}
+              />
             </div>
           </div>
 
@@ -435,42 +443,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       <Home className="h-3.5 w-3.5" />
                     </button>
 
-                    <Input
-                      type="date"
-                      value={editDueDate}
-                      onChange={(e) => setEditDueDate(e.target.value)}
-                      disabled={!!task.plan_id}
-                      title={task.plan_id ? tDetail("dueDateLockedHint") : tDetail("dueDateLabel")}
-                      className="h-7 w-36 px-2 text-xs"
-                      dir="ltr"
+                    {/* Due date lives in the header chip; status is gone (the
+                        ✓ / ⏰ / desk drive state). Assignment is a person-icon,
+                        manager-only. */}
+                    <AssigneeButton
+                      assignedTo={editAssignedTo || null}
+                      onAssign={(uid) => setEditAssignedTo(uid ?? "")}
                     />
-
-                    <select
-                      value={editStatus}
-                      onChange={(e) => setEditStatus(e.target.value)}
-                      className="h-7 rounded border px-1.5 text-xs bg-background"
-                      title={tDetail("statusLabel")}
-                    >
-                      <option value="inbox">{t("inbox")}</option>
-                      <option value="in_progress">{t("active")}</option>
-                      <option value="snoozed">{t("actions.snooze")}</option>
-                      <option value="archived">{t("archived")}</option>
-                      <option value="dismissed">{t("dismissed")}</option>
-                    </select>
-
-                    <select
-                      value={editAssignedTo}
-                      onChange={(e) => setEditAssignedTo(e.target.value)}
-                      className="h-7 max-w-40 rounded border px-1.5 text-xs bg-background"
-                      title={tDetail("assignedToLabel")}
-                    >
-                      <option value="">{tDetail("unassignedOption")}</option>
-                      {selectorMembers.map((m) => (
-                        <option key={m.user_id} value={m.user_id}>
-                          {m.name || m.email || m.user_id.slice(0, 8)}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                 </div>
               )}
@@ -735,15 +714,10 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 </IconButton>
               )}
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1 border-status-ok/40 text-status-ok/60 hover:bg-status-ok hover:text-white hover:border-status-ok active:bg-status-ok/90"
-              onClick={handleComplete}
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              {t("actions.complete")}
-            </Button>
+            {/* The unified ✓ done — same icon style as the rows/cards. */}
+            <IconButton label={t("actions.complete")} color="green" onClick={handleComplete}>
+              <Check />
+            </IconButton>
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
