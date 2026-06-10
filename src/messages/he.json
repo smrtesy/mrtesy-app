@@ -2211,7 +2211,19 @@
       "emptyBlocked": "אין משימות חסומות",
       "emptyDone": "עוד לא הושלמו משימות",
       "complete": "סיימתי",
-      "noTasks": "אין לך משימות בתוכניות עדיין"
+      "reopen": "החזרה לפעיל",
+      "noTasks": "אין לך משימות בתוכניות עדיין",
+      "detail": {
+        "description": "תיאור",
+        "noDescription": "אין תיאור",
+        "materials": "חומרים וקבצים",
+        "checklist": "צ'קליסט",
+        "subtasks": "תת-משימות",
+        "source": "הודעת המקור",
+        "edit": "עריכה",
+        "save": "שמירה",
+        "cancel": "ביטול"
+      }
     },
     "cell": {
       "title": "תא במטריצה",

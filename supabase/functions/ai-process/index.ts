@@ -2839,6 +2839,21 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
     }
 
+    // Idle probe — most cron ticks have nothing pending, so bail with one
+    // cheap query before loading params or sweeping locks. Deliberately
+    // checked on processing_status alone (no processing_lock_at filter):
+    // a stuck-locked row keeps status='pending', which makes this probe
+    // return work and lets the stale-lock sweep below run and recover it.
+    const { data: pendingProbe, error: probeErr } = await supabase
+      .from("source_messages")
+      .select("id")
+      .eq("processing_status", "pending")
+      .or("dead_letter.eq.false,dead_letter.is.null")
+      .limit(1);
+    if (!probeErr && (pendingProbe?.length ?? 0) === 0) {
+      return new Response(JSON.stringify({ processed: 0, deferred: 0, idle: true }), { headers: { "Content-Type": "application/json" } });
+    }
+
     const sys = await loadSystemParams();
 
     // Fresh per request — never reuse a token/label map across warm invocations.

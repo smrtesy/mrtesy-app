@@ -84,6 +84,24 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Step 0: Idle probe — most cron ticks have nothing to fetch, so bail
+    // with one cheap query before the lock sweep. Deliberately probed
+    // WITHOUT the processing_lock_at filter: a stuck-locked row still has
+    // body_text null, which makes this probe return work and lets the
+    // stale-lock sweep below run and recover it.
+    const { data: probe, error: probeErr } = await supabase
+      .from("source_messages")
+      .select("id")
+      .in("source_type", ["gmail", "gmail_sent"])
+      .is("body_text", null)
+      .or("dead_letter.eq.false,dead_letter.is.null")
+      .limit(1);
+    if (!probeErr && (probe?.length ?? 0) === 0) {
+      return new Response(JSON.stringify({ processed: 0, idle: true }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Step 1: Clean up stuck locks (older than 10 minutes)
     await supabase
       .from("source_messages")

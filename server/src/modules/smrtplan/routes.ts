@@ -580,7 +580,7 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
 const MY_TASK_FIELDS =
   "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id";
+  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -600,6 +600,25 @@ async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
   return tasks;
 }
 
+/** Attach each task's stage (banner) name, so worker views can show
+ *  "plan / stage" on the chip (e.g. כלי AI / ג'מיני ג'ם). */
+async function attachStageTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
+  const stageIds = [...new Set(tasks.map((t) => t.stage_id as string).filter(Boolean))];
+  if (stageIds.length === 0) return tasks;
+  const { data } = await db
+    .from("smrtplan_stages")
+    .select("id, name_he, name_en")
+    .eq("org_id", orgId)
+    .in("id", stageIds);
+  const byId = new Map(asRows(data).map((s) => [s.id as string, s]));
+  for (const t of tasks) {
+    const s = byId.get(t.stage_id as string);
+    t.stage_name_he = (s?.name_he as string) ?? null;
+    t.stage_name_en = (s?.name_en as string) ?? null;
+  }
+  return tasks;
+}
+
 router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   // Mine = assigned to me, OR unassigned tasks I created (an unassigned plan
   // task still belongs to its owner — it shouldn't fall through the cracks).
@@ -615,7 +634,7 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
   const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+  res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data)))) });
 });
 
 // A specific worker's tasks across all plans (planner view, fix #4). "Design"
@@ -632,7 +651,7 @@ router.get("/plan/worker-tasks/:userId", requireFull, async (req: Request, res: 
   if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
   const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+  res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data)))) });
 });
 
 // ── stream plan: matrix ──────────────────────────────────────────────────────
@@ -906,7 +925,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 });
 
 const PLAN_TASK_WRITABLE = new Set([
-  "title", "title_he", "due_date", "duration_days", "duration_manual",
+  "title", "title_he", "description", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
   "task_materials", "stage_id",
 ]);
@@ -956,6 +975,41 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
   if (error) return res.status(500).json({ error: error.message });
   if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
   res.json({ task: data });
+});
+
+/**
+ * GET /plan-tasks/:id/detail — read-only task card for the worker views: the
+ * task itself plus description, materials, drive docs, checklist, its subtasks,
+ * and needs/handoff. Open to any org member with smrtPlan access (the list
+ * endpoints already expose these tasks; this just adds their content).
+ */
+router.get("/plan-tasks/:id/detail", async (req: Request, res: Response) => {
+  const { data: task, error } = await db
+    .from("tasks")
+    .select(
+      MY_TASK_FIELDS +
+        ", description, task_materials, linked_drive_docs, checklist, " +
+        "source_messages(id, source_type, source_url, serial_display)",
+    )
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!task) return res.status(404).json({ error: "task not found" });
+
+  const { data: subs } = await db
+    .from("tasks")
+    .select("id, title, title_he, status, assigned_to_user_id, due_date, latest_finish")
+    .eq("organization_id", req.org!.id)
+    .eq("parent_task_id", req.params.id)
+    .order("created_at", { ascending: true });
+
+  const [enriched] = await attachStageTitles(
+    req.org!.id,
+    await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, [task as unknown as Row])),
+  );
+  res.json({ task: enriched, subtasks: subs ?? [] });
 });
 
 /**
