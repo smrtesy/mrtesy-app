@@ -15,9 +15,11 @@ interface TaskChecklistProps {
   taskId: string;
   items: ChecklistItem[];
   onChange: () => void;
+  /** Text direction — Hebrew-first product, so RTL unless told otherwise. */
+  dir?: "rtl" | "ltr";
 }
 
-export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
+export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChecklistProps) {
   const t = useTranslations("tasks.checklist");
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -178,17 +180,17 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
   }
 
   return (
-    <div>
-      <h4 className="text-sm font-medium mb-2 flex items-center justify-between">
+    <div dir={dir}>
+      <h4 className="text-xs font-medium mb-1.5 flex items-center justify-between text-muted-foreground uppercase tracking-wide">
         <span>{t("title")}</span>
         {total > 0 && (
-          <span className="text-xs text-muted-foreground font-normal">
+          <span className="text-[11px] font-normal normal-case">
             {t("progress", { done, total })}
           </span>
         )}
       </h4>
 
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         {localItems.map((item, idx) => {
           const isEditing = editingId === item.id;
           return (
@@ -201,7 +203,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
               onDrop={() => handleDrop(idx)}
               onDragEnd={handleDragEnd}
               className={cn(
-                "flex items-center gap-2 rounded border px-2 py-1.5 text-sm group bg-background",
+                "flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-sm group bg-background",
                 dragOverIdx === idx && "border-primary ring-1 ring-primary/40",
               )}
             >
@@ -260,7 +262,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                 <IconButton
                   label={t("saveEdit")}
                   color="green"
-                  className="shrink-0"
+                  className="h-6 w-6 min-h-0 min-w-0 shrink-0"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleSaveEdit}
                 >
@@ -273,7 +275,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="primary"
                     disabled={saving}
                     onClick={() => handleStartEdit(item)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <Pencil />
                   </IconButton>
@@ -282,7 +284,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="primary"
                     disabled={saving}
                     onClick={() => handlePromote(item)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <ArrowUpRight />
                   </IconButton>
@@ -291,7 +293,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="red"
                     disabled={saving}
                     onClick={() => handleRemove(item.id)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <X />
                   </IconButton>

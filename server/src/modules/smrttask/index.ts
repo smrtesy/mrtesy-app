@@ -7,6 +7,7 @@
 import { Router } from "express";
 import tasksRouter from "./tasks/routes";
 import tasksMergeRouter from "./tasks/merge";
+import marathonRouter from "./marathon/routes";
 import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
 import correctionsRouter from "./corrections/routes";
@@ -25,6 +26,7 @@ const router = Router();
 
 router.use(tasksRouter);
 router.use(tasksMergeRouter);
+router.use(marathonRouter);
 router.use(routerRouter);
 router.use(transcriptionExperimentRouter);
 router.use(projectsRouter);
