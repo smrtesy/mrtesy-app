@@ -47,11 +47,21 @@ async function refreshGoogleToken(userId: string): Promise<string> {
   return tokens.access_token;
 }
 
+// Constant-time string compare (length leak only; both sides are fixed-length
+// random UUID tokens). Avoids a node:crypto import in the edge runtime.
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
 Deno.serve(async (req) => {
   // Google sends a POST with X-Goog-Channel-ID and X-Goog-Resource-State headers
   if (req.method === "POST") {
     const channelId = req.headers.get("X-Goog-Channel-ID") || "";
     const resourceState = req.headers.get("X-Goog-Resource-State") || "";
+    const channelToken = req.headers.get("X-Goog-Channel-Token") || "";
 
     // channelId format: "calendar-{userId}" (legacy) or "calendar-{userId}-{ts}"
     // (current — a unique suffix is appended on each renewal). The userId is a
@@ -63,16 +73,24 @@ Deno.serve(async (req) => {
       return new Response("OK", { status: 200 });
     }
 
+    // Authenticate the channel: the userId in the header is attacker-controllable,
+    // so verify the opaque token Google echoes back (set at watch creation).
+    // Backward-compatible: watches created before watch_token existed have a NULL
+    // token — we fail OPEN for them until they renew (~weekly) and gain one.
+    const { data: syncState } = await supabase
+      .from("sync_state")
+      .select("checkpoint, watch_token")
+      .eq("user_id", userId)
+      .eq("source", "google_calendar")
+      .maybeSingle();
+
+    if (syncState?.watch_token && !safeEqual(syncState.watch_token, channelToken)) {
+      console.warn(`[calendar-webhook] channel token mismatch for ${userId} — rejecting`);
+      return new Response("forbidden", { status: 401 });
+    }
+
     try {
       const token = await refreshGoogleToken(userId);
-
-      // Get sync token from sync_state
-      const { data: syncState } = await supabase
-        .from("sync_state")
-        .select("checkpoint")
-        .eq("user_id", userId)
-        .eq("source", "google_calendar")
-        .single();
 
       // Fetch recent events
       const params = new URLSearchParams({

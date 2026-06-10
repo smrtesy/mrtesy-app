@@ -68,8 +68,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Enable Chrome DevTools inspection (works over USB via chrome://inspect)
-        WebView.setWebContentsDebuggingEnabled(true)
+        // Enable Chrome DevTools inspection (works over USB via chrome://inspect).
+        // Debug builds only — release builds must not expose the WebView to
+        // remote inspection.
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
 
         setupWebView()
         setupSwipeRefresh()

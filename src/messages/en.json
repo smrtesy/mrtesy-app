@@ -2098,7 +2098,11 @@
       "workDays": "work days",
       "overloaded": "Overloaded",
       "markDone": "Mark done",
-      "reopen": "Reopen"
+      "reopen": "Reopen",
+      "inputReopened": "Input reopened",
+      "reopenReleased": "Note — {n, plural, one {1 dependent task was already released} other {# dependent tasks were already released}}",
+      "reblockAction": "Re-block not-yet-started",
+      "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}"
     },
     "repository": {
       "title": "Idea repository",
