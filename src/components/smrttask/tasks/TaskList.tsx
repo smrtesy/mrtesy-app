@@ -85,15 +85,21 @@ export function TaskList({ locale }: { locale: string }) {
       const activeStatuses = "inbox,in_progress,pending_completion";
       const [{ tasks: rows }, planRes] = await Promise.all([
         api<{ tasks: Task[] }>(`/api/tasks?status=${activeStatuses}&verified=true&limit=200`),
-        // Plan needs (blocked state) for MY plan tasks. smrtPlan may not be
-        // enabled for this org — that's fine, rows just have no needs info.
+        // MY plan tasks: merged in as desk rows (plan tasks are never
+        // manually_verified, so the org list above doesn't include them) and
+        // the source of blocked-state meta. smrtPlan may not be enabled for
+        // this org — that's fine, the desk just has no plan rows.
         api<{ tasks: (Task & { needs?: TaskNeed[] })[] }>("/api/plan/my-tasks").catch(() => ({ tasks: [] })),
       ]);
-      setTasks(rows ?? []);
+      const merged: Task[] = [...(rows ?? [])];
+      const present = new Set(merged.map((row) => row.id));
       const meta = new Map<string, PlanMeta>();
+      const OPEN = new Set(["inbox", "in_progress", "pending_completion"]);
       for (const pt of planRes.tasks ?? []) {
         meta.set(pt.id, { needs: pt.needs ?? [] });
+        if (!present.has(pt.id) && OPEN.has(pt.status)) merged.push(pt as Task);
       }
+      setTasks(merged);
       setPlanMeta(meta);
       hasLoadedRef.current = true;
       if (typeof window !== "undefined") {

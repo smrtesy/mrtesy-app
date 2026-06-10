@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 interface Props {
   open: boolean;
@@ -89,6 +90,11 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
     if (d.getTime() <= Date.now()) {
       // Auto-shift to tomorrow at the same time if user picked a past moment.
       d.setDate(d.getDate() + 1);
+    }
+    // The auto-shift must not sneak past the deadline guard.
+    if (maxDate && d.toISOString().slice(0, 10) > maxDate) {
+      toast.error(t("pastDeadline", { date: maxDate }));
+      return;
     }
     setSubmitting(true);
     try {

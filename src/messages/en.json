@@ -58,7 +58,8 @@
       "createProject": "Create",
       "save": "Save info",
       "saved": "Info saved"
-    }
+    },
+    "createdToWaiting": "Added to waiting — the {date} deadline is far; it will surface on the desk when it nears"
   },
   "upcoming": {
     "title": "Happening soon",
@@ -91,7 +92,8 @@
     "new": "New",
     "never": "Never",
     "noDataYet": "No data yet",
-    "tasks": "tasks"
+    "tasks": "tasks",
+    "close": "Close"
   },
   "nav": {
     "tasks": "Tasks",

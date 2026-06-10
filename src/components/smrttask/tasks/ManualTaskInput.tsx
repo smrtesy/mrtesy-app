@@ -11,6 +11,8 @@ import { Loader2, Check, Plus, X, Zap, Home, ChevronDown, ChevronUp, Paperclip }
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { dueUrgency } from "@/lib/workdays";
 
 interface ManualTaskInputProps {
   open: boolean;
@@ -57,6 +59,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const t = useTranslations("manualTask");
   const tCommon = useTranslations("common");
   const locale = useLocale();
+  const blocked = useWorkCalendar();
 
   const [tab, setTab] = useState<"task" | "info">("task");
 
@@ -188,13 +191,17 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       if (dueTime) body.due_time = dueTime;
       const recurrenceRule = buildRecurrenceRule(recurrence, weekdays);
       if (recurrenceRule) body.recurrence_rule = recurrenceRule;
-      // A manual task goes straight onto the desk (pinned), per the desk model.
-      // Position = seconds since a fixed recent epoch: monotonic (new tasks
-      // append after older pins) and safely inside int4.
-      body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
+      // A manual task goes straight onto the desk (pinned) — UNLESS it got a
+      // far-off deadline, in which case it belongs in the waiting list and
+      // the 3-day rule will promote it when the time comes. Position =
+      // seconds since a fixed recent epoch: monotonic and safely inside int4.
+      const goesToWaiting = !!dueDate && dueUrgency(dueDate, blocked) === "far";
+      if (!goesToWaiting) {
+        body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
+      }
 
       await api<{ task: unknown }>("/api/tasks", { method: "POST", body });
-      toast.success(t("created"));
+      toast.success(goesToWaiting ? t("createdToWaiting", { date: dueDate }) : t("created"));
       reset();
       onCreated();
       onClose();

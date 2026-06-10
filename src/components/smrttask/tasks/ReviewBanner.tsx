@@ -43,9 +43,12 @@ export function ReviewBanner({
     }
   }
 
+  // Archive via PATCH, NOT /complete: a stale recurring task archived as
+  // "no longer relevant" must not spawn its next instance, and it shouldn't
+  // get a completed_at as if it were done.
   async function archive(taskId: string) {
     try {
-      await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "archived" } });
       onChanged();
     } catch (e) {
       toast.error((e as Error).message);
@@ -57,7 +60,7 @@ export function ReviewBanner({
     setBusy(true);
     try {
       for (const task of candidates) {
-        await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+        await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { status: "archived" } });
       }
       toast.success(t("archivedAll"));
       setOpen(false);

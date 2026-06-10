@@ -440,16 +440,20 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   // Bump snooze_count atomically via a fresh read+write — Postgres has no `+1` shorthand here.
   const { data: current } = await db
     .from("tasks")
-    .select("snooze_count, due_date")
+    .select("snooze_count, due_date, latest_finish")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
   if (!current) return res.status(404).json({ error: "task not found in this org" });
 
-  // Never let a snooze hide a task past its own deadline — clamp to the
-  // morning of the due date. The UI blocks this too; this is the backstop.
-  if (current.due_date && until.slice(0, 10) > (current.due_date as string)) {
-    until = `${current.due_date}T06:00:00.000Z`;
+  // Never let a snooze hide a task past its EFFECTIVE deadline (the earlier
+  // of due_date and the plan engine's latest_finish) — clamp to that morning.
+  // The UI blocks this too; this is the backstop.
+  const due = current.due_date as string | null;
+  const lf = current.latest_finish as string | null;
+  const deadline = due && lf ? (due < lf ? due : lf) : (due || lf);
+  if (deadline && until.slice(0, 10) > deadline) {
+    until = `${deadline}T06:00:00.000Z`;
   }
 
   const { data, error } = await db

@@ -179,7 +179,9 @@ export function TaskRow({
               <Clock className="h-3.5 w-3.5" />
             </button>
           )}
-          {onMove && zone === "waiting" && (
+          {/* A blocked task can't sit on the desk (the partition keeps it in
+              waiting regardless of pin), so don't offer a no-op arrow. */}
+          {onMove && zone === "waiting" && !isBlocked && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onMove(task.id, true); }}

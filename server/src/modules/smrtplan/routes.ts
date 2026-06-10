@@ -582,7 +582,11 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
 const MY_TASK_FIELDS =
   "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
   "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, " +
-  "assignment_status";
+  "assignment_status, " +
+  // Desk-row fields: my plan tasks are merged into the unified /tasks desk,
+  // whose rows need these to sort, age and render like any other task.
+  "size, context, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
+  "description, has_unread_update, recurrence_rule";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
