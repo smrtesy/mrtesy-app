@@ -92,6 +92,9 @@ async function withHealth(orgId: string, plans: Row[]): Promise<Row[]> {
 /** Resolve "what's needed to start" (needs) and downstream "handoff" for a set
  *  of tasks from smrtplan_dependencies (task→task). Shared by the plan-tasks
  *  and my-tasks endpoints. */
+// Statuses that count as "done" (matches the SQL progress/health views).
+const TASK_DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
+
 async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]> {
   const ids = taskRows.map((t) => t.id as string);
   if (ids.length === 0) return taskRows.map((t) => ({ ...t, needs: [], handoff: [] }));
@@ -131,11 +134,16 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
     if (idSet.has(consumer)) {
       const p = refMap.get(provider);
       const arr = needsByTask.get(consumer) ?? [];
+      const satisfied = (d.satisfied as boolean) ?? false;
       arr.push({
         dependency_id: d.id,
         task_id: provider,
         title: (p?.title_he as string) || (p?.title as string) || "—",
-        satisfied: (d.satisfied as boolean) ?? false,
+        satisfied,
+        // satisfied only flips on completion; a satisfied edge whose provider
+        // is no longer done means the provider was reopened — the consumer is
+        // working off an input that's back in progress.
+        provider_reopened: satisfied && !!p && !TASK_DONE_STATUSES.has(p.status as string),
         lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
       });
@@ -580,7 +588,7 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
 const MY_TASK_FIELDS =
   "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id";
+  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -600,6 +608,25 @@ async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
   return tasks;
 }
 
+/** Attach each task's stage (banner) name, so worker views can show
+ *  "plan / stage" on the chip (e.g. כלי AI / ג'מיני ג'ם). */
+async function attachStageTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
+  const stageIds = [...new Set(tasks.map((t) => t.stage_id as string).filter(Boolean))];
+  if (stageIds.length === 0) return tasks;
+  const { data } = await db
+    .from("smrtplan_stages")
+    .select("id, name_he, name_en")
+    .eq("org_id", orgId)
+    .in("id", stageIds);
+  const byId = new Map(asRows(data).map((s) => [s.id as string, s]));
+  for (const t of tasks) {
+    const s = byId.get(t.stage_id as string);
+    t.stage_name_he = (s?.name_he as string) ?? null;
+    t.stage_name_en = (s?.name_en as string) ?? null;
+  }
+  return tasks;
+}
+
 router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   // Mine = assigned to me, OR unassigned tasks I created (an unassigned plan
   // task still belongs to its owner — it shouldn't fall through the cracks).
@@ -615,7 +642,7 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
   if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
   const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+  res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data)))) });
 });
 
 // A specific worker's tasks across all plans (planner view, fix #4). "Design"
@@ -632,7 +659,7 @@ router.get("/plan/worker-tasks/:userId", requireFull, async (req: Request, res: 
   if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
   const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
+  res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data)))) });
 });
 
 // ── stream plan: matrix ──────────────────────────────────────────────────────
@@ -906,7 +933,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 });
 
 const PLAN_TASK_WRITABLE = new Set([
-  "title", "title_he", "due_date", "duration_days", "duration_manual",
+  "title", "title_he", "description", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
   "task_materials", "stage_id",
 ]);
@@ -934,6 +961,9 @@ function validateTaskMaterials(value: unknown): string | null {
 // capacity, so reassigning can shift its dates.
 const TASK_SCHED_FIELDS = new Set(["due_date", "duration_days", "duration_manual", "estimated_hours", "parent_task_id", "assigned_to_user_id"]);
 
+// A status flip INTO the done set via the generic PATCH must behave exactly
+// like /plan-tasks/:id/done — release dependents + recompute — otherwise
+// successor tasks stay blocked and matrix cells never flip.
 router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(req.body ?? {})) {
@@ -943,6 +973,21 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
   if ("task_materials" in patch) {
     const err = validateTaskMaterials(patch.task_materials);
     if (err) return res.status(400).json({ error: err });
+  }
+  // When the status changes, read the current one first to detect a
+  // done-transition (in either direction).
+  let wasDone: boolean | null = null;
+  if (typeof patch.status === "string") {
+    const { data: cur, error: curErr } = await db
+      .from("tasks")
+      .select("status")
+      .eq("organization_id", req.org!.id)
+      .eq("id", req.params.id)
+      .not("plan_id", "is", null)
+      .maybeSingle();
+    if (curErr) return res.status(500).json({ error: curErr.message });
+    if (!cur) return res.status(404).json({ error: "task not found" });
+    wasDone = TASK_DONE_STATUSES.has(cur.status as string);
   }
   // Scope to a task that actually belongs to a plan in this org.
   const { data, error } = await db
@@ -954,8 +999,49 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     .select("id, title, title_he, status, due_date, duration_days, parent_task_id, plan_id, task_materials")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  if (Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) await autoRecompute(req.org!.id);
+  const nowDone = typeof patch.status === "string" ? TASK_DONE_STATUSES.has(patch.status) : null;
+  const becameDone = wasDone === false && nowDone === true;
+  const reopened = wasDone === true && nowDone === false;
+  if (becameDone) await releaseDependents(req.org!.id, req.params.id); // unblock successors
+  if (becameDone || reopened || Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) {
+    await autoRecompute(req.org!.id);
+  }
   res.json({ task: data });
+});
+
+/**
+ * GET /plan-tasks/:id/detail — read-only task card for the worker views: the
+ * task itself plus description, materials, drive docs, checklist, its subtasks,
+ * and needs/handoff. Open to any org member with smrtPlan access (the list
+ * endpoints already expose these tasks; this just adds their content).
+ */
+router.get("/plan-tasks/:id/detail", async (req: Request, res: Response) => {
+  const { data: task, error } = await db
+    .from("tasks")
+    .select(
+      MY_TASK_FIELDS +
+        ", description, task_materials, linked_drive_docs, checklist, " +
+        "source_messages(id, source_type, source_url, serial_display)",
+    )
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!task) return res.status(404).json({ error: "task not found" });
+
+  const { data: subs } = await db
+    .from("tasks")
+    .select("id, title, title_he, status, assigned_to_user_id, due_date, latest_finish")
+    .eq("organization_id", req.org!.id)
+    .eq("parent_task_id", req.params.id)
+    .order("created_at", { ascending: true });
+
+  const [enriched] = await attachStageTitles(
+    req.org!.id,
+    await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, [task as unknown as Row])),
+  );
+  res.json({ task: enriched, subtasks: subs ?? [] });
 });
 
 /**
@@ -988,6 +1074,90 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
   if (done) await releaseDependents(req.org!.id, req.params.id); // unblock successors
   await autoRecompute(req.org!.id);
   res.json({ task: data });
+});
+
+/**
+ * GET /plan-tasks/:id/released-dependents — the consumer tasks whose dependency
+ * on this task was already released (satisfied = true). Surfaced after a
+ * reopen so the planner sees what kept running and can decide to re-block.
+ */
+router.get("/plan-tasks/:id/released-dependents", async (req: Request, res: Response) => {
+  const { data: edges, error } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id")
+    .eq("org_id", req.org!.id)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .eq("to_id", req.params.id)
+    .eq("satisfied", true);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!edges || edges.length === 0) return res.json({ dependents: [] });
+  const { data: consumers, error: cErr } = await db
+    .from("tasks")
+    .select("id, title, title_he, status")
+    .eq("organization_id", req.org!.id)
+    .in("id", edges.map((e) => e.from_id as string));
+  if (cErr) return res.status(500).json({ error: cErr.message });
+  res.json({ dependents: consumers ?? [] });
+});
+
+/**
+ * POST /plan-tasks/:id/reblock — after a reopen, flip satisfied back to false
+ * on this task's released edges, but ONLY for consumers that haven't started
+ * yet (status inbox). In-progress and done consumers are never yanked back —
+ * the human decides those case by case. Allowed for the same actors as /done
+ * (full planner, the task's assignee, super-admin), since it's the follow-up
+ * to their own reopen.
+ */
+router.post("/plan-tasks/:id/reblock", async (req: Request, res: Response) => {
+  const { data: task, error: tErr } = await db
+    .from("tasks")
+    .select("id, assigned_to_user_id, status")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: tErr.message });
+  if (!task) return res.status(404).json({ error: "task not found" });
+  const level = await resolveAccessLevel(req);
+  const allowed = level === "full" || (task.assigned_to_user_id as string | null) === req.user!.id || (await isSuperAdmin(req.user!));
+  if (!allowed) return res.status(403).json({ error: "not allowed to re-block" });
+  // The provider may have been re-completed while the toast was on screen —
+  // re-blocking edges of a DONE provider would wrongly block its consumers.
+  if (TASK_DONE_STATUSES.has(task.status as string)) return res.json({ reblocked: 0 });
+
+  const { data: edges, error } = await db
+    .from("smrtplan_dependencies")
+    .select("id, from_id")
+    .eq("org_id", req.org!.id)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .eq("to_id", req.params.id)
+    .eq("satisfied", true);
+  if (error) return res.status(500).json({ error: error.message });
+  let reblocked = 0;
+  if (edges && edges.length > 0) {
+    const { data: notStarted, error: nErr } = await db
+      .from("tasks")
+      .select("id")
+      .eq("organization_id", req.org!.id)
+      .in("id", edges.map((e) => e.from_id as string))
+      .eq("status", "inbox");
+    if (nErr) return res.status(500).json({ error: nErr.message });
+    const ids = new Set((notStarted ?? []).map((r) => r.id as string));
+    const edgeIds = edges.filter((e) => ids.has(e.from_id as string)).map((e) => e.id as string);
+    if (edgeIds.length > 0) {
+      const { error: uErr } = await db
+        .from("smrtplan_dependencies")
+        .update({ satisfied: false })
+        .eq("org_id", req.org!.id)
+        .in("id", edgeIds);
+      if (uErr) return res.status(500).json({ error: uErr.message });
+      reblocked = edgeIds.length;
+      await autoRecompute(req.org!.id);
+    }
+  }
+  res.json({ reblocked });
 });
 
 router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response) => {

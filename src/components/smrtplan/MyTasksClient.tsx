@@ -5,11 +5,14 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
+import { TaskDetailDialog } from "./TaskDetailDialog";
 
 export function MyTasksClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
   const [tasks, setTasks] = useState<PlanZoneTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [canEdit, setCanEdit] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const today = new Date();
 
   const load = useCallback(async () => {
@@ -22,6 +25,8 @@ export function MyTasksClient({ locale }: { locale: string }) {
     (async () => {
       try {
         await load();
+        const { access_level } = await api<{ access_level: string }>("/api/plans/access");
+        if (alive) setCanEdit(access_level === "full");
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -33,10 +38,12 @@ export function MyTasksClient({ locale }: { locale: string }) {
     };
   }, [load]);
 
-  async function complete(id: string) {
-    setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, status: "archived" } : x)));
+  // ✓ completes (releases dependents server-side); un-✓ reopens. The /done
+  // endpoint is allowed for the task's assignee even without full access.
+  async function toggle(id: string, done: boolean) {
+    setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, status: done ? "completed" : "inbox" } : x)));
     try {
-      await api(`/api/plan-tasks/${id}`, { method: "PATCH", body: { status: "archived" } });
+      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done } });
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
@@ -62,8 +69,23 @@ export function MyTasksClient({ locale }: { locale: string }) {
           {t("my.noTasks")}
         </div>
       ) : (
-        <TaskZones tasks={tasks} locale={locale} today={today} onComplete={complete} />
+        <TaskZones
+          tasks={tasks}
+          locale={locale}
+          today={today}
+          onToggle={toggle}
+          onOpen={(tk) => setOpenTaskId(tk.id)}
+        />
       )}
+
+      <TaskDetailDialog
+        taskId={openTaskId}
+        open={!!openTaskId}
+        onClose={() => setOpenTaskId(null)}
+        locale={locale}
+        canEdit={canEdit}
+        onChanged={() => void load()}
+      />
     </div>
   );
 }

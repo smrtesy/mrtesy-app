@@ -17,8 +17,30 @@ export interface PlanZoneTask {
   is_critical: boolean | null;
   plan_title_he: string | null;
   plan_title_en: string | null;
+  stage_name_he?: string | null;
+  stage_name_en?: string | null;
   needs: TaskNeed[];
   handoff: TaskHandoff[];
+}
+
+/** The date a task must actually meet — the earlier of its own due date and the
+ *  engine's latest_finish (an external constraint can pull it in). */
+function effectiveDeadline(t: PlanZoneTask): string | null {
+  if (t.due_date && t.latest_finish) return t.due_date < t.latest_finish ? t.due_date : t.latest_finish;
+  return t.due_date || t.latest_finish || null;
+}
+
+/** Urgency order: earliest effective deadline first (overdue floats to the
+ *  top), undated last; critical wins a tie. */
+function byUrgency(a: PlanZoneTask, b: PlanZoneTask): number {
+  const da = effectiveDeadline(a);
+  const db = effectiveDeadline(b);
+  if (da && db) {
+    if (da !== db) return da < db ? -1 : 1;
+  } else if (da) return -1;
+  else if (db) return 1;
+  if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
+  return 0;
 }
 
 type Zone = "ready" | "blocked" | "done";
@@ -42,26 +64,33 @@ const ZONES: { key: Zone; icon: typeof Zap; cls: string }[] = [
 ];
 
 /** The ready / blocked / done worker board — shared by "My tasks" and the
- *  by-worker view. `onComplete` enables the quick ✓ on ready tasks. */
+ *  by-worker view. `onToggle` enables the ✓ on ready tasks and un-✓ on done;
+ *  `onOpen` opens the task's detail card. */
 export function TaskZones({
   tasks,
   locale,
   today,
-  onComplete,
+  onToggle,
+  onOpen,
 }: {
   tasks: PlanZoneTask[];
   locale: string;
   today: Date;
-  onComplete?: (id: string) => void;
+  onToggle?: (id: string, done: boolean) => void;
+  onOpen?: (tk: PlanZoneTask) => void;
 }) {
   const t = useTranslations("smrtPlan");
   const title = (tk: PlanZoneTask) => (locale === "en" ? tk.title : tk.title_he || tk.title);
-  const planLabel = (tk: PlanZoneTask) => (locale === "en" ? tk.plan_title_en || tk.plan_title_he : tk.plan_title_he);
+  const planLabel = (tk: PlanZoneTask) => {
+    const plan = locale === "en" ? tk.plan_title_en || tk.plan_title_he : tk.plan_title_he;
+    const stage = locale === "en" ? tk.stage_name_en || tk.stage_name_he : tk.stage_name_he;
+    return [plan, stage].filter(Boolean).join(" / ");
+  };
 
   return (
     <div className="space-y-5">
       {ZONES.map((z) => {
-        const items = tasks.filter((tk) => zoneOf(tk) === z.key);
+        const items = tasks.filter((tk) => zoneOf(tk) === z.key).sort(byUrgency);
         return (
           <section key={z.key}>
             <div className="mb-2 flex items-center gap-2 px-1 text-[13px] font-bold">
@@ -78,21 +107,40 @@ export function TaskZones({
             ) : (
               <div className="space-y-2">
                 {items.map((tk) => {
-                  const deadline = tk.due_date || tk.latest_finish || null;
+                  // Show the same date the urgency sort uses, so the list never
+                  // looks out of order. ⚠ marks an external constraint that
+                  // pulled the date earlier than the task's own due date.
+                  const deadline = effectiveDeadline(tk);
                   const constraint =
                     tk.latest_finish && tk.due_date && tk.latest_finish < tk.due_date ? tk.latest_finish : null;
                   const urg = urgencyFor(deadline, today);
                   const waiting = (tk.needs ?? []).filter((n) => !n.satisfied);
                   return (
-                    <div key={tk.id} className={cn("rounded-xl border bg-card p-3", z.key === "done" && "opacity-70")}>
+                    <div
+                      key={tk.id}
+                      onClick={onOpen ? () => onOpen(tk) : undefined}
+                      className={cn(
+                        "rounded-xl border bg-card p-3",
+                        z.key === "done" && "opacity-70",
+                        onOpen && "cursor-pointer transition-colors hover:bg-accent/30",
+                      )}
+                    >
                       <div className="flex items-center gap-2.5">
-                        {z.key === "ready" && onComplete ? (
+                        {z.key === "ready" && onToggle ? (
                           <button
-                            onClick={() => onComplete(tk.id)}
+                            onClick={(e) => { e.stopPropagation(); onToggle(tk.id, true); }}
                             title={t("my.complete")}
                             className="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-md border-2 border-muted-foreground/40 text-transparent hover:border-status-ok hover:text-status-ok"
                           >
                             <Check className="h-3.5 w-3.5" />
+                          </button>
+                        ) : z.key === "done" && onToggle ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onToggle(tk.id, false); }}
+                            title={t("my.reopen")}
+                            className="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-md border-2 border-status-ok bg-status-ok text-[12px] text-white hover:border-muted-foreground/60 hover:bg-transparent hover:text-transparent"
+                          >
+                            ✓
                           </button>
                         ) : (
                           <span
@@ -132,7 +180,9 @@ export function TaskZones({
                             )}
                           >
                             {countdownText(deadline, t, today)} · {gregShort(parseISO(deadline))} · {hebDate(parseISO(deadline))}
-                            {constraint && <span className="ms-1 text-status-late">⚠ {gregShort(parseISO(constraint))}</span>}
+                            {constraint && (
+                              <span className="ms-1 text-status-late" title={t("effort.constraint")}>⚠</span>
+                            )}
                           </span>
                         )}
                       </div>
