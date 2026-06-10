@@ -20,6 +20,7 @@
  */
 
 import { db } from "../../db";
+import { notify } from "../../lib/platform";
 
 // ── working-day calendar ─────────────────────────────────────────────────────
 
@@ -672,6 +673,88 @@ export async function refreshOrg(orgId: string): Promise<{ scheduled: number; cr
   return { scheduled: r.scheduled, critical: r.critical };
 }
 
+const TASK_OPEN_FILTER = "(archived,completed,dismissed)";
+
+/**
+ * Alert each plan manager about tasks in their (active) plans that are within
+ * AT_RISK_DAYS working days of their effective deadline and still BLOCKED on
+ * an unsatisfied task→task dependency. A blocked task this close to its
+ * deadline cannot start, so only the manager can unblock it — that's exactly
+ * the moment they asked to hear about.
+ *
+ * Runs from the daily refresh job; dedup = skip tasks already alerted today
+ * (one notification per task per day, not per recompute).
+ */
+export async function notifyManagersOfBlockedTasks(orgId: string): Promise<number> {
+  const { data: plans } = await db
+    .from("smrtplan_plans")
+    .select("id, title_he, manager_user_id")
+    .eq("org_id", orgId)
+    .eq("status", "active")
+    .not("manager_user_id", "is", null);
+  const managed = new Map((plans ?? []).map((p) => [p.id as string, p]));
+  if (managed.size === 0) return 0;
+
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("id, title, title_he, due_date, latest_finish, plan_id")
+    .eq("organization_id", orgId)
+    .in("plan_id", [...managed.keys()])
+    .not("status", "in", TASK_OPEN_FILTER);
+  const tasks = (taskRows ?? []) as Record<string, unknown>[];
+  if (tasks.length === 0) return 0;
+
+  // Blocked = consumer of at least one unsatisfied task→task edge.
+  const ids = tasks.map((t) => t.id as string);
+  const { data: deps } = await db
+    .from("smrtplan_dependencies")
+    .select("to_id")
+    .eq("org_id", orgId)
+    .eq("from_type", "task")
+    .eq("to_type", "task")
+    .eq("satisfied", false)
+    .in("to_id", ids);
+  const blocked = new Set((deps ?? []).map((d) => d.to_id as string));
+  if (blocked.size === 0) return 0;
+
+  const blockedDates = await loadBlockedDates(orgId);
+  const today = rollForward(parseISO(toISO(new Date())), blockedDates);
+  const horizon = toISO(addWorkingDays(today, AT_RISK_DAYS, blockedDates));
+
+  // One alert per task per day. notifications.type is CHECK-constrained to
+  // info|warning|success|action_required, so dedup keys on app+type+entity.
+  const dayStart = `${toISO(new Date())}T00:00:00.000Z`;
+  const { data: alreadySent } = await db
+    .from("notifications")
+    .select("entity_id")
+    .eq("org_id", orgId)
+    .eq("app_slug", "smrtplan")
+    .eq("type", "warning")
+    .gte("created_at", dayStart);
+  const sentToday = new Set((alreadySent ?? []).map((n) => n.entity_id as string));
+
+  let sent = 0;
+  for (const t of tasks) {
+    if (!blocked.has(t.id as string) || sentToday.has(t.id as string)) continue;
+    const due = (t.due_date as string | null) ?? null;
+    const lf = (t.latest_finish as string | null) ?? null;
+    const deadline = due && lf ? (due < lf ? due : lf) : (due || lf);
+    if (!deadline || deadline > horizon) continue;
+    const plan = managed.get(t.plan_id as string);
+    if (!plan) continue;
+    await notify(orgId, plan.manager_user_id as string, {
+      app_slug: "smrtplan",
+      type: "warning",
+      title: `משימה חסומה מתקרבת ליעד: ${(t.title_he as string) || (t.title as string)}`,
+      body: `בתוכנית "${(plan.title_he as string) ?? ""}" — היעד ${deadline} והמשימה עדיין ממתינה לתלות שלא הושלמה`,
+      entity_type: "task",
+      entity_id: t.id as string,
+    });
+    sent++;
+  }
+  return sent;
+}
+
 /** Recompute every org that has plans (cron entry point). */
 export async function refreshAll(): Promise<{ orgs: number; scheduled: number }> {
   const { data: orgs } = await db.from("smrtplan_plans").select("org_id");
@@ -680,6 +763,9 @@ export async function refreshAll(): Promise<{ orgs: number; scheduled: number }>
   for (const orgId of uniqueOrgs) {
     const r = await computeOrgSchedule(orgId);
     scheduled += r.scheduled;
+    // Manager alerts ride the daily refresh — best-effort, never fail the job.
+    try { await notifyManagersOfBlockedTasks(orgId); }
+    catch (e) { console.error("[smrtplan] manager alerts failed:", e); }
   }
   return { orgs: uniqueOrgs.length, scheduled };
 }

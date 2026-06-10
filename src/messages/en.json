@@ -38,6 +38,26 @@
       "4": "Th",
       "5": "Fr",
       "6": "Sa"
+    },
+    "tabTask": "Task",
+    "tabInfo": "Info",
+    "sizeQuick": "Quick",
+    "sizeRegular": "Regular",
+    "contextHome": "Home",
+    "moreOptions": "More options",
+    "info": {
+      "titlePlaceholder": "Title (optional)",
+      "bodyPlaceholder": "What to save? Links stay clickable…",
+      "attachFile": "Attach file",
+      "attachFailed": "Attachment failed: {error}",
+      "projectRequired": "Pick a project for the info piece",
+      "bodyRequired": "Content or a title is required",
+      "projectCreated": "Project created",
+      "newProjectPlaceholder": "New project name…",
+      "newSubProjectPlaceholder": "New sub-project name…",
+      "createProject": "Create",
+      "save": "Save info",
+      "saved": "Info saved"
     }
   },
   "upcoming": {
@@ -315,7 +335,8 @@
       "confirmButton": "Snooze",
       "presetTomorrow": "Tomorrow 9 AM",
       "presetTomorrowEvening": "Tomorrow 6 PM",
-      "presetNextWeek": "Next week"
+      "presetNextWeek": "Next week",
+      "pastDeadline": "Cannot snooze past the deadline ({date}) — the task would hide until it is already late"
     },
     "materials": {
       "title": "Background Materials",
@@ -358,6 +379,61 @@
       "placeholder": "Add task in natural language...",
       "confirmDates": "Correct?",
       "editDates": "Edit dates"
+    },
+    "dueChip": {
+      "noDate": "No date",
+      "lockedHint": "Plan-task deadline — only the plan manager can move it",
+      "editHint": "Click to change the due date",
+      "constrainedHint": "A plan constraint pulled the deadline earlier",
+      "dialogTitle": "Due date",
+      "clear": "Remove date",
+      "save": "Save"
+    },
+    "row": {
+      "blockedHint": "Waiting for: {titles}",
+      "reopen": "Reopen task",
+      "reopened": "Task reopened",
+      "undo": "Undo",
+      "contextHome": "Home",
+      "recurring": "Recurring task",
+      "critical": "Critical",
+      "wokeChip": "Back from snooze",
+      "wokeHint": "Woke from snooze — first interaction clears this",
+      "sitting": "Sitting {days} days",
+      "sittingHint": "Working days without interaction",
+      "sizeQuick": "Quick",
+      "sizeRegular": "Regular",
+      "sizeQuickHint": "Quick task — click to make regular",
+      "sizeRegularHint": "Regular task — click to make quick",
+      "moveToDesk": "Move to desk",
+      "moveToWaiting": "Move to waiting"
+    },
+    "desk": {
+      "quick": "Quick",
+      "regular": "Regular",
+      "waiting": "Waiting",
+      "completed": "Completed",
+      "startRun": "Start run",
+      "emptyQuick": "No quick tasks on the desk — pull from waiting or create one",
+      "emptyRegular": "No regular tasks on the desk"
+    },
+    "contextFilter": {
+      "all": "All",
+      "home": "Home",
+      "work": "Work"
+    },
+    "review": {
+      "banner": "{count} stale tasks await review — still relevant?",
+      "dialogTitle": "Periodic review ({count})",
+      "dialogHint": "Tasks untouched for 20+ working days. Keep resets the clock, snooze hides until a date, archive closes.",
+      "sittingFor": "Sitting {days} working days",
+      "keep": "Keep",
+      "snooze": "Snooze",
+      "archive": "Archive",
+      "archiveAll": "Archive all",
+      "archiveAllConfirm": "Archive all {count} tasks?",
+      "archivedAll": "All tasks archived",
+      "close": "Close"
     }
   },
   "router": {
@@ -462,7 +538,10 @@
     "dismissedAt": "Dismissed {when}",
     "dismissedReasonLabel": "Reason",
     "restoreToInbox": "Restore to inbox",
-    "restored": "Item restored to inbox"
+    "restored": "Item restored to inbox",
+    "learnFromThis": "Teach the AI from this (the explanation is saved as a correction)",
+    "learnScopePersonal": "Just for me",
+    "learnScopeGeneral": "General rule"
   },
   "merge": {
     "step1Title": "Choose merge target",
@@ -842,7 +921,13 @@
     "assignedToLabel": "Assigned to",
     "unassignedOption": "— Unassigned —",
     "saveButton": "Save",
-    "addUpdatePlaceholder": "Add update..."
+    "addUpdatePlaceholder": "Add update...",
+    "sizeLabel": "Size",
+    "contextLabel": "Context",
+    "contextNone": "None",
+    "contextHome": "Home",
+    "contextWork": "Work",
+    "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board"
   },
   "orgSwitcher": {
     "orgCreated": "Organization created",
@@ -890,6 +975,43 @@
     "infoDelete": "Delete",
     "infoDeleted": "Info deleted",
     "infoDeleteConfirm": "Delete this info item?"
+  },
+  "infoBoard": {
+    "addItem": "Add info",
+    "addDialogTitle": "Add info",
+    "editDialogTitle": "Edit info",
+    "titlePlaceholder": "Title (optional)",
+    "bodyPlaceholder": "Content — links become clickable",
+    "markdownHint": "Ctrl+B bold · Ctrl+I italic · Ctrl+K link",
+    "attachFile": "Attach file",
+    "fileTooLarge": "File too large (max 7MB)",
+    "itemSaved": "Info saved",
+    "itemDeleted": "Info deleted",
+    "deleteConfirm": "Delete this info item?",
+    "editItem": "Edit",
+    "deleteItem": "Delete",
+    "searchPlaceholder": "Search the board…",
+    "filterByProject": "Filter by sub-project",
+    "filterAll": "All",
+    "empty": "No info items yet — add the first one.",
+    "noResults": "No matching items.",
+    "summaryTitle": "AI summary",
+    "summaryBuild": "Build summary",
+    "summaryRefresh": "Refresh summary",
+    "summaryBuilding": "Building summary…",
+    "summaryBuilt": "Summary updated",
+    "summaryEmpty": "No summary yet — click \"Build summary\" to create one from all info items.",
+    "summaryEdit": "Edit manually",
+    "summarySave": "Save summary",
+    "summarySaved": "Summary saved",
+    "summaryUpdatedAt": "Updated {date}",
+    "summaryStale": "New items were added since the last summary",
+    "relatedItems": "Suggestions & tasks",
+    "chooseProjectHint": "Choose a project to save the info to",
+    "newProject": "New project",
+    "newProjectPlaceholder": "New project name",
+    "newProjectCreate": "Create",
+    "projectCreated": "Project created"
   },
   "knowledge": {
     "title": "Knowledge base",
@@ -2283,5 +2405,50 @@
     "requests": "Requests",
     "types": "Resource types",
     "main": "main"
+  },
+  "contextPanel": {
+    "aiTitle": "AI details — why this task was created",
+    "planTitle": "Process context",
+    "loading": "Loading…",
+    "subject": "Subject",
+    "from": "From",
+    "classification": "Classification",
+    "size": "Size",
+    "sizeQuick": "⚡ Quick (AI suggestion)",
+    "sizeRegular": "Regular",
+    "reason": "Reasoning",
+    "critical": "Critical",
+    "duration": "{days} working days",
+    "chain": "Your place in the chain",
+    "chainArrived": "Arrived",
+    "chainWaiting": "Waiting",
+    "handoff": "Hands off to",
+    "startBy": "Start by",
+    "finishBy": "Finish by",
+    "openBoard": "Open the planning board"
+  },
+  "marathon": {
+    "progress": "{done} of {total}",
+    "remaining": "{count} left",
+    "exit": "End run",
+    "done": "Done",
+    "skip": "Skip",
+    "notQuick": "Not quick",
+    "finishTitle": "You finished {count} tasks in {time} ⚡",
+    "newRecord": "New record! Previous best: {prev}",
+    "bestSoFar": "Your best: {count} tasks in one run",
+    "pace": "Pace: a task every {time}",
+    "weekSummary": "This week: {runs} runs, {completed} tasks",
+    "backToDesk": "Back to the desk"
+  },
+  "planProposals": {
+    "sectionTitle": "Plan assignments",
+    "proposedPrefix": "You were assigned",
+    "duration": "Estimated: {days} working days",
+    "due": "Due: {date}",
+    "accept": "Accept",
+    "decline": "Decline",
+    "accepted": "Assignment accepted — the task joined your lists",
+    "declined": "Assignment declined — the plan manager was notified"
   }
 }

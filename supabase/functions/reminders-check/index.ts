@@ -123,6 +123,9 @@ Deno.serve(async (req) => {
         snoozed_until: null,
         status: "inbox",
         last_updated_reason: "snooze_expired",
+        // Drives the "returned from snooze" chip in the UI; cleared on the
+        // user's first interaction with the row.
+        woke_from_snooze_at: now,
         updated_at: now,
       }).eq("id", task.id);
     }

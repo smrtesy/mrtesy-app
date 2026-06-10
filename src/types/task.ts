@@ -73,6 +73,12 @@ export interface Task {
   ai_model_used: string | null;
   manually_verified: boolean;
   today_position: number | null;
+  /** Desk model: quick (one bounded action) vs regular (needs prep / multi-step). */
+  size?: "quick" | "regular";
+  /** Execution context — where this can be done. Null = unspecified (work implied). */
+  context?: "home" | "work" | null;
+  /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
+  woke_from_snooze_at?: string | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;

@@ -3,46 +3,45 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, X, Bell, Pencil, Clock } from "lucide-react";
+import { CheckCircle2, X, Bell, Pencil, Clock, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { SourceLink } from "@/components/smrttask/common/SourceLink";
-import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
-import { formatDateOnly } from "@/lib/date";
-import { useAITrail, AITrailIconButton, AITrailBody } from "@/components/smrttask/common/AITrail";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
-import { DismissDialog } from "./DismissDialog";
-import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
-import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
-import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
+import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
+import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
+import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { DismissDialog } from "./DismissDialog";
+import { PlanProposals } from "./PlanProposals";
+import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
+import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { effectiveDeadline } from "@/lib/workdays";
+import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
 
-interface SourceJoin {
-  id?: string | null;
-  source_type: string | null;
-  source_url: string | null;
-  serial_display: string | null;
-}
-
+/**
+ * The suggestions inbox — the decision queue. Cards are deliberately minimal:
+ * title + ✨ (everything identity-related lives in the context panel), the
+ * AI-proposed ⚡size (tap to flip BEFORE approving), and the colored deadline
+ * chip. Plan assignment proposals surface above the AI suggestions.
+ */
 export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpdate?: () => void }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const tMerge = useTranslations("merge");
-  const supabase = createClient();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [suggestions, setSuggestions] = useState<any[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
+  const blocked = useWorkCalendar();
+
+  const [suggestions, setSuggestions] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -74,80 +73,49 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }, [mergeJob.startJob]);
 
   // ?focus=<id> from a /whatsapp deep-link → scroll the matching
-  // suggestion card into view and briefly highlight it. The ref lets us
-  // attach a node to the focus target after render.
+  // suggestion card into view and briefly highlight it.
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
   const focusNodeRef = useRef<HTMLDivElement | null>(null);
-  // Tracks whether the first load has completed. Subsequent refetches
-  // (triggered by save/approve/dismiss → onUpdate) must NOT flip the
-  // global `loading` flag, because that unmounts the open <TaskDetail>
-  // sheet — and on remount the auto-edit effect re-fires against the
-  // stale `editTask` prop, making the form snap back to pre-save values.
+  // Subsequent refetches must NOT flip the global `loading` flag — that
+  // unmounts the open <TaskDetail> sheet mid-edit.
   const initialLoadDoneRef = useRef(false);
 
   const fetchSuggestions = useCallback(async () => {
     if (!initialLoadDoneRef.current) setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    try {
+      // mine=true → personal scope; the API also hides draft-plan tasks.
+      const { tasks } = await api<{ tasks: Task[] }>(
+        "/api/tasks?status=inbox&verified=false&has_source=true&mine=true&limit=1000",
+      );
+      const sorted = tasks ?? [];
+      setSuggestions(sorted);
+      setSelected(new Set());
+      // Re-bind editTask to the freshly fetched row so an open TaskDetail
+      // sheet renders the saved values instead of the pre-save snapshot.
+      setEditTask((prev) => (prev ? sorted.find((s) => s.id === prev.id) ?? null : null));
+    } catch {
+      // 401 etc — list stays as-is
+    } finally {
+      initialLoadDoneRef.current = true;
       setLoading(false);
-      return;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("smrtesy:badge-refresh"));
+      }
     }
-
-    const { data, count } = await supabase
-      .from("tasks")
-      // projects(...) is needed so the edit-button TaskDetail sheet can
-      // show the linked project chip; without the join it silently
-      // disappears in the editor.
-      .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id)", { count: "exact" })
-      .eq("user_id", user.id)
-      .eq("status", "inbox")
-      .eq("manually_verified", false)
-      .not("source_message_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1000);  // PostgREST default cap; the user wants to see every pending suggestion
-
-    // Show newest-first by creation order. Previously we re-sorted by
-    // priority client-side, which pinned old urgent items to the top and
-    // hid fresh suggestions below them. Priority is still visible as a
-    // badge on each card.
-    const sorted = (data || []) as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
-    setSuggestions(sorted);
-    setTotalCount(count ?? sorted.length);
-    setSelected(new Set());
-    // Re-bind editTask to the freshly fetched row so an open TaskDetail
-    // sheet renders the saved values instead of the pre-save snapshot.
-    // If the row no longer matches the suggestion filter (e.g. user
-    // changed status away from "inbox" inside the edit form), clear
-    // editTask — the sheet closes naturally via open={!!editTask}.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setEditTask((prev) => (prev ? ((sorted as any[]).find((s: any) => s.id === prev.id) as Task | undefined) ?? null : null));
-    initialLoadDoneRef.current = true;
-    setLoading(false);
-    // Nudge the sidebar to refetch its counters. The supabase Realtime
-    // subscription on tasks should also catch the underlying mutations,
-    // but firing a local event guarantees an instant update on the
-    // user's own actions without waiting for the round-trip.
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new Event("smrtesy:badge-refresh"));
-    }
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     fetchSuggestions();
   }, [fetchSuggestions]);
 
-  // Scroll-to-focus when the inbox page is opened via a /whatsapp link
-  // like /he/inbox?focus=<task_id>. Runs once per focus id; cleans the
-  // URL after so a manual reload doesn't keep re-scrolling.
+  // Scroll-to-focus when opened via a deep link like /he/inbox?focus=<task_id>.
   useEffect(() => {
     if (!focusId || loading) return;
     if (focusedRef.current === focusId) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const exists = suggestions.some((s: any) => s.id === focusId);
+    const exists = suggestions.some((s) => s.id === focusId);
     if (!exists) return;
     focusedRef.current = focusId;
-    // Wait a frame for the DOM to settle before scrolling.
     requestAnimationFrame(() => {
       focusNodeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -167,20 +135,41 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   function selectAllFiltered() {
-    setSelected(new Set(suggestions.map((t: any) => t.id as string))); // eslint-disable-line @typescript-eslint/no-explicit-any
+    setSelected(new Set(suggestions.map((s) => s.id)));
   }
 
   function clearSelection() { setSelected(new Set()); }
 
   async function handleApprove(taskId: string) {
-    const { error } = await supabase
-      .from("tasks")
-      .update({ manually_verified: true, seen_at: new Date().toISOString() })
-      .eq("id", taskId);
-    if (error) { toast.error(error.message); return; }
-    toast.success(t("approve"));
-    fetchSuggestions();
-    onUpdate?.();
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
+      toast.success(t("approve"));
+      fetchSuggestions();
+      onUpdate?.();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleSizeToggle(task: Task) {
+    const size = task.size === "quick" ? "regular" : "quick";
+    setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, size } : s)));
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { size } });
+    } catch (e) {
+      toast.error((e as Error).message);
+      fetchSuggestions();
+    }
+  }
+
+  async function handleDueChange(taskId: string, date: string | null) {
+    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, due_date: date } : s)));
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { due_date: date } });
+    } catch (e) {
+      toast.error((e as Error).message);
+      fetchSuggestions();
+    }
   }
 
   async function handleFastDismiss(taskId: string) {
@@ -250,121 +239,129 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
-  // The suggestion list itself. The unified search (CombinedSearch) wraps this
-  // and takes over the view whenever a query is active; the list shows when
-  // there's no active search.
+  const snoozeTask = snoozeTaskId ? suggestions.find((s) => s.id === snoozeTaskId) : null;
+
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
     </div>
-  ) : suggestions.length === 0 ? (
-    <div className="py-12 text-center text-muted-foreground">
-      <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
-      <p>{t("noSuggestions")}</p>
-    </div>
   ) : (
-    <div className="space-y-3">
-      <SuggestionToolbar
-        total={totalCount || suggestions.length}
-        filtered={suggestions.length}
-        selectedCount={selected.size}
-        searchQuery=""
-        onSearchChange={() => {}}
-        onSelectAll={selectAllFiltered}
-        onClearSelection={clearSelection}
-        onBulkApprove={handleBulkApprove}
-        onBulkDismissFast={handleBulkDismissFast}
-        onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
-        hideSearch
-      />
+    <div className="space-y-4">
+      {/* Plan assignments awaiting my accept/decline */}
+      <PlanProposals locale={locale} onChanged={() => { onUpdate?.(); }} />
 
-      {suggestions.map((task: any) => {  // eslint-disable-line @typescript-eslint/no-explicit-any
-        const source = (Array.isArray(task.source_messages) ? task.source_messages[0] : task.source_messages) as SourceJoin | null;
-        const title = locale === "he" && task.title_he ? task.title_he : task.title;
-        // YYYY-MM-DD parsed via new Date() lands at UTC midnight and shifts back a
-        // day in negative UTC offsets — same bug TaskCard fixed in 29484ef.
-        const dueDate = task.due_date
-          ? formatDateOnly(task.due_date as string, locale, { day: "numeric", month: "short" })
-          : null;
-        const isSelected = selected.has(task.id);
-        const isFocused = task.id === focusId;
+      {suggestions.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground">
+          <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
+          <p>{t("noSuggestions")}</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <SuggestionToolbar
+            total={suggestions.length}
+            filtered={suggestions.length}
+            selectedCount={selected.size}
+            searchQuery=""
+            onSearchChange={() => {}}
+            onSelectAll={selectAllFiltered}
+            onClearSelection={clearSelection}
+            onBulkApprove={handleBulkApprove}
+            onBulkDismissFast={handleBulkDismissFast}
+            onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
+            hideSearch
+          />
 
-        return (
-          <Card
-            key={task.id}
-            ref={isFocused ? focusNodeRef : undefined}
-            className={
-              isFocused
-                ? "ring-2 ring-status-warn animate-pulse"
-                : isSelected
-                ? "ring-2 ring-primary/50"
-                : undefined
-            }
-          >
-            <CardContent className="p-4">
-              <div className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleSelect(task.id as string)}
-                  className="mt-2 shrink-0 h-4 w-4 cursor-pointer"
-                  aria-label={t("selectAll")}
-                />
-                <div className="mt-1 rounded-full bg-accent p-2">
-                  <Bell className="h-4 w-4 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="font-medium text-sm" dir={locale === "he" ? "rtl" : "ltr"}>{title}</h4>
-                    <SerialBadge serial={task.serial_display as string | null} />
-                    <SourceLink source={source} />
-                    {dueDate && (
-                      <Badge variant="outline" className="text-[10px] bg-accent shrink-0">
-                        {dueDate}
-                      </Badge>
-                    )}
+          {suggestions.map((task) => {
+            const source = task.source_messages ?? null;
+            const title = locale === "he" && task.title_he ? task.title_he : task.title;
+            const isSelected = selected.has(task.id);
+            const isFocused = task.id === focusId;
+
+            return (
+              <Card
+                key={task.id}
+                ref={isFocused ? focusNodeRef : undefined}
+                className={
+                  isFocused
+                    ? "ring-2 ring-status-warn animate-pulse"
+                    : isSelected
+                    ? "ring-2 ring-primary/50"
+                    : undefined
+                }
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(task.id)}
+                      className="mt-1.5 shrink-0 h-4 w-4 cursor-pointer"
+                      aria-label={t("selectAll")}
+                    />
+                    <div className="flex-1 min-w-0">
+                      {/* Title row: title + ✨ + size + deadline. All other
+                          identity (serial, source, reasoning) lives in ✨. */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-medium" dir="auto">{title}</h4>
+                        <ContextButton task={task} locale={locale} />
+                        <button
+                          type="button"
+                          onClick={() => handleSizeToggle(task)}
+                          title={task.size === "quick" ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
+                          className={cn(
+                            "flex h-6 items-center gap-0.5 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
+                            task.size === "quick"
+                              ? "bg-status-warn-bg text-status-warn"
+                              : "bg-secondary text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Zap className="h-3 w-3" />
+                          {task.size === "quick" ? tTasks("row.sizeQuick") : tTasks("row.sizeRegular")}
+                        </button>
+                        <DueDateChip
+                          deadline={effectiveDeadline(task)}
+                          locale={locale}
+                          blocked={blocked}
+                          onChange={(d) => handleDueChange(task.id, d)}
+                        />
+                      </div>
+                      {task.description ? (
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir="auto">
+                          {task.description}
+                        </p>
+                      ) : null}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {task.related_contact && (
+                          <Badge variant="outline" className="text-[10px]">
+                            {task.related_contact}
+                          </Badge>
+                        )}
+                        {(task.tags ?? []).slice(0, 2).map((tag) => (
+                          <Badge key={tag} variant="outline" className="text-[10px] capitalize">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  {task.description ? (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words" dir={locale === "he" ? "rtl" : "ltr"}>
-                      {task.description}
-                    </p>
-                  ) : null}
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {task.related_contact && (
-                      <Badge variant="outline" className="text-[10px]">
-                        {task.related_contact as string}
-                      </Badge>
-                    )}
-                    {task.priority && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {tTasks(`priority.${task.priority}`)}
-                      </Badge>
-                    )}
-                    {(task.tags as string[] | null)?.slice(0, 2).map((tag) => (
-                      <Badge key={tag} variant="outline" className="text-[10px] capitalize">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              </div>
 
-              <SuggestionActions
-                taskId={task.id as string}
-                infoProjectId={(task.project_id as string | null) ?? null}
-                infoTitle={title as string}
-                infoBody={(task.description as string | null) ?? null}
-                onFastDismiss={() => handleFastDismiss(task.id as string)}
-                onDismissWithReason={() => openDismissDialog(task.id as string, (locale === "he" && task.title_he ? task.title_he : task.title) as string, source?.source_type ?? null)}
-                onApprove={() => handleApprove(task.id as string)}
-                onEdit={() => setEditTask(task as Task)}
-                onSnooze={() => setSnoozeTaskId(task.id as string)}
-                onComplete={() => handleComplete(task.id as string)}
-              />
-            </CardContent>
-          </Card>
-        );
-      })}
+                  <SuggestionActions
+                    infoProjectId={task.project_id}
+                    infoTitle={title}
+                    infoBody={task.description}
+                    onFastDismiss={() => handleFastDismiss(task.id)}
+                    onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
+                    onApprove={() => handleApprove(task.id)}
+                    onEdit={() => setEditTask(task)}
+                    onSnooze={() => setSnoozeTaskId(task.id)}
+                    onComplete={() => handleComplete(task.id)}
+                  />
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -396,6 +393,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         open={!!snoozeTaskId}
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
+        maxDate={snoozeTask ? effectiveDeadline(snoozeTask) : null}
       />
 
       <MergeModal
@@ -429,15 +427,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
 /**
  * Per-card action row, in RTL display order from start to end:
- *   AI trail · edit · snooze · [flex] · fast-X (red) · X! (orange) · approve · done
+ *   edit · snooze · save-as-info · [flex] · fast-X (red) · X! (orange) · approve · done
  *
- * "approve" moves the suggestion into the active task list. "done" (green,
- * matching the TaskCard complete button) marks the task as completed in one
- * step — for users who want to log an immediate task and close it without
- * the intermediate inbox stage.
+ * "approve" moves the suggestion into the task lists (waiting, or straight to
+ * the desk when the deadline is near). "done" closes it in one step.
  */
 function SuggestionActions({
-  taskId,
   infoProjectId,
   infoTitle,
   infoBody,
@@ -448,7 +443,6 @@ function SuggestionActions({
   onSnooze,
   onComplete,
 }: {
-  taskId: string;
   infoProjectId: string | null;
   infoTitle: string;
   infoBody: string | null;
@@ -462,89 +456,76 @@ function SuggestionActions({
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const tCommon = useTranslations("common");
-  const trail = useAITrail(taskId);
 
   return (
-    <>
-      <div className="flex gap-2 mt-3 items-center">
-        <AITrailIconButton open={trail.open} onToggle={trail.toggle} />
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-9 w-9"
-          onClick={onEdit}
-          title={tCommon("edit")}
-          aria-label={tCommon("edit")}
-        >
-          <Pencil className="h-4 w-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-9 w-9"
-          onClick={onSnooze}
-          title={tTasks("actions.snooze")}
-          aria-label={tTasks("actions.snooze")}
-        >
-          <Clock className="h-4 w-4" />
-        </Button>
-        <SaveAsInfoButton
-          defaultProjectId={infoProjectId}
-          defaultTitle={infoTitle}
-          defaultBody={infoBody}
-        />
-        <div className="flex-1" />
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-9 w-9 text-status-late hover:bg-status-late-bg"
-          onClick={onFastDismiss}
-          title={t("fastDismiss")}
-          aria-label={t("fastDismiss")}
-        >
-          <X className="h-4 w-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-9 w-9 text-status-warn hover:bg-status-warn-bg font-semibold"
-          onClick={onDismissWithReason}
-          title={t("dismissWithReason")}
-          aria-label={t("dismissWithReason")}
-        >
-          <X className="h-4 w-4" />
-          <span className="text-sm leading-none -ms-0.5">!</span>
-        </Button>
-        <Button
-          size="icon"
-          className="h-9 w-9"
-          onClick={onApprove}
-          title={t("approve")}
-          aria-label={t("approve")}
-        >
-          <CheckCircle2 className="h-4 w-4" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-9 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok"
-          onClick={onComplete}
-          title={tTasks("actions.complete")}
-          aria-label={tTasks("actions.complete")}
-        >
-          <CheckCircle2 className="h-4 w-4" />
-          <span className="hidden md:inline">{tTasks("actions.complete")}</span>
-        </Button>
-      </div>
-
-      {trail.open && (
-        <AITrailBody
-          data={trail.data}
-          loading={trail.loading}
-          error={trail.error}
-          className="mt-2"
-        />
-      )}
-    </>
+    <div className="flex gap-2 mt-3 items-center">
+      <Button
+        size="icon"
+        variant="ghost"
+        className="h-9 w-9"
+        onClick={onEdit}
+        title={tCommon("edit")}
+        aria-label={tCommon("edit")}
+      >
+        <Pencil className="h-4 w-4" />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="h-9 w-9"
+        onClick={onSnooze}
+        title={tTasks("actions.snooze")}
+        aria-label={tTasks("actions.snooze")}
+      >
+        <Clock className="h-4 w-4" />
+      </Button>
+      <SaveAsInfoButton
+        defaultProjectId={infoProjectId}
+        defaultTitle={infoTitle}
+        defaultBody={infoBody}
+      />
+      <div className="flex-1" />
+      <Button
+        size="icon"
+        variant="ghost"
+        className="h-9 w-9 text-status-late hover:bg-status-late-bg"
+        onClick={onFastDismiss}
+        title={t("fastDismiss")}
+        aria-label={t("fastDismiss")}
+      >
+        <X className="h-4 w-4" />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="h-9 w-9 text-status-warn hover:bg-status-warn-bg font-semibold"
+        onClick={onDismissWithReason}
+        title={t("dismissWithReason")}
+        aria-label={t("dismissWithReason")}
+      >
+        <X className="h-4 w-4" />
+        <span className="text-sm leading-none -ms-0.5">!</span>
+      </Button>
+      <Button
+        size="icon"
+        className="h-9 w-9"
+        onClick={onApprove}
+        title={t("approve")}
+        aria-label={t("approve")}
+      >
+        <CheckCircle2 className="h-4 w-4" />
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-9 gap-1 text-status-ok/40 hover:text-white hover:bg-status-ok active:bg-status-ok"
+        onClick={onComplete}
+        title={tTasks("actions.complete")}
+        aria-label={tTasks("actions.complete")}
+      >
+        <CheckCircle2 className="h-4 w-4" />
+        <span className="hidden md:inline">{tTasks("actions.complete")}</span>
+      </Button>
+    </div>
   );
 }

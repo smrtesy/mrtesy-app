@@ -71,6 +71,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [editPriority, setEditPriority] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editStatus, setEditStatus] = useState("");
+  const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
+  const [editContext, setEditContext] = useState<"" | "home" | "work">("");
   const [editProjectId, setEditProjectId] = useState("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
@@ -155,6 +157,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     setEditPriority(task.priority);
     setEditDueDate(task.due_date || "");
     setEditStatus(task.status);
+    setEditSize(task.size === "quick" ? "quick" : "regular");
+    setEditContext(task.context === "home" || task.context === "work" ? task.context : "");
     setEditProjectId(task.project_id || "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
@@ -180,10 +184,14 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     const body: Record<string, unknown> = {
       priority: editPriority,
       status: editStatus,
-      due_date: editDueDate || null,
+      size: editSize,
+      context: editContext || null,
       project_id: editProjectId || null,
       assigned_to_user_id: editAssignedTo || null,
     };
+    // Plan-task deadlines belong to the plan manager (set via the planning
+    // board); the input is disabled in the UI and skipped here as a backstop.
+    if (!task.plan_id) body.due_date = editDueDate || null;
     if (locale === "he") body.title_he = editTitle;
     else                 body.title = editTitle;
     // Manually linking a project → mark as 100% confident
@@ -410,9 +418,43 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       </select>
                     </div>
                   </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium">{tDetail("sizeLabel")}</label>
+                      <select
+                        value={editSize}
+                        onChange={(e) => setEditSize(e.target.value as "quick" | "regular")}
+                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                      >
+                        <option value="quick">{t("row.sizeQuick")}</option>
+                        <option value="regular">{t("row.sizeRegular")}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">{tDetail("contextLabel")}</label>
+                      <select
+                        value={editContext}
+                        onChange={(e) => setEditContext(e.target.value as "" | "home" | "work")}
+                        className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                      >
+                        <option value="">{tDetail("contextNone")}</option>
+                        <option value="home">{tDetail("contextHome")}</option>
+                        <option value="work">{tDetail("contextWork")}</option>
+                      </select>
+                    </div>
+                  </div>
                   <div>
                     <label className="text-xs font-medium">{tDetail("dueDateLabel")}</label>
-                    <Input type="date" value={editDueDate} onChange={(e) => setEditDueDate(e.target.value)} />
+                    <Input
+                      type="date"
+                      value={editDueDate}
+                      onChange={(e) => setEditDueDate(e.target.value)}
+                      disabled={!!task.plan_id}
+                      title={task.plan_id ? tDetail("dueDateLockedHint") : undefined}
+                    />
+                    {task.plan_id && (
+                      <p className="mt-0.5 text-[11px] text-muted-foreground" dir="auto">{tDetail("dueDateLockedHint")}</p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs font-medium">{tDetail("projectLabel")}</label>

@@ -26,6 +26,7 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
+import { notify } from "../../lib/platform";
 import { computeOrgSchedule, releaseDependents } from "./engine";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
@@ -290,12 +291,12 @@ function requireFull(req: Request, res: Response, next: NextFunction) {
 const PLAN_FIELDS =
   "id, org_id, parent_id, project_id, title_he, title_en, goal, kind, group_label, " +
   "start_date, end_date, stage, status, is_capability, is_available, progress, progress_manual, is_critical, color, " +
-  "is_private, owner_user_id, created_by, created_at, updated_at";
+  "is_private, owner_user_id, manager_user_id, created_by, created_at, updated_at";
 
 const PLAN_WRITABLE = new Set([
   "parent_id", "project_id", "title_he", "title_en", "goal", "kind", "group_label",
   "start_date", "end_date", "stage", "status", "is_capability", "is_available",
-  "progress_manual", "color", "is_private", "owner_user_id",
+  "progress_manual", "color", "is_private", "owner_user_id", "manager_user_id",
 ]);
 
 function pickPlan(body: Record<string, unknown>): Record<string, unknown> {
@@ -580,7 +581,8 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
 // ── current user's plan tasks, in ready/blocked/done zones (the worker view) ──
 const MY_TASK_FIELDS =
   "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id";
+  "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, " +
+  "assignment_status";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -629,12 +631,75 @@ router.get("/plan/my-tasks", async (req: Request, res: Response) => {
     .select(MY_TASK_FIELDS)
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
-    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`);
+    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`)
+    // Proposed assignments live in the inbox (accept/decline) and declined
+    // ones are not my work — neither belongs in the working list.
+    .not("assignment_status", "in", "(proposed,declined)");
   // Every row here has a non-null plan_id, so a plain not-in is null-safe.
   if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
   const { data, error } = await q.order("due_date", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data)))) });
+});
+
+/** GET /plan/proposals — plan tasks proposed TO me, awaiting accept/decline.
+ *  Surfaced in the platform inbox alongside AI suggestions. */
+router.get("/plan/proposals", async (req: Request, res: Response) => {
+  const silent = await silentPlanIds(req.org!.id);
+  let q = db
+    .from("tasks")
+    .select(MY_TASK_FIELDS + ", proposed_by, proposed_at, description")
+    .eq("organization_id", req.org!.id)
+    .not("plan_id", "is", null)
+    .eq("assigned_to_user_id", req.user!.id)
+    .eq("assignment_status", "proposed");
+  if (silent.length) q = q.not("plan_id", "in", `(${silent.join(",")})`);
+  const { data, error } = await q.order("due_date", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tasks: await attachStageTitles(req.org!.id, await attachPlanTitles(req.org!.id, asRows(data))) });
+});
+
+/** POST /plan-tasks/:id/assignment-response  body: { accept: boolean }
+ *  The assignee's own accept/decline on a proposed plan task. Deliberately NOT
+ *  behind requireFull — responding to a proposal is the worker's call. */
+router.post("/plan-tasks/:id/assignment-response", async (req: Request, res: Response) => {
+  const accept = req.body?.accept === true;
+  const { data, error } = await db
+    .from("tasks")
+    .update({
+      assignment_status: accept ? "accepted" : "declined",
+      accepted_at: accept ? new Date().toISOString() : null,
+    })
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .eq("assigned_to_user_id", req.user!.id)
+    .eq("assignment_status", "proposed")
+    .select("id, assignment_status")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data)  return res.status(404).json({ error: "proposal not found (or already answered)" });
+
+  // A declined task needs the planner's attention — tell the plan's manager.
+  if (!accept) {
+    const { data: task } = await db
+      .from("tasks").select("title_he, title, plan_id").eq("id", req.params.id).maybeSingle();
+    const { data: plan } = task?.plan_id
+      ? await db.from("smrtplan_plans").select("manager_user_id, title_he").eq("id", task.plan_id as string).maybeSingle()
+      : { data: null };
+    if (plan?.manager_user_id) {
+      await notify(req.org!.id, plan.manager_user_id as string, {
+        app_slug: "smrtplan",
+        type: "action_required",
+        title: `שיבוץ נדחה: ${(task?.title_he as string) || (task?.title as string) || ""}`,
+        body: `העובד דחה את השיבוץ בתוכנית "${(plan.title_he as string) ?? ""}"`,
+        entity_type: "task",
+        entity_id: req.params.id,
+        from_user_id: req.user!.id,
+      });
+    }
+  }
+
+  res.json({ task: data });
 });
 
 // A specific worker's tasks across all plans (planner view, fix #4). "Design"

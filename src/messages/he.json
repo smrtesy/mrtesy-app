@@ -38,6 +38,26 @@
       "4": "ה",
       "5": "ו",
       "6": "ש"
+    },
+    "tabTask": "משימה",
+    "tabInfo": "מידע",
+    "sizeQuick": "מהיר",
+    "sizeRegular": "רגיל",
+    "contextHome": "בית",
+    "moreOptions": "עוד אפשרויות",
+    "info": {
+      "titlePlaceholder": "כותרת (אופציונלי)",
+      "bodyPlaceholder": "מה לשמור? קישורים יישארו לחיצים…",
+      "attachFile": "צרף קובץ",
+      "attachFailed": "צירוף הקובץ נכשל: {error}",
+      "projectRequired": "צריך לבחור פרויקט לפיסת המידע",
+      "bodyRequired": "צריך תוכן או כותרת",
+      "projectCreated": "הפרויקט נוצר",
+      "newProjectPlaceholder": "שם פרויקט חדש…",
+      "newSubProjectPlaceholder": "שם תת-פרויקט חדש…",
+      "createProject": "צור",
+      "save": "שמור מידע",
+      "saved": "המידע נשמר"
     }
   },
   "upcoming": {
@@ -315,7 +335,8 @@
       "confirmButton": "אישור",
       "presetTomorrow": "מחר 09:00",
       "presetTomorrowEvening": "מחר 18:00",
-      "presetNextWeek": "שבוע הבא"
+      "presetNextWeek": "שבוע הבא",
+      "pastDeadline": "אי אפשר לנדנד מעבר ליעד ({date}) — המשימה תוסתר עד אחרי הדדליין"
     },
     "materials": {
       "title": "חומר רקע",
@@ -358,6 +379,61 @@
       "placeholder": "הוסף משימה בשפה טבעית...",
       "confirmDates": "נכון?",
       "editDates": "ערוך תאריכים"
+    },
+    "dueChip": {
+      "noDate": "בלי תאריך",
+      "lockedHint": "יעד של משימת פלאן — רק מנהל התוכנית משנה אותו",
+      "editHint": "לחיצה לשינוי תאריך היעד",
+      "constrainedHint": "אילוץ בתוכנית הקדים את היעד",
+      "dialogTitle": "תאריך יעד",
+      "clear": "הסר תאריך",
+      "save": "שמירה"
+    },
+    "row": {
+      "blockedHint": "ממתין ל: {titles}",
+      "reopen": "החזר משימה",
+      "reopened": "המשימה נפתחה מחדש",
+      "undo": "ביטול",
+      "contextHome": "בית",
+      "recurring": "משימה חוזרת",
+      "critical": "קריטי",
+      "wokeChip": "חזר מנדנוד",
+      "wokeHint": "המשימה התעוררה מנדנוד — נגיעה ראשונה מנקה את הסימון",
+      "sitting": "יושב {days} ימים",
+      "sittingHint": "ימי עסקים ללא טיפול",
+      "sizeQuick": "מהיר",
+      "sizeRegular": "רגיל",
+      "sizeQuickHint": "משימה מהירה — לחיצה תהפוך לרגילה",
+      "sizeRegularHint": "משימה רגילה — לחיצה תהפוך למהירה",
+      "moveToDesk": "העלה לשולחן",
+      "moveToWaiting": "הורד לממתינות"
+    },
+    "desk": {
+      "quick": "מהיר",
+      "regular": "רגיל",
+      "waiting": "ממתינות",
+      "completed": "הושלמו",
+      "startRun": "התחל ריצה",
+      "emptyQuick": "אין משימות מהירות על השולחן — גרור מממתינות או צור חדשה",
+      "emptyRegular": "אין משימות רגילות על השולחן"
+    },
+    "contextFilter": {
+      "all": "הכל",
+      "home": "בית",
+      "work": "עבודה"
+    },
+    "review": {
+      "banner": "{count} משימות ישנות מחכות לביקורת — עדיין רלוונטיות?",
+      "dialogTitle": "ביקורת תקופתית ({count})",
+      "dialogHint": "משימות שלא נגעת בהן 20 ימי עסקים ומעלה. שמור מאפס את השעון, נדנוד מסתיר עד תאריך, ארכוב סוגר.",
+      "sittingFor": "יושב {days} ימי עסקים",
+      "keep": "שמור",
+      "snooze": "נדנוד",
+      "archive": "ארכב",
+      "archiveAll": "ארכב הכל",
+      "archiveAllConfirm": "לארכב את כל {count} המשימות?",
+      "archivedAll": "כל המשימות אורכבו",
+      "close": "סגור"
     }
   },
   "router": {
@@ -462,7 +538,10 @@
     "dismissedAt": "נדחה ב-{when}",
     "dismissedReasonLabel": "סיבה",
     "restoreToInbox": "החזר לתיבת הנכנסות",
-    "restored": "הפריט הוחזר לתיבת הנכנסות"
+    "restored": "הפריט הוחזר לתיבת הנכנסות",
+    "learnFromThis": "תלמד מזה את ה-AI להבא (ההסבר יישמר כתיקון)",
+    "learnScopePersonal": "רק בשבילי",
+    "learnScopeGeneral": "כלל כללי"
   },
   "merge": {
     "step1Title": "בחירת יעד למיזוג",
@@ -842,7 +921,13 @@
     "assignedToLabel": "משויך ל-",
     "unassignedOption": "— לא משויך —",
     "saveButton": "שמור",
-    "addUpdatePlaceholder": "הוסף עדכון..."
+    "addUpdatePlaceholder": "הוסף עדכון...",
+    "sizeLabel": "גודל",
+    "contextLabel": "הקשר",
+    "contextNone": "ללא",
+    "contextHome": "בית",
+    "contextWork": "עבודה",
+    "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון"
   },
   "orgSwitcher": {
     "orgCreated": "ארגון נוצר",
@@ -890,6 +975,43 @@
     "infoDelete": "מחיקה",
     "infoDeleted": "המידע נמחק",
     "infoDeleteConfirm": "למחוק את פריט המידע הזה?"
+  },
+  "infoBoard": {
+    "addItem": "הוסף מידע",
+    "addDialogTitle": "הוספת מידע",
+    "editDialogTitle": "עריכת מידע",
+    "titlePlaceholder": "כותרת (לא חובה)",
+    "bodyPlaceholder": "התוכן — קישורים יהפכו ללחיצים",
+    "markdownHint": "Ctrl+B מודגש · Ctrl+I נטוי · Ctrl+K קישור",
+    "attachFile": "צרף קובץ",
+    "fileTooLarge": "הקובץ גדול מדי (מקסימום 7MB)",
+    "itemSaved": "המידע נשמר",
+    "itemDeleted": "המידע נמחק",
+    "deleteConfirm": "למחוק את פריט המידע הזה?",
+    "editItem": "עריכה",
+    "deleteItem": "מחיקה",
+    "searchPlaceholder": "חיפוש בלוח…",
+    "filterByProject": "סינון לפי תת-פרויקט",
+    "filterAll": "הכל",
+    "empty": "אין פריטי מידע עדיין — הוסיפו את הראשון.",
+    "noResults": "לא נמצאו פריטים תואמים.",
+    "summaryTitle": "סיכום AI",
+    "summaryBuild": "בנה סיכום",
+    "summaryRefresh": "עדכן סיכום",
+    "summaryBuilding": "בונה סיכום…",
+    "summaryBuilt": "הסיכום עודכן",
+    "summaryEmpty": "אין עדיין סיכום — לחצו \"בנה סיכום\" כדי ליצור אחד מכל פריטי המידע.",
+    "summaryEdit": "עריכה ידנית",
+    "summarySave": "שמירת סיכום",
+    "summarySaved": "הסיכום נשמר",
+    "summaryUpdatedAt": "עודכן ב-{date}",
+    "summaryStale": "נוספו פריטים חדשים מאז הסיכום האחרון",
+    "relatedItems": "הצעות ומשימות",
+    "chooseProjectHint": "יש לבחור פרויקט כדי לשמור את המידע",
+    "newProject": "פרויקט חדש",
+    "newProjectPlaceholder": "שם הפרויקט החדש",
+    "newProjectCreate": "צור",
+    "projectCreated": "הפרויקט נוצר"
   },
   "knowledge": {
     "title": "מאגר ידע",
@@ -2282,5 +2404,50 @@
     "requests": "בקשות",
     "types": "סוגי משאבים",
     "main": "ראשי"
+  },
+  "contextPanel": {
+    "aiTitle": "פרטי AI — למה המשימה נוצרה",
+    "planTitle": "הקשר בתהליך",
+    "loading": "טוען…",
+    "subject": "נושא",
+    "from": "מאת",
+    "classification": "סיווג",
+    "size": "גודל",
+    "sizeQuick": "⚡ מהיר (הצעת AI)",
+    "sizeRegular": "רגיל",
+    "reason": "נימוק",
+    "critical": "קריטי",
+    "duration": "{days} ימי עבודה",
+    "chain": "המקום שלך בשרשרת",
+    "chainArrived": "הגיע",
+    "chainWaiting": "ממתין",
+    "handoff": "ממשיך אל",
+    "startBy": "להתחיל עד",
+    "finishBy": "לסיים עד",
+    "openBoard": "פתח את לוח התכנון"
+  },
+  "marathon": {
+    "progress": "{done} מתוך {total}",
+    "remaining": "נשארו {count}",
+    "exit": "סיים ריצה",
+    "done": "בוצע",
+    "skip": "דלג",
+    "notQuick": "זה לא מהיר",
+    "finishTitle": "סיימת {count} משימות ב-{time} ⚡",
+    "newRecord": "שיא חדש! השיא הקודם: {prev}",
+    "bestSoFar": "השיא שלך: {count} משימות בריצה אחת",
+    "pace": "קצב: משימה כל {time}",
+    "weekSummary": "השבוע: {runs} ריצות, {completed} משימות",
+    "backToDesk": "חזרה לשולחן"
+  },
+  "planProposals": {
+    "sectionTitle": "שיבוצים מתוכניות",
+    "proposedPrefix": "שובצת למשימה",
+    "duration": "משך משוער: {days} ימי עבודה",
+    "due": "יעד: {date}",
+    "accept": "קבל",
+    "decline": "דחה שיבוץ",
+    "accepted": "השיבוץ התקבל — המשימה נכנסה לרשימות שלך",
+    "declined": "השיבוץ נדחה — מנהל התוכנית קיבל הודעה"
   }
 }
