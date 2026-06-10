@@ -143,11 +143,40 @@ export function PlanEffortDetail({
   // full-access planners). The server enforces the same rule.
   const canComplete = (task: PlanTask) => canEdit || isSuperAdmin || (myId != null && task.assigned_to_user_id === myId);
   async function toggleDone(task: PlanTask) {
+    const reopening = zoneOf(task) === "done";
     try {
-      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: zoneOf(task) !== "done" } });
+      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: !reopening } });
       await afterMutation();
+      if (reopening) void notifyReopen(task.id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  // Reopening doesn't silently re-block dependents that were already released —
+  // it tells the user what kept running and offers a one-click re-block of the
+  // consumers that haven't started yet (the human decides, the engine doesn't).
+  async function notifyReopen(taskId: string) {
+    try {
+      const { dependents } = await api<{ dependents: { id: string }[] }>(`/api/plan-tasks/${taskId}/released-dependents`);
+      if (!dependents || dependents.length === 0) return;
+      toast.warning(t("effort.reopenReleased", { n: dependents.length }), {
+        duration: 10000,
+        action: {
+          label: t("effort.reblockAction"),
+          onClick: async () => {
+            try {
+              const { reblocked } = await api<{ reblocked: number }>(`/api/plan-tasks/${taskId}/reblock`, { method: "POST" });
+              toast.success(t("effort.reblocked", { n: reblocked }));
+              await afterMutation();
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Error");
+            }
+          },
+        },
+      });
+    } catch {
+      /* informational only — never block the reopen itself */
     }
   }
 
@@ -207,7 +236,17 @@ export function PlanEffortDetail({
       )}
 
       {tasks.length === 0 && !adding ? (
-        <p className="py-6 text-center text-[12.5px] italic text-muted-foreground">{t("effort.empty")}</p>
+        <div className="rounded-lg border border-dashed py-8 text-center">
+          <p className="text-[12.5px] font-medium">{t("effort.empty")}</p>
+          {canEdit && plan.kind !== "roster" && (
+            <button
+              onClick={() => setAdding(true)}
+              className="mt-3 inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-3.5 w-3.5" /> {te("addTask")}
+            </button>
+          )}
+        </div>
       ) : (
         <div className="divide-y">
           {tasks.map((task) =>
@@ -311,6 +350,12 @@ function TaskRow({
               </span>
             ) : null,
           )}
+          {/* a released input whose provider has since been reopened — warn, don't block */}
+          {(task.needs ?? []).filter((n) => n.provider_reopened).map((n) => (
+            <span key={`ro-${n.dependency_id}`} className="ms-2 rounded bg-status-warn-bg px-1.5 py-px text-[9px] font-bold text-status-warn" title={n.title}>
+              ⚠ {t("effort.inputReopened")}: {n.title}
+            </span>
+          ))}
         </span>
         {task.duration_days != null && (
           <span

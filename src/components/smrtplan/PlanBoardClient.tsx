@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, UserCog, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, LayoutTemplate, Undo2, Redo2, ZoomIn, ZoomOut } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
@@ -17,8 +17,7 @@ import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanTableView } from "./PlanTableView";
 import { PlanEditDialog } from "./PlanEditDialog";
 import { MilestoneEditor } from "./MilestoneEditor";
-import { RolesEditor } from "./RolesEditor";
-import { TemplatesEditor } from "./TemplatesEditor";
+import { PlanSettingsHub } from "./PlanSettingsHub";
 
 const DAY_MS = 86_400_000;
 
@@ -90,8 +89,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
-  const [rolesOpen, setRolesOpen] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [templates, setTemplates] = useState<{ id: string; name_he: string }[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [mobileTimeline, setMobileTimeline] = useState(false);
@@ -740,11 +738,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
             </ControlButton>
-            <ControlButton onClick={() => setRolesOpen(true)}>
-              <UserCog className="h-3.5 w-3.5" /> {t("roles.button")}
-            </ControlButton>
-            <ControlButton onClick={() => setTemplatesOpen(true)}>
-              <LayoutTemplate className="h-3.5 w-3.5" /> {t("templates.button")}
+            <ControlButton onClick={() => setSettingsOpen(true)}>
+              <Settings2 className="h-3.5 w-3.5" /> {t("settings.button")}
             </ControlButton>
             <ControlButton onClick={recompute} disabled={recomputing}>
               <RefreshCw className={cn("h-3.5 w-3.5", recomputing && "animate-spin")} />
@@ -764,8 +759,17 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       </div>
 
       {editing && (
-        <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-muted-foreground">
-          {t("edit.editHint")}
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/50 bg-primary/10 px-3 py-2">
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2 py-0.5 text-[11px] font-bold text-primary-foreground">
+            <Pencil className="h-3 w-3" /> {t("edit.editMode")}
+          </span>
+          <span className="flex-1 text-[12px] text-muted-foreground">{t("edit.editHint")}</span>
+          <button
+            onClick={() => { setEditMode(false); setAddRowOpen(false); setEditingTitleId(null); histReset(); }}
+            className="rounded-md border bg-card px-2.5 py-1 text-[11.5px] font-medium hover:bg-accent"
+          >
+            {t("edit.exitEdit")}
+          </button>
         </div>
       )}
 
@@ -806,7 +810,15 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       {boardPlans.length === 0 ? (
         <div className="rounded-xl border bg-card p-10 text-center">
           <p className="text-sm font-medium">{t("board.empty")}</p>
-          <p className="mt-1 text-[12.5px] text-muted-foreground">{t("board.emptyHint")}</p>
+          <p className="mx-auto mt-1 max-w-md text-[12.5px] text-muted-foreground">{t("board.emptyHint")}</p>
+          {canEdit && (
+            <button
+              onClick={() => { setEditorPlan(null); setEditorOpen(true); }}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" /> {t("board.emptyCta")}
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -906,6 +918,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           className={cn(
             mobileTimeline ? "flex" : "hidden",
             "overflow-hidden rounded-xl border bg-card md:flex",
+            editing && "border-primary/50 ring-2 ring-primary/30",
           )}
         >
           {/* fixed label column (stays while the timeline scrolls) */}
@@ -1362,8 +1375,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         onClose={() => setMilestonesOpen(false)}
         onChanged={load}
       />
-      <RolesEditor open={rolesOpen} onClose={() => setRolesOpen(false)} />
-      <TemplatesEditor open={templatesOpen} onClose={() => setTemplatesOpen(false)} onChanged={load} />
+      <PlanSettingsHub open={settingsOpen} onClose={() => setSettingsOpen(false)} onChanged={load} />
       </>
       )}
     </div>
