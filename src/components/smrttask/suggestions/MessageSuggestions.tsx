@@ -24,7 +24,9 @@ import { PlanProposals } from "./PlanProposals";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { effectiveDeadline } from "@/lib/workdays";
+import { effectiveDeadline, autoSnoozeMoment } from "@/lib/workdays";
+import { undoToast } from "@/components/ui/undo-toast";
+import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
 
@@ -182,6 +184,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     }
   }
 
+  function unsnooze(taskId: string) {
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox", snoozed_until: null } })
+      .then(() => { fetchSuggestions(); onUpdate?.(); })
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   async function handleDueChange(taskId: string, date: string | null) {
     setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, due_date: date } : s)));
     try {
@@ -189,7 +197,25 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     } catch (e) {
       toast.error((e as Error).message);
       fetchSuggestions();
+      return;
     }
+    // Setting a due date auto-snoozes the suggestion until two working days
+    // before it — it leaves the inbox now and resurfaces in time. Skipped when
+    // there isn't enough lead time (autoSnoozeMoment → null).
+    if (!date) return;
+    const moment = autoSnoozeMoment(date, blocked);
+    if (!moment) return;
+    removeLocal([taskId]);
+    api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+    undoToast({
+      message: tTasks("undo.autoSnoozed", { date: dueLabel(moment.dateISO) }),
+      undoLabel: tTasks("row.undo"),
+      onUndo: () => unsnooze(taskId),
+      changeLabel: tTasks("undo.changeDate"),
+      onChange: () => setSnoozeTaskId(taskId),
+    });
   }
 
   async function handleHomeToggle(task: Task) {
@@ -225,14 +251,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     removeLocal([taskId]);
     // Undo restores status=inbox; manually_verified is untouched, so the
     // row comes straight back as a suggestion.
-    toast.success(tTasks("actions.complete"), {
-      action: {
-        label: tTasks("row.undo"),
-        onClick: () => {
-          api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
-            .then(() => { fetchSuggestions(); onUpdate?.(); })
-            .catch((e) => toast.error((e as Error).message));
-        },
+    undoToast({
+      message: tTasks("actions.complete"),
+      undoLabel: tTasks("row.undo"),
+      onUndo: () => {
+        api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
+          .then(() => { fetchSuggestions(); onUpdate?.(); })
+          .catch((e) => toast.error((e as Error).message));
       },
     });
     api(`/api/tasks/${taskId}/complete`, { method: "POST" })

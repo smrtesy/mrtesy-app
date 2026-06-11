@@ -452,6 +452,10 @@
       "archiveAllConfirm": "Archive all {count} tasks?",
       "archivedAll": "All tasks archived",
       "close": "Close"
+    },
+    "undo": {
+      "autoSnoozed": "Hidden until {date}",
+      "changeDate": "Reschedule"
     }
   },
   "router": {

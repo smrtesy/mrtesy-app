@@ -11,7 +11,7 @@
 /** Blocked-date set, keyed "YYYY-MM-DD". */
 export type BlockedDays = Set<string>;
 
-function toISODate(d: Date): string {
+export function toISODate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -65,6 +65,47 @@ export function addWorkdays(from: Date, n: number, blocked: BlockedDays): Date {
     if (isWorkingDay(cur, blocked)) left--;
   }
   return cur;
+}
+
+/** Subtract n WORKING days from a local Date (result lands on a working day). */
+export function subWorkdays(from: Date, n: number, blocked: BlockedDays): Date {
+  const cur = new Date(from);
+  let left = n;
+  for (let i = 0; i < 400 && left > 0; i++) {
+    cur.setDate(cur.getDate() - 1);
+    if (isWorkingDay(cur, blocked)) left--;
+  }
+  return cur;
+}
+
+/**
+ * Working days of lead time before a due date at which a freshly-dated task
+ * should resurface — the "auto-snooze" the user asked for: set a due date and
+ * the item hides itself until two working days before, then pops back so it's
+ * never forgotten and never sits on the desk earlier than it needs to.
+ */
+export const AUTO_SNOOZE_LEAD_WORKDAYS = 2;
+
+/**
+ * The auto-snooze moment for a just-set due date: 09:00 local time,
+ * AUTO_SNOOZE_LEAD_WORKDAYS working days before `dueISO`.
+ *
+ * Returns null when that moment is today-or-earlier (i.e. there isn't enough
+ * lead time left to be worth hiding the task) — in that case the caller leaves
+ * the item visible and applies no auto-snooze.
+ */
+export function autoSnoozeMoment(
+  dueISO: string,
+  blocked: BlockedDays,
+  today = todayISO(),
+): { iso: string; dateISO: string } | null {
+  const target = subWorkdays(parseISODateLocal(dueISO), AUTO_SNOOZE_LEAD_WORKDAYS, blocked);
+  const dateISO = toISODate(target);
+  if (dateISO <= today) return null;
+  // 09:00 LOCAL — build from numeric parts so the wall-clock hour is honored
+  // regardless of the browser timezone (the same care SnoozeDialog takes).
+  const at9 = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 9, 0, 0, 0);
+  return { iso: at9.toISOString(), dateISO };
 }
 
 export type DueUrgency = "overdue" | "today" | "soon" | "far";

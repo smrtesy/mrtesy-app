@@ -37,8 +37,11 @@ import {
   effectiveDeadline,
   dueUrgency,
   sittingWorkdays,
+  autoSnoozeMoment,
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
+import { undoToast } from "@/components/ui/undo-toast";
+import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
 import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -280,11 +283,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     try {
       if (done) {
         await completeTask(task);
-        toast.success(t("actions.complete"), {
-          action: {
-            label: t("row.undo"),
-            onClick: () => { reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message)); },
-          },
+        undoToast({
+          message: t("actions.complete"),
+          undoLabel: t("row.undo"),
+          onUndo: () => { reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message)); },
         });
       } else {
         await reopenTask(task);
@@ -308,16 +310,18 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
   }
 
-  async function patchTask(taskId: string, body: Record<string, unknown>, optimistic?: (task: Task) => Task) {
+  async function patchTask(taskId: string, body: Record<string, unknown>, optimistic?: (task: Task) => Task): Promise<boolean> {
     if (optimistic) {
       setTasks((prev) => prev.map((task) => (task.id === taskId ? optimistic(task) : task)));
       setSelectedTask((prev) => (prev && prev.id === taskId ? optimistic(prev) : prev));
     }
     try {
       await api(`/api/tasks/${taskId}`, { method: "PATCH", body });
+      return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
       fetchTasks();
+      return false;
     }
   }
 
@@ -325,8 +329,35 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     patchTask(taskId, { size }, (task) => ({ ...task, size }));
   }
 
-  function handleDueChange(taskId: string, date: string | null) {
-    patchTask(taskId, { due_date: date }, (task) => ({ ...task, due_date: date }));
+  /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */
+  const unsnooze = useCallback((taskId: string) => {
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox", snoozed_until: null } })
+      .then(fetchTasks)
+      .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
+  }, [fetchTasks]);
+
+  async function handleDueChange(taskId: string, date: string | null) {
+    // Persist the due date FIRST and wait for it: the snooze route below reads
+    // due_date from the DB to clamp the wake moment to the deadline, so it must
+    // see the value we just set (and we must not snooze if the date write failed).
+    const ok = await patchTask(taskId, { due_date: date }, (task) => ({ ...task, due_date: date }));
+    // Setting a due date auto-snoozes the item until two working days before it,
+    // so it disappears from the desk/waiting lists now and resurfaces in time.
+    // Skipped when there isn't enough lead time (autoSnoozeMoment → null).
+    if (!ok || !date) return;
+    const moment = autoSnoozeMoment(date, blocked);
+    if (!moment) return;
+    setTasks((prev) => prev.filter((row) => row.id !== taskId)); // optimistic hide
+    api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
+      .then(fetchTasks)
+      .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
+    undoToast({
+      message: t("undo.autoSnoozed", { date: dueLabel(moment.dateISO) }),
+      undoLabel: t("row.undo"),
+      onUndo: () => unsnooze(taskId),
+      changeLabel: t("undo.changeDate"),
+      onChange: () => setSnoozeTaskId(taskId),
+    });
   }
 
   function handleMove(taskId: string, toDesk: boolean) {
