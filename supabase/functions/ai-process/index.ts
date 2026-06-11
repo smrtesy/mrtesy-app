@@ -828,13 +828,52 @@ content under the rules above.`;
   };
 }
 
+// A recurring series holds several occurrences of the SAME matter, but an
+// update (a payment confirmation, a reply) belongs to ONE of them — the
+// occurrence whose due_date matches the signal — never to whichever occurrence
+// a stale pointer (thread_memory, the WhatsApp router, the sibling linker)
+// happened to reference (user rule 2026-06-11: "העדכון נכנס למשימה המתאימה
+// בלבד"). Mirrors the recurring tie-break in findDuplicateOpenTask: nearest
+// due_date, gently preferring an occurrence already due (a confirmation closes
+// the CURRENT cycle, not next month's). Non-recurring tasks pass through.
+async function resolveRecurringOccurrence(taskId: string, msg: any): Promise<string> {
+  const { data: t } = await supabase
+    .from("tasks")
+    .select("id, user_id, recurrence_rule, recurrence_parent_id, due_date, status")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (!t || (!t.recurrence_rule && !t.recurrence_parent_id)) return taskId;
+  const seriesKey = (t.recurrence_parent_id as string | null) ?? (t.id as string);
+  const { data: sibs } = await supabase
+    .from("tasks")
+    .select("id, due_date, status")
+    .eq("user_id", t.user_id)
+    .or(`id.eq.${seriesKey},recurrence_parent_id.eq.${seriesKey}`)
+    .in("status", ["inbox", "in_progress", "snoozed", "pending_completion"]);
+  const pool = (sibs ?? []) as Array<{ id: string; due_date: string | null }>;
+  if (pool.length === 0) return taskId;
+  const signalDate = msg?.received_at ? new Date(msg.received_at).toISOString().slice(0, 10) : null;
+  if (!signalDate) return taskId;
+  let bestId: string | null = null;
+  let bestScore = Infinity;
+  for (const s of pool) {
+    const d = dayDiff(signalDate, s.due_date);
+    if (d === null) continue;
+    const future = s.due_date && s.due_date > signalDate ? 0.5 : 0;
+    const score = d + future;
+    if (score < bestScore) { bestScore = score; bestId = s.id; }
+  }
+  return bestId ?? taskId;
+}
+
 async function appendUpdateToTask(
   taskId: string,
   msg: any,
   analysis: ThreadAnalysis,
   classification: string,
   opts?: { reopen?: boolean },
-) {
+): Promise<string> {
+  taskId = await resolveRecurringOccurrence(taskId, msg);
   const { data: existing } = await supabase
     .from("tasks")
     .select("updates, status, title_he")
@@ -864,7 +903,7 @@ async function appendUpdateToTask(
         && u.source_received_at === msg.received_at,
     )
   ) {
-    return;
+    return taskId;
   }
 
   const updateFields: Record<string, unknown> = {
@@ -933,6 +972,9 @@ async function appendUpdateToTask(
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
+  // The occurrence the update actually landed on (may differ from the id the
+  // caller passed when a recurring series was redirected above).
+  return taskId;
 }
 
 // ── WhatsApp per-matter router ────────────────────────────────────────────
@@ -2369,14 +2411,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         } else {
           const target = candidates.find((c) => c.id === targetId)!;
           const closed = ["pending_completion", "completed"].includes(String(target.status));
+          // appendUpdateToTask may redirect to a different occurrence of a
+          // recurring series — record the id the update actually landed on.
+          let resolvedId: string;
           if (closed && classification === "actionable") {
-            await appendUpdateToTask(targetId, msg, analysis, "actionable", { reopen: true });
-            classificationReason = `WhatsApp: reopened matter ${targetId} — thread resumed`;
+            resolvedId = await appendUpdateToTask(targetId, msg, analysis, "actionable", { reopen: true });
+            classificationReason = `WhatsApp: reopened matter ${resolvedId} — thread resumed`;
           } else {
-            await appendUpdateToTask(targetId, msg, analysis, classification);
-            classificationReason = `WhatsApp: routed ${classification} to matter ${targetId}`;
+            resolvedId = await appendUpdateToTask(targetId, msg, analysis, classification);
+            classificationReason = `WhatsApp: routed ${classification} to matter ${resolvedId}`;
           }
-          linkedTaskId = targetId;
+          linkedTaskId = resolvedId;
           classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
         }
       }
@@ -2437,16 +2482,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         } else if (taskClosed && classification === "actionable") {
           // (b) Same-topic resumption of an already-closed task → reopen it
           // rather than burying new actionable content as a silent update.
-          await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
-          linkedTaskId = memory.related_task_id;
+          const resolvedId = await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
+          linkedTaskId = resolvedId;
           classification = "actionable_followup";
-          classificationReason = `reopened task ${memory.related_task_id} via ${msg.source_type} — thread resumed`;
+          classificationReason = `reopened task ${resolvedId} via ${msg.source_type} — thread resumed`;
         } else {
           // (c) Open task continuing, or an informational follow-up → append.
-          await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
-          linkedTaskId = memory.related_task_id;
+          const resolvedId = await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
+          linkedTaskId = resolvedId;
           classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
-          classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+          classificationReason = `linked to task ${resolvedId} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
         }
       }
     } catch (e) {
@@ -2463,10 +2508,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     try {
       const sibling = await tryLinkToExistingTask(msg, msg.user_id);
       if (sibling) {
-        await appendUpdateToTask(sibling.id, msg, analysis, "actionable");
-        linkedTaskId = sibling.id;
+        const resolvedId = await appendUpdateToTask(sibling.id, msg, analysis, "actionable");
+        linkedTaskId = resolvedId;
         classification = "actionable_followup";
-        classificationReason = `linked to task ${sibling.id} via ${msg.source_type} (sibling-fallback)`;
+        classificationReason = `linked to task ${resolvedId} via ${msg.source_type} (sibling-fallback)`;
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
@@ -2741,10 +2786,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             completionReason: link.reason,
             reason: link.reason,
           };
-          await appendUpdateToTask(link.taskId, msg, completionAnalysis, "informational");
-          linkedTaskId = link.taskId;
+          const resolvedId = await appendUpdateToTask(link.taskId, msg, completionAnalysis, "informational");
+          linkedTaskId = resolvedId;
           classification = "informational_followup";
-          classificationReason = `cross-source: closes task ${link.taskId} — ${link.reason}`;
+          classificationReason = `cross-source: closes task ${resolvedId} — ${link.reason}`;
           totalInputTokens += 0; // Haiku call tracked inside callClaude via ai_usage
         }
       }

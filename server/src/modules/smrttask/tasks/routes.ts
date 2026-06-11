@@ -28,6 +28,27 @@ import { nextOccurrence, isValidRecurrenceRule } from "./recurrence";
 
 const router = Router();
 
+// UTC instant of `hour`:00 local time in `tz` on `dateStr` (YYYY-MM-DD).
+// Uses Intl.formatToParts (server-timezone independent, unlike the
+// toLocaleString round-trip): read the wall time the guess maps to in `tz`,
+// shift by the difference, and run a second pass to absorb a DST boundary
+// crossed by the first adjustment.
+function utcInstantForLocalHour(dateStr: string, hour: number, tz: string): Date {
+  const target = Date.parse(`${dateStr}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+  const wallAsUtc = (instant: number): number => {
+    const parts: Record<string, string> = {};
+    for (const p of new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(new Date(instant))) parts[p.type] = p.value;
+    const hh = parts.hour === "24" ? "00" : parts.hour;
+    return Date.parse(`${parts.year}-${parts.month}-${parts.day}T${hh}:${parts.minute}:${parts.second}.000Z`);
+  };
+  let x = target - (wallAsUtc(target) - target);
+  x = x - (wallAsUtc(x) - target);
+  return new Date(x);
+}
+
 // Every task route requires auth + active org + smrtTask enabled for that org.
 router.use(requireAuth, requireOrg, requireApp("smrttask"));
 
@@ -441,6 +462,21 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
       const checklist = Array.isArray(data.checklist)
         ? (data.checklist as Record<string, unknown>[]).map((c) => ({ ...c, done: false, completed_at: null }))
         : data.checklist;
+      // A recurring occurrence must NOT sit in the inbox weeks before its date
+      // (user rule 2026-06-11: "משימות חוזרות צריכות להופיע רק בתאריך שהן
+      // חזרו"). Spawn future occurrences snoozed until 07:00 local on their
+      // due date — reminders-check wakes them into the inbox that morning
+      // with the "returned from snooze" chip. A same-day occurrence goes
+      // straight to the inbox as before.
+      let spawnStatus = "inbox";
+      let spawnSnoozedUntil: string | null = null;
+      if (next > today) {
+        const { data: us } = await db
+          .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
+        const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+        spawnStatus = "snoozed";
+        spawnSnoozedUntil = utcInstantForLocalHour(next, 7, tz).toISOString();
+      }
       const { data: created, error: recErr } = await db
         .from("tasks")
         .insert({
@@ -448,7 +484,8 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
           organization_id: req.org!.id,
           title: data.title, title_he: data.title_he, description: data.description,
           priority: data.priority, task_type: data.task_type ?? "action",
-          status: "inbox", manually_verified: true,
+          status: spawnStatus, manually_verified: true,
+          snoozed_until: spawnSnoozedUntil,
           due_date: next, due_time: data.due_time,
           reminder_at: nextReminder,
           recurrence_rule: data.recurrence_rule,
