@@ -155,7 +155,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Protected route check
-  const isPublicRoute = pathname.includes("/login") || pathname.includes("/onboarding") || pathname.includes("/invite/");
+  const isPublicRoute = pathname.includes("/login") || pathname.includes("/onboarding") || pathname.includes("/invite/") || pathname.includes("/privacy") || pathname.includes("/terms");
   if (!isPublicRoute && !isAdminRoute && user === null) {
     const localePrefix = pathnameLocale === "en" ? "/en" : "/he";
     if (
