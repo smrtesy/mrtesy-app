@@ -1978,6 +1978,32 @@ function buildProbe(msg: any, ownerContact?: string | null): DupeProbe {
   };
 }
 
+// Probe built from a PRODUCED task (its OWN title/description), not the raw
+// inbound message. A WhatsApp burst's transcript spans several days, so the
+// task builder can re-derive an ask the user already turned into a (now
+// dismissed/archived) task while the burst's SALIENT content is a different,
+// newer topic — buildProbe(msg) then can't see the stale ask, but the produced
+// task's own text can. Real case: one בתי baguette ask spawned four
+// dismissed/archived duplicate tasks in 22h because the message-level probe
+// never matched it. Contact signals still come from the message (same
+// sender/phone) plus the task's owner_contact.
+function buildProbeFromTask(msg: any, task: any): DupeProbe {
+  const title = String(task.title_he || task.title || "");
+  const description = String(task.description || "").slice(0, 1200);
+  const blob = `${title} ${description}`;
+  const emails = extractEmails(msg.sender_email, msg.sender, (msg.metadata as any)?.to, task.owner_contact, blob);
+  const phones = extractPhones((msg.metadata as any)?.fromPhone, task.owner_contact, blob);
+  const dueProxy = task.due_date || (msg.received_at ? new Date(msg.received_at).toISOString().slice(0, 10) : null);
+  return {
+    title,
+    description,
+    dueDate: dueProxy,
+    emails,
+    domains: emailDomains(emails),
+    phones,
+  };
+}
+
 const DUPE_MATCH_PROMPT = `You decide whether a NEW item refers to the SAME real-world event, appointment, obligation, or thread as one of the user's EXISTING open tasks — even when they arrived from DIFFERENT sources (a calendar event, an email, a WhatsApp chat, a Drive document).
 
 A MATCH means the SAME concrete thing — not merely the same person or the same topic. Require at least 2 of the following to agree:
@@ -2742,6 +2768,39 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           let firstTaskId: string | null = null;
           const createdTaskIds: string[] = [];
           for (const task of taskResult.tasks) {
+            // Per-task re-extraction guard: dedup each produced task by its OWN
+            // content (buildProbeFromTask) against recent open+closed tasks. The
+            // message-level Path 2.5 probe misses the case where the builder
+            // re-derives a stale ask from the multi-day WhatsApp transcript while
+            // the burst's salient/newest content is a different topic — which is
+            // how one dismissed ask kept respawning (T665→T685→T688→T694).
+            try {
+              const tDup = await findDuplicateOpenTask(msg.user_id, buildProbeFromTask(msg, task), sys, msg.id);
+              if (tDup && tDup.confidence === "high") {
+                if (tDup.closed) {
+                  // Already handled and closed (completed/archived/dismissed):
+                  // do NOT re-create the same ask the user already disposed of.
+                  classification = "actionable_followup";
+                  classificationReason = `re-extracted duplicate of already-handled ${tDup.serial || tDup.taskId} — skipped re-creating "${task.title_he}" — ${tDup.reason}`;
+                  await supabase.from("log_entries").insert({
+                    user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "duplicate",
+                    ...msgLogFields(msg), classification_reason: classificationReason,
+                  });
+                  continue;
+                }
+                // Open duplicate: fold this message into the existing task
+                // rather than spawning a parallel one. Don't push it into
+                // createdTaskIds — the deferred-follow-up snooze below must only
+                // touch tasks this burst actually created, never a pre-existing
+                // open task.
+                await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason);
+                if (!firstTaskId) firstTaskId = tDup.taskId;
+                continue;
+              }
+            } catch (e) {
+              await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_dupe", status: "failed", ...msgLogFields(msg), error_message: `per-task dedup failed: ${(e as Error).message}` });
+            }
+
             const { data: newTask } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
