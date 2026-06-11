@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
 const FIELDS = [
+  "app_secret",
   "live_wa_phone_number_id", "live_wa_access_token", "live_verify_token", "live_phone_display",
   "test_wa_phone_number_id", "test_wa_access_token", "test_verify_token", "test_phone_display",
 ] as const;
@@ -58,6 +59,13 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
 
   return (
     <div className="space-y-4">
+      <Card>
+        <CardContent className="space-y-3 pt-6">
+          <h2 className="font-semibold">{t("appSecretTitle")}</h2>
+          {field("app_secret")}
+          <p className="text-xs text-muted-foreground">{t("appSecretHint")}</p>
+        </CardContent>
+      </Card>
       <Card>
         <CardContent className="space-y-3 pt-6">
           <h2 className="font-semibold">{t("tabLive")}</h2>
