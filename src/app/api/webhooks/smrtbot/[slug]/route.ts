@@ -34,6 +34,7 @@ type Params = { params: Promise<{ slug: string }> };
 interface BotRow {
   id: string;
   org_id: string;
+  transport: string;
   app_secret: string | null;
   verify_token: string | null;
   test_verify_token: string | null;
@@ -44,7 +45,7 @@ interface BotRow {
 }
 
 const BOT_FIELDS =
-  "id, org_id, app_secret, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
+  "id, org_id, transport, app_secret, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
 
 /** Resolve a bot from the callback path segment.
  *
@@ -159,28 +160,39 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     const bot = await loadBot(slug);
     if (!bot) return new Response("ok", { status: 200 });
 
+    // This is the Meta Cloud API callback. Only official ('meta'-transport)
+    // bots use it; unofficial ('baileys') bots receive messages over their own
+    // WhatsApp-Web socket on the backend, never here. So any POST to this
+    // endpoint for a non-meta bot is misrouted or forged — drop it (acking 200
+    // so a forged caller gets no signal), which also closes the forged-payload
+    // injection vector for unofficial bots.
+    if (bot.transport !== "meta") {
+      return new Response("ok", { status: 200 });
+    }
+
     // Read the RAW body once — HMAC must run over the exact bytes Meta signed.
     const raw = await request.text();
 
-    // Verify Meta's X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret).
-    // Each bot is its own Meta app with its own App Secret, so resolve the
-    // bot's own secret first; fall back to the platform META_APP_SECRET env
-    // (single-app deployments / transition). Backward-compatible: only enforced
-    // once a secret is resolved — until then it's a no-op, so nothing breaks
-    // before a bot's secret is configured.
+    // Authenticate the official bot: Meta signs every POST with
+    // X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret). Each bot is its
+    // own Meta app, so resolve the bot's own app_secret first, then the platform
+    // META_APP_SECRET env. An official bot CANNOT function without its secret, so
+    // require a valid signature: a missing secret (misconfigured / not yet live)
+    // or a bad/absent signature ⇒ drop. This is safe — no working official bot
+    // operates without its secret — and it actually closes the injection hole
+    // rather than relying on the secret being set.
     // NOTE: app_secret is stored plaintext to match this table's existing
     // wa_access_token/verify_token columns; moving smrtbot secrets to Vault
     // (as whatsapp_connections does) is a worthwhile future hardening.
     const appSecret = bot.app_secret ?? process.env.META_APP_SECRET ?? null;
-    if (appSecret) {
-      const sig = request.headers.get("x-hub-signature-256") ?? "";
-      const expected =
-        "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex");
-      if (!sig || !timingSafeEqualStr(sig, expected)) {
-        console.warn("[smrtbot-webhook] signature mismatch — rejecting");
-        // Ack 200 (so Meta doesn't retry a forged/garbage request) but do not process.
-        return new Response("ok", { status: 200 });
-      }
+    const sig = request.headers.get("x-hub-signature-256") ?? "";
+    const expected = appSecret
+      ? "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex")
+      : null;
+    if (!expected || !sig || !timingSafeEqualStr(sig, expected)) {
+      console.warn(`[smrtbot-webhook] missing/invalid signature for ${slug} — rejecting`);
+      // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
+      return new Response("ok", { status: 200 });
     }
 
     const payload = (() => {
