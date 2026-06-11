@@ -2481,7 +2481,10 @@
     "weekSummary": "This week: {runs} runs, {completed} tasks",
     "backToDesk": "Back to the desk",
     "isQuick": "Actually quick",
-    "newItem": "New task/info"
+    "newItem": "New task/info",
+    "overtime": "Over the estimated time ({min} min)",
+    "attachments": "Attachments",
+    "source": "Source"
   },
   "planProposals": {
     "sectionTitle": "Plan assignments",
