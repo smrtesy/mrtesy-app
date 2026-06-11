@@ -147,6 +147,9 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
         provider_reopened: satisfied && !!p && !TASK_DONE_STATUSES.has(p.status as string),
         lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
+        // The provider task's assignee, so the consumer's "to start I need" list
+        // can show who owns each input (resolved to a name client-side).
+        assignee_user_id: (p?.assigned_to_user_id as string | null) ?? null,
       });
       needsByTask.set(consumer, arr);
     }
@@ -514,7 +517,7 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 
   const select =
     "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, assignment_status";
+    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, assignment_status";
 
   let query = db.from("tasks").select(select).eq("organization_id", req.org!.id);
   if (plan?.kind === "roster") {

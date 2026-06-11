@@ -93,7 +93,15 @@
     "never": "אף פעם",
     "noDataYet": "אין נתונים עדיין",
     "tasks": "משימות",
-    "close": "סגור"
+    "close": "סגור",
+    "calendar": {
+      "hebrew": "לוח עברי",
+      "gregorian": "לוח לועזי",
+      "today": "היום",
+      "prevMonth": "חודש קודם",
+      "nextMonth": "חודש הבא",
+      "pick": "בחר תאריך"
+    }
   },
   "nav": {
     "tasks": "משימות",
@@ -2102,6 +2110,7 @@
       "arrived": "הגיע",
       "constraint": "אילוץ",
       "rosterNote": "מבט מרכז: משימות מתוכניות אחרות לפי אחראי",
+      "noStage": "ללא שלב",
       "viewList": "רשימה",
       "viewGantt": "ציר",
       "basedOn": "מבוסס על",

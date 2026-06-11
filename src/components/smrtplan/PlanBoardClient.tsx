@@ -180,10 +180,30 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const shelfPlans = useMemo(() => plans.filter((p) => p.is_capability && p.status === "done"), [plans]);
   const boardPlans = useMemo(() => plans.filter((p) => !(p.is_capability && p.status === "done")), [plans]);
 
-  // Timeline bounds from the data (fallback: today .. +90d).
+  // Timeline bounds from the data (fallback: today .. +90d). Bounds come from
+  // everything drawn on the board — not just plan windows but also explicitly
+  // dated stages and milestones, which can sit beyond a plan's own start/end.
+  // Leaving them out clipped the timeline early (the board ended at the last
+  // plan's end even though a milestone/stage fell weeks later).
   const { t0, totalDays } = useMemo(() => {
-    const starts = boardPlans.map((p) => p.start_date).filter(Boolean) as string[];
-    const ends = boardPlans.map((p) => p.end_date).filter(Boolean) as string[];
+    const boardPlanIds = new Set(boardPlans.map((p) => p.id));
+    const starts: string[] = [];
+    const ends: string[] = [];
+    for (const p of boardPlans) {
+      if (p.start_date) starts.push(p.start_date);
+      if (p.end_date) ends.push(p.end_date);
+    }
+    for (const s of stages) {
+      if (!boardPlanIds.has(s.plan_id)) continue;
+      if (s.start_date) starts.push(s.start_date);
+      if (s.end_date) ends.push(s.end_date);
+    }
+    for (const m of milestones) {
+      // global (plan_id null) milestones, or ones pinned to a board plan
+      if (m.plan_id && !boardPlanIds.has(m.plan_id)) continue;
+      starts.push(m.milestone_date);
+      ends.push(m.milestone_date);
+    }
     if (!starts.length) {
       const now = new Date();
       return { t0: now, totalDays: 90 };
@@ -193,7 +213,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     const start = parseISO(minS);
     const end = parseISO(maxE);
     return { t0: start, totalDays: Math.max(14, daysBetween(start, end) + 7) };
-  }, [boardPlans]);
+  }, [boardPlans, stages, milestones]);
 
   const colPx = Math.round(COL_BASE * zoom);
   const tl = useTimeline(t0, totalDays, colPx);
@@ -588,11 +608,14 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     const v = name.trim();
     if (!v || v === st.name_he) return;
     const key = histKeyOf(st.id);
+    // Renaming doesn't touch the schedule, so trust the optimistic update and
+    // skip the full board reload — that reload only held `useHistory` busy long
+    // enough that a quick follow-up edit got silently dropped ("had to rename a
+    // few times before it stuck").
     const apply = async (val: string) => {
       const live = histResolve(key);
       setStages((ss) => ss.map((x) => (x.id === live ? { ...x, name_he: val } : x)));
       await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
-      await load();
     };
     runCmd({ label: t("edit.actRename"), redo: () => apply(v), undo: () => apply(st.name_he) });
   }
@@ -1359,7 +1382,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               {detailView === "gantt" ? (
                 <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={load} />
               ) : (
-                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} onChanged={load} />
+                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} stages={stagesByPlan.get(selected.id) ?? []} onChanged={load} />
               )}
             </>
           )}

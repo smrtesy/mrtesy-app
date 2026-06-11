@@ -93,7 +93,15 @@
     "never": "Never",
     "noDataYet": "No data yet",
     "tasks": "tasks",
-    "close": "Close"
+    "close": "Close",
+    "calendar": {
+      "hebrew": "Hebrew calendar",
+      "gregorian": "Gregorian calendar",
+      "today": "Today",
+      "prevMonth": "Previous month",
+      "nextMonth": "Next month",
+      "pick": "Pick a date"
+    }
   },
   "nav": {
     "tasks": "Tasks",
@@ -2103,6 +2111,7 @@
       "arrived": "Arrived",
       "constraint": "constraint",
       "rosterNote": "Aggregated view: tasks from other plans by assignee",
+      "noStage": "No stage",
       "viewList": "List",
       "viewGantt": "Timeline",
       "basedOn": "Based on",

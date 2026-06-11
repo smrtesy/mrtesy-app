@@ -14,6 +14,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { TaskMaterial, ChecklistItem, TaskNeed, TaskHandoff } from "@/types/task";
@@ -208,7 +209,7 @@ export function TaskDetailDialog({
                 <span className="rounded bg-accent px-2 py-0.5 text-[11px] text-accent-foreground">{planChip}</span>
               )}
               {editing ? (
-                <Input type="date" value={fDue} onChange={(e) => setFDue(e.target.value)} className="w-44" />
+                <DatePicker value={fDue} onChange={setFDue} className="w-44" />
               ) : (
                 deadline &&
                 !DONE_STATUSES.has(task.status) && (

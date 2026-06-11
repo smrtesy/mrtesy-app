@@ -10,6 +10,7 @@ import type { Plan, PlanStageRow, PlanEpisode, EpisodeStageStatus, CellStatus } 
 import { parseISO, gregShort, daysBetween } from "@/lib/smrtplan/dates";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Button } from "@/components/ui/button";
 import { CellSheet } from "./CellSheet";
 
@@ -431,7 +432,7 @@ function EpisodeDialog({
             </label>
             <label className="block">
               <span className="mb-1 block text-[12px] font-medium text-muted-foreground">{te("due")}</span>
-              <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} />
+              <DatePicker className="h-9 w-auto px-2 py-1 text-sm" value={due} onChange={setDue} />
             </label>
           </div>
         </div>

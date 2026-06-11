@@ -110,6 +110,8 @@ export interface Task {
   // ── smrtPlan layer (migration 20260604000100) ──────────────────────────────
   /** The plan this task belongs to (smrtPlan). Mutually exclusive with project_id in practice. */
   plan_id?: string | null;
+  /** The plan stage (banner) this task is grouped under, if any. */
+  stage_id?: string | null;
   /** Parent task — this is a sub-task (a unit of work in the engine). */
   parent_task_id?: string | null;
   /** Engine: effective duration in working days (computed unless duration_manual). */
@@ -165,6 +167,8 @@ export interface TaskNeed {
   title: string;
   /** Whoever owns the provider (assignee display name / source). */
   source?: string | null;
+  /** The provider task's assignee user id (resolved to a name client-side). */
+  assignee_user_id?: string | null;
   /** true once the provider task is complete (the input "arrived"). */
   satisfied: boolean;
   /** true when the edge is satisfied but the provider task has since been

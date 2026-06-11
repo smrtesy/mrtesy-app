@@ -5,6 +5,7 @@ import { useTranslations, useLocale } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Check, Search, X } from "lucide-react";
@@ -368,10 +369,9 @@ export function UpdateInput({ open, onClose, onApplied }: UpdateInputProps) {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-xs font-medium">{t("fields.dueDate")}</label>
-                      <Input
-                        type="date"
+                      <DatePicker
                         value={editPayload.due_date ?? ""}
-                        onChange={(e) => setEditPayload({ ...editPayload, due_date: e.target.value || null })}
+                        onChange={(v) => setEditPayload({ ...editPayload, due_date: v || null })}
                       />
                     </div>
                     <div>

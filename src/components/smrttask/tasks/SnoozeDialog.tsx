@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
@@ -159,10 +160,9 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs font-medium">{t("dateLabel")}</label>
-              <Input
-                type="date"
+              <DatePicker
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={setDate}
                 min={new Date().toISOString().slice(0, 10)}
                 max={maxDate ?? undefined}
                 disabled={submitting}

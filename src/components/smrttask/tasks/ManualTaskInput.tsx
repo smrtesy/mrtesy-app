@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Check, Plus, X, Zap, Home, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
@@ -349,7 +350,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               <div>
                 <label className="text-xs font-medium">{t("dueDateLabel")}</label>
-                <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} dir="ltr" />
+                <DatePicker value={dueDate} onChange={setDueDate} />
               </div>
               <div>
                 <label className="text-xs font-medium">{t("dueTimeLabel")}</label>

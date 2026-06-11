@@ -8,6 +8,7 @@ import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Button } from "@/components/ui/button";
 import type { Plan, PlanMilestone } from "@/types/plan";
 
@@ -141,8 +142,8 @@ export function MilestoneEditor({
               <div key={m.id} className="flex flex-wrap items-center gap-2 rounded-md border border-primary/40 px-2 py-1.5">
                 <input type="color" className="h-8 w-9 cursor-pointer rounded-md border border-input bg-background"
                   value={edit.color} onChange={(e) => setEdit({ ...edit, color: e.target.value })} />
-                <input type="date" className={fieldCls} value={edit.milestone_date}
-                  onChange={(e) => setEdit({ ...edit, milestone_date: e.target.value })} />
+                <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={edit.milestone_date}
+                  onChange={(v) => setEdit({ ...edit, milestone_date: v })} />
                 <Input value={edit.label_he} onChange={(e) => setEdit({ ...edit, label_he: e.target.value })}
                   className="h-8 flex-1" dir="rtl" />
                 <select className={fieldCls} value={edit.plan_id}
@@ -185,8 +186,8 @@ export function MilestoneEditor({
 
         {/* add row */}
         <div className="mt-3 grid grid-cols-[auto_1fr] gap-2 rounded-lg border bg-secondary/40 p-2">
-          <input type="date" className={fieldCls} value={draft.milestone_date}
-            onChange={(e) => setDraft({ ...draft, milestone_date: e.target.value })} />
+          <DatePicker className="h-9 w-auto px-2 py-1 text-[12.5px]" value={draft.milestone_date}
+            onChange={(v) => setDraft({ ...draft, milestone_date: v })} />
           <Input placeholder={te("mLabel")} value={draft.label_he}
             onChange={(e) => setDraft({ ...draft, label_he: e.target.value })} className="h-9" dir="rtl" />
           <input type="color" className="h-9 w-12 cursor-pointer rounded-md border border-input bg-background"
