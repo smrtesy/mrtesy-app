@@ -13,7 +13,7 @@ import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
 /** The system-wide due-date label: "M/D - <hebrew day letters> <hebrew month>",
  *  e.g. "6/9 - כ״ה סיון". Falls back to the Gregorian part alone when the
  *  runtime lacks the Hebrew calendar. */
-function dueLabel(iso: string): string {
+export function dueLabel(iso: string): string {
   const d = parseISO(iso);
   const heb = hebDate(d);
   return heb ? `${gregShort(d)} - ${heb}` : gregShort(d);

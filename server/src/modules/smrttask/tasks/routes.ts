@@ -76,6 +76,10 @@ const UPDATABLE_FIELDS = new Set([
   "size", "context",
   // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
   "woke_from_snooze_at",
+  // Undo of a snooze: the UI PATCHes { status: "inbox", snoozed_until: null }
+  // to pull a task back out of snooze (the auto-snooze undo window, and the
+  // "wake up now" action). snooze_count is intentionally NOT touched here.
+  "snoozed_until",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
