@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Zap, X, SkipForward, Scale, Trophy, Plus } from "lucide-react";
+import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ExternalLink, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ManualTaskInput } from "./ManualTaskInput";
+import { TaskChecklist } from "./TaskChecklist";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,32 @@ export function MarathonMode({
 
   const current = queue[index] ?? null;
   const remaining = queue.length - index;
+
+  // Per-task clock — resets on every task. Drives a light over-time nudge:
+  // a quick task is meant to take ~7 minutes, a regular one ~30. We never
+  // block or auto-advance; just flag visually that the estimate was passed.
+  const [taskSeconds, setTaskSeconds] = useState(0);
+  useEffect(() => {
+    setTaskSeconds(0);
+    const iv = setInterval(() => setTaskSeconds((s) => s + 1), 1000);
+    return () => clearInterval(iv);
+  }, [index]);
+  const limitMin = (current?.size ?? mode) === "quick" ? 7 : 30;
+  const overtime = !!current && taskSeconds >= limitMin * 60;
+
+  // Pull the full content of the task in focus — description, subtasks
+  // (checklist), attached materials/files and source — so the runner has
+  // everything needed to finish it without leaving the run.
+  const [detail, setDetail] = useState<Task | null>(null);
+  const currentId = current?.id ?? null;
+  const loadDetail = useCallback(async () => {
+    if (!currentId) { setDetail(null); return; }
+    try {
+      const { task } = await api<{ task: Task }>(`/api/tasks/${currentId}`);
+      setDetail(task);
+    } catch { /* fall back to the list row's fields */ }
+  }, [currentId]);
+  useEffect(() => { setDetail(null); void loadDetail(); }, [loadDetail]);
 
   async function closeRun(done: number, skipped: number): Promise<{ stats: MarathonStats; prev: MarathonStats } | null> {
     if (closedRef.current) return null;
@@ -147,6 +174,24 @@ export function MarathonMode({
     ? (locale === "he" && current.title_he ? current.title_he : current.title)
     : "";
 
+  // Material to show in-run. Prefer the freshly fetched detail; fall back to the
+  // list row so something shows before the fetch lands.
+  const description = detail?.description ?? current?.description ?? null;
+  const checklist = detail?.checklist ?? [];
+  const materials = detail?.task_materials ?? [];
+  const driveDocs = (detail?.linked_drive_docs ?? []).filter((d) => !!d.url);
+  const sourceUrl = detail?.source_messages?.source_url ?? current?.source_messages?.source_url ?? null;
+  // Plan tasks carry their plan/stage on the desk row — the "where this lives".
+  const planLabel = current?.plan_id
+    ? [
+        locale === "en" ? current.plan_title_en || current.plan_title_he : current.plan_title_he || current.plan_title_en,
+        locale === "en" ? current.stage_name_en || current.stage_name_he : current.stage_name_he || current.stage_name_en,
+      ].filter(Boolean).join(" / ")
+    : "";
+  const hasAttachments = !!sourceUrl || driveDocs.length > 0 || materials.length > 0;
+  const chipCls =
+    "inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border bg-secondary/60 px-2 py-0.5 text-[12px] hover:bg-accent";
+
   if (finish) {
     return (
       <FinishScreen
@@ -161,10 +206,20 @@ export function MarathonMode({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
-      {/* Header: timer + progress + new-item + exit */}
+      {/* Header: run timer + per-task timer + progress + new-item + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span className="flex items-center gap-1.5 font-mono text-lg font-bold tabular-nums" dir="ltr">
           {fmtClock(seconds)}
+        </span>
+        {/* per-task clock — turns amber once the size's time estimate is passed */}
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 font-mono text-xs font-medium tabular-nums",
+            overtime ? "bg-status-warn-bg text-status-warn" : "bg-secondary text-muted-foreground",
+          )}
+          dir="ltr"
+        >
+          {fmtClock(taskSeconds)}
         </span>
         <span className="rounded-full bg-secondary px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
           {t("progress", { done: doneCount, total: queue.length })}
@@ -187,6 +242,13 @@ export function MarathonMode({
         </Button>
       </div>
 
+      {/* Light over-time nudge — never blocks, just a calm banner. */}
+      {overtime && (
+        <div className="flex items-center justify-center gap-1.5 bg-status-warn-bg px-4 py-1.5 text-[12.5px] font-medium text-status-warn">
+          <AlertTriangle className="h-3.5 w-3.5" /> {t("overtime", { min: limitMin })}
+        </div>
+      )}
+
       {/* New task/info capture — rendered above the full-screen run. */}
       <ManualTaskInput
         open={newItemOpen}
@@ -194,15 +256,62 @@ export function MarathonMode({
         onCreated={() => setNewItemOpen(false)}
       />
 
-      {/* The one task */}
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-status-warn-bg">
-          <Zap className="h-6 w-6 text-status-warn" />
-        </span>
-        <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{title}</h2>
-        {current?.description && (
-          <p className="max-w-lg text-sm text-muted-foreground line-clamp-3" dir="auto">{current.description}</p>
-        )}
+      {/* The one task — full content so it can be finished without leaving */}
+      <div className="flex flex-1 flex-col overflow-y-auto">
+        <div className="mx-auto w-full max-w-2xl space-y-5 px-6 py-8">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-status-warn-bg">
+              <Zap className="h-6 w-6 text-status-warn" />
+            </span>
+            <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{title}</h2>
+            {planLabel && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-0.5 text-[12px] font-medium text-muted-foreground">
+                <MapPin className="h-3.5 w-3.5" /> {planLabel}
+              </span>
+            )}
+          </div>
+
+          {description && (
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80" dir="auto">{description}</p>
+          )}
+
+          {/* attachments: origin deep-link + Drive docs + task materials */}
+          {hasAttachments && (
+            <div className="space-y-1.5">
+              <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{t("attachments")}</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {sourceUrl && (
+                  <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={chipCls}>
+                    <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{t("source")}</span>
+                  </a>
+                )}
+                {driveDocs.map((d, i) => (
+                  <a key={`d${i}`} href={d.url} target="_blank" rel="noopener noreferrer" className={chipCls}>
+                    <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{d.name || "Drive"}</span>
+                  </a>
+                ))}
+                {materials.filter((m) => m.url).map((m) => (
+                  <a key={m.id} href={m.url} target="_blank" rel="noopener noreferrer" className={chipCls}>
+                    <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{m.title || m.url}</span>
+                  </a>
+                ))}
+              </div>
+              {/* note-type materials (no URL) shown as plain text lines */}
+              {materials.filter((m) => !m.url && m.title).map((m) => (
+                <p key={m.id} className="whitespace-pre-wrap rounded-md bg-secondary/40 px-2 py-1 text-[12px] text-foreground/80" dir="auto">
+                  {m.title}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {/* subtasks (checklist) — editable so items can be ticked off here */}
+          {current && (
+            <div className="rounded-lg border bg-card/50 p-2.5">
+              <TaskChecklist taskId={current.id} items={checklist} onChange={loadDetail} />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Actions */}

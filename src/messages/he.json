@@ -2476,7 +2476,10 @@
     "weekSummary": "השבוע: {runs} ריצות, {completed} משימות",
     "backToDesk": "חזרה לשולחן",
     "isQuick": "זה מהיר",
-    "newItem": "משימה/מידע חדש"
+    "newItem": "משימה/מידע חדש",
+    "overtime": "עבר הזמן המשוער למשימה ({min} דק׳)",
+    "attachments": "חומרים מצורפים",
+    "source": "מקור"
   },
   "planProposals": {
     "sectionTitle": "שיבוצים מתוכניות",
