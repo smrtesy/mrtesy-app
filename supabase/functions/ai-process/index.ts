@@ -365,11 +365,26 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
   // support assistant message prefill" — it took the classifier down for ~3h
   // on 2026-06-11. JSON-only replies are enforced by prompt instruction
   // (OUTPUT FORMAT block in the classifier contract) instead.
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+  // Network-level retry: a transient "connection reset" between the edge
+  // runtime and api.anthropic.com (twice on 2026-06-11, both self-healed on
+  // the next cron tick) used to surface as a level=error log row and page
+  // the admin via the error-fanout trigger. When fetch itself THROWS, the
+  // request never reached the API, so one in-call retry after 2s is safe and
+  // absorbs the blip without a failed pass. HTTP error responses (4xx/5xx)
+  // are deliberately NOT retried here — those reached the API and carry a
+  // meaningful verdict (bad request, rate limit) the caller must see.
+  const doFetch = () => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages: [{ role: "user", content: safeUserMessage }] }),
   });
+  let resp: Response;
+  try {
+    resp = await doFetch();
+  } catch (_netErr) {
+    await new Promise((r) => setTimeout(r, 2000));
+    resp = await doFetch();
+  }
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
   const usage = {
@@ -2364,7 +2379,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // classification — which is how 24 failure-path rows hid from the
       // damage query during the 2026-06-11 prefill outage.
       await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
-      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
+      // Attempts 1-2 are the retry mechanism WORKING, not an incident: log
+      // them as warning so the error-fanout trigger (level='error' →
+      // action_required notification to super-admins) only pages on the
+      // FINAL give-up. A transient network blip that self-heals on the next
+      // tick used to page the admin twice in one day.
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: retryCount >= 3 ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
       return;
     }
   }
@@ -3180,8 +3200,12 @@ Deno.serve(async (req) => {
           const result = await processMessage(msg, settings, sys);
           if (result === "deferred") totalDeferred++; else totalProcessed++;
         } catch (e) {
-          await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: (msg.retry_count || 0) + 1 }).eq("id", msg.id);
-          await supabase.from("log_entries").insert({ user_id: userId, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+          const outerRetry = (msg.retry_count || 0) + 1;
+          await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: outerRetry }).eq("id", msg.id);
+          // Same retry-aware level as the inner classify catch: warning while
+          // the row will be retried, error only once it has burned 3 attempts
+          // (the fanout trigger pages super-admins on level='error').
+          await supabase.from("log_entries").insert({ user_id: userId, level: outerRetry >= 3 ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
         }
       }
     }
