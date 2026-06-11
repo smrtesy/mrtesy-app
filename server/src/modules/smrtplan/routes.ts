@@ -147,6 +147,9 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
         provider_reopened: satisfied && !!p && !TASK_DONE_STATUSES.has(p.status as string),
         lag_days: (d.lag_days as number | null) ?? 0,
         source: null,
+        // The provider task's assignee, so the consumer's "to start I need" list
+        // can show who owns each input (resolved to a name client-side).
+        assignee_user_id: (p?.assigned_to_user_id as string | null) ?? null,
       });
       needsByTask.set(consumer, arr);
     }

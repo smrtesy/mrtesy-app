@@ -167,6 +167,8 @@ export interface TaskNeed {
   title: string;
   /** Whoever owns the provider (assignee display name / source). */
   source?: string | null;
+  /** The provider task's assignee user id (resolved to a name client-side). */
+  assignee_user_id?: string | null;
   /** true once the provider task is complete (the input "arrived"). */
   satisfied: boolean;
   /** true when the edge is satisfied but the provider task has since been

@@ -82,6 +82,8 @@ export function PlanEffortDetail({
   // Stage sections start collapsed — the user sees the stage overview first and
   // opens a stage to reveal its tasks.
   const [openStages, setOpenStages] = useState<Set<string>>(new Set());
+  // A task we jumped to from a "to start I need" link — briefly ringed.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const [myId, setMyId] = useState<string | null>(null);
   const { isSuperAdmin } = useSuperAdmin();
 
@@ -90,6 +92,14 @@ export function PlanEffortDetail({
     createClient().auth.getUser().then((r: { data: { user: { id: string } | null } }) => { if (alive) setMyId(r.data.user?.id ?? null); }).catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  // Smooth-scroll to (and momentarily ring) a task jumped to from a needs link.
+  useEffect(() => {
+    if (!highlightId) return;
+    document.getElementById(`plantask-${highlightId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlightId(null), 1800);
+    return () => clearTimeout(timer);
+  }, [highlightId]);
 
   const memberMap = new Map(members.map((m) => [m.user_id, memberName(m)]));
 
@@ -227,6 +237,20 @@ export function PlanEffortDetail({
   const noStageTasks = tasks.filter((tk) => !tk.stage_id || !stageIdSet.has(tk.stage_id));
   const stageName = (s: Stage) => (locale === "en" ? s.name_en || s.name_he : s.name_he);
 
+  // Jump from a "to start I need" link to the provider task in this same list:
+  // open its stage section (if collapsed) and scroll/ring it. No-op when the
+  // dependency lives in another plan (not present in this list).
+  const jumpToTask = (taskId: string | null) => {
+    if (!taskId) return;
+    const target = tasks.find((tk) => tk.id === taskId);
+    if (!target) return;
+    if (hasStages) {
+      const key = target.stage_id && stageIdSet.has(target.stage_id) ? target.stage_id : NO_STAGE;
+      setOpenStages((prev) => new Set(prev).add(key));
+    }
+    setHighlightId(taskId);
+  };
+
   const renderRow = (task: PlanTask) =>
     editingId === task.id && canEdit ? (
       <EditTaskRow
@@ -248,11 +272,15 @@ export function PlanEffortDetail({
         te={te}
         canEdit={canEdit}
         members={members}
+        memberMap={memberMap}
         canComplete={canComplete(task)}
         onToggleDone={() => toggleDone(task)}
         assignee={task.assigned_to_user_id ? memberMap.get(task.assigned_to_user_id) ?? null : null}
         onEdit={() => setEditingId(task.id)}
         onPatch={(body) => patchTask(task, body)}
+        onJumpToTask={jumpToTask}
+        domId={`plantask-${task.id}`}
+        highlighted={highlightId === task.id}
       />
     );
 
@@ -392,11 +420,15 @@ function TaskRow({
   te,
   canEdit,
   members,
+  memberMap,
   canComplete,
   onToggleDone,
   assignee,
   onEdit,
   onPatch,
+  onJumpToTask,
+  domId,
+  highlighted,
 }: {
   task: PlanTask;
   locale: string;
@@ -405,11 +437,15 @@ function TaskRow({
   te: ReturnType<typeof useTranslations>;
   canEdit: boolean;
   members: Member[];
+  memberMap: Map<string, string>;
   canComplete: boolean;
   onToggleDone: () => void;
   assignee: string | null;
   onEdit: () => void;
   onPatch: (body: Record<string, unknown>) => void;
+  onJumpToTask: (taskId: string | null) => void;
+  domId: string;
+  highlighted: boolean;
 }) {
   const zone = zoneOf(task);
   // Inline edits straight from the row: click the assignee → a select, click the
@@ -429,7 +465,10 @@ function TaskRow({
   // (red, flipped unavailable) badge on the row.
   const capNeeds = (task.needs ?? []).filter((n) => n.provider_kind === "plan");
   return (
-    <div className="py-2.5">
+    <div
+      id={domId}
+      className={cn("scroll-mt-24 rounded-md px-1 py-2.5 transition-colors", highlighted && "bg-primary/5 ring-2 ring-primary/60")}
+    >
       <div
         className={cn("flex items-center gap-2.5", canEdit && "cursor-pointer")}
         onClick={canEdit ? onEdit : undefined}
@@ -565,22 +604,36 @@ function TaskRow({
       {zone === "blocked" && waiting.length > 0 && (
         <div className="ms-7 mt-1.5 space-y-1">
           <div className="text-[11px] font-bold text-muted-foreground">{t("effort.needs")}</div>
-          {(task.needs ?? []).map((n) => (
-            <div key={n.dependency_id} className="flex items-center gap-2 text-[12px]">
-              <span
-                className={cn(
-                  "flex h-[16px] w-[16px] items-center justify-center rounded text-[10px] text-white",
-                  n.satisfied ? "bg-status-ok" : "bg-status-warn",
+          {(task.needs ?? []).map((n) => {
+            const needAssignee = n.assignee_user_id ? memberMap.get(n.assignee_user_id) ?? null : null;
+            return (
+              <div key={n.dependency_id} className="flex items-center gap-2 text-[12px]">
+                <span
+                  className={cn(
+                    "flex h-[16px] w-[16px] items-center justify-center rounded text-[10px] text-white",
+                    n.satisfied ? "bg-status-ok" : "bg-status-warn",
+                  )}
+                >
+                  {n.satisfied ? <CheckCircle2 className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                </span>
+                {n.task_id ? (
+                  <button type="button" onClick={() => onJumpToTask(n.task_id)} className="text-start hover:underline">
+                    {n.title}
+                  </button>
+                ) : (
+                  <span>{n.title}</span>
                 )}
-              >
-                {n.satisfied ? <CheckCircle2 className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
-              </span>
-              <span>{n.title}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground">
-                {n.satisfied ? t("effort.arrived") : t("effort.waiting")}
-              </span>
-            </div>
-          ))}
+                {needAssignee && (
+                  <span className="whitespace-nowrap rounded bg-accent px-1.5 py-px text-[10px] font-medium text-accent-foreground">
+                    {needAssignee}
+                  </span>
+                )}
+                <span className="ms-auto text-[11px] text-muted-foreground">
+                  {n.satisfied ? t("effort.arrived") : t("effort.waiting")}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
 
