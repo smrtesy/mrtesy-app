@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
@@ -348,8 +349,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 <X />
               </IconButton>
             </div>
-            {/* Source + editable due date — same cluster as on the cards. */}
+            {/* Serial (T42/G127/…) + source + editable due date — same cluster
+                as on the cards. The serial is click-to-copy so the user can
+                paste it into chat ("what happened to T42?"). */}
             <div dir="ltr" className="flex items-center gap-1.5">
+              <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
               {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
               <DueDateChip
                 deadline={effectiveDeadline(effectiveTask)}
