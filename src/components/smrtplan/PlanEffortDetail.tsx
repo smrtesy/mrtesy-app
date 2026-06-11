@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, Clock, Plus, Trash2, X } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, Clock, EyeOff, Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { createClient } from "@/lib/supabase/client";
 import { useSuperAdmin } from "@/lib/api/use-super-admin";
+import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { cn } from "@/lib/utils";
 import { DatePicker } from "@/components/ui/date-picker";
 import type { Plan } from "@/types/plan";
@@ -16,7 +17,7 @@ import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDa
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 interface Member {
@@ -85,6 +86,8 @@ export function PlanEffortDetail({
   const [openStages, setOpenStages] = useState<Set<string>>(new Set());
   // A task we jumped to from a "to start I need" link — briefly ringed.
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // Done tasks are filtered out of the list by default; a toggle reveals them.
+  const [hideDone, setHideDone] = useState(true);
   const [myId, setMyId] = useState<string | null>(null);
   const { isSuperAdmin } = useSuperAdmin();
 
@@ -291,6 +294,10 @@ export function PlanEffortDetail({
     const open = openStages.has(sectionKey);
     const total = sectionTasks.length;
     const doneCount = sectionTasks.filter((tk) => zoneOf(tk) === "done").length;
+    // The header count/progress reflects ALL tasks; the body hides done ones
+    // when the filter is on, so a stage still shows "3/5 done" while listing
+    // only the open work.
+    const visibleTasks = hideDone ? sectionTasks.filter((tk) => zoneOf(tk) !== "done") : sectionTasks;
     const isAdding = canEdit && adding?.stageId === stageId;
     return (
       <div key={sectionKey}>
@@ -324,10 +331,12 @@ export function PlanEffortDetail({
             {isAdding && (
               <NewTaskRow planId={plan.id} stageId={stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
             )}
-            {sectionTasks.length === 0 && !isAdding ? (
-              <p className="py-2 text-[12px] text-muted-foreground">{t("effort.empty")}</p>
+            {visibleTasks.length === 0 && !isAdding ? (
+              <p className="py-2 text-[12px] text-muted-foreground">
+                {sectionTasks.length > 0 ? t("effort.allDone") : t("effort.empty")}
+              </p>
             ) : (
-              <div className="divide-y">{sectionTasks.map(renderRow)}</div>
+              <div className="divide-y">{visibleTasks.map(renderRow)}</div>
             )}
           </div>
         )}
@@ -371,14 +380,27 @@ export function PlanEffortDetail({
             </div>
           )}
         </div>
-        {canEdit && plan.kind !== "roster" && !hasStages && (
-          <button
-            onClick={() => setAdding((v) => (v ? null : { stageId: null }))}
-            className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent"
-          >
-            <Plus className="h-3.5 w-3.5" /> {te("addTask")}
-          </button>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {tasks.length > 0 && (
+            <button
+              onClick={() => setHideDone((v) => !v)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
+                hideDone ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground hover:bg-accent",
+              )}
+            >
+              <EyeOff className="h-3.5 w-3.5" /> {t("table.hideDone")}
+            </button>
+          )}
+          {canEdit && plan.kind !== "roster" && !hasStages && (
+            <button
+              onClick={() => setAdding((v) => (v ? null : { stageId: null }))}
+              className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent"
+            >
+              <Plus className="h-3.5 w-3.5" /> {te("addTask")}
+            </button>
+          )}
+        </div>
       </div>
 
       {hasStages ? (
@@ -406,7 +428,7 @@ export function PlanEffortDetail({
           {adding && canEdit && (
             <NewTaskRow planId={plan.id} stageId={adding.stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
           )}
-          <div className="divide-y">{tasks.map(renderRow)}</div>
+          <div className="divide-y">{(hideDone ? tasks.filter((tk) => zoneOf(tk) !== "done") : tasks).map(renderRow)}</div>
         </>
       )}
     </div>
@@ -866,6 +888,10 @@ function EditTaskRow({
         <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
           value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       </div>
+
+      {/* subtasks (checklist) — same editor as the regular tasks desk; persists
+          on the shared tasks row, so adds/edits/toggles stick immediately */}
+      <TaskChecklist taskId={task.id} items={task.checklist ?? []} onChange={onChanged} />
 
       {/* needs editor */}
       <div className="space-y-1">

@@ -5,7 +5,6 @@ import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repea
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
-  effectiveDeadline,
   sittingWorkdays,
   AGING_LABEL_WORKDAYS,
   type BlockedDays,
@@ -56,7 +55,11 @@ export function TaskRow({
   const isBlocked = unsatisfiedNeeds.length > 0;
   const isDone = zone === "done";
   const isPlan = !!task.plan_id;
-  const deadline = effectiveDeadline(task);
+  // Show the date the user actually set (due_date) as the primary deadline, so a
+  // due date edited on the plan board shows here verbatim — matching the board.
+  // When the engine's latest_finish pulls earlier, `constrained` flags it with ⚠
+  // (rather than silently replacing the shown date with the earlier one).
+  const deadline = task.due_date ?? task.latest_finish ?? null;
   const constrained = !!(task.latest_finish && task.due_date && task.latest_finish < task.due_date);
   const sitting = zone === "waiting" ? sittingWorkdays(task, blocked) : 0;
   const woke = !!task.woke_from_snooze_at;
