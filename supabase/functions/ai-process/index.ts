@@ -350,7 +350,7 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
-async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }, prefillJson: boolean = false) {
+async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   // Sanitize every text field that goes into the JSON body. A lone surrogate
@@ -360,23 +360,20 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
     ? stripLoneSurrogates(system)
     : system.map((b) => ({ ...b, text: stripLoneSurrogates(b.text) }));
   const safeUserMessage = stripLoneSurrogates(userMessage);
-  // prefillJson forces the reply to START as a JSON object by prefilling the
-  // assistant turn with "{". Without it the model sometimes opens with a prose
-  // preamble ("Let me analyze…") and long replies get truncated by max_tokens
-  // before the JSON ever starts — 8/300 replies were lost that way in the
-  // 2026-06 shadow eval. The "{" is prepended back onto the returned text so
-  // callers parse a complete object.
-  const messages: Array<{ role: string; content: string }> = [{ role: "user", content: safeUserMessage }];
-  if (prefillJson) messages.push({ role: "assistant", content: "{" });
+  // NOTE: do NOT add assistant-message prefill here ("{" as a final assistant
+  // turn). Claude 4.6-era models reject it with HTTP 400 "This model does not
+  // support assistant message prefill" — it took the classifier down for ~3h
+  // on 2026-06-11. JSON-only replies are enforced by prompt instruction
+  // (OUTPUT FORMAT block in the classifier contract) instead.
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages: [{ role: "user", content: safeUserMessage }] }),
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
   const usage = {
-    text: (prefillJson ? "{" : "") + (data.content?.[0]?.text || ""),
+    text: data.content?.[0]?.text || "",
     inputTokens: data.usage?.input_tokens || 0,
     outputTokens: data.usage?.output_tokens || 0,
     cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
@@ -703,7 +700,12 @@ Incorrect: INFORMATIONAL.`;
   // even when a tenant has customized the edge_classifier prompt. Without this,
   // a custom prompt that predates new_matter would never emit it and the
   // spin-off-vs-reopen logic in Path 1 would silently no-op for that tenant.
-  const newMatterContract = `\n\n═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
+  const newMatterContract = `\n\n═══ OUTPUT FORMAT (mandatory) ═══
+Your reply MUST begin directly with the { of the JSON object — no preamble,
+no analysis, no "Let me…", no markdown fence. The reply is the JSON object
+and nothing else.
+
+═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
 In addition to any shape above, the JSON you return MUST include the boolean
 field "new_matter". new_matter=true ONLY when classification is ACTIONABLE AND
 this message opens a matter DISTINCT from what the existing thread summary /
@@ -727,9 +729,9 @@ content under the rules above.`;
   const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
   // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
-  // and truncate the JSON mid-object. prefillJson forces the reply to start at
-  // "{" so no token is spent on a prose preamble.
-  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id }, true);
+  // and truncate the JSON mid-object. JSON-only output (no prose preamble) is
+  // enforced by the OUTPUT FORMAT block in newMatterContract.
+  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
