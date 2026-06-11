@@ -2094,6 +2094,7 @@
     "effort": {
       "tasks": "Tasks",
       "empty": "No tasks in this plan yet",
+      "allDone": "All tasks in this stage are done",
       "needs": "To start I need",
       "handoff": "When done, hands off to",
       "blocked": "Blocked",
