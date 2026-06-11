@@ -704,6 +704,9 @@ Incorrect: INFORMATIONAL.`;
 Your reply MUST begin directly with the { of the JSON object — no preamble,
 no analysis, no "Let me…", no markdown fence. The reply is the JSON object
 and nothing else.
+Inside JSON string values, NEVER write a raw double quote (") — it breaks the
+JSON. Hebrew gershayim go as the dedicated character ״ (ש״ח, חב״ד) and quoted
+words use single quotes ('יטופל'), or escape with \\" if you must.
 
 ═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
 In addition to any shape above, the JSON you return MUST include the boolean
@@ -739,11 +742,49 @@ content under the rules above.`;
     if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
   } catch { /* fallthrough */ }
 
-  const fallbackClass = text.toUpperCase().startsWith("ACTIONABLE")
-    ? "actionable"
-    : text.toUpperCase().startsWith("SPAM")
-      ? "spam"
-      : "informational";
+  // Tolerant second pass: Hebrew text routinely carries unescaped gershayim
+  // (ש"ח, מילים "מצוטטות") inside JSON string values, which makes JSON.parse
+  // throw even though the structure is intact. Before this repair, a broken
+  // reply fell through to the text-start fallback below, which classified a
+  // perfectly good ACTIONABLE verdict as informational (G5084: Sonnet said
+  // ACTIONABLE, the system filed informational and dumped the raw JSON into
+  // the log). Recover field-by-field: scalars via strict regex; text fields
+  // by capturing up to the quote that precedes the next key / closing brace,
+  // so inner quotes survive (a value containing the delimiter pattern only
+  // truncates that one field — the classification itself is never lost).
+  if (!parsed) {
+    const field = (name: string): string => {
+      const m = text.match(new RegExp(`"${name}"\\s*:\\s*"([\\s\\S]*?)"\\s*(?=,\\s*"|\\n\\s*"|\\s*\\})`));
+      return m ? m[1] : "";
+    };
+    const boolField = (name: string): boolean =>
+      new RegExp(`"${name}"\\s*:\\s*true`).test(text);
+    const recoveredCls = field("classification").toUpperCase();
+    if (["ACTIONABLE", "INFORMATIONAL", "SPAM"].includes(recoveredCls)) {
+      parsed = {
+        classification: recoveredCls,
+        reason_he: field("reason_he"),
+        new_title_he: field("new_title_he"),
+        new_summary: field("new_summary"),
+        state: field("state"),
+        completion: boolField("completion"),
+        completion_reason_he: field("completion_reason_he"),
+        new_matter: boolField("new_matter"),
+        confidence: field("confidence") || "low",
+      };
+    }
+  }
+
+  // Last-resort fallback: prefer an embedded "classification": "X" anywhere in
+  // the text over guessing from the first word (the reply usually starts with
+  // "{", never with "ACTIONABLE").
+  const embedded = text.match(/"classification"\s*:\s*"(ACTIONABLE|INFORMATIONAL|SPAM)"/i)?.[1]?.toLowerCase();
+  const fallbackClass = embedded
+    ?? (text.toUpperCase().startsWith("ACTIONABLE")
+      ? "actionable"
+      : text.toUpperCase().startsWith("SPAM")
+        ? "spam"
+        : "informational");
 
   if (!parsed) {
     return {
@@ -876,10 +917,17 @@ async function appendUpdateToTask(
   taskId = await resolveRecurringOccurrence(taskId, msg);
   const { data: existing } = await supabase
     .from("tasks")
-    .select("updates, status, title_he")
+    .select("updates, status, title_he, manually_verified")
     .eq("id", taskId)
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
+  // Where a resurfaced/reopened task goes: an APPROVED task returns to the
+  // active list (in_progress), but a never-approved suggestion must return to
+  // the INBOX — the suggestions view shows only status='inbox' and the task
+  // list shows only verified=true, so an unverified task parked in
+  // in_progress is invisible on EVERY screen (the T711/T579 black hole: an
+  // active support conversation resurfaced into nowhere).
+  const resurfaceStatus = existing?.manually_verified === true ? "in_progress" : "inbox";
 
   // Dedup guard: skip ONLY if we already appended an update for this exact
   // source_message id at this exact received_at. WhatsApp burst rows and Gmail
@@ -947,7 +995,7 @@ async function appendUpdateToTask(
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
   if (opts?.reopen) {
-    updateFields.status = "in_progress";
+    updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
   } else if (analysis.completionSignal) {
@@ -960,7 +1008,7 @@ async function appendUpdateToTask(
     // instead of leaving the update buried where the user can't see it (real
     // case: a substantive reply with a link folded silently into a snoozed
     // task). Informational follow-ups ("תודה") deliberately do NOT resurface.
-    updateFields.status = "in_progress";
+    updateFields.status = resurfaceStatus;
     updateFields.snoozed_until = null;
   }
 
@@ -2797,7 +2845,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       await supabase.from("log_entries").insert({
         user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
         status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
 
@@ -2828,7 +2876,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       await supabase.from("log_entries").insert({
         user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
         status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
 

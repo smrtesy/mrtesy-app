@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -221,25 +221,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  function handleComplete(taskId: string) {
-    removeLocal([taskId]);
-    // Undo restores status=inbox; manually_verified is untouched, so the
-    // row comes straight back as a suggestion.
-    toast.success(tTasks("actions.complete"), {
-      action: {
-        label: tTasks("row.undo"),
-        onClick: () => {
-          api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
-            .then(() => { fetchSuggestions(); onUpdate?.(); })
-            .catch((e) => toast.error((e as Error).message));
-        },
-      },
-    });
-    api(`/api/tasks/${taskId}/complete`, { method: "POST" })
-      .then(() => onUpdate?.())
-      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
-  }
-
   function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
     const id = snoozeTaskId;
@@ -391,7 +372,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
-                    onComplete={() => handleComplete(task.id)}
                   />
                 </CardContent>
               </Card>
@@ -498,7 +478,6 @@ function SuggestionActions({
   onDismissWithReason,
   onApprove,
   onSnooze,
-  onComplete,
 }: {
   task: Task;
   locale: string;
@@ -512,7 +491,6 @@ function SuggestionActions({
   onDismissWithReason: () => void;
   onApprove: () => void;
   onSnooze: () => void;
-  onComplete: () => void;
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
@@ -560,11 +538,13 @@ function SuggestionActions({
       <IconButton label={t("dismissWithReason")} color="violet" onClick={onDismissWithReason}>
         <ThumbsDown />
       </IconButton>
+      {/* NO "complete" button on suggestions. A suggestion was never approved,
+          so "בוצע" makes no sense here — and the green ✓ sat next to "אשר"
+          and read as approve, silently archiving suggestions one tap at a
+          time (the June-2026 "suggestions vanished" incident). Completing
+          belongs to the task list, after approval. */}
       <IconButton label={t("approve")} color="blue" onClick={onApprove}>
         <ListPlus />
-      </IconButton>
-      <IconButton label={tTasks("actions.complete")} color="green" onClick={onComplete}>
-        <Check />
       </IconButton>
     </div>
   );

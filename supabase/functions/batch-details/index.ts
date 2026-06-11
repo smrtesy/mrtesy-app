@@ -113,7 +113,7 @@ Deno.serve(async (req) => {
     // Step 2: Find messages needing details (no body_text, not locked, not dead)
     const { data: messages, error } = await supabase
       .from("source_messages")
-      .select("id, user_id, source_type, source_id")
+      .select("id, user_id, source_type, source_id, retry_count")
       .in("source_type", ["gmail", "gmail_sent"])
       .is("body_text", null)
       .is("processing_lock_at", null)
@@ -169,6 +169,14 @@ Deno.serve(async (req) => {
         const chunk = userMsgs.slice(i, i + CONCURRENCY);
         const results = await Promise.allSettled(
           chunk.map(async (msg) => {
+            // Retry cap: a row whose detail-fetch THROWS (rather than cleanly
+            // returning null) used to retry forever — 10 rows from May 31
+            // looped on every 3-minute tick for 11 days, reported only as an
+            // opaque failed-count. After MAX_DETAIL_RETRIES the row is
+            // dead-lettered with the error preserved, so it shows up in the
+            // log instead of silently burning quota.
+            const MAX_DETAIL_RETRIES = 5;
+            try {
             const detail = await fetchMessageDetails(token, msg.source_id);
             if (!detail) {
               await supabase
@@ -200,6 +208,17 @@ Deno.serve(async (req) => {
               return { id: msg.id, success: false };
             }
 
+            // Safe date resolution: an unparseable Date header (or missing
+            // internalDate) used to throw "Invalid time value" inside this
+            // map, rejecting the row forever. Prefer the header, fall back to
+            // internalDate, fall back to now.
+            const headerDate = h.date ? new Date(h.date) : null;
+            const internalMs = Number(detail.internalDate);
+            const receivedAt =
+              headerDate && !isNaN(headerDate.getTime()) ? headerDate
+                : Number.isFinite(internalMs) && internalMs > 0 ? new Date(internalMs)
+                : new Date();
+
             await supabase
               .from("source_messages")
               .update({
@@ -213,14 +232,26 @@ Deno.serve(async (req) => {
                 has_attachments: (detail.payload?.parts || []).some(
                   (p: any) => p.filename && p.filename.length > 0
                 ),
-                received_at: h.date
-                  ? new Date(h.date).toISOString()
-                  : new Date(parseInt(detail.internalDate)).toISOString(),
+                received_at: receivedAt.toISOString(),
                 processing_lock_at: null,
               })
               .eq("id", msg.id);
 
             return { id: msg.id, success: true };
+            } catch (e) {
+              const retries = (Number((msg as any).retry_count) || 0) + 1;
+              await supabase
+                .from("source_messages")
+                .update({
+                  processing_lock_at: null,
+                  retry_count: retries,
+                  ...(retries >= MAX_DETAIL_RETRIES
+                    ? { dead_letter: true, skip_reason: `details_failed_${retries}x: ${(e as Error).message}`.slice(0, 300) }
+                    : {}),
+                })
+                .eq("id", msg.id);
+              return { id: msg.id, success: false };
+            }
           })
         );
 

@@ -436,6 +436,20 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
 
+  // Forensics: completion used to leave NO trail at all, which made the
+  // June-2026 "suggestions vanished" incident unattributable (two unverified
+  // suggestions were completed-archived and nothing recorded who or from
+  // where). Record the actor identity on every completion.
+  const { error: actErr } = await db.from("task_activities").insert({
+    user_id: req.user!.id,
+    task_id: data.id,
+    activity_type: "completed",
+    new_value: "archived",
+    note: `completed via POST /complete by ${req.user!.email ?? req.user!.id}`,
+    actor: "user",
+  });
+  if (actErr) console.error("[tasks complete] activity log failed:", actErr.message);
+
   await emitEvent(req.org!.id, "smrttask", "task.completed", "task", data.id, {
     completed_at: data.completed_at,
   });
