@@ -34,6 +34,7 @@ type Params = { params: Promise<{ slug: string }> };
 interface BotRow {
   id: string;
   org_id: string;
+  app_secret: string | null;
   verify_token: string | null;
   test_verify_token: string | null;
   live_verify_token: string | null;
@@ -43,7 +44,7 @@ interface BotRow {
 }
 
 const BOT_FIELDS =
-  "id, org_id, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
+  "id, org_id, app_secret, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
 
 /** Resolve a bot from the callback path segment.
  *
@@ -162,12 +163,15 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     const raw = await request.text();
 
     // Verify Meta's X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret).
-    // Backward-compatible: only enforced when META_APP_SECRET is configured.
-    // Until a bot goes live and the secret is set, this is a no-op so nothing
-    // breaks. (Mirrors the smrtTask /webhooks/whatsapp handler. If bots ever
-    // span multiple Meta apps with different secrets, add a per-bot secret
-    // column and resolve it here instead of the single platform env.)
-    const appSecret = process.env.META_APP_SECRET ?? null;
+    // Each bot is its own Meta app with its own App Secret, so resolve the
+    // bot's own secret first; fall back to the platform META_APP_SECRET env
+    // (single-app deployments / transition). Backward-compatible: only enforced
+    // once a secret is resolved — until then it's a no-op, so nothing breaks
+    // before a bot's secret is configured.
+    // NOTE: app_secret is stored plaintext to match this table's existing
+    // wa_access_token/verify_token columns; moving smrtbot secrets to Vault
+    // (as whatsapp_connections does) is a worthwhile future hardening.
+    const appSecret = bot.app_secret ?? process.env.META_APP_SECRET ?? null;
     if (appSecret) {
       const sig = request.headers.get("x-hub-signature-256") ?? "";
       const expected =

@@ -37,6 +37,7 @@ const BOT_UPDATABLE = new Set([
   "wa_phone_number_id",
   "wa_access_token",
   "verify_token",
+  "app_secret",
   "test_wa_phone_number_id",
   "test_wa_access_token",
   "test_verify_token",
