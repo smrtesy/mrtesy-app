@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { HebrewCalendar } from "@/components/ui/hebrew-calendar";
 import { CalendarPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dueUrgency, type BlockedDays, type DueUrgency } from "@/lib/workdays";
@@ -118,13 +118,9 @@ export function DueDateChip({
           <DialogHeader>
             <DialogTitle className="text-start">{t("dialogTitle")}</DialogTitle>
           </DialogHeader>
-          <Input
-            type="date"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            dir="ltr"
-            autoFocus
-          />
+          <div className="flex justify-center">
+            <HebrewCalendar value={draft || null} onSelect={setDraft} />
+          </div>
           <DialogFooter className="gap-2">
             {deadline && (
               <Button variant="ghost" className="text-status-late" onClick={() => commit(null)}>
