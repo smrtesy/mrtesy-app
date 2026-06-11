@@ -73,6 +73,12 @@ export interface Task {
   ai_model_used: string | null;
   manually_verified: boolean;
   today_position: number | null;
+  /** Desk model: quick (one bounded action) vs regular (needs prep / multi-step). */
+  size?: "quick" | "regular";
+  /** Execution context — where this can be done. Null = unspecified (work implied). */
+  context?: "home" | "work" | null;
+  /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
+  woke_from_snooze_at?: string | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;
@@ -120,6 +126,11 @@ export interface Task {
   latest_finish?: string | null;
   /** Engine: on the critical path (slack = 0). */
   is_critical?: boolean | null;
+  /** Plan + stage names, attached at runtime by /api/plan/my-tasks (not columns). */
+  plan_title_he?: string | null;
+  plan_title_en?: string | null;
+  stage_name_he?: string | null;
+  stage_name_en?: string | null;
   /** Assignment model: assigned tasks are 'accepted' immediately; peer offers are 'proposed'. */
   assignment_status?: "proposed" | "accepted" | "declined" | null;
   proposed_by?: string | null;

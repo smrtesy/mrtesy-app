@@ -1,5 +1,5 @@
-// /calendar is now a view inside the Tasks page (the timeline toggle).
-// Kept as a redirect so existing bookmarks / external links keep working.
+// The calendar view was removed with the desk redesign — /calendar now lands
+// on the tasks desk. Kept as a redirect so existing bookmarks keep working.
 import { redirect } from "next/navigation";
 
 export default async function CalendarPage({
@@ -8,5 +8,5 @@ export default async function CalendarPage({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  redirect(`/${locale}/tasks?view=calendar`);
+  redirect(`/${locale}/tasks`);
 }

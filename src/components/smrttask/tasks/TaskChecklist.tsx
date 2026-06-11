@@ -3,9 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check } from "lucide-react";
+import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check, Copy } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -15,11 +14,15 @@ interface TaskChecklistProps {
   taskId: string;
   items: ChecklistItem[];
   onChange: () => void;
+  /** Text direction — Hebrew-first product, so RTL unless told otherwise. */
+  dir?: "rtl" | "ltr";
 }
 
-export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
+export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChecklistProps) {
   const t = useTranslations("tasks.checklist");
   const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+  const addInputRef = useRef<HTMLInputElement | null>(null);
   const [saving, setSaving] = useState(false);
   // Mirror the prop locally so rapid toggles on DIFFERENT items don't race
   // against a not-yet-arrived parent refetch (which would re-read stale `items`).
@@ -29,6 +32,11 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
   // Inline edit
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
+
+  // Serializes whole-array PATCHes: two rapid optimistic adds must apply in
+  // order, otherwise the earlier (shorter) array can land last and silently
+  // drop the newer item.
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // Native HTML5 drag-and-drop. Records the index of the row being dragged so
   // we can compute the new order on drop. dragOverIdx is used for the highlight.
@@ -56,7 +64,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
     }
   }
 
-  async function handleAdd() {
+  function handleAdd() {
     const title = draft.trim();
     if (!title) return;
     const now = new Date().toISOString();
@@ -68,8 +76,34 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
       completed_at: null,
       created_by: "user",
     };
+    // Optimistic: the row appears and the input is ready for the NEXT item
+    // immediately — the save runs in the background (persist rolls back on
+    // failure). No await: awaiting here was the Enter-lag the user felt.
+    // Chained so rapid adds can't apply out of order server-side.
     setDraft("");
-    await persist([...localItems, newItem]);
+    const next = [...localItems, newItem];
+    setLocalItems(next);
+    persistChainRef.current = persistChainRef.current.then(() => persist(next));
+    setAdding(true);
+    requestAnimationFrame(() => addInputRef.current?.focus());
+  }
+
+  function openAdd() {
+    setAdding(true);
+    requestAnimationFrame(() => addInputRef.current?.focus());
+  }
+
+  /** Copy the whole checklist as plain text (e.g. to paste into an AI fix). */
+  async function handleCopyAll() {
+    const text = localItems
+      .map((it) => `- [${it.done ? "x" : " "}] ${it.title}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(t("copied"));
+    } catch {
+      toast.error(t("copyFailed"));
+    }
   }
 
   async function handleToggle(id: string) {
@@ -178,17 +212,35 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
   }
 
   return (
-    <div>
-      <h4 className="text-sm font-medium mb-2 flex items-center justify-between">
+    <div dir={dir}>
+      <h4 className="text-xs font-medium mb-1.5 flex items-center gap-1.5 text-muted-foreground uppercase tracking-wide">
         <span>{t("title")}</span>
+        <IconButton
+          label={t("addButton")}
+          color="primary"
+          className="h-6 w-6 min-h-0 min-w-0 [&_svg]:size-3.5"
+          onClick={openAdd}
+        >
+          <Plus />
+        </IconButton>
         {total > 0 && (
-          <span className="text-xs text-muted-foreground font-normal">
+          <IconButton
+            label={t("copy")}
+            color="neutral"
+            className="h-6 w-6 min-h-0 min-w-0 [&_svg]:size-3.5"
+            onClick={handleCopyAll}
+          >
+            <Copy />
+          </IconButton>
+        )}
+        {total > 0 && (
+          <span className="ms-auto text-[11px] font-normal normal-case">
             {t("progress", { done, total })}
           </span>
         )}
       </h4>
 
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         {localItems.map((item, idx) => {
           const isEditing = editingId === item.id;
           return (
@@ -201,7 +253,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
               onDrop={() => handleDrop(idx)}
               onDragEnd={handleDragEnd}
               className={cn(
-                "flex items-center gap-2 rounded border px-2 py-1.5 text-sm group bg-background",
+                "flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-sm group bg-background",
                 dragOverIdx === idx && "border-primary ring-1 ring-primary/40",
               )}
             >
@@ -260,7 +312,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                 <IconButton
                   label={t("saveEdit")}
                   color="green"
-                  className="shrink-0"
+                  className="h-6 w-6 min-h-0 min-w-0 shrink-0"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleSaveEdit}
                 >
@@ -273,7 +325,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="primary"
                     disabled={saving}
                     onClick={() => handleStartEdit(item)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <Pencil />
                   </IconButton>
@@ -282,7 +334,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="primary"
                     disabled={saving}
                     onClick={() => handlePromote(item)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <ArrowUpRight />
                   </IconButton>
@@ -291,7 +343,7 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
                     color="red"
                     disabled={saving}
                     onClick={() => handleRemove(item.id)}
-                    className="opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
                   >
                     <X />
                   </IconButton>
@@ -301,32 +353,42 @@ export function TaskChecklist({ taskId, items, onChange }: TaskChecklistProps) {
           );
         })}
 
-        <div className="flex gap-1.5">
+        {/* Add row — revealed by either + (heading or bottom). Enter saves
+            instantly and keeps the row open for the next item; empty Enter /
+            Escape / blur closes it. NOT disabled while saving — typing the
+            next item must never wait for the previous save. dir comes from
+            the prop so the empty placeholder is right-aligned in Hebrew. */}
+        {adding && (
           <Input
+            ref={addInputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                handleAdd();
+                if (draft.trim()) handleAdd();
+                else setAdding(false);
               }
+              if (e.key === "Escape") { e.preventDefault(); setDraft(""); setAdding(false); }
             }}
+            onBlur={() => { if (!draft.trim()) setAdding(false); }}
             placeholder={t("addPlaceholder")}
-            dir="auto"
+            dir={dir}
             className="h-8 text-sm"
-            disabled={saving}
           />
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 px-2 gap-1 shrink-0"
-            onClick={handleAdd}
-            disabled={saving || !draft.trim()}
+        )}
+
+        {/* Bottom + — same add flow, handy on long lists. */}
+        {!adding && total > 0 && (
+          <button
+            type="button"
+            onClick={openAdd}
+            className="flex w-full items-center gap-1.5 rounded border border-dashed px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
           >
             <Plus className="h-3.5 w-3.5" />
             {t("addButton")}
-          </Button>
-        </div>
+          </button>
+        )}
       </div>
     </div>
   );

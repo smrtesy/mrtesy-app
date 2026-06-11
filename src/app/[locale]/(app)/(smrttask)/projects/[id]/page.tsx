@@ -11,6 +11,7 @@ import { BriefFactVerifier } from "@/components/smrttask/projects/BriefFactVerif
 import { EditProjectSheet } from "@/components/smrttask/projects/EditProjectSheet";
 import { NewProjectButton } from "@/components/smrttask/projects/NewProjectButton";
 import { ProjectInfoCenter, type InfoCenterItem } from "@/components/smrttask/projects/ProjectInfoCenter";
+import { InfoBoard } from "@/components/smrttask/projects/InfoBoard";
 
 export default async function ProjectDetailPage({
   params,
@@ -20,6 +21,7 @@ export default async function ProjectDetailPage({
   const { locale, id } = await params;
   const t = await getTranslations("projects");
   const tDetail = await getTranslations("projectDetail");
+  const tBoard = await getTranslations("infoBoard");
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/${locale}/login`);
@@ -33,7 +35,7 @@ export default async function ProjectDetailPage({
 
   if (!project) notFound();
 
-  const [briefResult, tasksResult, subProjectsResult, suggestionsResult, infoItemsResult] = await Promise.all([
+  const [briefResult, tasksResult, subProjectsResult, suggestionsResult] = await Promise.all([
     supabase.from("project_briefs").select("*").eq("project_id", id).single(),
     supabase
       .from("tasks")
@@ -61,20 +63,12 @@ export default async function ProjectDetailPage({
       .neq("status", "archived")
       .order("created_at", { ascending: false })
       .limit(20),
-    supabase
-      .from("project_information_items")
-      .select("id, title, body, created_at")
-      .eq("project_id", id)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(50),
   ]);
 
   const brief = briefResult.data;
   const tasks = tasksResult.data || [];
   const subProjects = subProjectsResult.data || [];
   const rawSuggestions = suggestionsResult.data || [];
-  const rawInfoItems = infoItemsResult.data || [];
   const name = locale === "he" && project.name_he ? project.name_he : project.name;
 
   const infoCenterSuggestions: InfoCenterItem[] = rawSuggestions.map((t) => ({
@@ -95,13 +89,6 @@ export default async function ProjectDetailPage({
     priority: t.priority as string | null,
     status: t.status as string | null,
     due_date: t.due_date as string | null,
-  }));
-
-  const infoCenterInfoItems: InfoCenterItem[] = rawInfoItems.map((item) => ({
-    id: item.id as string,
-    type: "info" as const,
-    title: item.title as string,
-    body: (item.body as string | null) ?? null,
   }));
 
   const pendingFacts = (brief?.pending_facts as Array<{
@@ -297,23 +284,36 @@ export default async function ProjectDetailPage({
         )}
       </div>
 
-      {/* Information Center */}
+      {/* Information Center — chronological info board + pinned AI summary */}
       <div>
         <h2 className="text-lg font-semibold mb-4 relative">
           {tDetail("infoCenter")}
         </h2>
-        <ProjectInfoCenter
-          suggestions={infoCenterSuggestions}
-          tasks={infoCenterTasks}
-          infoItems={infoCenterInfoItems}
+        <InfoBoard
           projectId={id}
-          projectName={name}
-          subProjects={subProjects.map((sub) => ({
-            id: sub.id as string,
-            name: (locale === "he" && sub.name_he ? sub.name_he : sub.name) as string,
-          }))}
+          initialSummary={(project.info_summary as string | null) ?? null}
+          initialSummaryUpdatedAt={(project.info_summary_updated_at as string | null) ?? null}
         />
       </div>
+
+      {/* Project suggestions + tasks overview */}
+      {(infoCenterSuggestions.length > 0 || infoCenterTasks.length > 0) && (
+        <div>
+          <h2 className="text-lg font-semibold mb-4 relative">
+            {tBoard("relatedItems")}
+          </h2>
+          <ProjectInfoCenter
+            suggestions={infoCenterSuggestions}
+            tasks={infoCenterTasks}
+            projectId={id}
+            projectName={name}
+            subProjects={subProjects.map((sub) => ({
+              id: sub.id as string,
+              name: (locale === "he" && sub.name_he ? sub.name_he : sub.name) as string,
+            }))}
+          />
+        </div>
+      )}
     </div>
   );
 }

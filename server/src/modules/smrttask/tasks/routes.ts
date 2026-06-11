@@ -51,9 +51,15 @@ const UPDATABLE_FIELDS = new Set([
   // Cross-source duplicate suggestion — set by ai-process, cleared (→ null)
   // by the UI when the user dismisses the suggestion or merges the tasks.
   "suggested_duplicate_of",
+  // Desk model: quick/regular column + home/work execution context.
+  "size", "context",
+  // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
+  "woke_from_snooze_at",
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
+const SIZES = ["quick", "regular"];
+const CONTEXTS = ["home", "work"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 const TASK_TYPES = ["action", "project_suggestion", "brief_review", "followup", "meeting"];
 
@@ -151,6 +157,13 @@ function pickUpdates(body: Record<string, unknown>) {
   if (updates.task_type && !TASK_TYPES.includes(updates.task_type as string)) {
     throw new Error(`invalid task_type: ${updates.task_type}`);
   }
+  if (updates.size && !SIZES.includes(updates.size as string)) {
+    throw new Error(`invalid size: ${updates.size}`);
+  }
+  if (updates.context !== undefined && updates.context !== null
+      && !CONTEXTS.includes(updates.context as string)) {
+    throw new Error(`invalid context: ${updates.context}`);
+  }
   if (updates.recurrence_rule !== undefined && updates.recurrence_rule !== null
       && !isValidRecurrenceRule(updates.recurrence_rule)) {
     throw new Error(`invalid recurrence_rule: ${updates.recurrence_rule}`);
@@ -178,9 +191,14 @@ function pickUpdates(body: Record<string, unknown>) {
  *   task_type     — single type or comma-separated  ("action","project_suggestion",...)
  */
 function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T }>(
-  q: T, query: Request["query"],
+  q: T, query: Request["query"], userId?: string,
 ): T {
-  const { status, verified, project_id, assigned_to, has_source, task_type, today } = query;
+  const { status, verified, project_id, assigned_to, has_source, task_type, today, mine, size, context } = query;
+  // mine=true → personal scope: rows the user owns (user_id). Used by the
+  // suggestions inbox, which is per-user rather than org-wide.
+  if (mine === "true" && userId) q = q.eq("user_id", userId);
+  if (size === "quick" || size === "regular") q = q.eq("size", size);
+  if (context === "home" || context === "work") q = q.eq("context", context);
   if (typeof status === "string") {
     const list = status.split(",").map((s) => s.trim()).filter(Boolean);
     if (list.length === 1) q = q.eq("status", list[0]);
@@ -213,14 +231,15 @@ router.get("/tasks", async (req: Request, res: Response) => {
     .select("*, source_messages(id, source_type, source_url, serial_display), projects(id, name, name_he, color, parent_id), suggested_duplicate:tasks!suggested_duplicate_of(id, title, title_he, serial_display)")
     .eq("organization_id", req.org!.id);
 
-  q = applyTaskFilters(q, req.query);
+  q = applyTaskFilters(q, req.query, req.user!.id);
   // Hide tasks of draft (not-yet-approved) smrtPlan plans. Ordinary tasks have a
   // null plan_id, so the null branch keeps them (a bare not-in would drop nulls).
   const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
   const draftIds = (draftPlans ?? []).map((p) => p.id as string);
   if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
   q = q.order("created_at", { ascending: false });
-  const n = Math.min(parseInt((limit as string) ?? "50", 10) || 50, 200);
+  // 1000 cap: the suggestions inbox shows EVERY pending suggestion in one list.
+  const n = Math.min(parseInt((limit as string) ?? "50", 10) || 50, 1000);
   q = q.limit(n);
 
   const { data, error } = await q;
@@ -234,7 +253,7 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
     .from("tasks")
     .select("id", { count: "exact", head: true })
     .eq("organization_id", req.org!.id);
-  q = applyTaskFilters(q, req.query);
+  q = applyTaskFilters(q, req.query, req.user!.id);
   const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
   const draftIds = (draftPlans ?? []).map((p) => p.id as string);
   if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
@@ -305,9 +324,42 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "nothing to update" });
   }
 
+  // Assigning a task to someone is a manager-only action (org owner/admin).
+  // A non-manager PATCH may not touch assigned_to_user_id.
+  if ("assigned_to_user_id" in updates) {
+    const role = req.member!.role;
+    if (role !== "owner" && role !== "admin") {
+      return res.status(403).json({ error: "only an org manager can assign tasks" });
+    }
+  }
+
+  // An unverified→verified flip is "the suggestion was approved" — read the
+  // prior value first so we log the TRANSITION only (a repeated verified:true
+  // patch, e.g. a double-click, must not write duplicate audit rows).
+  let wasVerified: boolean | null = null;
+  if (updates.manually_verified === true) {
+    const { data: prior } = await db
+      .from("tasks")
+      .select("manually_verified")
+      .eq("organization_id", req.org!.id)
+      .eq("id", req.params.id)
+      .maybeSingle();
+    wasVerified = prior ? prior.manually_verified === true : null;
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
+  // A position-only patch (drag-reorder writes today_position to every row of
+  // a column) is NOT the user touching those tasks — it must not reset the
+  // aging clock or clear the snooze-return chip.
+  const positionOnly = Object.keys(updates).every((k) => k === "today_position");
   updates.updated_at = new Date().toISOString();
+  if (!positionOnly) {
+    // Every user-driven edit counts as an interaction (aging clock) and clears
+    // the "returned from snooze" chip — unless the patch sets the chip itself.
+    updates.last_interaction_at = updates.updated_at;
+    if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
+  }
 
   const { data, error } = await db
     .from("tasks")
@@ -319,6 +371,21 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
 
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
+
+  // Forensics: record the approve transition — see the June-2026 ספרלין case
+  // ("how did this suggestion become a task?").
+  if (updates.manually_verified === true && wasVerified === false) {
+    const { error: actErr } = await db.from("task_activities").insert({
+      user_id: req.user!.id,
+      task_id: req.params.id,
+      activity_type: "approved",
+      new_value: "verified",
+      note: "approved via PATCH (suggestion → task)",
+      actor: "user",
+    });
+    if (actErr) console.error("[tasks PATCH] approve activity log failed:", actErr.message);
+  }
+
   res.json({ task: data });
 });
 
@@ -417,11 +484,21 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   // Bump snooze_count atomically via a fresh read+write — Postgres has no `+1` shorthand here.
   const { data: current } = await db
     .from("tasks")
-    .select("snooze_count")
+    .select("snooze_count, due_date, latest_finish")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
   if (!current) return res.status(404).json({ error: "task not found in this org" });
+
+  // Never let a snooze hide a task past its EFFECTIVE deadline (the earlier
+  // of due_date and the plan engine's latest_finish) — clamp to that morning.
+  // The UI blocks this too; this is the backstop.
+  const due = current.due_date as string | null;
+  const lf = current.latest_finish as string | null;
+  const deadline = due && lf ? (due < lf ? due : lf) : (due || lf);
+  if (deadline && until.slice(0, 10) > deadline) {
+    until = `${deadline}T06:00:00.000Z`;
+  }
 
   const { data, error } = await db
     .from("tasks")
@@ -440,15 +517,30 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   res.json({ task: data });
 });
 
-/** POST /tasks/:id/seen */
+/** POST /tasks/:id/seen — also counts as an interaction: refreshes the aging
+ *  clock and clears the "returned from snooze" chip. */
 router.post("/tasks/:id/seen", async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
   const { error } = await db
     .from("tasks")
-    .update({ seen_at: new Date().toISOString() })
+    .update({ seen_at: now, last_interaction_at: now, woke_from_snooze_at: null })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+/** GET /work-calendar — blocked (non-working) dates for business-day math in
+ *  the UI: global Israeli holidays (org_id NULL) + this org's own rows. The
+ *  Mon–Fri weekend is computed client-side; this returns only calendar dates.
+ *  Same source as the smrtPlan engine (smrtplan_blocked_days). */
+router.get("/work-calendar", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_blocked_days")
+    .select("blocked_date")
+    .or(`org_id.is.null,org_id.eq.${req.org!.id}`);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ blocked_days: (data ?? []).map((r) => r.blocked_date as string) });
 });
 
 /** POST /tasks/:id/materials/upload — upload a file to task-materials bucket.
@@ -667,12 +759,17 @@ async function refreshTaskDescription(opts: {
 ציטוט מילולי של דברי אדם ("אמר שיתקשר מחר") מותר — זה דיווח על מה שנאמר,
 לא קביעת מועד.
 
+בנוסף לתיאור, עדכן גם את כותרת המשימה כך שתשקף את הצעד הבא הנדרש עכשיו:
+- כותרת בעברית בלבד, מתחילה בפועל פעולה (לענות / לאשר / להתקשר / לבדוק /
+  לשלם / לתאם / להגיש...), קצרה (עד ~60 תווים).
+- אם הצעד הבא לא השתנה — החזר את הכותרת הקודמת כמות שהיא.
+- אל תמציא פעולה שלא עולה מהעדכונים; בספק שמור על הכותרת הקודמת.
+
 כללים נוספים:
 - שמור על URLs מלאים מהמקור verbatim, אל תקצר לדומיין בלבד.
-- אל תוסיף הקדמות כמו "כאן התיאור המעודכן" — החזר רק את הטקסט.
-- אל תוסיף שורות חדשות שאינן נחוצות.
+- אל תוסיף הקדמות.
 
-החזר טקסט בלבד, בלי JSON, בלי גרשיים מסביב.`;
+החזר JSON בלבד בפורמט: {"title": "<כותרת מעודכנת>", "description": "<תיאור מעודכן>"}`;
 
   const userMessage = `כותרת המשימה: ${opts.title}
 מועד המשימה (due_date): ${opts.dueDate || "(לא נקבע)"}
@@ -683,22 +780,44 @@ ${opts.currentDescription || "(ריק)"}
 העדכונים שנכנסו לפי הסדר:
 ${recent || "(אין עדכונים)"}
 
-שכתב את התיאור.`;
+שכתב את הכותרת והתיאור.`;
 
   const { content } = await simpleCall(
     "haiku",
     systemPrompt,
     userMessage,
-    600,
-    { component: "smrttask.tasks.update.refresh_description", userId: opts.userId },
+    700,
+    { component: "smrttask.tasks.update.refresh_summary", userId: opts.userId },
   );
 
-  const cleaned = content.trim().replace(/^["'`]+|["'`]+$/g, "");
-  if (!cleaned) return;
+  // Expect { title, description }. Be tolerant: if the model returns plain
+  // text (no JSON), treat it as the description and leave the title as-is.
+  let title: string | null = null;
+  let description: string | null = null;
+  try {
+    const parsed = parseJsonResponse<{ title?: string; description?: string }>(content);
+    if (parsed && typeof parsed === "object") {
+      title = typeof parsed.title === "string" ? parsed.title.trim() : null;
+      description = typeof parsed.description === "string" ? parsed.description.trim() : null;
+    }
+  } catch { /* fall through to plain-text handling */ }
+  if (description === null && title === null) {
+    description = content.trim().replace(/^["'`]+|["'`]+$/g, "");
+  }
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (description) patch.description = description.slice(0, 1000);
+  if (title) {
+    // Bilingual title columns: the UI shows title_he in Hebrew, falling back
+    // to title. Keep both in sync with the AI-refreshed Hebrew title.
+    patch.title_he = title.slice(0, 200);
+    patch.title = title.slice(0, 200);
+  }
+  if (!("description" in patch) && !("title_he" in patch)) return;
 
   await db
     .from("tasks")
-    .update({ description: cleaned.slice(0, 1000), updated_at: new Date().toISOString() })
+    .update(patch)
     .eq("organization_id", opts.orgId)
     .eq("id", opts.taskId);
 }
@@ -808,7 +927,9 @@ router.get("/tasks/:id/trail", async (req: Request, res: Response) => {
       .maybeSingle(),
     db
       .from("log_entries")
-      .select("classification_reason, ai_classification, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, status, error_message, created_at")
+      // Full set, matching the smrtTask log page so the ✨ panel can show the
+      // same detail: pre-classification, confidences (in `details`), duration.
+      .select("classification_reason, ai_classification, pre_classification, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, details, status, error_message, created_at")
       .eq("source_message_id", task.source_message_id)
       .order("created_at", { ascending: false })
       .limit(1),
@@ -1249,14 +1370,33 @@ router.post("/tasks/bulk-approve", async (req: Request, res: Response) => {
   if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
 
   const now = new Date().toISOString();
-  const { count, error } = await db
+  const { data: touched, error } = await db
     .from("tasks")
-    .update({ manually_verified: true, seen_at: now }, { count: "exact" })
+    .update({ manually_verified: true, seen_at: now })
     .eq("organization_id", req.org!.id)
-    .in("id", ids);
+    .in("id", ids)
+    .select("id");
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ ok: true, approved_count: count ?? 0 });
+  // Forensics — same as the single-task approve flip in PATCH. Log only the
+  // rows the org-scoped update ACTUALLY touched (a bogus/cross-org id in the
+  // request must neither fail the batch on FK nor write a false record).
+  const touchedIds = (touched ?? []).map((r) => r.id as string);
+  if (touchedIds.length > 0) {
+    const { error: actErr } = await db.from("task_activities").insert(
+      touchedIds.map((id) => ({
+        user_id: req.user!.id,
+        task_id: id,
+        activity_type: "approved",
+        new_value: "verified",
+        note: "approved via bulk-approve",
+        actor: "user",
+      })),
+    );
+    if (actErr) console.error("[bulk-approve] activity log failed:", actErr.message);
+  }
+
+  res.json({ ok: true, approved_count: touchedIds.length });
 });
 
 /** POST /tasks/bulk-dismiss-fast

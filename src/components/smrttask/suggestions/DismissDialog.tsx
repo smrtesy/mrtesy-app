@@ -40,6 +40,11 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
   const t = useTranslations("suggestions");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [customText, setCustomText] = useState("");
+  // "Dismiss & learn": for a custom reason, also record the explanation as a
+  // correction (the same channel the log's CorrectionDialog feeds) so the AI
+  // improvement loop sees it.
+  const [learn, setLearn] = useState(true);
+  const [learnScope, setLearnScope] = useState<"personal" | "general">("personal");
   const [submitting, setSubmitting] = useState(false);
   const [preview, setPreview] = useState<{ count: number; trigger: string | null } | null>(null);
   const [cascade, setCascade] = useState(true);
@@ -102,6 +107,8 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
   function reset() {
     setSelectedCode(null);
     setCustomText("");
+    setLearn(true);
+    setLearnScope("personal");
     setSubmitting(false);
     setPreview(null);
     setCascade(true);
@@ -137,6 +144,22 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
             : undefined,
         },
       });
+
+      // "Learn from this": file the custom explanation as a correction so it
+      // rides the next corrections export to the AI. Fire-and-forget — the
+      // dismissal already succeeded, so don't make the user wait for it.
+      if (selectedCode === "custom" && learn && customText.trim()) {
+        void api("/api/corrections", {
+          method: "POST",
+          body: {
+            task_id: taskId,
+            correction_type: "note",
+            note: customText.trim(),
+            scope: learnScope,
+            context: { source: "dismiss_dialog", task_title: taskTitle ?? null },
+          },
+        }).catch(() => {});
+      }
 
       // Toast hierarchy: most specific message wins.
       if (cascaded_count > 0) {
@@ -210,14 +233,49 @@ export function DismissDialog({ taskId, taskTitle, open, onClose, onDismissed, s
         </div>
 
         {selectedCode === "custom" && (
-          <Textarea
-            value={customText}
-            onChange={(e) => setCustomText(e.target.value)}
-            placeholder={t("reasonCustomPlaceholder")}
-            className="min-h-[80px] mt-2"
-            dir="auto"
-            autoFocus
-          />
+          <div className="mt-2 space-y-2">
+            <Textarea
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+              placeholder={t("reasonCustomPlaceholder")}
+              className="min-h-[80px]"
+              dir="auto"
+              autoFocus
+            />
+            <label className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={learn}
+                onChange={(e) => setLearn(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="flex-1" dir="auto">{t("learnFromThis")}</span>
+            </label>
+            {learn && (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLearnScope("personal")}
+                  className={cn(
+                    "flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    learnScope === "personal" ? "border-primary bg-primary/10" : "border-input hover:bg-accent",
+                  )}
+                >
+                  {t("learnScopePersonal")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLearnScope("general")}
+                  className={cn(
+                    "flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    learnScope === "general" ? "border-primary bg-primary/10" : "border-input hover:bg-accent",
+                  )}
+                >
+                  {t("learnScopeGeneral")}
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         {selectedCode === "sender_type_unimportant" && (

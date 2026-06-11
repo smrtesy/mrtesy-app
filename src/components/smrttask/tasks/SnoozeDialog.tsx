@@ -6,6 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { addWorkdays } from "@/lib/workdays";
 
 interface Props {
   open: boolean;
@@ -14,6 +17,12 @@ interface Props {
   onConfirm: (untilIso: string) => Promise<void> | void;
   /** Optional title override; defaults to the snooze action label. */
   title?: string;
+  /**
+   * The task's deadline (YYYY-MM-DD). Snoozing PAST the deadline would hide
+   * the task until it's already late, so dates after it are blocked and the
+   * presets that would land past it are disabled.
+   */
+  maxDate?: string | null;
 }
 
 /**
@@ -26,12 +35,26 @@ interface Props {
  * needs *some* concrete moment to resurface, and shipping without a time
  * input would force the same hardcoded 09:00 the user is trying to escape.
  */
-export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
+function localISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props) {
   const t = useTranslations("tasks.snooze");
   const tCommon = useTranslations("common");
+  const blocked = useWorkCalendar();
   const [date, setDate] = useState("");
   const [time, setTime] = useState("09:00");
   const [submitting, setSubmitting] = useState(false);
+
+  // Only a FUTURE deadline caps the snooze. If the deadline already passed
+  // (or is today), capping would block every selectable date — snoozing an
+  // overdue task is legitimate, so drop the cap in that case.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const effMax = maxDate && maxDate > todayStr ? maxDate : null;
 
   // Re-seed each time the dialog opens so reopening after a previous
   // snooze doesn't keep the stale date around.
@@ -39,16 +62,40 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
     if (!open) return;
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    setDate(tomorrow.toISOString().slice(0, 10));
+    let seed = tomorrow.toISOString().slice(0, 10);
+    if (effMax && seed > effMax) seed = effMax;
+    setDate(seed);
     setTime("09:00");
-  }, [open]);
+  }, [open, effMax]);
 
-  function setPreset(daysAhead: number, hour: number) {
-    const d = new Date();
-    d.setDate(d.getDate() + daysAhead);
-    setDate(d.toISOString().slice(0, 10));
-    setTime(`${String(hour).padStart(2, "0")}:00`);
+  // The three presets: tomorrow 09:00 · tomorrow 15:00 · +2 working days 09:00.
+  // Clicking one APPLIES IMMEDIATELY (no confirm click).
+  const presets: { key: string; date: Date; hour: number }[] = (() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return [
+      { key: "presetTomorrow", date: tomorrow, hour: 9 },
+      { key: "presetTomorrowNoon", date: tomorrow, hour: 15 },
+      { key: "presetTwoWorkdays", date: addWorkdays(new Date(), 2, blocked), hour: 9 },
+    ];
+  })();
+
+  function presetBlockedBy(d: Date): boolean {
+    return !!effMax && localISODate(d) > effMax;
   }
+
+  async function applyPreset(d: Date, hour: number) {
+    const when = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0);
+    setSubmitting(true);
+    try {
+      await onConfirm(when.toISOString());
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const pastDeadline = !!effMax && !!date && date > effMax;
 
   async function handleConfirm() {
     if (!date) return;
@@ -72,6 +119,11 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
       // Auto-shift to tomorrow at the same time if user picked a past moment.
       d.setDate(d.getDate() + 1);
     }
+    // The auto-shift must not sneak past the deadline guard.
+    if (maxDate && d.toISOString().slice(0, 10) > maxDate) {
+      toast.error(t("pastDeadline", { date: maxDate }));
+      return;
+    }
     setSubmitting(true);
     try {
       await onConfirm(d.toISOString());
@@ -89,17 +141,19 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
         </DialogHeader>
 
         <div className="space-y-3 py-2">
-          {/* Quick presets — cover the 90% of cases without typing. */}
+          {/* Quick presets — one tap snoozes and closes, no confirm needed. */}
           <div className="flex gap-2 flex-wrap">
-            <Button size="sm" variant="outline" onClick={() => setPreset(1, 9)} disabled={submitting}>
-              {t("presetTomorrow")}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreset(1, 18)} disabled={submitting}>
-              {t("presetTomorrowEvening")}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreset(7, 9)} disabled={submitting}>
-              {t("presetNextWeek")}
-            </Button>
+            {presets.map((p) => (
+              <Button
+                key={p.key}
+                size="sm"
+                variant="outline"
+                onClick={() => applyPreset(p.date, p.hour)}
+                disabled={submitting || presetBlockedBy(p.date)}
+              >
+                {t(p.key)}
+              </Button>
+            ))}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -110,6 +164,7 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 min={new Date().toISOString().slice(0, 10)}
+                max={maxDate ?? undefined}
                 disabled={submitting}
               />
             </div>
@@ -125,11 +180,15 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
           </div>
         </div>
 
+        {pastDeadline && (
+          <p className="text-xs text-status-late" dir="auto">{t("pastDeadline", { date: maxDate ?? "" })}</p>
+        )}
+
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             {tCommon("cancel")}
           </Button>
-          <Button onClick={handleConfirm} disabled={!date || submitting} className="gap-1">
+          <Button onClick={handleConfirm} disabled={!date || submitting || pastDeadline} className="gap-1">
             {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
             {t("confirmButton")}
           </Button>
