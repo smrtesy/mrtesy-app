@@ -19,7 +19,7 @@ async function notifyDisconnect(userId: string, reason: string) {
     category: "drive_sync",
     status: "failed",
     error_message: `Drive disconnected — ${reason}. User must reconnect in Settings.`,
-  }).catch(() => {});
+  }).then(() => {}, () => {});
 
   if (membership?.org_id) {
     await supabase.from("notifications").insert({
@@ -30,7 +30,7 @@ async function notifyDisconnect(userId: string, reason: string) {
       title: "Google Drive disconnected",
       body: `Drive connection was lost (${reason}). Please reconnect in Settings → Connections.`,
       link: "/settings",
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
 }
 

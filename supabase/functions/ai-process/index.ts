@@ -350,7 +350,7 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
-async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }, prefillJson: boolean = false) {
+async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   // Sanitize every text field that goes into the JSON body. A lone surrogate
@@ -360,23 +360,20 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
     ? stripLoneSurrogates(system)
     : system.map((b) => ({ ...b, text: stripLoneSurrogates(b.text) }));
   const safeUserMessage = stripLoneSurrogates(userMessage);
-  // prefillJson forces the reply to START as a JSON object by prefilling the
-  // assistant turn with "{". Without it the model sometimes opens with a prose
-  // preamble ("Let me analyze…") and long replies get truncated by max_tokens
-  // before the JSON ever starts — 8/300 replies were lost that way in the
-  // 2026-06 shadow eval. The "{" is prepended back onto the returned text so
-  // callers parse a complete object.
-  const messages: Array<{ role: string; content: string }> = [{ role: "user", content: safeUserMessage }];
-  if (prefillJson) messages.push({ role: "assistant", content: "{" });
+  // NOTE: do NOT add assistant-message prefill here ("{" as a final assistant
+  // turn). Claude 4.6-era models reject it with HTTP 400 "This model does not
+  // support assistant message prefill" — it took the classifier down for ~3h
+  // on 2026-06-11. JSON-only replies are enforced by prompt instruction
+  // (OUTPUT FORMAT block in the classifier contract) instead.
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages: [{ role: "user", content: safeUserMessage }] }),
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
   const usage = {
-    text: (prefillJson ? "{" : "") + (data.content?.[0]?.text || ""),
+    text: data.content?.[0]?.text || "",
     inputTokens: data.usage?.input_tokens || 0,
     outputTokens: data.usage?.output_tokens || 0,
     cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
@@ -703,7 +700,15 @@ Incorrect: INFORMATIONAL.`;
   // even when a tenant has customized the edge_classifier prompt. Without this,
   // a custom prompt that predates new_matter would never emit it and the
   // spin-off-vs-reopen logic in Path 1 would silently no-op for that tenant.
-  const newMatterContract = `\n\n═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
+  const newMatterContract = `\n\n═══ OUTPUT FORMAT (mandatory) ═══
+Your reply MUST begin directly with the { of the JSON object — no preamble,
+no analysis, no "Let me…", no markdown fence. The reply is the JSON object
+and nothing else.
+Inside JSON string values, NEVER write a raw double quote (") — it breaks the
+JSON. Hebrew gershayim go as the dedicated character ״ (ש״ח, חב״ד) and quoted
+words use single quotes ('יטופל'), or escape with \\" if you must.
+
+═══ OUTPUT CONTRACT — new_matter (mandatory, do not omit) ═══
 In addition to any shape above, the JSON you return MUST include the boolean
 field "new_matter". new_matter=true ONLY when classification is ACTIONABLE AND
 this message opens a matter DISTINCT from what the existing thread summary /
@@ -727,9 +732,9 @@ content under the rules above.`;
   const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
   // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
-  // and truncate the JSON mid-object. prefillJson forces the reply to start at
-  // "{" so no token is spent on a prose preamble.
-  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id }, true);
+  // and truncate the JSON mid-object. JSON-only output (no prose preamble) is
+  // enforced by the OUTPUT FORMAT block in newMatterContract.
+  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -737,11 +742,49 @@ content under the rules above.`;
     if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
   } catch { /* fallthrough */ }
 
-  const fallbackClass = text.toUpperCase().startsWith("ACTIONABLE")
-    ? "actionable"
-    : text.toUpperCase().startsWith("SPAM")
-      ? "spam"
-      : "informational";
+  // Tolerant second pass: Hebrew text routinely carries unescaped gershayim
+  // (ש"ח, מילים "מצוטטות") inside JSON string values, which makes JSON.parse
+  // throw even though the structure is intact. Before this repair, a broken
+  // reply fell through to the text-start fallback below, which classified a
+  // perfectly good ACTIONABLE verdict as informational (G5084: Sonnet said
+  // ACTIONABLE, the system filed informational and dumped the raw JSON into
+  // the log). Recover field-by-field: scalars via strict regex; text fields
+  // by capturing up to the quote that precedes the next key / closing brace,
+  // so inner quotes survive (a value containing the delimiter pattern only
+  // truncates that one field — the classification itself is never lost).
+  if (!parsed) {
+    const field = (name: string): string => {
+      const m = text.match(new RegExp(`"${name}"\\s*:\\s*"([\\s\\S]*?)"\\s*(?=,\\s*"|\\n\\s*"|\\s*\\})`));
+      return m ? m[1] : "";
+    };
+    const boolField = (name: string): boolean =>
+      new RegExp(`"${name}"\\s*:\\s*true`).test(text);
+    const recoveredCls = field("classification").toUpperCase();
+    if (["ACTIONABLE", "INFORMATIONAL", "SPAM"].includes(recoveredCls)) {
+      parsed = {
+        classification: recoveredCls,
+        reason_he: field("reason_he"),
+        new_title_he: field("new_title_he"),
+        new_summary: field("new_summary"),
+        state: field("state"),
+        completion: boolField("completion"),
+        completion_reason_he: field("completion_reason_he"),
+        new_matter: boolField("new_matter"),
+        confidence: field("confidence") || "low",
+      };
+    }
+  }
+
+  // Last-resort fallback: prefer an embedded "classification": "X" anywhere in
+  // the text over guessing from the first word (the reply usually starts with
+  // "{", never with "ACTIONABLE").
+  const embedded = text.match(/"classification"\s*:\s*"(ACTIONABLE|INFORMATIONAL|SPAM)"/i)?.[1]?.toLowerCase();
+  const fallbackClass = embedded
+    ?? (text.toUpperCase().startsWith("ACTIONABLE")
+      ? "actionable"
+      : text.toUpperCase().startsWith("SPAM")
+        ? "spam"
+        : "informational");
 
   if (!parsed) {
     return {
@@ -826,19 +869,65 @@ content under the rules above.`;
   };
 }
 
+// A recurring series holds several occurrences of the SAME matter, but an
+// update (a payment confirmation, a reply) belongs to ONE of them — the
+// occurrence whose due_date matches the signal — never to whichever occurrence
+// a stale pointer (thread_memory, the WhatsApp router, the sibling linker)
+// happened to reference (user rule 2026-06-11: "העדכון נכנס למשימה המתאימה
+// בלבד"). Mirrors the recurring tie-break in findDuplicateOpenTask: nearest
+// due_date, gently preferring an occurrence already due (a confirmation closes
+// the CURRENT cycle, not next month's). Non-recurring tasks pass through.
+async function resolveRecurringOccurrence(taskId: string, msg: any): Promise<string> {
+  const { data: t } = await supabase
+    .from("tasks")
+    .select("id, user_id, recurrence_rule, recurrence_parent_id, due_date, status")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (!t || (!t.recurrence_rule && !t.recurrence_parent_id)) return taskId;
+  const seriesKey = (t.recurrence_parent_id as string | null) ?? (t.id as string);
+  const { data: sibs } = await supabase
+    .from("tasks")
+    .select("id, due_date, status")
+    .eq("user_id", t.user_id)
+    .or(`id.eq.${seriesKey},recurrence_parent_id.eq.${seriesKey}`)
+    .in("status", ["inbox", "in_progress", "snoozed", "pending_completion"]);
+  const pool = (sibs ?? []) as Array<{ id: string; due_date: string | null }>;
+  if (pool.length === 0) return taskId;
+  const signalDate = msg?.received_at ? new Date(msg.received_at).toISOString().slice(0, 10) : null;
+  if (!signalDate) return taskId;
+  let bestId: string | null = null;
+  let bestScore = Infinity;
+  for (const s of pool) {
+    const d = dayDiff(signalDate, s.due_date);
+    if (d === null) continue;
+    const future = s.due_date && s.due_date > signalDate ? 0.5 : 0;
+    const score = d + future;
+    if (score < bestScore) { bestScore = score; bestId = s.id; }
+  }
+  return bestId ?? taskId;
+}
+
 async function appendUpdateToTask(
   taskId: string,
   msg: any,
   analysis: ThreadAnalysis,
   classification: string,
   opts?: { reopen?: boolean },
-) {
+): Promise<string> {
+  taskId = await resolveRecurringOccurrence(taskId, msg);
   const { data: existing } = await supabase
     .from("tasks")
-    .select("updates, status, title_he")
+    .select("updates, status, title_he, manually_verified")
     .eq("id", taskId)
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
+  // Where a resurfaced/reopened task goes: an APPROVED task returns to the
+  // active list (in_progress), but a never-approved suggestion must return to
+  // the INBOX — the suggestions view shows only status='inbox' and the task
+  // list shows only verified=true, so an unverified task parked in
+  // in_progress is invisible on EVERY screen (the T711/T579 black hole: an
+  // active support conversation resurfaced into nowhere).
+  const resurfaceStatus = existing?.manually_verified === true ? "in_progress" : "inbox";
 
   // Dedup guard: skip ONLY if we already appended an update for this exact
   // source_message id at this exact received_at. WhatsApp burst rows and Gmail
@@ -862,7 +951,7 @@ async function appendUpdateToTask(
         && u.source_received_at === msg.received_at,
     )
   ) {
-    return;
+    return taskId;
   }
 
   const updateFields: Record<string, unknown> = {
@@ -906,7 +995,7 @@ async function appendUpdateToTask(
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
   if (opts?.reopen) {
-    updateFields.status = "in_progress";
+    updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
   } else if (analysis.completionSignal) {
@@ -919,7 +1008,7 @@ async function appendUpdateToTask(
     // instead of leaving the update buried where the user can't see it (real
     // case: a substantive reply with a link folded silently into a snoozed
     // task). Informational follow-ups ("תודה") deliberately do NOT resurface.
-    updateFields.status = "in_progress";
+    updateFields.status = resurfaceStatus;
     updateFields.snoozed_until = null;
   }
 
@@ -931,6 +1020,9 @@ async function appendUpdateToTask(
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
+  // The occurrence the update actually landed on (may differ from the id the
+  // caller passed when a recurring series was redirected above).
+  return taskId;
 }
 
 // ── WhatsApp per-matter router ────────────────────────────────────────────
@@ -2248,7 +2340,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // Do NOT set dead_letter: the message is handled, not stuck, and the
       // failure is already recorded in log_entries. (A true dead_letter flag on
       // an otherwise-"processed" row is what made the admin counts misleading.)
-      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      // skip_reason marks the give-up explicitly: processed_at deliberately
+      // stays NULL (nothing was actually processed), so without this marker a
+      // failed-out row is indistinguishable from a genuine "informational"
+      // classification — which is how 24 failure-path rows hid from the
+      // damage query during the 2026-06-11 prefill outage.
+      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
       return;
     }
@@ -2362,14 +2459,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         } else {
           const target = candidates.find((c) => c.id === targetId)!;
           const closed = ["pending_completion", "completed"].includes(String(target.status));
+          // appendUpdateToTask may redirect to a different occurrence of a
+          // recurring series — record the id the update actually landed on.
+          let resolvedId: string;
           if (closed && classification === "actionable") {
-            await appendUpdateToTask(targetId, msg, analysis, "actionable", { reopen: true });
-            classificationReason = `WhatsApp: reopened matter ${targetId} — thread resumed`;
+            resolvedId = await appendUpdateToTask(targetId, msg, analysis, "actionable", { reopen: true });
+            classificationReason = `WhatsApp: reopened matter ${resolvedId} — thread resumed`;
           } else {
-            await appendUpdateToTask(targetId, msg, analysis, classification);
-            classificationReason = `WhatsApp: routed ${classification} to matter ${targetId}`;
+            resolvedId = await appendUpdateToTask(targetId, msg, analysis, classification);
+            classificationReason = `WhatsApp: routed ${classification} to matter ${resolvedId}`;
           }
-          linkedTaskId = targetId;
+          linkedTaskId = resolvedId;
           classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
         }
       }
@@ -2430,16 +2530,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         } else if (taskClosed && classification === "actionable") {
           // (b) Same-topic resumption of an already-closed task → reopen it
           // rather than burying new actionable content as a silent update.
-          await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
-          linkedTaskId = memory.related_task_id;
+          const resolvedId = await appendUpdateToTask(memory.related_task_id, msg, analysis, "actionable", { reopen: true });
+          linkedTaskId = resolvedId;
           classification = "actionable_followup";
-          classificationReason = `reopened task ${memory.related_task_id} via ${msg.source_type} — thread resumed`;
+          classificationReason = `reopened task ${resolvedId} via ${msg.source_type} — thread resumed`;
         } else {
           // (c) Open task continuing, or an informational follow-up → append.
-          await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
-          linkedTaskId = memory.related_task_id;
+          const resolvedId = await appendUpdateToTask(memory.related_task_id, msg, analysis, classification);
+          linkedTaskId = resolvedId;
           classification = classification === "actionable" ? "actionable_followup" : "informational_followup";
-          classificationReason = `linked to task ${memory.related_task_id} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
+          classificationReason = `linked to task ${resolvedId} via ${msg.source_type}${analysis.completionSignal ? " — completion signal" : ""}`;
         }
       }
     } catch (e) {
@@ -2456,10 +2556,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     try {
       const sibling = await tryLinkToExistingTask(msg, msg.user_id);
       if (sibling) {
-        await appendUpdateToTask(sibling.id, msg, analysis, "actionable");
-        linkedTaskId = sibling.id;
+        const resolvedId = await appendUpdateToTask(sibling.id, msg, analysis, "actionable");
+        linkedTaskId = resolvedId;
         classification = "actionable_followup";
-        classificationReason = `linked to task ${sibling.id} via ${msg.source_type} (sibling-fallback)`;
+        classificationReason = `linked to task ${resolvedId} via ${msg.source_type} (sibling-fallback)`;
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_link", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
@@ -2734,10 +2834,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             completionReason: link.reason,
             reason: link.reason,
           };
-          await appendUpdateToTask(link.taskId, msg, completionAnalysis, "informational");
-          linkedTaskId = link.taskId;
+          const resolvedId = await appendUpdateToTask(link.taskId, msg, completionAnalysis, "informational");
+          linkedTaskId = resolvedId;
           classification = "informational_followup";
-          classificationReason = `cross-source: closes task ${link.taskId} — ${link.reason}`;
+          classificationReason = `cross-source: closes task ${resolvedId} — ${link.reason}`;
           totalInputTokens += 0; // Haiku call tracked inside callClaude via ai_usage
         }
       }
@@ -2745,7 +2845,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       await supabase.from("log_entries").insert({
         user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
         status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
 
@@ -2776,7 +2876,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       await supabase.from("log_entries").insert({
         user_id: msg.user_id, level: "warning", category: "ai_process_cross_link",
         status: "failed", ...msgLogFields(msg), error_message: (e as Error).message,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
 

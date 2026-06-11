@@ -242,7 +242,7 @@ Deno.serve(async (req) => {
               "Content-Type": "application/json",
             },
           }
-        ).catch(() => { /* ignore */ });
+        ).then(() => {}, () => { /* ignore */ });
       } catch { /* ignore drive errors */ }
     }
 

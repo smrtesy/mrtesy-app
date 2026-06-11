@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -24,7 +24,9 @@ import { PlanProposals } from "./PlanProposals";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { effectiveDeadline } from "@/lib/workdays";
+import { effectiveDeadline, autoSnoozeMoment } from "@/lib/workdays";
+import { undoToast } from "@/components/ui/undo-toast";
+import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types/task";
 
@@ -182,6 +184,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     }
   }
 
+  function unsnooze(taskId: string) {
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox", snoozed_until: null } })
+      .then(() => { fetchSuggestions(); onUpdate?.(); })
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   async function handleDueChange(taskId: string, date: string | null) {
     setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, due_date: date } : s)));
     try {
@@ -189,7 +197,25 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     } catch (e) {
       toast.error((e as Error).message);
       fetchSuggestions();
+      return;
     }
+    // Setting a due date auto-snoozes the suggestion until two working days
+    // before it — it leaves the inbox now and resurfaces in time. Skipped when
+    // there isn't enough lead time (autoSnoozeMoment → null).
+    if (!date) return;
+    const moment = autoSnoozeMoment(date, blocked);
+    if (!moment) return;
+    removeLocal([taskId]);
+    api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+    undoToast({
+      message: tTasks("undo.autoSnoozed", { date: dueLabel(moment.dateISO) }),
+      undoLabel: tTasks("row.undo"),
+      onUndo: () => unsnooze(taskId),
+      changeLabel: tTasks("undo.changeDate"),
+      onChange: () => setSnoozeTaskId(taskId),
+    });
   }
 
   async function handleHomeToggle(task: Task) {
@@ -217,25 +243,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     removeLocal([taskId]);
     toast.success(t("fastDismissed"));
     api(`/api/tasks/${taskId}/dismiss-fast`, { method: "POST" })
-      .then(() => onUpdate?.())
-      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
-  }
-
-  function handleComplete(taskId: string) {
-    removeLocal([taskId]);
-    // Undo restores status=inbox; manually_verified is untouched, so the
-    // row comes straight back as a suggestion.
-    toast.success(tTasks("actions.complete"), {
-      action: {
-        label: tTasks("row.undo"),
-        onClick: () => {
-          api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
-            .then(() => { fetchSuggestions(); onUpdate?.(); })
-            .catch((e) => toast.error((e as Error).message));
-        },
-      },
-    });
-    api(`/api/tasks/${taskId}/complete`, { method: "POST" })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -391,7 +398,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
-                    onComplete={() => handleComplete(task.id)}
                   />
                 </CardContent>
               </Card>
@@ -498,7 +504,6 @@ function SuggestionActions({
   onDismissWithReason,
   onApprove,
   onSnooze,
-  onComplete,
 }: {
   task: Task;
   locale: string;
@@ -512,7 +517,6 @@ function SuggestionActions({
   onDismissWithReason: () => void;
   onApprove: () => void;
   onSnooze: () => void;
-  onComplete: () => void;
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
@@ -560,11 +564,13 @@ function SuggestionActions({
       <IconButton label={t("dismissWithReason")} color="violet" onClick={onDismissWithReason}>
         <ThumbsDown />
       </IconButton>
+      {/* NO "complete" button on suggestions. A suggestion was never approved,
+          so "בוצע" makes no sense here — and the green ✓ sat next to "אשר"
+          and read as approve, silently archiving suggestions one tap at a
+          time (the June-2026 "suggestions vanished" incident). Completing
+          belongs to the task list, after approval. */}
       <IconButton label={t("approve")} color="blue" onClick={onApprove}>
         <ListPlus />
-      </IconButton>
-      <IconButton label={tTasks("actions.complete")} color="green" onClick={onComplete}>
-        <Check />
       </IconButton>
     </div>
   );

@@ -452,6 +452,10 @@
       "archiveAllConfirm": "לארכב את כל {count} המשימות?",
       "archivedAll": "כל המשימות אורכבו",
       "close": "סגור"
+    },
+    "undo": {
+      "autoSnoozed": "יוסתר עד {date}",
+      "changeDate": "שנה מועד"
     }
   },
   "router": {
