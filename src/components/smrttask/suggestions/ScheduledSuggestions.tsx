@@ -67,7 +67,9 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
           .eq("user_id", user.id)
           .eq("status", "snoozed")
           .not("snoozed_until", "is", null)
-          .order("snoozed_until", { ascending: true })
+          // Order by WHEN it was snoozed (status_changed_at), freshest first —
+          // the user scans "what did I just push off", not "what wakes first".
+          .order("status_changed_at", { ascending: false })
           .limit(200);
         setSnoozed((snoozedRows as SnoozedTaskRow[] | null) ?? []);
       } else {

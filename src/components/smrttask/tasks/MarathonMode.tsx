@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Zap, X, SkipForward, Scale, Trophy } from "lucide-react";
+import { Zap, X, SkipForward, Scale, Trophy, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ManualTaskInput } from "./ManualTaskInput";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -32,17 +33,20 @@ function fmtClock(totalSeconds: number): string {
 export function MarathonMode({
   tasks,
   locale,
+  mode = "quick",
   onComplete,
-  onMakeRegular,
+  onReclassify,
   onExit,
 }: {
-  /** The quick desk tasks, in display order. */
+  /** The desk tasks of this run's column, in display order. */
   tasks: Task[];
   locale: string;
+  /** Which column is being run — flips the reclassify button's direction. */
+  mode?: "quick" | "regular";
   /** Completes the task (caller hits the API + refreshes its lists). */
   onComplete: (taskId: string) => Promise<void>;
-  /** "This isn't quick" — flips the task to regular and drops it from the run. */
-  onMakeRegular: (taskId: string) => Promise<void>;
+  /** "Wrong column" — flips the task's size and drops it from the run. */
+  onReclassify: (taskId: string) => Promise<void>;
   onExit: () => void;
 }) {
   const t = useTranslations("marathon");
@@ -54,6 +58,7 @@ export function MarathonMode({
   const [skipCount, setSkipCount] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [newItemOpen, setNewItemOpen] = useState(false);
   const [finish, setFinish] = useState<{ stats: MarathonStats; prev: MarathonStats; seconds: number } | null>(null);
   const runIdRef = useRef<string | null>(null);
   const closedRef = useRef(false);
@@ -118,11 +123,11 @@ export function MarathonMode({
     else setIndex(index + 1);
   }
 
-  async function handleNotQuick() {
+  async function handleReclassify() {
     if (!current || busy) return;
     setBusy(true);
     try {
-      await onMakeRegular(current.id);
+      await onReclassify(current.id);
       const nextSkip = skipCount + 1;
       setSkipCount(nextSkip);
       if (index + 1 >= queue.length) await finishRun(doneCount, nextSkip);
@@ -156,7 +161,7 @@ export function MarathonMode({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
-      {/* Header: timer + progress + exit */}
+      {/* Header: timer + progress + new-item + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span className="flex items-center gap-1.5 font-mono text-lg font-bold tabular-nums" dir="ltr">
           {fmtClock(seconds)}
@@ -165,10 +170,29 @@ export function MarathonMode({
           {t("progress", { done: doneCount, total: queue.length })}
         </span>
         <span className="text-xs text-muted-foreground">{t("remaining", { count: remaining })}</span>
-        <Button variant="ghost" size="icon" className="ms-auto" onClick={handleExit} aria-label={t("exit")}>
+        {/* Things pop into your head mid-run — capture them without leaving.
+            The timer keeps running. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ms-auto"
+          onClick={() => setNewItemOpen(true)}
+          aria-label={t("newItem")}
+          title={t("newItem")}
+        >
+          <Plus className="h-5 w-5" />
+        </Button>
+        <Button variant="ghost" size="icon" onClick={handleExit} aria-label={t("exit")}>
           <X className="h-5 w-5" />
         </Button>
       </div>
+
+      {/* New task/info capture — rendered above the full-screen run. */}
+      <ManualTaskInput
+        open={newItemOpen}
+        onClose={() => setNewItemOpen(false)}
+        onCreated={() => setNewItemOpen(false)}
+      />
 
       {/* The one task */}
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
@@ -195,9 +219,9 @@ export function MarathonMode({
           <SkipForward className="h-4 w-4" />
           {t("skip")}
         </Button>
-        <Button size="lg" variant="ghost" className="h-14 gap-2 text-muted-foreground" onClick={handleNotQuick} disabled={busy || !current}>
+        <Button size="lg" variant="ghost" className="h-14 gap-2 text-muted-foreground" onClick={handleReclassify} disabled={busy || !current}>
           <Scale className="h-4 w-4" />
-          {t("notQuick")}
+          {mode === "quick" ? t("notQuick") : t("isQuick")}
         </Button>
       </div>
     </div>

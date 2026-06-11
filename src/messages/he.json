@@ -335,10 +335,12 @@
       "dateLabel": "תאריך",
       "timeLabel": "שעה",
       "confirmButton": "אישור",
-      "presetTomorrow": "מחר 09:00",
+      "presetTomorrow": "מחר 9:00",
       "presetTomorrowEvening": "מחר 18:00",
       "presetNextWeek": "שבוע הבא",
-      "pastDeadline": "אי אפשר לנדנד מעבר ליעד ({date}) — המשימה תוסתר עד אחרי הדדליין"
+      "pastDeadline": "אי אפשר לנדנד מעבר ליעד ({date}) — המשימה תוסתר עד אחרי הדדליין",
+      "presetTomorrowNoon": "מחר 15:00",
+      "presetTwoWorkdays": "עוד 2 ימי עסקים, 9:00"
     },
     "materials": {
       "title": "חומר רקע",
@@ -367,7 +369,10 @@
       "saveEdit": "שמור",
       "promoteItem": "המר למשימה",
       "promotedToast": "הפריט הומר למשימה חדשה",
-      "aiBadge": "AI"
+      "aiBadge": "AI",
+      "copy": "העתק את כל הרשימה",
+      "copied": "הרשימה הועתקה",
+      "copyFailed": "ההעתקה נכשלה"
     },
     "search": {
       "placeholder": "חפש משימות, T<מס׳>, או מקור G/S/W/E/D/C<מס׳>...",
@@ -375,7 +380,9 @@
       "groupSuggestions": "הצעות",
       "groupTasks": "משימות",
       "noResults": "לא נמצאו תוצאות",
-      "naturalLanguage": "מה עם הבנק?"
+      "naturalLanguage": "מה עם הבנק?",
+      "clear": "נקה חיפוש",
+      "snoozedUntil": "מנודנד עד {when}"
     },
     "smartInput": {
       "placeholder": "הוסף משימה בשפה טבעית...",
@@ -2454,7 +2461,9 @@
     "bestSoFar": "השיא שלך: {count} משימות בריצה אחת",
     "pace": "קצב: משימה כל {time}",
     "weekSummary": "השבוע: {runs} ריצות, {completed} משימות",
-    "backToDesk": "חזרה לשולחן"
+    "backToDesk": "חזרה לשולחן",
+    "isQuick": "זה מהיר",
+    "newItem": "משימה/מידע חדש"
   },
   "planProposals": {
     "sectionTitle": "שיבוצים מתוכניות",

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { IconButton } from "@/components/ui/icon-button";
-import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check } from "lucide-react";
+import { Plus, X, Sparkles, GripVertical, ArrowUpRight, Pencil, Check, Copy } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -33,6 +33,11 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
 
+  // Serializes whole-array PATCHes: two rapid optimistic adds must apply in
+  // order, otherwise the earlier (shorter) array can land last and silently
+  // drop the newer item.
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve());
+
   // Native HTML5 drag-and-drop. Records the index of the row being dragged so
   // we can compute the new order on drop. dragOverIdx is used for the highlight.
   const dragFromIdx = useRef<number | null>(null);
@@ -59,7 +64,7 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
     }
   }
 
-  async function handleAdd() {
+  function handleAdd() {
     const title = draft.trim();
     if (!title) return;
     const now = new Date().toISOString();
@@ -71,10 +76,14 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
       completed_at: null,
       created_by: "user",
     };
+    // Optimistic: the row appears and the input is ready for the NEXT item
+    // immediately — the save runs in the background (persist rolls back on
+    // failure). No await: awaiting here was the Enter-lag the user felt.
+    // Chained so rapid adds can't apply out of order server-side.
     setDraft("");
-    await persist([...localItems, newItem]);
-    // Stay in add-mode and refocus so the user can rattle off items one after
-    // another, each saved on Enter.
+    const next = [...localItems, newItem];
+    setLocalItems(next);
+    persistChainRef.current = persistChainRef.current.then(() => persist(next));
     setAdding(true);
     requestAnimationFrame(() => addInputRef.current?.focus());
   }
@@ -82,6 +91,19 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
   function openAdd() {
     setAdding(true);
     requestAnimationFrame(() => addInputRef.current?.focus());
+  }
+
+  /** Copy the whole checklist as plain text (e.g. to paste into an AI fix). */
+  async function handleCopyAll() {
+    const text = localItems
+      .map((it) => `- [${it.done ? "x" : " "}] ${it.title}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(t("copied"));
+    } catch {
+      toast.error(t("copyFailed"));
+    }
   }
 
   async function handleToggle(id: string) {
@@ -202,6 +224,16 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
           <Plus />
         </IconButton>
         {total > 0 && (
+          <IconButton
+            label={t("copy")}
+            color="neutral"
+            className="h-6 w-6 min-h-0 min-w-0 [&_svg]:size-3.5"
+            onClick={handleCopyAll}
+          >
+            <Copy />
+          </IconButton>
+        )}
+        {total > 0 && (
           <span className="ms-auto text-[11px] font-normal normal-case">
             {t("progress", { done, total })}
           </span>
@@ -321,9 +353,11 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
           );
         })}
 
-        {/* Add row — revealed by the + next to the heading. Enter saves and
-            keeps the row open for the next item; empty Enter / Escape / blur
-            closes it. */}
+        {/* Add row — revealed by either + (heading or bottom). Enter saves
+            instantly and keeps the row open for the next item; empty Enter /
+            Escape / blur closes it. NOT disabled while saving — typing the
+            next item must never wait for the previous save. dir comes from
+            the prop so the empty placeholder is right-aligned in Hebrew. */}
         {adding && (
           <Input
             ref={addInputRef}
@@ -339,10 +373,21 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
             }}
             onBlur={() => { if (!draft.trim()) setAdding(false); }}
             placeholder={t("addPlaceholder")}
-            dir="auto"
+            dir={dir}
             className="h-8 text-sm"
-            disabled={saving}
           />
+        )}
+
+        {/* Bottom + — same add flow, handy on long lists. */}
+        {!adding && total > 0 && (
+          <button
+            type="button"
+            onClick={openAdd}
+            className="flex w-full items-center gap-1.5 rounded border border-dashed px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("addButton")}
+          </button>
         )}
       </div>
     </div>

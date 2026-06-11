@@ -335,10 +335,12 @@
       "dateLabel": "Date",
       "timeLabel": "Time",
       "confirmButton": "Snooze",
-      "presetTomorrow": "Tomorrow 9 AM",
+      "presetTomorrow": "Tomorrow 9:00",
       "presetTomorrowEvening": "Tomorrow 6 PM",
       "presetNextWeek": "Next week",
-      "pastDeadline": "Cannot snooze past the deadline ({date}) — the task would hide until it is already late"
+      "pastDeadline": "Cannot snooze past the deadline ({date}) — the task would hide until it is already late",
+      "presetTomorrowNoon": "Tomorrow 15:00",
+      "presetTwoWorkdays": "+2 working days, 9:00"
     },
     "materials": {
       "title": "Background Materials",
@@ -367,7 +369,10 @@
       "saveEdit": "Save",
       "promoteItem": "Convert to task",
       "promotedToast": "Item converted to a new task",
-      "aiBadge": "AI"
+      "aiBadge": "AI",
+      "copy": "Copy the whole list",
+      "copied": "List copied",
+      "copyFailed": "Copy failed"
     },
     "search": {
       "placeholder": "Search tasks, T<#>, or source G/S/W/E/D/C<#>...",
@@ -375,7 +380,9 @@
       "groupSuggestions": "Suggestions",
       "groupTasks": "Tasks",
       "noResults": "No results",
-      "naturalLanguage": "What about the bank?"
+      "naturalLanguage": "What about the bank?",
+      "clear": "Clear search",
+      "snoozedUntil": "Snoozed until {when}"
     },
     "smartInput": {
       "placeholder": "Add task in natural language...",
@@ -2455,7 +2462,9 @@
     "bestSoFar": "Your best: {count} tasks in one run",
     "pace": "Pace: a task every {time}",
     "weekSummary": "This week: {runs} runs, {completed} tasks",
-    "backToDesk": "Back to the desk"
+    "backToDesk": "Back to the desk",
+    "isQuick": "Actually quick",
+    "newItem": "New task/info"
   },
   "planProposals": {
     "sectionTitle": "Plan assignments",

@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { addWorkdays } from "@/lib/workdays";
 
 interface Props {
   open: boolean;
@@ -33,9 +35,17 @@ interface Props {
  * needs *some* concrete moment to resurface, and shipping without a time
  * input would force the same hardcoded 09:00 the user is trying to escape.
  */
+function localISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props) {
   const t = useTranslations("tasks.snooze");
   const tCommon = useTranslations("common");
+  const blocked = useWorkCalendar();
   const [date, setDate] = useState("");
   const [time, setTime] = useState("09:00");
   const [submitting, setSubmitting] = useState(false);
@@ -58,19 +68,31 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
     setTime("09:00");
   }, [open, effMax]);
 
-  function presetDate(daysAhead: number): string {
-    const d = new Date();
-    d.setDate(d.getDate() + daysAhead);
-    return d.toISOString().slice(0, 10);
+  // The three presets: tomorrow 09:00 · tomorrow 15:00 · +2 working days 09:00.
+  // Clicking one APPLIES IMMEDIATELY (no confirm click).
+  const presets: { key: string; date: Date; hour: number }[] = (() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return [
+      { key: "presetTomorrow", date: tomorrow, hour: 9 },
+      { key: "presetTomorrowNoon", date: tomorrow, hour: 15 },
+      { key: "presetTwoWorkdays", date: addWorkdays(new Date(), 2, blocked), hour: 9 },
+    ];
+  })();
+
+  function presetBlockedBy(d: Date): boolean {
+    return !!effMax && localISODate(d) > effMax;
   }
 
-  function presetBlocked(daysAhead: number): boolean {
-    return !!effMax && presetDate(daysAhead) > effMax;
-  }
-
-  function setPreset(daysAhead: number, hour: number) {
-    setDate(presetDate(daysAhead));
-    setTime(`${String(hour).padStart(2, "0")}:00`);
+  async function applyPreset(d: Date, hour: number) {
+    const when = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0);
+    setSubmitting(true);
+    try {
+      await onConfirm(when.toISOString());
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const pastDeadline = !!effMax && !!date && date > effMax;
@@ -119,17 +141,19 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, maxDate }: Props
         </DialogHeader>
 
         <div className="space-y-3 py-2">
-          {/* Quick presets — cover the 90% of cases without typing. */}
+          {/* Quick presets — one tap snoozes and closes, no confirm needed. */}
           <div className="flex gap-2 flex-wrap">
-            <Button size="sm" variant="outline" onClick={() => setPreset(1, 9)} disabled={submitting || presetBlocked(1)}>
-              {t("presetTomorrow")}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreset(1, 18)} disabled={submitting || presetBlocked(1)}>
-              {t("presetTomorrowEvening")}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreset(7, 9)} disabled={submitting || presetBlocked(7)}>
-              {t("presetNextWeek")}
-            </Button>
+            {presets.map((p) => (
+              <Button
+                key={p.key}
+                size="sm"
+                variant="outline"
+                onClick={() => applyPreset(p.date, p.hour)}
+                disabled={submitting || presetBlockedBy(p.date)}
+              >
+                {t(p.key)}
+              </Button>
+            ))}
           </div>
 
           <div className="grid grid-cols-2 gap-2">

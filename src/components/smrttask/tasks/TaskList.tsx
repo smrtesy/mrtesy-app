@@ -3,6 +3,23 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskRow } from "./TaskRow";
@@ -23,7 +40,7 @@ import {
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -34,6 +51,30 @@ type ContextFilter = "all" | "home" | "work";
 /** Plan metadata (needs/blocked state) for MY plan tasks, keyed by task id. */
 interface PlanMeta {
   needs: TaskNeed[];
+}
+
+/** Sortable wrapper for a desk row: grip handle + dnd-kit transform. */
+function SortableDeskRow({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
+      className="flex items-center gap-1"
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        type="button"
+        className="shrink-0 touch-none cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground"
+        aria-label="drag"
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
 }
 
 /**
@@ -51,6 +92,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const router = useRouter();
   const pathname = usePathname();
   const blocked = useWorkCalendar();
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [planMeta, setPlanMeta] = useState<Map<string, PlanMeta>>(new Map());
@@ -60,7 +105,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [contextFilter, setContextFilter] = useState<ContextFilter>("all");
-  const [marathonOpen, setMarathonOpen] = useState(false);
+  const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
   const focusId = searchParams.get("focus");
@@ -340,8 +385,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     { key: "work", label: t("contextFilter.work"), icon: Briefcase },
   ];
 
-  function renderRows(list: Task[], zone: "desk" | "waiting") {
-    return list.map((task) => (
+  function renderRow(task: Task, zone: "desk" | "waiting") {
+    return (
       <TaskRow
         key={task.id}
         task={task}
@@ -357,7 +402,56 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         onSizeToggle={handleSizeToggle}
         onDueChange={task.plan_id ? undefined : handleDueChange}
       />
-    ));
+    );
+  }
+
+  function renderRows(list: Task[], zone: "desk" | "waiting") {
+    return list.map((task) => renderRow(task, zone));
+  }
+
+  /** Drag-reorder within ONE desk column. Persists the new order by writing
+   *  today_position (0..n) to every row of that column — auto-promoted rows
+   *  get pinned by this, which is exactly what a manual reorder means. */
+  function handleColumnDragEnd(column: Task[]) {
+    return async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = column.findIndex((row) => row.id === active.id);
+      const newIndex = column.findIndex((row) => row.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
+      const reordered = arrayMove(column, oldIndex, newIndex);
+      const posById = new Map(reordered.map((row, i) => [row.id, i]));
+      setTasks((prev) =>
+        prev.map((row) => (posById.has(row.id) ? { ...row, today_position: posById.get(row.id)! } : row)),
+      );
+      try {
+        await Promise.all(
+          reordered.map((row, i) =>
+            api(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
+          ),
+        );
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Error");
+        fetchTasks();
+      }
+    };
+  }
+
+  /** A desk column with drag-to-reorder (grip handle per row). */
+  function renderDeskColumn(column: Task[]) {
+    return (
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleColumnDragEnd(column)}>
+        <SortableContext items={column.map((row) => row.id)} strategy={verticalListSortingStrategy}>
+          <div className="space-y-1.5">
+            {column.map((task) => (
+              <SortableDeskRow key={task.id} id={task.id}>
+                {renderRow(task, "desk")}
+              </SortableDeskRow>
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+    );
   }
 
   return (
@@ -417,7 +511,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                     size="sm"
                     variant="outline"
                     className="ms-auto h-7 gap-1 text-xs"
-                    onClick={() => setMarathonOpen(true)}
+                    onClick={() => setMarathonMode("quick")}
                   >
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
@@ -429,22 +523,35 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   {t("desk.emptyQuick")}
                 </p>
               ) : (
-                <div className="space-y-1.5">{renderRows(deskQuick, "desk")}</div>
+                renderDeskColumn(deskQuick)
               )}
             </div>
 
-            {/* Regular */}
+            {/* Regular — same run feature as the quick column */}
             <div>
-              <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                {t("desk.regular")}
-                <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
-              </h2>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  {t("desk.regular")}
+                  <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
+                </h2>
+                {deskRegular.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ms-auto h-7 gap-1 text-xs"
+                    onClick={() => setMarathonMode("regular")}
+                  >
+                    <Play className="h-3 w-3" />
+                    {t("desk.startRun")}
+                  </Button>
+                )}
+              </div>
               {deskRegular.length === 0 ? (
                 <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
                   {t("desk.emptyRegular")}
                 </p>
               ) : (
-                <div className="space-y-1.5">{renderRows(deskRegular, "desk")}</div>
+                renderDeskColumn(deskRegular)
               )}
             </div>
           </section>
@@ -501,20 +608,26 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     </div>
     </CombinedSearch>
 
-      {marathonOpen && (
+      {marathonMode && (
         <MarathonMode
-          tasks={deskQuick}
+          key={marathonMode}
+          tasks={marathonMode === "quick" ? deskQuick : deskRegular}
           locale={locale}
+          mode={marathonMode}
           onComplete={async (taskId) => {
             const task = tasks.find((row) => row.id === taskId);
             if (task) await completeTask(task);
             fetchTasks();
           }}
-          onMakeRegular={async (taskId) => {
-            await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { size: "regular" } });
+          onReclassify={async (taskId) => {
+            // "Wrong column" — flip to the OTHER size and drop from this run.
+            await api(`/api/tasks/${taskId}`, {
+              method: "PATCH",
+              body: { size: marathonMode === "quick" ? "regular" : "quick" },
+            });
             fetchTasks();
           }}
-          onExit={() => { setMarathonOpen(false); fetchTasks(); }}
+          onExit={() => { setMarathonMode(null); fetchTasks(); }}
         />
       )}
 

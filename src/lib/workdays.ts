@@ -56,6 +56,17 @@ export function todayISO(): string {
   return toISODate(new Date());
 }
 
+/** Add n WORKING days to a local Date (result lands on a working day). */
+export function addWorkdays(from: Date, n: number, blocked: BlockedDays): Date {
+  const cur = new Date(from);
+  let left = n;
+  for (let i = 0; i < 400 && left > 0; i++) {
+    cur.setDate(cur.getDate() + 1);
+    if (isWorkingDay(cur, blocked)) left--;
+  }
+  return cur;
+}
+
 export type DueUrgency = "overdue" | "today" | "soon" | "far";
 
 /** Working days within which a deadline counts as "soon" (the desk rule). */

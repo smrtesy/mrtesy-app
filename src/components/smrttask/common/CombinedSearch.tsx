@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Search } from "lucide-react";
+import { Search, X, Clock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -192,8 +192,19 @@ export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchPro
             value={query}
             onChange={(e) => handleChange(e.target.value)}
             placeholder={t("placeholder")}
-            className="ps-8 h-8 text-sm text-start"
+            className="ps-8 pe-7 h-8 text-sm text-start"
           />
+          {query && (
+            <button
+              type="button"
+              onClick={() => handleChange("")}
+              aria-label={t("clear")}
+              title={t("clear")}
+              className="absolute end-1.5 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
           <input
@@ -282,9 +293,15 @@ function ResultCard({
   locale: string;
   onSelect: (t: Task) => void;
 }) {
+  const t = useTranslations("tasks.search");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const due = task.due_date
     ? formatDateOnly(task.due_date, locale, { day: "numeric", month: "short" })
+    : null;
+  const snoozedUntil = task.status === "snoozed" && task.snoozed_until
+    ? new Date(task.snoozed_until).toLocaleString(locale === "he" ? "he-IL" : "en-US", {
+        day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit",
+      })
     : null;
 
   return (
@@ -299,6 +316,13 @@ function ResultCard({
         {task.projects && (
           <span className="inline-flex items-center rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {locale === "he" && task.projects.name_he ? task.projects.name_he : task.projects.name}
+          </span>
+        )}
+        {/* A snoozed result says so — with when it wakes. */}
+        {snoozedUntil && (
+          <span className="inline-flex items-center gap-0.5 rounded-md bg-status-warn-bg px-1.5 py-0.5 text-[10px] font-medium text-status-warn">
+            <Clock className="h-3 w-3" />
+            {t("snoozedUntil", { when: snoozedUntil })}
           </span>
         )}
         {due && <span className="text-[10px] text-muted-foreground">{due}</span>}

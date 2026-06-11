@@ -1894,6 +1894,23 @@ function dayDiff(a: string | null, b: string | null): number | null {
   return Math.abs(ta - tb) / 86_400_000;
 }
 
+// Hebrew titles are verb-first formulas; stopwords like לעקוב/לבדוק/לגבי would
+// make every pair of follow-up tasks "overlap". Keep meaningful words only.
+const TITLE_STOPWORDS = new Set([
+  "לעקוב", "לבדוק", "לוודא", "לענות", "להשיב", "לאשר", "לשלוח", "להתקשר",
+  "לתאם", "לטפל", "מול", "עם", "על", "של", "את", "לגבי", "אצל", "עד",
+  "the", "for", "and", "with", "from",
+]);
+
+/** Meaningful word tokens (len ≥ 3, minus formula stopwords) for overlap recall. */
+function textTokens(text: string | null | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const w of String(text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (w.length >= 3 && !TITLE_STOPWORDS.has(w)) out.add(w);
+  }
+  return out;
+}
+
 // Build a probe from the raw inbound message. Contact emails/phones are pulled
 // from the sender, the recipients, the AI-supplied owner_contact (when present)
 // and the head of the body — calendar events carry the assessor's email only
@@ -1941,8 +1958,13 @@ async function findDuplicateOpenTask(
   sys: SystemParams,
   refId: string,
 ): Promise<{ taskId: string; serial: string; confidence: "high" | "medium"; reason: string; closed: boolean } | null> {
-  // No signal to match on → skip entirely (no DB read, no AI call).
-  if (probe.emails.size === 0 && probe.phones.size === 0 && !probe.dueDate) return null;
+  // Need SOMETHING to match on. Contact/date are the strong signals, but many
+  // WhatsApp items carry neither — for those the TEXT is the signal
+  // (token-overlap recall below). For WhatsApp, probe.title is the chat's
+  // display name (a contact name, ~1 token), so fold in the message body's
+  // head too; only a signal-less AND text-less probe skips entirely.
+  const titleTokens = textTokens(`${probe.title} ${probe.description.slice(0, 300)}`);
+  if (probe.emails.size === 0 && probe.phones.size === 0 && !probe.dueDate && titleTokens.size < 2) return null;
 
   const cols = "id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone, status";
   const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
@@ -1984,10 +2006,13 @@ async function findDuplicateOpenTask(
   if (pool.length === 0) return null;
 
   // Deterministic recall: keep only tasks that share a contact OR fall within
-  // 3 days of the probe date. Contact extraction reads BOTH the structured
-  // columns AND the free-text related_contact field, because Sonnet often
-  // packs the email/phone into related_contact ("Robin Speary — robin@x.com —
-  // (212)…") and leaves related_contact_email null.
+  // 3 days of the probe date OR overlap the title on 2+ meaningful tokens.
+  // The title path is what catches the contact-less WhatsApp case ("לעקוב מול
+  // דובי … החבילות" arriving twice with no email/phone on either) — without
+  // it those items were never dup-checked at all. Contact extraction reads
+  // BOTH the structured columns AND the free-text related_contact field,
+  // because Sonnet often packs the email/phone into related_contact
+  // ("Robin Speary — robin@x.com — (212)…") and leaves the column null.
   const candidates = (pool as any[]).filter((t) => {
     const tEmails = extractEmails(t.related_contact_email, t.related_contact);
     const tPhones = extractPhones(t.related_contact_phone, t.related_contact);
@@ -1998,7 +2023,16 @@ async function findDuplicateOpenTask(
       [...probe.domains].some((d) => tDomains.has(d));
     const dist = dayDiff(probe.dueDate, t.due_date);
     const dateHit = dist !== null && dist <= 3;
-    return contactHit || dateHit;
+    let titleHit = false;
+    if (titleTokens.size >= 2) {
+      const tTokens = textTokens(`${t.title_he || ""} ${t.title || ""} ${String(t.description || "").slice(0, 300)}`);
+      let shared = 0;
+      for (const tok of titleTokens) if (tTokens.has(tok)) shared++;
+      // 3+ shared meaningful tokens — title+description text on both sides
+      // makes 2 too easy to hit by accident; the Haiku gate still decides.
+      titleHit = shared >= 3;
+    }
+    return contactHit || dateHit || titleHit;
   }).slice(0, 12);
 
   if (candidates.length === 0) return null;
@@ -2550,6 +2584,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // misleading (and merging into a done task is nonsensical).
         dupSuggestionTaskId = dup.taskId;
         classificationReason = `possible duplicate of ${dup.serial || dup.taskId} (medium) — ${dup.reason}`;
+      } else if (dup && dup.confidence === "medium" && dup.closed) {
+        // Closed target → no merge banner, but DO say it in the reasoning so
+        // the ✨ panel shows "possibly a re-send of something already handled".
+        classificationReason = `possible duplicate of already-handled ${dup.serial || dup.taskId} (medium, closed) — ${dup.reason}`;
       }
     } catch (e) {
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_dupe", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });

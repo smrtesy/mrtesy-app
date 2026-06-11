@@ -333,13 +333,33 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     }
   }
 
+  // An unverified→verified flip is "the suggestion was approved" — read the
+  // prior value first so we log the TRANSITION only (a repeated verified:true
+  // patch, e.g. a double-click, must not write duplicate audit rows).
+  let wasVerified: boolean | null = null;
+  if (updates.manually_verified === true) {
+    const { data: prior } = await db
+      .from("tasks")
+      .select("manually_verified")
+      .eq("organization_id", req.org!.id)
+      .eq("id", req.params.id)
+      .maybeSingle();
+    wasVerified = prior ? prior.manually_verified === true : null;
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
+  // A position-only patch (drag-reorder writes today_position to every row of
+  // a column) is NOT the user touching those tasks — it must not reset the
+  // aging clock or clear the snooze-return chip.
+  const positionOnly = Object.keys(updates).every((k) => k === "today_position");
   updates.updated_at = new Date().toISOString();
-  // Every user-driven edit counts as an interaction (aging clock) and clears
-  // the "returned from snooze" chip — unless the patch sets the chip itself.
-  updates.last_interaction_at = updates.updated_at;
-  if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
+  if (!positionOnly) {
+    // Every user-driven edit counts as an interaction (aging clock) and clears
+    // the "returned from snooze" chip — unless the patch sets the chip itself.
+    updates.last_interaction_at = updates.updated_at;
+    if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
+  }
 
   const { data, error } = await db
     .from("tasks")
@@ -351,6 +371,21 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
 
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
+
+  // Forensics: record the approve transition — see the June-2026 ספרלין case
+  // ("how did this suggestion become a task?").
+  if (updates.manually_verified === true && wasVerified === false) {
+    const { error: actErr } = await db.from("task_activities").insert({
+      user_id: req.user!.id,
+      task_id: req.params.id,
+      activity_type: "approved",
+      new_value: "verified",
+      note: "approved via PATCH (suggestion → task)",
+      actor: "user",
+    });
+    if (actErr) console.error("[tasks PATCH] approve activity log failed:", actErr.message);
+  }
+
   res.json({ task: data });
 });
 
@@ -1335,14 +1370,33 @@ router.post("/tasks/bulk-approve", async (req: Request, res: Response) => {
   if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
 
   const now = new Date().toISOString();
-  const { count, error } = await db
+  const { data: touched, error } = await db
     .from("tasks")
-    .update({ manually_verified: true, seen_at: now }, { count: "exact" })
+    .update({ manually_verified: true, seen_at: now })
     .eq("organization_id", req.org!.id)
-    .in("id", ids);
+    .in("id", ids)
+    .select("id");
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ ok: true, approved_count: count ?? 0 });
+  // Forensics — same as the single-task approve flip in PATCH. Log only the
+  // rows the org-scoped update ACTUALLY touched (a bogus/cross-org id in the
+  // request must neither fail the batch on FK nor write a false record).
+  const touchedIds = (touched ?? []).map((r) => r.id as string);
+  if (touchedIds.length > 0) {
+    const { error: actErr } = await db.from("task_activities").insert(
+      touchedIds.map((id) => ({
+        user_id: req.user!.id,
+        task_id: id,
+        activity_type: "approved",
+        new_value: "verified",
+        note: "approved via bulk-approve",
+        actor: "user",
+      })),
+    );
+    if (actErr) console.error("[bulk-approve] activity log failed:", actErr.message);
+  }
+
+  res.json({ ok: true, approved_count: touchedIds.length });
 });
 
 /** POST /tasks/bulk-dismiss-fast
