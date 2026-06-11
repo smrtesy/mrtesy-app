@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSuperAdmin } from "@/lib/api/use-super-admin";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { cn } from "@/lib/utils";
+import { DatePicker } from "@/components/ui/date-picker";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
 import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDays } from "@/lib/smrtplan/dates";
@@ -587,15 +588,15 @@ function TaskRow({
           </span>
         ) : null}
         {canEdit && editDue ? (
-          <input
-            type="date"
-            autoFocus
-            defaultValue={task.due_date ?? ""}
-            onClick={stop}
-            onChange={(e) => { onPatch({ due_date: e.target.value || null }); setEditDue(false); }}
-            onBlur={() => setEditDue(false)}
-            className="rounded-md border border-input bg-background px-1.5 py-0.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+          <div onClick={stop}>
+            <DatePicker
+              autoOpen
+              value={task.due_date ?? ""}
+              onChange={(v) => { onPatch({ due_date: v || null }); setEditDue(false); }}
+              onClose={() => setEditDue(false)}
+              className="h-7 w-auto px-1.5 py-0.5 text-[11px]"
+            />
+          </div>
         ) : deadline && zone !== "done" ? (
           <button
             type="button"
@@ -728,7 +729,7 @@ function NewTaskRow({
         <option value="in_progress">{te("statusInProgress")}</option>
         <option value="archived">{te("statusDone")}</option>
       </select>
-      <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
+      <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={due} onChange={setDue} />
       <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
         onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
       <button onClick={save} disabled={busy || !title.trim()}
@@ -868,7 +869,7 @@ function EditTaskRow({
     <div className="my-2 space-y-2 rounded-lg border bg-secondary/40 p-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <input className={`${fieldCls} flex-1`} value={title} onChange={(e) => setTitle(e.target.value)} dir="rtl" />
-        <input type="date" className={fieldCls} value={due} onChange={(e) => setDue(e.target.value)} title={te("due")} />
+        <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={due} onChange={setDue} />
         <select className={fieldCls} value={status} onChange={(e) => setStatus(e.target.value as PlanTask["status"])}>
           <option value="inbox">{te("statusInbox")}</option>
           <option value="in_progress">{te("statusInProgress")}</option>

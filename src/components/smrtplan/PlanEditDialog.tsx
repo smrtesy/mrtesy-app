@@ -15,6 +15,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Plan, PlanKind, PlanStage, PlanStatus } from "@/types/plan";
@@ -199,12 +200,12 @@ export function PlanEditDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <Field label={te("start")}>
-              <input type="date" className={fieldCls} value={form.start_date}
-                onChange={(e) => set("start_date", e.target.value)} />
+              <DatePicker className="h-9 w-auto px-2 py-1 text-sm" value={form.start_date}
+                onChange={(v) => set("start_date", v)} />
             </Field>
             <Field label={te("end")}>
-              <input type="date" className={fieldCls} value={form.end_date}
-                onChange={(e) => set("end_date", e.target.value)} />
+              <DatePicker className="h-9 w-auto px-2 py-1 text-sm" value={form.end_date}
+                onChange={(v) => set("end_date", v)} />
             </Field>
           </div>
 

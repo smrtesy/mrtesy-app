@@ -9,6 +9,7 @@ import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Button } from "@/components/ui/button";
 import type { Plan } from "@/types/plan";
 import type { TaskNeed } from "@/types/task";
@@ -256,17 +257,20 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
 
   /** Commit the in-progress text/number/date edit of the active cell. */
   const commitDraft = useCallback(
-    (task: TableTask, col: NavCol) => {
+    // `valueOverride` lets value-based editors (the date picker) commit the
+    // chosen value directly, without waiting for the async `draft` state.
+    (task: TableTask, col: NavCol, valueOverride?: string) => {
+      const d = valueOverride ?? draft;
       if (col === "title") {
-        const v = draft.trim();
+        const v = d.trim();
         if (v && v !== (task.title_he || task.title)) {
           editField(task.id, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, te("actRename"), false);
         }
       } else if (col === "due") {
-        const v = draft || null;
+        const v = d || null;
         if (v !== task.due_date) editField(task.id, { due_date: v }, { due_date: task.due_date }, { due_date: v }, { due_date: task.due_date }, t("table.colDue"), true);
       } else if (col === "duration") {
-        const v = draft === "" ? null : Number(draft);
+        const v = d === "" ? null : Number(d);
         if (v !== task.duration_days) {
           editField(task.id, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, { duration_days: v, duration_manual: v != null }, { duration_days: task.duration_days, duration_manual: task.duration_manual }, t("table.colDuration"), true);
         }
@@ -778,7 +782,7 @@ function PlanGroup(props: {
   cellRef: React.MutableRefObject<HTMLElement | null>;
   onActivate: (r: number, c: number) => void;
   onEnterEdit: (r: number, c: number) => void;
-  onCommitDraft: (task: TableTask, col: NavCol) => void;
+  onCommitDraft: (task: TableTask, col: NavCol, valueOverride?: string) => void;
   onCommitSelect: (task: TableTask, col: NavCol, value: string) => void;
   onMove: (dir: "down" | "next") => void;
   onCancel: () => void;
@@ -912,10 +916,21 @@ function PlanGroup(props: {
 
         const textCell = (c: number, col: NavCol, display: string, kind: "text" | "date" | "number", opts?: { cls?: string; tooltip?: string }) => {
           if (isEdit(c)) {
+            if (kind === "date") {
+              return (
+                <DatePicker
+                  autoOpen
+                  value={props.draft}
+                  onChange={(v) => { props.setDraft(v); props.onCommitDraft(task, col, v); props.onMove("down"); }}
+                  onClose={() => props.onCancel()}
+                  className="h-7 w-full px-1.5 py-0.5 text-[12.5px]"
+                />
+              );
+            }
             return (
               <input
                 ref={(el) => { if (el) props.cellRef.current = el; }}
-                type={kind === "date" ? "date" : kind === "number" ? "number" : "text"}
+                type={kind === "number" ? "number" : "text"}
                 {...(kind === "number" ? { min: 0, step: 0.5 } : {})}
                 dir={kind === "text" ? "rtl" : undefined}
                 value={props.draft}

@@ -8,6 +8,13 @@ const supabase = createClient(
 
 interface SystemParams {
   classification_model: string;
+  // Model for the thread classifier (analyzeWithMemory) ONLY. Split from
+  // classification_model after the 2026-06 shadow eval (300 messages, Haiku
+  // vs Sonnet): Haiku mis-filed personal WhatsApp chats as spam, missed
+  // direct asks, and echoed invalid category labels. The mechanical jobs
+  // (wa_route, dupe_match, cross_link, project, checkFollowup) stay on the
+  // cheap classification_model.
+  classifier_model: string;
   summary_model: string;
   batch_size: number;
   processing_lock_minutes: number;
@@ -48,6 +55,7 @@ interface SystemParams {
 
 const FALLBACK_PARAMS: SystemParams = {
   classification_model: "claude-haiku-4-5-20251001",
+  classifier_model: "claude-sonnet-4-6",
   summary_model: "claude-sonnet-4-6",
   batch_size: 40,
   processing_lock_minutes: 10,
@@ -69,6 +77,7 @@ async function loadSystemParams(): Promise<SystemParams> {
   if (error || !data) return FALLBACK_PARAMS;
   return {
     classification_model: data.classification_model ?? FALLBACK_PARAMS.classification_model,
+    classifier_model: data.classifier_model ?? FALLBACK_PARAMS.classifier_model,
     summary_model: data.summary_model ?? FALLBACK_PARAMS.summary_model,
     batch_size: data.batch_size ?? FALLBACK_PARAMS.batch_size,
     processing_lock_minutes: data.processing_lock_minutes ?? FALLBACK_PARAMS.processing_lock_minutes,
@@ -341,7 +350,7 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
-async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
+async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }, prefillJson: boolean = false) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   // Sanitize every text field that goes into the JSON body. A lone surrogate
@@ -351,15 +360,23 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
     ? stripLoneSurrogates(system)
     : system.map((b) => ({ ...b, text: stripLoneSurrogates(b.text) }));
   const safeUserMessage = stripLoneSurrogates(userMessage);
+  // prefillJson forces the reply to START as a JSON object by prefilling the
+  // assistant turn with "{". Without it the model sometimes opens with a prose
+  // preamble ("Let me analyze…") and long replies get truncated by max_tokens
+  // before the JSON ever starts — 8/300 replies were lost that way in the
+  // 2026-06 shadow eval. The "{" is prepended back onto the returned text so
+  // callers parse a complete object.
+  const messages: Array<{ role: string; content: string }> = [{ role: "user", content: safeUserMessage }];
+  if (prefillJson) messages.push({ role: "assistant", content: "{" });
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages: [{ role: "user", content: safeUserMessage }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: safeSystem, messages }),
   });
   if (!resp.ok) { const err = await resp.text(); throw new Error(`Claude API ${resp.status}: ${err}`); }
   const data = await resp.json();
   const usage = {
-    text: data.content?.[0]?.text || "",
+    text: (prefillJson ? "{" : "") + (data.content?.[0]?.text || ""),
     inputTokens: data.usage?.input_tokens || 0,
     outputTokens: data.usage?.output_tokens || 0,
     cacheReadTokens: data.usage?.cache_read_input_tokens || 0,
@@ -506,7 +523,7 @@ async function analyzeWithMemory(
 ): Promise<ThreadAnalysis> {
   // modelOverride is set only on the escalation pass (see end of function), so
   // the recursion is bounded to a single re-run on the stronger model.
-  const model = modelOverride ?? sys.classification_model;
+  const model = modelOverride ?? sys.classifier_model;
   const myEmails: string[] = settings.my_emails ?? [];
   const officeAddresses: string[] = settings.office_addresses ?? [];
   const userName: string = settings.__userName ?? "";
@@ -539,350 +556,147 @@ async function analyzeWithMemory(
   // Static, message-invariant instructions → cached prefix (admin-editable via
   // ai_prompts key "edge_classifier"). Per-message context (identity, memory,
   // WhatsApp note) is appended to the user message below so the cache stays warm.
-  const staticPrompt = settings.__prompts?.classifier ?? `You are a message classifier and thread-state tracker for a personal task management system.
+  const staticPrompt = settings.__prompts?.classifier ?? `You are the message analyst for a personal task management system. For each
+incoming message you decide, in ONE JSON response: its classification, whether
+it resolves a tracked matter (completion), and the matter's updated Hebrew
+summary/title.
 
-═══ HARDEST RULE — READ FIRST ═══
-
-If the message comes from a service provider (lawyer, accountant, doctor's
-office, bank, vendor, agent, school, government office, contractor) and
-contains ANY of these signals:
-
-  • "we are looking into it"
-  • "we are working on it"
-  • "I'll get back to you"
-  • "we will update you"
-  • "we received your request/question/inquiry"
-  • "we are currently <verb-ing>"
-  • Hebrew equivalents: "אנחנו בודקים", "נחזור אליך", "נעדכן", "אנחנו עובדים על"
-
-then the classification is ACTIONABLE. No exceptions. The reasoning is:
-the user asked them to do something, they promised to follow up, and the
-user now needs a tracker so the promise does not silently expire. The
-title of the task should be in the form "לעקוב אחרי <party> על <topic>".
-
-NEVER classify such a message as INFORMATIONAL just because "no immediate
-step is required". The action IS the tracking.
-
-═══ SECOND-HARDEST RULE — A REPLY TO THE USER'S OWN REQUEST IS ACTIONABLE ═══
-
-If the message is a response, update, decision, or status notice about a
-request / claim / case / application / inquiry the USER themselves submitted —
-recognizable by signals such as:
-
-  • "regarding your request/claim/case/application #<number>"
-  • "your <Provider> request", "your claim", "case #", "reference #",
-    "request 48376432", "Read more details" about a case the user opened
-  • Hebrew: "בנוגע לבקשתך", "התביעה שלך", "מספר תיק", "בהמשך לפנייתך"
-  • a benefits administrator / insurer / bank / law office / government office
-    answering something the user initiated
-
-then the classification is ACTIONABLE — the user has an open matter with this
-party and needs to read the decision and act on it. Two failure modes this
-rule forbids:
-
-  (1) NEVER classify it as SPAM merely because the sender address looks
-      generic, third-party, or unfamiliar (e.g. an insurer's servicing domain
-      like virginiasurety.com acting for Chase), or because the visible body
-      is only legal boilerplate / a disclaimer with the real substance behind
-      a link, PDF, or "secure message" portal. A thin or boilerplate body on a
-      message that references the user's own request number is NOT evidence of
-      spam — it is a real reply whose content is one click away. When the
-      subject itself says "Important Information Regarding Your <X> Request
-      #<number>", treat it as a genuine, important reply.
-  (2) NEVER classify it as INFORMATIONAL just because it reads like a generic
-      system notification. An update on a request the user is actively waiting
-      on (e.g. "Your <Provider> request — Read more details — Case #…") is the
-      answer they have been expecting → ACTIONABLE, even with no thread memory
-      linking it.
-
-═══ FULL CLASSIFICATION RULES ═══
-
-You will receive the NEW message. Classify it AND update the running thread state in a single JSON response.
-
-Return ONLY a JSON object with this exact shape (Hebrew strings, no markdown):
+═══ OUTPUT — return ONLY this JSON object (Hebrew strings, no markdown) ═══
 {
   "classification": "ACTIONABLE" | "INFORMATIONAL" | "SPAM",
   "reason_he": "short Hebrew explanation",
-  "new_title_he": "Hebrew, ≤ 80 chars. The matter's CURRENT next action as of THIS message — what the user must do NEXT — NOT the original ask if that step is already done. Example: the original task was 'להגיש את טופס תוכנית התזונה'; once the user submitted it and the reply says a screening call is coming, the title becomes 'לעקוב אחרי שיחת הסינון ולשאול על דיור וחשמל'. Return an empty string ONLY when the next action is unchanged from the existing title.",
-  "new_summary": "Hebrew, ≤ 400 chars. LEAD with the current open question and who owes the next step RIGHT NOW. Do NOT open by recapping steps the user already completed (e.g. don't start with 'נרשם'/'שילם'/'שלח') — reference prior history only briefly and only if it clarifies the current state.",
+  "new_title_he": "Hebrew, ≤80 chars: the matter's CURRENT next action as of THIS message — what the user must do NEXT, not the original ask if that step is already done. Empty string when unchanged from the existing title.",
+  "new_summary": "Hebrew, ≤400 chars: lead with the current open question and who owes the next step RIGHT NOW. Do not open by recapping steps the user already completed.",
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
-  "completion_reason_he": "if completion=true, brief Hebrew explanation; else empty string",
+  "completion_reason_he": "brief Hebrew when completion=true, else empty string",
   "new_matter": true | false,
   "confidence": "high" | "low"
 }
 
-- confidence = your honest certainty about the "classification" field. Use
-  "low" — do not default to "high" — whenever ANY of these hold:
-    • You are torn between SPAM and a real message (e.g. an unfamiliar/generic
-      sender domain, but the subject ties it to the user's own request/case).
-    • You are torn between INFORMATIONAL and ACTIONABLE (e.g. it might be a
-      reply to something the user is waiting on, but you cannot be sure).
-    • The real substance is behind a link, PDF, attachment, or secure-message
-      portal you cannot read, so you are guessing from the envelope alone.
-    • The message is in a language/format you only partially parsed.
-  Use "high" only when the category is unambiguous from the text in front of
-  you. An honest "low" is far more useful than a confident wrong answer — a
-  stronger model gets a second look at exactly the messages you flag.
+═══ CLASSIFICATION — apply in this order; the FIRST matching rule wins ═══
 
-- ACTIONABLE = either (a) the user must take a concrete step now, OR
-  (b) the message is a pending matter the user MUST keep tracking until it
-  resolves. The HARDEST RULE above is the most common case of (b).
+R1. SPAM — clearly junk EMAIL only: unsolicited mass marketing from a party
+    with NO relationship to the user, phishing, obvious scams.
+    NEVER spam:
+    • a WhatsApp chat with a known contact — junk or promo content quoted
+      INSIDE a personal chat does not make the chat spam;
+    • any reply/update referencing a request, claim, case or application the
+      user submitted (even from an unfamiliar servicing domain, even when the
+      visible body is boilerplate and the substance sits behind a link, PDF
+      or secure portal — that is a real reply, one click away);
+    • mail from a service the user actually uses (their carrier, bank, tools,
+      subscriptions) — that is INFORMATIONAL at worst.
 
-  An EXPLICIT request or instruction DIRECTED AT THE USER — "can you do X",
-  "please send/check/call/bring Y", "תוכל ל…", "תשלח לי", "תבדוק", a direct
-  question awaiting the user's answer/decision — is ACTIONABLE (case a), EVEN
-  WHEN it continues an existing thread or matter the user is already tracking.
-  Do NOT downgrade a fresh ask to INFORMATIONAL merely because it arrived as a
-  follow-up inside a known conversation: the other party asking the user to act
-  is the user's action, regardless of thread history.
+R2. ACTIONABLE — match any one of:
+    a. An explicit ask, instruction or question DIRECTED AT THE USER awaiting
+       their answer or action ("תוכל ל…", "תשלח לי", "please check…") — even
+       when it arrives inside a thread that is already tracked. A fresh ask is
+       never downgraded to INFORMATIONAL just because the thread is known.
+    b. A service provider (lawyer, accountant, doctor, bank, vendor, agent,
+       school, government office) acknowledging the user's request with a
+       promise to follow up — "we are looking into it", "I'll get back to
+       you", "אנחנו בודקים", "נחזור אליך", "נעדכן". The user must track that
+       promise so it does not silently expire. Title: "לעקוב אחרי <party> על
+       <topic>". This holds even when no immediate step exists — the action
+       IS the tracking.
+    c. A response, decision or status notice about a matter the USER initiated
+       — "regarding your request/claim/case #<n>", "בנוגע לבקשתך", "מספר תיק"
+       — the user must read the decision and act on it.
+    d. A meeting / video-call invitation — a Teams / Zoom / Google Meet /
+       Webex join link or a "MEETING DETAILS" block — ALWAYS actionable, even
+       when the rest of the thread looks closed and even below quoted history.
+    e. Money or a benefit coming TO the user that they must claim, collect or
+       use: refund issued, grant awarded, food stamps / EBT approved, an
+       eligibility or appointment date. Title: "לממש/להשתמש ב<benefit> עד
+       <date>". A usable amount or an actionable date beats "it merely
+       confirms something known".
+    f. The user's own outgoing commitment ("אשלח", "אבדוק", "אחזור") → they
+       owe the follow-through; state=pending_user_action.
+    g. An ongoing pending matter that must not silently expire: legal case,
+       medical test or referral pending, loan / insurance application under
+       review, delivery in transit, vendor quote pending, negotiation in
+       progress.
 
-  Other ACTIONABLE pending matters (no immediate step, but must track):
-    • Legal case / collection / dispute in progress
-    • Medical test / lab work / specialist referral pending
-    • Loan / mortgage / refund application under review
-    • Insurance claim / appeal in progress
-    • Delivery in transit / order being prepared
-    • Vendor / contractor / agent quote pending
-    • Business deal / negotiation in progress
-    • Meeting / video-call invitation — a Teams / Zoom / Google Meet / Webex
-      join link, or a "MEETING DETAILS" block, means the user has a meeting to
-      attend. ALWAYS ACTIONABLE, even if the rest of the thread looks closed
-      and even if the link sits below quoted history.
-    • Benefit / grant / subsidy / refund / payment / entitlement coming TO the
-      user — especially when it carries an amount to collect or a future date to
-      claim or use (e.g. food-stamps / EBT approved, a grant awarded, a refund
-      issued, an eligibility or appointment date). The action is to REMEMBER and
-      USE / collect it. Do NOT mark this INFORMATIONAL just because the message
-      merely "confirms" something already known: a usable amount, or a date the
-      user must act on, makes it ACTIONABLE. Title in the form
-      "להשתמש ב<benefit>" / "לממש <benefit> עד <date>".
+R3. INFORMATIONAL — everything else; read-and-forget. Typical:
+    • marketing / newsletters from the user's own providers, system / CI /
+      monitoring notices, social pings;
+    • payment confirmation of a transaction the USER made and considers
+      closed (money going OUT — money coming IN is R2e);
+    • closure acknowledgements: "תודה", "סבבה", "👍", "all set";
+    • a REPEATED notification about a matter that is already tracked,
+      carrying no new information (a re-sent "ready for download", a second
+      identical reminder): the pipeline links it to the existing task — do not
+      treat the repetition itself as a new action and do not flag completion.
 
-- INFORMATIONAL = read-and-forget. No tracking needed. The user did not
-  initiate anything that requires a return response. Examples:
-    • Marketing / newsletter / sale / promotion
-    • Build, CI, server, monitoring notification ("deploy succeeded")
-    • Social-network ping
-    • Payment CONFIRMATION of a transaction the USER themselves made / initiated
-      and considers closed (money going OUT). NOTE: money or a benefit coming TO
-      the user that they still need to claim, collect, or use is ACTIONABLE — see
-      the benefit/entitlement bullet above.
-    • Closure acknowledgement: "thanks, all good", "סבבה", "תודה"
-    • System sender (Vercel, Railway, GitHub Actions) with no human follow-up
+Tie-breaks when genuinely uncertain:
+  • unsure whether the user must act → prefer ACTIONABLE (over-tracking is
+    cheaper than losing a pending matter);
+  • unsure between INFORMATIONAL and SPAM → prefer INFORMATIONAL (spam hides
+    the message from the user).
 
-- SPAM = clearly junk (unsolicited marketing blasts, phishing with no
-  relationship to the user, obvious scams). A message that references the
-  user's OWN request / claim / case / application by number, or is a reply
-  from a party the user contacted, is NEVER spam — see the SECOND-HARDEST
-  RULE above. Do not treat a generic sender domain or a boilerplate-only body
-  as a spam signal when the subject ties the message to the user's own case.
+═══ completion — did THIS message resolve the tracked matter? ═══
+completion=true when the open question the linked task tracks has been
+answered or closed: payment confirmed, decision communicated, the awaited
+information / quote / ETA / date provided, the other party closed the loop,
+or the user themselves accepted closure ("מעולה תודה", "קיבלתי", "👍",
+"all set") on a thread that HAS a linked task. classification and completion
+are independent — an INFORMATIONAL closure can still carry completion=true.
+  • A task titled "לעקוב אחרי X על Y" / "לחכות לתשובת X": when X has now
+    provided the awaited answer → completion=true, even before the user
+    replies. The system surfaces it for one-click confirmation.
+  • If the same message also opens a NEW request, still set completion=true
+    for the ORIGINAL question (one task = one open question); the new request
+    is the new_matter.
+  • Scheduling is NOT completion: confirming WHEN or HOW a future user action
+    will happen leaves completion=false until the action itself is done.
+    "אשלח מחר" → false. "שלחתי" → true.
+  • "I'll check and get back to you" is NOT completion — that is R2b
+    tracking, still pending.
+  • A bare "תודה" with no linked task stays INFORMATIONAL, completion=false.
 
-Default when uncertain: prefer ACTIONABLE over INFORMATIONAL. It is better
-to over-track than to lose visibility on a pending matter.
+═══ WORDING of reason_he / new_summary / new_title_he ═══
+W1. Register — three levels; never upgrade one into another:
+    (1) possibility — "אנסה", "אולי", "אם יהיה זמן", "I can try", "maybe"
+        → "אמר שינסה" / "ציין שאולי". NEVER "התחייב"/"הבטיח".
+    (2) plain intent — unhedged future: "אתקשר", "אשלח מחר", "I will call"
+        → "אמר שיתקשר" / "אמר שישלח". Plain future is NOT a commitment;
+        NEVER "התחייב"/"הבטיח" here either.
+    (3) explicit promise — "מבטיח", "מתחייב", "נשבע", "I promise / commit /
+        guarantee" → only here write "התחייב" / "הבטיח".
+    In doubt between (2) and (3) → "אמר ש…".
+W2. Grounding — attribute to each party ONLY what they literally said. A
+    vague "יטופל" / "we'll handle it" stays vague and quoted ('אמר ש"יטופל"');
+    never expand it into a specific commitment. A topic one party raised does
+    not become the other party's obligation. Never invent names, numbers or
+    dates absent from the message.
+W3. Supersession — describe the situation AS OF the latest line. When a newer
+    line cancels a premise (a meeting postponed, a contingent time window
+    voided), DROP the stale fact entirely — never state both. A postponed
+    blocker WIDENS availability. Use the [INCOMING/OUTGOING <ts>] markers and
+    the current date/time to decide which fact is newest.
+W4. Natural Hebrew — use the user's own verbs; plain Hebrew, no calques
+    ("התנאים עומדים"), no internal jargon ("חוסם"); title_he transliterates
+    foreign names (גוגל, זום, אמזון).
 
-completion=true means: the open matter the prior task was tracking has been
-ANSWERED or RESOLVED in this message. Specifically:
-  • Payment confirmed
-  • Document signed and accepted
-  • Decision made and communicated
-  • Pending information / answer / quote / ETA / date was provided
-  • The other party closed the loop on what the user was waiting for
-  • The user themselves ACCEPTED / CLOSED the matter a LINKED task was tracking.
-    A satisfied acknowledgement on a thread that has a linked task —
-    "מעולה תודה רבה", "תודה, קיבלתי", "בסדר תודה רבה", "סבבה", "👍",
-    "great, got it", "all set" — means the tracked thing is DONE: set
-    completion=true. classification may still be INFORMATIONAL (the two fields
-    are independent). Do NOT leave a tracker open just because no further step
-    remains — an accepted matter is a resolved matter, and leaving it open is
-    what makes the same task resurface again and again on every later message.
-    This applies ONLY when a linked task exists AND the acknowledgement is about
-    what that task tracks; a bare "תודה" with no linked matter stays
-    INFORMATIONAL with completion=false.
-
-CRITICAL — TASKS THAT TRACK A PENDING RESPONSE:
-When the task title is "לחכות לתשובת X על Y" / "לעקוב אחרי X על Y" /
-"wait for X's response about Y" / "follow up with X about Y", and X has
-now PROVIDED that information / decision / commitment — set completion=true,
-even if the user hasn't yet written back. The system has a "pending_completion"
-state for exactly this case: it surfaces the resolved task for one-click
-confirmation so the user doesn't have to dig through the inbox to close it.
-Withholding completion=true just because the user hasn't acknowledged YET
-defeats this mechanism and leaves answered questions stuck in the inbox.
-
-Conversely, if NEW pending matters surface in the same thread (e.g. the
-other party now wants something back), you still set completion=true for
-the ORIGINAL open question — a new task will be created downstream for the
-new matter. One task = one open question.
-
-CRITICAL — DO NOT confuse scheduling confirmation with task completion:
-If the task requires the USER to take a future action (transfer money,
-attend a meeting, submit a document, make a call, pay a bill, etc.),
-then confirming WHEN or HOW the action will happen is NOT completion.
-completion=true only when the action itself has been done, received, or
-confirmed as completed — not merely planned or scheduled.
-  WRONG: task="להעביר כסף ביום שישי" → message confirms the timing is Friday → completion=true
-  RIGHT: task="להעביר כסף ביום שישי" → message confirms timing → completion=false (money not sent yet)
-  WRONG: task="לשלוח דו״ח" → user says "אשלח מחר" → completion=true
-  RIGHT: task="לשלוח דו״ח" → user says "אשלח מחר" → completion=false (still future)
-
-Be conservative only when the answer is genuinely partial or ambiguous
-(e.g. "I'll check and get back to you" — that's still pending). When the
-requested answer is plainly in the message, set completion=true.
-
-═══ new_matter — is this a DIFFERENT open matter? ═══
-new_matter=true means: this message opens an actionable matter that is
-DISTINCT from what the existing thread summary / linked task was tracking
-— a different action, deliverable, meeting, or topic — NOT just the next
-turn of the same one. Judge against the "Existing thread summary" block.
-
-  • Same matter continuing (more back-and-forth on the SAME question,
-    a status update, the other party finally answering the original ask)
-    → new_matter=false.
-  • A genuinely new ask/commitment/event on top of (or after) the original
-    → new_matter=true. Classic case: the original question was just
-    answered (completion=true) and the conversation pivots to scheduling a
-    call, sending a document, or a new request — that scheduling/request is
-    a NEW matter that deserves its own task.
-
-Set new_matter=false when classification is not ACTIONABLE, or when there
-is no existing thread summary (first message — there is nothing to be
-distinct from). Default to false when unsure: re-opening or appending to
-the known task is safer than spawning a duplicate.
-
-IGNORE quoted text (after "On … wrote:" or starting with "> ") — that history is
-already captured in new_summary's prior version. Base decisions on the FRESHLY
-written portion of the message only.
-
-If the user's own address is the sender:
-- Their own commitment ("אחזור", "אבדוק") → ACTIONABLE (they owe follow-through), state=pending_user_action
-- Just acknowledging closure → INFORMATIONAL
-
-═══ COMMITMENT vs POSSIBILITY vs STATEMENT — wording rule (mandatory) ═══
-THREE registers — never collapse one into another in reason_he / new_summary.
-
-(1) Soft possibility (modal / conditional / tentative):
-    EN: "I can try", "I might", "I'll see", "I could", "let me try",
-        "if I have time", "perhaps", "maybe I'll",
-        "I might be able to"
-    HE: "אנסה", "אולי אעשה", "אם יהיה לי זמן", "אני יכול לנסות",
-        "אבדוק אם אפשר", "אולי", "ייתכן ש", "אני אשתדל"
-    → "אמר שיכול לנסות" / "הציע לנסות" / "ציין שאולי יבדוק".
-    NEVER use "התחייב" / "הבטיח" for these.
-
-(2) Statement of intent (plain future tense, no promise vocabulary):
-    EN: "I will call", "I'll send tomorrow", "I'm going to pay",
-        "you'll have it by Friday", "let's meet at 3"
-    HE: "אתקשר", "אשלח", "אעדכן", "אבדוק" (unhedged future),
-        "אסיים", "אעביר עד מחר", "ניפגש ב-3"
-    → "אמר שיתקשר" / "אמר שישלח" / "ציין שיעדכן" /
-      "Wagner אמר שיבדוק".
-    Plain future-tense is NOT a commitment. The speaker stated what
-    they intend to do; they did NOT make an explicit promise. NEVER
-    write "התחייב" / "הבטיח" for these — that's misleading.
-
-(3) Explicit promise / commitment ONLY:
-    EN: "I promise to call", "I commit to send", "you have my word",
-        "I guarantee", "I pledge to"
-    HE: "מבטיח שאתקשר", "מתחייב לשלוח", "מתחייב להעביר",
-        "ערב לכך ש", "נשבע ש", "מילתי על"
-    → "התחייב להתקשר" / "הבטיח לשלוח" — appropriate ONLY here.
-    The speaker must use explicit promise vocabulary
-    (promise/commit/guarantee/pledge/מבטיח/מתחייב/ערב/נשבע).
-
-WORKED EXAMPLES:
-  Input: "I will call AT&T tomorrow"
-  WRONG: "Chanoch התחייב להתקשר ל-AT&T"
-  RIGHT: "Chanoch אמר שיתקשר ל-AT&T מחר"
-
-  Input: "I can try to handle it"
-  WRONG: "Chanoch התחייב לטפל"
-  RIGHT: "Chanoch אמר שיכול לנסות לטפל"
-
-  Input: "I promise I'll send the report by Friday"
-  RIGHT: "Chanoch הבטיח לשלוח את הדו״ח עד שישי"
-  (explicit "I promise" → "הבטיח" is correct)
-
-When in doubt between (2) and (3): default to "אמר ש" / "ציין ש". Saying
-someone committed when they merely stated intent erodes the user's
-trust in the system's wording.
-
-═══ GROUNDING — NO FABRICATION (mandatory) ═══
-reason_he / new_summary may attribute to a party ONLY what they literally
-said. This is separate from the register rule above: even when you pick
-"אמר ש" correctly, you must not INVENT the object or scope of the statement,
-and you must not move a topic raised by one party onto another party.
-
-  • Vague / impersonal acknowledgements — "יטופל", "נטפל בזה", "אני אדאג",
-    "we'll handle it", "I'll take care of it", "leave it with me" — are NOT
-    a commitment to any SPECIFIC sub-task. Report them as the vague statement
-    they are, quoted: 'אמר ש"יטופל"' / 'ציין שייטפל בכך'. NEVER expand "יטופל"
-    into "אמר/התחייב שיבדוק את <נושא ספציפי>".
-  • If party A asked about topic X and party B answered only "I don't know",
-    do NOT later write that B will check / committed to checking X. B said
-    nothing about X beyond not knowing.
-  • A topic the USER raised (or said they don't know about) does NOT
-    automatically become something the OTHER party agreed to handle. Attribute
-    each open item to whoever actually owns it per the literal text; if it is
-    unowned, say it is still open — do not assign it to anyone.
-
-WORKED EXAMPLE (the failure this rule prevents):
-  Thread: user asked an accountant to prepare a final statement; user asked
-  about salary (answered) and about "בוטמן" (user said "I don't know"); the
-  accountant replied only "יטופל".
-  WRONG: "רוה״ח התחייב לבדוק את נושא בוטמן ולהכין את החשבון" — fabricates a
-         בוטמן commitment that was never made and mis-registers "יטופל".
-  RIGHT: 'רוה״ח אמר ש"יטופל" — נדרש מעקב על החשבון הסופי. נושא בוטמן עדיין
-         פתוח (המשתמש לא ידע).'
-
-═══ SUPERSESSION — NEWER FACTS REPLACE STALE ONES (mandatory) ═══
-new_summary / reason_he describe the situation AS OF THE LATEST message —
-not a pile of every state the thread passed through. When a newer line
-changes a premise an earlier line established, REPLACE the stale premise;
-never state both side by side.
-  • Time windows and deadlines that were CONTINGENT on an event need
-    special care. If a window was framed as "after my 4:00 meeting, before
-    I leave at 6:00" and a later line says that meeting was postponed or
-    cancelled, the window NO LONGER HOLDS — the constraint that created it
-    is gone. Re-derive availability from the latest facts. A postponed or
-    cancelled blocker WIDENS availability; it does not preserve the old
-    narrow window.
-  • Use the [INCOMING <ts>]/[OUTGOING <ts>] timestamps and the current
-    date/time given above to decide which fact is newest. The newest
-    statement wins.
-  • Never produce a summary that contradicts itself (e.g. "the blocking
-    meeting was postponed AND there is a narrow window 5–6"). If both
-    cannot be true now, keep only the one true as of the last line.
-WORKED EXAMPLE (the failure this prevents):
-  Voice memo: "I have a 4:00 meeting, hope it ends ~5:00, then I'll try; at
-  6:00 I leave — so let's try in that 5–6 window." Later line: "the meeting
-  was postponed."
-  WRONG: "...the blocking meeting was postponed and there is a narrow 5–6
-         window today..." — self-contradictory; the 5–6 bound came from the
-         now-cancelled meeting.
-  RIGHT: "פגישת ה-4:00 נדחתה, כך שאילוץ ה-5–6 הקודם כבר לא חל — יש עכשיו
-         יותר זמן עד היציאה ב-6:00. עדיין צריך לבצע את שיחת הוועידה."
-
-═══ NATURAL HEBREW — NO INVENTED WORDS OR SYSTEM JARGON (mandatory) ═══
-  • Use the user's own verb. If they wrote "לעשות שיחת ועידה" / "אעשה
-    שיחה", say "לעשות" / "לקיים שיחת ועידה" — do NOT invent an ill-fitting
-    verb (e.g. "להערים", which is not a real fit) or paraphrase into
-    something they never said.
-  • Plain Hebrew, not calques. "the conditions hold / are met" → "הכל
-    מסודר" / "אפשר להתקדם", never the literal "התנאים עומדים".
-  • Never inject internal/PM jargon into user-facing text. A meeting that
-    was in the way is "הפגישה שעיכבה" / "הפגישה החוסמת" — never "הפגישה
-    בחוסם" (the word "חוסם"/blocker belongs to app-status tracking, not
-    task text).
-  • Never introduce a name, number, or detail absent from the message. If
-    the other party is "שוויגער"/Miryam, do not invent a different name.
+═══ OTHER RULES ═══
+• IGNORE quoted history ("On … wrote:", lines starting with ">") — decide on
+  the freshly written portion only. EXCEPTION: a "MEETING DETAILS" block is
+  always fresh, actionable content (R2d), even below quoted history.
+• If the user's own address is the sender: their commitment → ACTIONABLE
+  (R2f); a bare closing acknowledgement → INFORMATIONAL.
+• confidence = your honest certainty about "classification" only. Use "low"
+  when torn between categories, when the substance is behind a link / PDF /
+  portal you cannot read, or when you only partially parsed the message. Do
+  not default to "high".
 
 ═══ WORKED EXAMPLE ═══
-Input: "Please be advised that we are currently looking into the
-collection action against your son. I will let you know as soon as we
-have an update." — from a law firm.
-Correct output: ACTIONABLE, state=pending_other_party. reason_he should
-reference HARDEST RULE: "תגובה לפניית המשתמש, עורכי הדין הבטיחו לחזור — נדרש מעקב".
-INCORRECT output: INFORMATIONAL. The HARDEST RULE applies here.`;
+Input: "Please be advised that we are currently looking into the collection
+action against your son. I will let you know as soon as we have an update."
+— from a law firm.
+Correct: ACTIONABLE (R2b), state=pending_other_party, reason_he:
+"תגובה לפניית המשתמש — עורכי הדין אמרו שיחזרו, נדרש מעקב".
+Incorrect: INFORMATIONAL.`;
 
   // Mandatory output-contract addendum, appended AFTER the (possibly
   // admin-overridden) staticPrompt so the new_matter field is always required
@@ -912,7 +726,10 @@ content under the rules above.`;
   const contextBlock = `\n\n${nowContextLine()}${identityBlock}${memoryBlock}${whatsappNote}${personalBlock}${selfNote}`;
   const userMessage = `${contextBlock ? contextBlock + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
-  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 800, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
+  // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
+  // and truncate the JSON mid-object. prefillJson forces the reply to start at
+  // "{" so no token is spent on a prose preamble.
+  const result = await callClaude(model, cachedSystem(staticPrompt + newMatterContract), userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id }, true);
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -944,7 +761,15 @@ content under the rules above.`;
     };
   }
 
-  const cls = String(parsed.classification ?? "").toLowerCase();
+  const clsRaw = String(parsed.classification ?? "").toLowerCase().trim();
+  // Normalize echoes of pipeline-internal labels. Per-user correction rules
+  // used to quote the log-UI override marker verbatim ("classify as
+  // \"user_actionable\""), the model echoed it back, and the unknown-value
+  // fallback below mapped it to informational — INVERTING the user's
+  // correction (the 2026-06 shadow eval caught this on 21/290 messages).
+  // The injection now translates the marker (see asCategory in the runner),
+  // and this guard keeps any residual echo on the right side.
+  const cls = clsRaw.replace(/^user_/, "").replace(/_followup$/, "");
   const classification: "actionable" | "informational" | "spam" =
     cls === "actionable" ? "actionable" : cls === "spam" ? "spam" : "informational";
   const validStates = ["open", "pending_user_action", "pending_other_party", "resolved"];
@@ -1159,29 +984,32 @@ Judge by the LAST message in the transcript. When unsure between NEW and an [ope
   return { taskId, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
-const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the outgoing-mail rule above) ═══\nThe body is a chat transcript with lines like\n  [INCOMING <timestamp>] <text>\n  [OUTGOING <timestamp>] <text>\n[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.\nClassify by the LAST message in the transcript:\n  • Last line is [INCOMING] → ACTIONABLE (the user owes a response)\n  • Last line is [OUTGOING] containing a commitment ("אחזור", "אבדוק", "אשלח",\n    "אעדכן", "תוך X זמן", a specific time/date) → ACTIONABLE\n    (the user owes a follow-through on what they promised)\n  • Last line is [OUTGOING] that asks a question or makes a request and is still\n    awaiting the other side's reply ("?", "אתם פתוחים?", "אפשר?", "מה לגבי",\n    any open ask) → ACTIONABLE (the user is waiting on the other party and\n    needs a tracker so it does not silently expire — the user is NOT the one\n    who owes a reply here)\n  • Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה") → INFORMATIONAL\n  • Conversation appears closed and resolved → INFORMATIONAL\nThe generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
-
-async function classifyMessage(msg: any, settings: any, sys: SystemParams) {
-  const model = sys.classification_model;
-  const myEmails: string[] = settings.my_emails ?? [];
-  const officeAddresses: string[] = settings.office_addresses ?? [];
-  const identityLines: string[] = [];
-  if (myEmails.length > 0) identityLines.push(`User's own addresses (outgoing): ${myEmails.join(", ")}`);
-  if (officeAddresses.length > 0) identityLines.push(`User's office/customer-facing addresses: ${officeAddresses.join(", ")}. Mail addressed to or from these is business correspondence — classify by content, never spam.`);
-  const identityBlock = identityLines.length > 0 ? `\n\n${identityLines.join("\n")}` : "";
-
-  const whatsappBlock = isWhatsApp(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
-
-  const systemPrompt = `You are a message classifier for a personal task management system.${identityBlock}\n\nRules:\n- Outgoing mail (from the user's own addresses) → informational\n- Payment confirmations of completed transactions → informational\n- Mail to/from the user's office addresses → classify by content (NOT spam)${whatsappBlock}\n\nRespond: WORD | reason in Hebrew. WORD must be one of: ACTIONABLE | INFORMATIONAL | SPAM`;
-
-  const userMessage = `From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
-  const result = await callClaude(model, systemPrompt, userMessage, 100);
-  const text = result.text.trim().toUpperCase();
-  let classification = "informational";
-  if (text.startsWith("ACTIONABLE")) classification = "actionable";
-  else if (text.startsWith("SPAM")) classification = "spam";
-  return { classification, reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, model };
-}
+const WHATSAPP_CLASSIFIER_RULES = `\n\n═══ WhatsApp conversation rule (OVERRIDES the email direction rules above) ═══
+The body is a chat transcript with lines like
+  [INCOMING <timestamp>] <text>
+  [OUTGOING <timestamp>] <text>
+[INCOMING] = the other side wrote. [OUTGOING] = the user wrote.
+Decide by the LAST meaningful exchange, in this priority order (first match wins):
+  1. The OTHER party committed to do / check / answer something that has not
+     arrived yet ("אבדוק", "אחזור אליך", "אעדכן", "I'll get back to you") →
+     ACTIONABLE, state=pending_other_party — EVEN IF the user then closed
+     politely ("תודה", "👍", "מעולה"). A polite acknowledgement of a promise
+     does not cancel the need to track the promise; only the promised thing
+     actually ARRIVING does.
+  2. Last line is [INCOMING] with an ask / question / new information the user
+     must act on → ACTIONABLE (the user owes a response).
+  3. Last line is [OUTGOING] asking a question or making a request whose reply
+     has not arrived ("?", "אפשר?", "מה לגבי", any open ask) → ACTIONABLE (the
+     user is WAITING on the other party — they do NOT owe a reply; the tracker
+     exists so the ask does not silently expire).
+  4. Last line is [OUTGOING] with the user's own commitment ("אחזור", "אבדוק",
+     "אשלח", "אעדכן", a time pledge) → ACTIONABLE (the user owes follow-through).
+  5. Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה")
+     with nothing pending → INFORMATIONAL.
+  6. Conversation appears closed and resolved → INFORMATIONAL.
+A personal chat is NEVER spam — junk or promo content quoted inside the
+transcript does not make the chat spam.
+The generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
 
 async function detectProject(msg: any, sys: SystemParams, userId: string) {
   const { data: projects } = await supabase.from("projects").select("id, name, name_he").eq("user_id", userId).eq("is_active", true);
@@ -1445,7 +1273,26 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
 
 async function checkFollowup(msg: any, sys: SystemParams) {
   const model = sys.classification_model;
-  const result = await callClaude(model, `Determine if this outgoing message requires follow-up tracking.\nRespond: FOLLOWUP | reason OR INFO | reason`, `Subject: ${msg.subject || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const system = `You decide whether a message the USER SENT needs a follow-up tracker.
+The tracker only surfaces if no reply arrives within ~2 business days, so the
+question is: is the user now WAITING on the recipient for something?
+
+FOLLOWUP when the user:
+  • asked a question or requested an action / decision / document / payment
+    and the recipient has not yet answered;
+  • sent a deliverable, offer or proposal that expects a confirmation or reply;
+  • committed to something contingent on the recipient's response.
+INFO when the message:
+  • closes a loop ("thanks", "got it", "מצורף כמבוקש", a final answer to THEIR
+    question) with nothing awaited back;
+  • is a pure FYI, broadcast, mass mail, newsletter, receipt or automated
+    notification;
+  • expects no reply by its nature (calendar response, unsubscribe, ack).
+When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
+noise follow-up erodes trust in every suggestion.
+
+Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
+  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -3097,8 +2944,17 @@ Deno.serve(async (req) => {
         const note = String((c as any).note ?? "").trim();
         if (!note) continue;
         if (String((c as any).correction_type) === "reclassify" && (c as any).new_value) {
-          const from = (c as any).old_value ? ` (not "${(c as any).old_value}")` : "";
-          personalRuleLines.push(`- classify as "${(c as any).new_value}"${from}: ${note}`);
+          // The log UI stores reclassifications with pipeline-internal labels
+          // ("user_actionable", "*_followup") that are NOT classifier
+          // categories. Quoting them verbatim taught the model to echo
+          // "user_actionable" back, and the parser's unknown-value fallback
+          // turned that into informational — INVERTING the user's correction
+          // (shadow eval 2026-06: 21/290 messages). Translate to the real
+          // category before injecting.
+          const asCategory = (v: unknown) =>
+            String(v).toLowerCase().replace(/^user_/, "").replace(/_followup$/, "");
+          const from = (c as any).old_value ? ` (not "${asCategory((c as any).old_value)}")` : "";
+          personalRuleLines.push(`- classify as "${asCategory((c as any).new_value)}"${from}: ${note}`);
         } else {
           personalRuleLines.push(`- ${note}`);
         }

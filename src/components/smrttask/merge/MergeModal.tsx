@@ -20,6 +20,7 @@ import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -815,11 +816,7 @@ function Step2(props: Step2Props) {
           <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
             {t("dueDateField")} {proposal && <Sparkles className="h-3 w-3 text-primary" />}
           </label>
-          <Input
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-          />
+          <DatePicker value={dueDate} onChange={setDueDate} />
           {proposal?.due_date_reason && (
             <div className="text-xs text-muted-foreground italic">{proposal.due_date_reason}</div>
           )}
