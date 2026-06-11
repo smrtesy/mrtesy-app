@@ -2250,7 +2250,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // Do NOT set dead_letter: the message is handled, not stuck, and the
       // failure is already recorded in log_entries. (A true dead_letter flag on
       // an otherwise-"processed" row is what made the admin counts misleading.)
-      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      // skip_reason marks the give-up explicitly: processed_at deliberately
+      // stays NULL (nothing was actually processed), so without this marker a
+      // failed-out row is indistinguishable from a genuine "informational"
+      // classification — which is how 24 failure-path rows hid from the
+      // damage query during the 2026-06-11 prefill outage.
+      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
       await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message, retry_count: retryCount });
       return;
     }
