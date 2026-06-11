@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ArrowRight, CheckCircle2, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, Clock, Plus, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { createClient } from "@/lib/supabase/client";
@@ -15,7 +15,7 @@ import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDa
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 interface Member {
@@ -24,6 +24,14 @@ interface Member {
   name: string | null;
   display_name: string | null;
 }
+interface Stage {
+  id: string;
+  name_he: string;
+  name_en: string | null;
+  sequence: number;
+}
+/** Stable key for the "no stage" section (tasks with no/unknown stage_id). */
+const NO_STAGE = "__none__";
 function memberName(m: Member): string {
   return personLabel(m);
 }
@@ -52,12 +60,14 @@ export function PlanEffortDetail({
   locale,
   today,
   canEdit = false,
+  stages = [],
   onChanged,
 }: {
   plan: Plan;
   locale: string;
   today: Date;
   canEdit?: boolean;
+  stages?: Stage[];
   onChanged?: () => void;
 }) {
   const t = useTranslations("smrtPlan");
@@ -67,7 +77,11 @@ export function PlanEffortDetail({
   const [holidays, setHolidays] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  // `adding` carries the stage the new task belongs to (null = no stage).
+  const [adding, setAdding] = useState<{ stageId: string | null } | null>(null);
+  // Stage sections start collapsed — the user sees the stage overview first and
+  // opens a stage to reveal its tasks.
+  const [openStages, setOpenStages] = useState<Set<string>>(new Set());
   const [myId, setMyId] = useState<string | null>(null);
   const { isSuperAdmin } = useSuperAdmin();
 
@@ -139,6 +153,25 @@ export function PlanEffortDetail({
     onChanged?.();
   }
 
+  // Inline field edit from a row (assignee / due) — both can reschedule, so we
+  // refetch after the PATCH to pull fresh engine dates.
+  async function patchTask(task: PlanTask, body: Record<string, unknown>) {
+    try {
+      await api(`/api/plan-tasks/${task.id}`, { method: "PATCH", body });
+      await afterMutation();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
+
+  const toggleSection = (key: string) =>
+    setOpenStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   // Mark complete / reopen — allowed for the assignee + super-admin (not only
   // full-access planners). The server enforces the same rule.
   const canComplete = (task: PlanTask) => canEdit || isSuperAdmin || (myId != null && task.assigned_to_user_id === myId);
@@ -185,6 +218,94 @@ export function PlanEffortDetail({
 
   if (loading) return <div className="h-24 animate-pulse rounded-lg bg-muted" />;
 
+  // Group the list by stage only for a real (non-roster) plan that has stages —
+  // a roster aggregates tasks across plans, so its tasks' stages aren't this
+  // plan's, and a plan with no stages stays a plain flat list.
+  const hasStages = plan.kind !== "roster" && stages.length > 0;
+  const sortedStages = [...stages].sort((a, b) => a.sequence - b.sequence);
+  const stageIdSet = new Set(stages.map((s) => s.id));
+  const noStageTasks = tasks.filter((tk) => !tk.stage_id || !stageIdSet.has(tk.stage_id));
+  const stageName = (s: Stage) => (locale === "en" ? s.name_en || s.name_he : s.name_he);
+
+  const renderRow = (task: PlanTask) =>
+    editingId === task.id && canEdit ? (
+      <EditTaskRow
+        key={task.id}
+        task={task}
+        planId={plan.id}
+        members={members}
+        te={te}
+        onClose={() => setEditingId(null)}
+        onChanged={afterMutation}
+      />
+    ) : (
+      <TaskRow
+        key={task.id}
+        task={task}
+        locale={locale}
+        today={today}
+        t={t}
+        te={te}
+        canEdit={canEdit}
+        members={members}
+        canComplete={canComplete(task)}
+        onToggleDone={() => toggleDone(task)}
+        assignee={task.assigned_to_user_id ? memberMap.get(task.assigned_to_user_id) ?? null : null}
+        onEdit={() => setEditingId(task.id)}
+        onPatch={(body) => patchTask(task, body)}
+      />
+    );
+
+  // One collapsible stage section: header (name · progress · "+ task") + the
+  // tasks under it, revealed only when the section is open.
+  const renderSection = (sectionKey: string, stageId: string | null, name: string, sectionTasks: PlanTask[]) => {
+    const open = openStages.has(sectionKey);
+    const total = sectionTasks.length;
+    const doneCount = sectionTasks.filter((tk) => zoneOf(tk) === "done").length;
+    const isAdding = canEdit && adding?.stageId === stageId;
+    return (
+      <div key={sectionKey}>
+        <div className="flex cursor-pointer items-center gap-2 py-2.5" onClick={() => toggleSection(sectionKey)}>
+          {open ? (
+            <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronLeft className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          )}
+          <span className={cn("flex-1 text-[13px] font-bold", stageId === null && "italic text-muted-foreground")}>{name}</span>
+          {total > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-16 overflow-hidden rounded bg-secondary">
+                <span className="block h-full rounded bg-status-ok" style={{ width: `${(doneCount / total) * 100}%` }} />
+              </span>
+              <span className="whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">{doneCount}/{total}</span>
+            </span>
+          )}
+          {canEdit && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setAdding({ stageId }); setOpenStages((prev) => new Set(prev).add(sectionKey)); }}
+              className="inline-flex items-center gap-0.5 rounded px-1 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={te("addTask")}
+            >
+              <Plus className="h-3 w-3" /> {te("addTask")}
+            </button>
+          )}
+        </div>
+        {open && (
+          <div className="ms-2 border-s ps-3">
+            {isAdding && (
+              <NewTaskRow planId={plan.id} stageId={stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
+            )}
+            {sectionTasks.length === 0 && !isAdding ? (
+              <p className="py-2 text-[12px] text-muted-foreground">{t("effort.empty")}</p>
+            ) : (
+              <div className="divide-y">{sectionTasks.map(renderRow)}</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="flex items-start justify-between gap-2">
@@ -221,9 +342,9 @@ export function PlanEffortDetail({
             </div>
           )}
         </div>
-        {canEdit && plan.kind !== "roster" && (
+        {canEdit && plan.kind !== "roster" && !hasStages && (
           <button
-            onClick={() => setAdding((v) => !v)}
+            onClick={() => setAdding((v) => (v ? null : { stageId: null }))}
             className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border bg-card px-2.5 py-1 text-[12px] font-medium hover:bg-accent"
           >
             <Plus className="h-3.5 w-3.5" /> {te("addTask")}
@@ -231,16 +352,20 @@ export function PlanEffortDetail({
         )}
       </div>
 
-      {adding && canEdit && (
-        <NewTaskRow planId={plan.id} members={members} te={te} onDone={async () => { setAdding(false); await afterMutation(); }} />
-      )}
-
-      {tasks.length === 0 && !adding ? (
+      {hasStages ? (
+        <div className="divide-y">
+          {sortedStages.map((s) =>
+            renderSection(s.id, s.id, stageName(s), tasks.filter((tk) => tk.stage_id === s.id)),
+          )}
+          {(noStageTasks.length > 0 || adding?.stageId === null) &&
+            renderSection(NO_STAGE, null, t("effort.noStage"), noStageTasks)}
+        </div>
+      ) : tasks.length === 0 && !adding ? (
         <div className="rounded-lg border border-dashed py-8 text-center">
           <p className="text-[12.5px] font-medium">{t("effort.empty")}</p>
           {canEdit && plan.kind !== "roster" && (
             <button
-              onClick={() => setAdding(true)}
+              onClick={() => setAdding({ stageId: null })}
               className="mt-3 inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90"
             >
               <Plus className="h-3.5 w-3.5" /> {te("addTask")}
@@ -248,34 +373,12 @@ export function PlanEffortDetail({
           )}
         </div>
       ) : (
-        <div className="divide-y">
-          {tasks.map((task) =>
-            editingId === task.id && canEdit ? (
-              <EditTaskRow
-                key={task.id}
-                task={task}
-                planId={plan.id}
-                members={members}
-                te={te}
-                onClose={() => setEditingId(null)}
-                onChanged={afterMutation}
-              />
-            ) : (
-              <TaskRow
-                key={task.id}
-                task={task}
-                locale={locale}
-                today={today}
-                t={t}
-                canEdit={canEdit}
-                canComplete={canComplete(task)}
-                onToggleDone={() => toggleDone(task)}
-                assignee={task.assigned_to_user_id ? memberMap.get(task.assigned_to_user_id) ?? null : null}
-                onEdit={() => setEditingId(task.id)}
-              />
-            ),
+        <>
+          {adding && canEdit && (
+            <NewTaskRow planId={plan.id} stageId={adding.stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
           )}
-        </div>
+          <div className="divide-y">{tasks.map(renderRow)}</div>
+        </>
       )}
     </div>
   );
@@ -286,23 +389,34 @@ function TaskRow({
   locale,
   today,
   t,
+  te,
   canEdit,
+  members,
   canComplete,
   onToggleDone,
   assignee,
   onEdit,
+  onPatch,
 }: {
   task: PlanTask;
   locale: string;
   today: Date;
   t: ReturnType<typeof useTranslations>;
+  te: ReturnType<typeof useTranslations>;
   canEdit: boolean;
+  members: Member[];
   canComplete: boolean;
   onToggleDone: () => void;
   assignee: string | null;
   onEdit: () => void;
+  onPatch: (body: Record<string, unknown>) => void;
 }) {
   const zone = zoneOf(task);
+  // Inline edits straight from the row: click the assignee → a select, click the
+  // date → a date picker. Clicking anywhere else on the row opens the full editor.
+  const [editAssignee, setEditAssignee] = useState(false);
+  const [editDue, setEditDue] = useState(false);
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   // The row shows the SET deadline (due_date). The engine's computed
   // latest_finish only shows as a constraint hint when it's earlier (e.g. a
   // worker-leave pulls it in).
@@ -316,11 +430,15 @@ function TaskRow({
   const capNeeds = (task.needs ?? []).filter((n) => n.provider_kind === "plan");
   return (
     <div className="py-2.5">
-      <div className="flex items-center gap-2.5">
+      <div
+        className={cn("flex items-center gap-2.5", canEdit && "cursor-pointer")}
+        onClick={canEdit ? onEdit : undefined}
+        title={canEdit ? te("edit") : undefined}
+      >
         <button
           type="button"
           disabled={!canComplete}
-          onClick={canComplete ? onToggleDone : undefined}
+          onClick={canComplete ? (e) => { stop(e); onToggleDone(); } : undefined}
           title={zone === "done" ? t("effort.reopen") : t("effort.markDone")}
           className={cn(
             "flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded border text-[11px]",
@@ -376,28 +494,72 @@ function TaskRow({
                 : t("edit.durEstimated")}
           </span>
         )}
-        {assignee && (
+        {canEdit && editAssignee ? (
+          <select
+            autoFocus
+            value={task.assigned_to_user_id ?? ""}
+            onClick={stop}
+            onChange={(e) => { onPatch({ assigned_to_user_id: e.target.value || null }); setEditAssignee(false); }}
+            onBlur={() => setEditAssignee(false)}
+            className="rounded-md border border-input bg-background px-1.5 py-0.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="">{te("unassigned")}</option>
+            {members.map((m) => (
+              <option key={m.user_id} value={m.user_id}>{memberName(m)}</option>
+            ))}
+          </select>
+        ) : canEdit ? (
+          <button
+            type="button"
+            onClick={(e) => { stop(e); setEditAssignee(true); }}
+            className={cn(
+              "whitespace-nowrap rounded px-2 py-0.5 text-[11px] font-medium hover:ring-1 hover:ring-ring",
+              assignee ? "bg-accent text-accent-foreground" : "bg-secondary text-muted-foreground/70",
+            )}
+            title={te("assignee")}
+          >
+            {assignee ?? te("unassigned")}
+          </button>
+        ) : assignee ? (
           <span className="whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-foreground">
             {assignee}
           </span>
-        )}
-        {deadline && zone !== "done" && (
-          <span
+        ) : null}
+        {canEdit && editDue ? (
+          <input
+            type="date"
+            autoFocus
+            defaultValue={task.due_date ?? ""}
+            onClick={stop}
+            onChange={(e) => { onPatch({ due_date: e.target.value || null }); setEditDue(false); }}
+            onBlur={() => setEditDue(false)}
+            className="rounded-md border border-input bg-background px-1.5 py-0.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        ) : deadline && zone !== "done" ? (
+          <button
+            type="button"
+            disabled={!canEdit}
+            onClick={canEdit ? (e) => { stop(e); setEditDue(true); } : undefined}
             className={cn(
               "whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold",
               urg ? countdownClasses[urg] : "bg-secondary text-muted-foreground",
+              canEdit && "hover:ring-1 hover:ring-ring",
             )}
-            title={constraint ? `${t("effort.constraint")}: ${gregShort(parseISO(constraint))}` : undefined}
+            title={constraint ? `${t("effort.constraint")}: ${gregShort(parseISO(constraint))}` : te("due")}
           >
             {countdownText(deadline, t, today)} · {gregShort(parseISO(deadline))} · {hebDate(parseISO(deadline))}
             {constraint && <span className="ms-1 text-status-late">⚠ {gregShort(parseISO(constraint))}</span>}
-          </span>
-        )}
-        {canEdit && (
-          <button onClick={onEdit} className="flex-shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
-            <Pencil className="h-3.5 w-3.5" />
           </button>
-        )}
+        ) : canEdit && zone !== "done" ? (
+          <button
+            type="button"
+            onClick={(e) => { stop(e); setEditDue(true); }}
+            className="whitespace-nowrap rounded-md bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground/70 hover:ring-1 hover:ring-ring"
+            title={te("due")}
+          >
+            {te("due")}
+          </button>
+        ) : null}
       </div>
 
       {zone === "blocked" && waiting.length > 0 && (
@@ -435,11 +597,13 @@ function TaskRow({
 
 function NewTaskRow({
   planId,
+  stageId = null,
   members,
   te,
   onDone,
 }: {
   planId: string;
+  stageId?: string | null;
   members: Member[];
   te: ReturnType<typeof useTranslations>;
   onDone: () => void;
@@ -462,6 +626,7 @@ function NewTaskRow({
           duration_days: dur ? Number(dur) : null,
           status,
           assigned_to_user_id: assignee || null,
+          stage_id: stageId,
         },
       });
       onDone();

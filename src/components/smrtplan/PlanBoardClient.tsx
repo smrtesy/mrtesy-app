@@ -588,11 +588,14 @@ export function PlanBoardClient({ locale }: { locale: string }) {
     const v = name.trim();
     if (!v || v === st.name_he) return;
     const key = histKeyOf(st.id);
+    // Renaming doesn't touch the schedule, so trust the optimistic update and
+    // skip the full board reload — that reload only held `useHistory` busy long
+    // enough that a quick follow-up edit got silently dropped ("had to rename a
+    // few times before it stuck").
     const apply = async (val: string) => {
       const live = histResolve(key);
       setStages((ss) => ss.map((x) => (x.id === live ? { ...x, name_he: val } : x)));
       await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { name_he: val } });
-      await load();
     };
     runCmd({ label: t("edit.actRename"), redo: () => apply(v), undo: () => apply(st.name_he) });
   }
@@ -1359,7 +1362,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
               {detailView === "gantt" ? (
                 <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={load} />
               ) : (
-                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} onChanged={load} />
+                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} stages={stagesByPlan.get(selected.id) ?? []} onChanged={load} />
               )}
             </>
           )}

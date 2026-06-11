@@ -2103,6 +2103,7 @@
       "arrived": "Arrived",
       "constraint": "constraint",
       "rosterNote": "Aggregated view: tasks from other plans by assignee",
+      "noStage": "No stage",
       "viewList": "List",
       "viewGantt": "Timeline",
       "basedOn": "Based on",
