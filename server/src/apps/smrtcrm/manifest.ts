@@ -24,6 +24,7 @@ export const manifest: AppManifest = {
   subscribes: [
     { event: "contact.observed", source: "smrtbot", handler: "handlers/onBotContact" },
     { event: "contact.unsubscribed", source: "smrtreach", handler: "handlers/onUnsubscribe" },
+    { event: "contact.preference_changed", source: "smrtreach", handler: "handlers/onPreferenceChanged" },
   ],
 
   notifications: {

@@ -34,27 +34,30 @@ interface Campaign {
   status: string;
 }
 
-interface Tag {
+interface Named {
   id: string;
   name: string;
 }
 
-const ALL_CONTACTS = "__all__";
+const ALL_CONTACTS = "all:";
 
 export function CampaignsClient() {
   const t = useTranslations("smrtReach");
   const locale = useLocale();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
+  const [tags, setTags] = useState<Named[]>([]);
+  const [groups, setGroups] = useState<Named[]>([]);
+  const [segments, setSegments] = useState<Named[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<{ name: string; channel: Channel; audienceTag: string }>({
+  // audienceKey is "<kind>:<id?>" — kind ∈ all|tag|group|segment.
+  const [form, setForm] = useState<{ name: string; channel: Channel; audienceKey: string }>({
     name: "",
     channel: "email",
-    audienceTag: ALL_CONTACTS,
+    audienceKey: ALL_CONTACTS,
   });
 
   const loadCampaigns = useCallback(async () => {
@@ -69,21 +72,27 @@ export function CampaignsClient() {
     }
   }, []);
 
-  const loadTags = useCallback(async () => {
+  const loadAudiences = useCallback(async () => {
+    // Audiences come from smrtCRM (tags / groups / segments). If smrtCRM isn't
+    // enabled for this org, fall back silently to "all contacts".
     try {
-      // Audiences come from smrtCRM tags (smrtReach reads CRM audiences).
-      const { tags } = await api<{ tags: Tag[] }>("/api/crm/tags");
-      setTags(tags);
+      const [{ tags }, { groups }, { segments }] = await Promise.all([
+        api<{ tags: Named[] }>("/api/crm/tags"),
+        api<{ groups: Named[] }>("/api/crm/groups"),
+        api<{ segments: Named[] }>("/api/crm/segments"),
+      ]);
+      setTags(tags ?? []);
+      setGroups(groups ?? []);
+      setSegments(segments ?? []);
     } catch {
-      // smrtCRM may not be enabled for this org — audiences fall back to "all".
-      setTags([]);
+      setTags([]); setGroups([]); setSegments([]);
     }
   }, []);
 
   useEffect(() => {
     loadCampaigns();
-    loadTags();
-  }, [loadCampaigns, loadTags]);
+    loadAudiences();
+  }, [loadCampaigns, loadAudiences]);
 
   async function handleCreate() {
     if (!form.name.trim()) {
@@ -92,16 +101,14 @@ export function CampaignsClient() {
     }
     setSaving(true);
     try {
-      const audience =
-        form.audienceTag === ALL_CONTACTS
-          ? { kind: "all" }
-          : { kind: "tag", id: form.audienceTag };
+      const [kind, id] = form.audienceKey.split(":");
+      const audience = id ? { kind, id } : { kind: "all" };
       await api("/api/reach/campaigns", {
         method: "POST",
         body: { name: form.name.trim(), channel: form.channel, audience },
       });
       toast.success(t("campaignCreated"));
-      setForm({ name: "", channel: "email", audienceTag: ALL_CONTACTS });
+      setForm({ name: "", channel: "email", audienceKey: ALL_CONTACTS });
       setCreateOpen(false);
       loadCampaigns();
     } catch (e) {
@@ -188,18 +195,22 @@ export function CampaignsClient() {
             <div className="grid gap-1.5">
               <label className="text-sm text-muted-foreground">{t("audience")}</label>
               <Select
-                value={form.audienceTag}
-                onValueChange={(v) => setForm((f) => ({ ...f, audienceTag: v }))}
+                value={form.audienceKey}
+                onValueChange={(v) => setForm((f) => ({ ...f, audienceKey: v }))}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL_CONTACTS}>{t("audienceAll")}</SelectItem>
+                  {groups.map((g) => (
+                    <SelectItem key={`group:${g.id}`} value={`group:${g.id}`}>{t("audienceGroup")}: {g.name}</SelectItem>
+                  ))}
                   {tags.map((tag) => (
-                    <SelectItem key={tag.id} value={tag.id}>
-                      {tag.name}
-                    </SelectItem>
+                    <SelectItem key={`tag:${tag.id}`} value={`tag:${tag.id}`}>{t("audienceTag")}: {tag.name}</SelectItem>
+                  ))}
+                  {segments.map((s) => (
+                    <SelectItem key={`segment:${s.id}`} value={`segment:${s.id}`}>{t("audienceSegment")}: {s.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

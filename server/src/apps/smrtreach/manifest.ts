@@ -11,8 +11,12 @@ export const manifest: AppManifest = {
     "campaign.done",
     "campaign.failed",
     // The public unsubscribe page writes the preference back to smrtCRM via
-    // this event (Reach-4 / CRM-6) — Reach never touches smrtCRM tables itself.
+    // this event (Reach-4 / CRM-6) — Reach never touches the contact's
+    // preference fields itself.
     "contact.unsubscribed",
+    // The public preferences page emits the chosen email_frequency tier back to
+    // smrtCRM (granular all/weekly/monthly/none, botsite parity).
+    "contact.preference_changed",
   ],
 
   subscribes: [],
@@ -54,6 +58,12 @@ export const manifest: AppManifest = {
       "smrtreach_logs",
       "smrtreach_senders",
       "smrtreach_settings",
+      // Auto-tag on completion (botsite "קמפיין: <name>"): Reach creates/assigns
+      // a CRM tag for the sent audience so it's reusable as a future audience.
+      // Direct org-scoped write (same client audience-service reads with) — the
+      // no-cross-app-*import* rule is honored; this is the declared exception.
+      "smrtcrm_tags",
+      "smrtcrm_tag_assignments",
     ],
   },
 

@@ -2,10 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ExternalLink, AlertTriangle } from "lucide-react";
+import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ExternalLink, AlertTriangle, Home, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { ManualTaskInput } from "./ManualTaskInput";
 import { TaskChecklist } from "./TaskChecklist";
+import { ContextButton } from "./ContextPanel";
+import { AssigneeButton } from "./AssigneeButton";
+import { DueDateChip } from "./DueDateChip";
+import { SnoozeDialog } from "./SnoozeDialog";
+import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
+import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { effectiveDeadline } from "@/lib/workdays";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -51,6 +59,9 @@ export function MarathonMode({
   onExit: () => void;
 }) {
   const t = useTranslations("marathon");
+  const tTasks = useTranslations("tasks");
+  const tDetail = useTranslations("taskDetailExt");
+  const blocked = useWorkCalendar();
   // Snapshot the queue at start: list refetches during the run must not
   // reshuffle what the runner sees.
   const [queue] = useState<Task[]>(() => tasks);
@@ -101,6 +112,46 @@ export function MarathonMode({
     } catch { /* fall back to the list row's fields */ }
   }, [currentId]);
   useEffect(() => { setDetail(null); void loadDetail(); }, [loadDetail]);
+
+  // The same task-window actions (size/home/snooze/assign/due/info/delete) are
+  // offered in-run. Edits PATCH the shared task row and refresh the detail; the
+  // ones that drop the task off the desk (snooze/delete) advance the run.
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  async function patchCurrent(body: Record<string, unknown>) {
+    if (!currentId) return;
+    try {
+      await api(`/api/tasks/${currentId}`, { method: "PATCH", body });
+      await loadDetail();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+  // Snooze / delete remove the task from the desk → advance like a skip.
+  async function advancePastCurrent() {
+    const nextSkip = skipCount + 1;
+    setSkipCount(nextSkip);
+    if (index + 1 >= queue.length) await finishRun(doneCount, nextSkip);
+    else setIndex(index + 1);
+  }
+  async function handleSnoozeConfirm(untilIso: string) {
+    if (!currentId) return;
+    try {
+      await api(`/api/tasks/${currentId}/snooze`, { method: "POST", body: { until: untilIso } });
+      setSnoozeOpen(false);
+      await advancePastCurrent();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+  async function handleDeleteCurrent() {
+    if (!currentId || !window.confirm(tTasks("deleteConfirm"))) return;
+    try {
+      await api(`/api/tasks/${currentId}`, { method: "DELETE" });
+      await advancePastCurrent();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
 
   async function closeRun(done: number, skipped: number): Promise<{ stats: MarathonStats; prev: MarathonStats } | null> {
     if (closedRef.current) return null;
@@ -176,6 +227,9 @@ export function MarathonMode({
 
   // Material to show in-run. Prefer the freshly fetched detail; fall back to the
   // list row so something shows before the fetch lands.
+  const view = detail ?? current;
+  const isQuickNow = (view?.size ?? mode) === "quick";
+  const isHomeNow = view?.context === "home";
   const description = detail?.description ?? current?.description ?? null;
   const checklist = detail?.checklist ?? [];
   const materials = detail?.task_materials ?? [];
@@ -271,6 +325,48 @@ export function MarathonMode({
             )}
           </div>
 
+          {/* Same action icons as the regular task window — available in-run so
+              nothing forces the runner to leave the flow to act on a task. */}
+          {current && view && (
+            <div className="flex flex-wrap items-center justify-center gap-1 rounded-lg border bg-card/50 px-2 py-1.5">
+              <ContextButton task={view} locale={locale} className="h-9 w-9 [&_svg]:size-4" />
+              <IconButton
+                label={isQuickNow ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
+                color="amber"
+                className={isQuickNow ? "text-status-warn" : undefined}
+                onClick={() => patchCurrent({ size: isQuickNow ? "regular" : "quick" })}
+              >
+                <Zap className={isQuickNow ? "fill-current" : undefined} />
+              </IconButton>
+              <IconButton
+                label={tDetail("contextHome")}
+                color="primary"
+                aria-pressed={isHomeNow}
+                className={isHomeNow ? "text-primary" : undefined}
+                onClick={() => patchCurrent({ context: isHomeNow ? null : "home" })}
+              >
+                <Home className={isHomeNow ? "fill-current" : undefined} />
+              </IconButton>
+              <IconButton label={tTasks("actions.snooze")} color="amber" onClick={() => setSnoozeOpen(true)}>
+                <Clock />
+              </IconButton>
+              <SaveAsInfoButton defaultProjectId={view.project_id} defaultTitle={title} defaultBody={view.description} />
+              <AssigneeButton
+                assignedTo={view.assigned_to_user_id ?? null}
+                onAssign={(uid) => patchCurrent({ assigned_to_user_id: uid })}
+              />
+              <DueDateChip
+                deadline={effectiveDeadline(view)}
+                blocked={blocked}
+                locked={!!view.plan_id}
+                onChange={view.plan_id ? undefined : (d) => patchCurrent({ due_date: d })}
+              />
+              <IconButton label={tTasks("actions.delete")} color="red" onClick={handleDeleteCurrent}>
+                <Trash2 />
+              </IconButton>
+            </div>
+          )}
+
           {description && (
             <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80" dir="auto">{description}</p>
           )}
@@ -333,6 +429,8 @@ export function MarathonMode({
           {mode === "quick" ? t("notQuick") : t("isQuick")}
         </Button>
       </div>
+
+      <SnoozeDialog open={snoozeOpen} onClose={() => setSnoozeOpen(false)} onConfirm={handleSnoozeConfirm} />
     </div>
   );
 }

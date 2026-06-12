@@ -25,6 +25,7 @@ import { resolveAudience } from "./audience-service";
 import type { AudienceRef, Channel } from "./audience-service";
 import { enqueueCampaignEmail, processEmailQueue } from "./send-service";
 import { enqueueCampaignWhatsapp, processWhatsappQueue } from "./wa-send-service";
+import { sendTestMessage } from "./test-send";
 
 const router = Router();
 
@@ -105,6 +106,8 @@ router.patch("/reach/campaigns/:id", async (req: Request, res: Response) => {
     status?: string;
     scheduled_at?: string | null;
     timezone?: string | null;
+    country_filter?: string | null;
+    test_batch_size?: number | null;
   };
 
   const patch: Record<string, unknown> = {};
@@ -112,6 +115,8 @@ router.patch("/reach/campaigns/:id", async (req: Request, res: Response) => {
   if (body.audience !== undefined) patch.audience = body.audience ?? {};
   if (body.scheduled_at !== undefined) patch.scheduled_at = body.scheduled_at;
   if (body.timezone !== undefined) patch.timezone = body.timezone;
+  if (body.country_filter !== undefined) patch.country_filter = body.country_filter;
+  if (body.test_batch_size !== undefined) patch.test_batch_size = body.test_batch_size;
   if (body.status !== undefined) {
     const allowed = ["draft", "approved", "ready", "sending", "paused", "done", "failed"];
     if (!allowed.includes(body.status)) {
@@ -158,11 +163,12 @@ function pick<T extends Record<string, unknown>>(body: T, keys: readonly string[
 }
 
 const EMAIL_COLS = [
-  "subject", "preview", "sender", "reply_to", "html_body",
-  "priority", "send_hours", "exclude_shabbat", "rate_limit", "cooldown_seconds",
+  "subject", "preview", "sender", "reply_to", "html_body", "language",
+  "priority", "send_hours", "exclude_shabbat", "rate_limit", "cooldown_seconds", "sto_enabled",
 ] as const;
 const WHATSAPP_COLS = [
   "bot_ref", "template", "template_lang", "template_params", "recipient_cap",
+  "body_text", "send_hours", "exclude_shabbat",
 ] as const;
 
 // Upsert per-channel detail (email/whatsapp).
@@ -388,12 +394,16 @@ router.put("/reach/settings", async (req: Request, res: Response) => {
 // Resolve recipients, enqueue them, and process a first batch immediately so
 // the user sees sending start. The rest of the queue is drained by repeated
 // calls to /reach/queue/process (pg_cron will call it; see build plan §H).
+// If the campaign has a test_batch_size, only that many are sent now and the
+// campaign is parked in 'paused' awaiting an explicit /resume (botsite "מנה ראשונה").
 router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const { data: campaign } = await db
-    .from("smrtreach_campaigns").select("channel").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+    .from("smrtreach_campaigns").select("channel, test_batch_size").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
   if (!campaign) return res.status(404).json({ error: "campaign not found" });
   const channel = campaign.channel as Channel;
+  const testBatch = (campaign.test_batch_size as number | null) ?? 0;
+  const firstBatch = testBatch && testBatch > 0 ? testBatch : 50;
 
   try {
     let queued = 0;
@@ -401,17 +411,69 @@ router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => 
     if (channel === "email" || channel === "both") {
       const q = await enqueueCampaignEmail(orgId, req.params.id);
       queued += q;
-      if (q > 0) { const r = await processEmailQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+      if (q > 0) { const r = await processEmailQueue(orgId, firstBatch); totals.sent += r.sent; totals.failed += r.failed; }
     }
     if (channel === "whatsapp" || channel === "both") {
       const q = await enqueueCampaignWhatsapp(orgId, req.params.id);
       queued += q;
-      if (q > 0) { const r = await processWhatsappQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+      if (q > 0) { const r = await processWhatsappQueue(orgId, firstBatch); totals.sent += r.sent; totals.failed += r.failed; }
     }
-    res.json({ queued, ...totals });
+    // Test batch: pause after the first batch so the user can review before the
+    // rest goes out. The processor only sends 'sending' campaigns, so 'paused'
+    // holds the remaining queued rows until /resume.
+    let paused = false;
+    if (testBatch && testBatch > 0 && queued > testBatch) {
+      await db.from("smrtreach_campaigns").update({ status: "paused" }).eq("org_id", orgId).eq("id", req.params.id);
+      paused = true;
+    }
+    res.json({ queued, ...totals, paused });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await notifyError(orgId, "smrtreach", { title: "Failed to send campaign", body: msg });
+    res.status(400).json({ error: msg });
+  }
+});
+
+// Pause a sending campaign (holds the queued rows; the processor skips non-'sending').
+router.post("/reach/campaigns/:id/pause", async (req: Request, res: Response) => {
+  const { error } = await db.from("smrtreach_campaigns")
+    .update({ status: "paused" }).eq("org_id", req.org!.id).eq("id", req.params.id).eq("status", "sending");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// Resume a paused campaign and process a batch immediately; cron drains the rest.
+router.post("/reach/campaigns/:id/resume", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { data: campaign } = await db
+    .from("smrtreach_campaigns").select("channel, status").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (!campaign) return res.status(404).json({ error: "campaign not found" });
+  if (campaign.status !== "paused") return res.status(400).json({ error: "campaign is not paused" });
+  await db.from("smrtreach_campaigns").update({ status: "sending" }).eq("org_id", orgId).eq("id", req.params.id);
+  try {
+    const totals = { sent: 0, failed: 0 };
+    const channel = campaign.channel as Channel;
+    if (channel === "email" || channel === "both") { const r = await processEmailQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+    if (channel === "whatsapp" || channel === "both") { const r = await processWhatsappQueue(orgId, 50); totals.sent += r.sent; totals.failed += r.failed; }
+    res.json({ ok: true, ...totals });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtreach", { title: "Failed to resume campaign", body: msg });
+    res.status(400).json({ error: msg });
+  }
+});
+
+// One-off test send to a single address (does NOT touch the queue or status).
+router.post("/reach/campaigns/:id/test", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  if (!email && !phone) return res.status(400).json({ error: "email or phone is required" });
+  try {
+    const result = await sendTestMessage(orgId, req.params.id, { email: email || null, phone: phone || null });
+    res.json(result);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     res.status(400).json({ error: msg });
   }
 });
@@ -431,16 +493,68 @@ router.post("/reach/queue/process", async (req: Request, res: Response) => {
   }
 });
 
-// Campaign stats (sent/failed/open/click counts).
+// Campaign stats: counts + derived rates + bounce/complaint/unsub + top links.
 router.get("/reach/campaigns/:id/stats", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
-  const [{ count: sent }, { count: failed }, { count: opens }, { count: clicks }] = await Promise.all([
-    db.from("smrtreach_logs").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("status", "sent"),
-    db.from("smrtreach_logs").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("status", "failed"),
-    db.from("smrtreach_tracking").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("event", "open"),
-    db.from("smrtreach_tracking").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", req.params.id).eq("event", "click"),
+  const id = req.params.id;
+  const tlog = (status: string) =>
+    db.from("smrtreach_logs").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", id).eq("status", status);
+  const ttrk = (event: string) =>
+    db.from("smrtreach_tracking").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("campaign_id", id).eq("event", event);
+
+  const [
+    { count: sent }, { count: failed },
+    { count: opens }, { count: clicks }, { count: bounces }, { count: complaints },
+    { data: clickRows },
+  ] = await Promise.all([
+    tlog("sent"),
+    tlog("failed"),
+    ttrk("open"), ttrk("click"), ttrk("bounce"), ttrk("complaint"),
+    // Top clicked links (bounded fetch, aggregated in code).
+    db.from("smrtreach_tracking").select("url").eq("org_id", orgId).eq("campaign_id", id).eq("event", "click").not("url", "is", null).limit(5000),
   ]);
-  res.json({ sent: sent ?? 0, failed: failed ?? 0, opens: opens ?? 0, clicks: clicks ?? 0 });
+
+  const sentN = sent ?? 0;
+  const pct = (n: number) => (sentN > 0 ? Math.round((n / sentN) * 1000) / 10 : 0);
+
+  const linkCounts = new Map<string, number>();
+  for (const r of clickRows ?? []) {
+    const url = r.url as string;
+    linkCounts.set(url, (linkCounts.get(url) ?? 0) + 1);
+  }
+  const topLinks = [...linkCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([url, count]) => ({ url, count }));
+
+  res.json({
+    sent: sentN,
+    failed: failed ?? 0,
+    opens: opens ?? 0,
+    clicks: clicks ?? 0,
+    bounces: bounces ?? 0,
+    complaints: complaints ?? 0,
+    open_rate: pct(opens ?? 0),
+    click_rate: pct(clicks ?? 0),
+    bounce_rate: pct(bounces ?? 0),
+    top_links: topLinks,
+  });
+});
+
+// Per-recipient send log (paginated), for the campaign detail recipients table.
+router.get("/reach/campaigns/:id/log", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const { data, error, count } = await db
+    .from("smrtreach_logs")
+    .select("contact_id, channel, status, error, sent_at", { count: "exact" })
+    .eq("org_id", orgId)
+    .eq("campaign_id", req.params.id)
+    .order("sent_at", { ascending: false, nullsFirst: false })
+    .range(offset, offset + limit - 1);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ rows: data ?? [], total: count ?? 0 });
 });
 
 export default router;
