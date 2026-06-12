@@ -563,7 +563,11 @@
     "restored": "הפריט הוחזר לתיבת הנכנסות",
     "learnFromThis": "תלמד מזה את ה-AI להבא (ההסבר יישמר כתיקון)",
     "learnScopePersonal": "רק בשבילי",
-    "learnScopeGeneral": "כלל כללי"
+    "learnScopeGeneral": "כלל כללי",
+    "resolvedTitle": "נפתרו מעצמם ({count})",
+    "resolvedHint": "הצעות שנסגרו אחרי שכבר טיפלת בהן בשיחה. אשר שבוצעו או החזר להצעה.",
+    "confirmDone": "בוצע",
+    "reopen": "החזר"
   },
   "merge": {
     "step1Title": "בחירת יעד למיזוג",

@@ -563,7 +563,11 @@
     "restored": "Item restored to inbox",
     "learnFromThis": "Teach the AI from this (the explanation is saved as a correction)",
     "learnScopePersonal": "Just for me",
-    "learnScopeGeneral": "General rule"
+    "learnScopeGeneral": "General rule",
+    "resolvedTitle": "Resolved themselves ({count})",
+    "resolvedHint": "Suggestions that closed after you already handled them in the conversation. Confirm done, or reopen.",
+    "confirmDone": "Done",
+    "reopen": "Reopen"
   },
   "merge": {
     "step1Title": "Choose merge target",

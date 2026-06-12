@@ -191,6 +191,58 @@ function bodyForClassify(msg: any, limit: number): string {
   return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${clipped}`;
 }
 
+// WhatsApp burst transcripts are a ROLLING 20-message window: every new
+// message rebuilds raw_content as "last 20 messages" and stamps the burst's
+// received_at = now. So a matter from days ago keeps re-appearing in the
+// window, and the task builder re-extracts it as a brand-new task stamped
+// today (T736: a 9 ביוני "Dini materials" matter rebuilt as a 12 ביוני task;
+// T737 titled "נשלח ב-12/6" over 11 ביוני content). This splits the transcript
+// at a high-water timestamp (the latest message already processed in a PRIOR
+// burst for this chat): lines at/before it are CONTEXT-only; only lines after
+// it are NEW material the builder may turn into a task. Deterministic on
+// purpose — we partition the lines ourselves rather than trust the model to
+// honor a "ignore old lines" instruction (it doesn't, reliably). When there is
+// no high-water (first burst ever for the chat), the whole transcript is new.
+const WA_LINE_RE = /^\[(INCOMING|OUTGOING)\s+([0-9T:.\-]+)\]/;
+function splitWhatsAppByHighWater(rawBody: string, highWaterIso: string | null): string {
+  if (!highWaterIso) return rawBody;
+  const hw = Date.parse(highWaterIso);
+  if (isNaN(hw)) return rawBody;
+  const lines = String(rawBody).split("\n");
+  const header: string[] = [];
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  // A transcript line's timestamp governs the lines that follow it (OCR /
+  // multi-line message bodies have no marker of their own), so carry the last
+  // seen bucket forward. Header lines (Chat:/Phone:/Group:/--- markers) before
+  // the first [ts] line stay in the header.
+  let bucket: "header" | "old" | "new" = "header";
+  for (const line of lines) {
+    const m = line.match(WA_LINE_RE);
+    if (m) {
+      const ts = Date.parse(m[2]);
+      bucket = !isNaN(ts) && ts > hw ? "new" : "old";
+    }
+    if (bucket === "header") header.push(line);
+    else if (bucket === "old") oldLines.push(line);
+    else newLines.push(line);
+  }
+  // No genuinely-new lines → nothing for the builder to act on. Return only the
+  // header + a marker; the builder will correctly produce [] (and the tiny-gate
+  // / empty-build paths handle it), instead of re-mining stale history.
+  const headBlock = header.join("\n").trim();
+  if (newLines.length === 0) {
+    return `${headBlock}\n\n[No new messages since the last time this chat was processed — nothing new to act on.]`;
+  }
+  const ctx = oldLines.join("\n").trim();
+  const fresh = newLines.join("\n").trim();
+  return [
+    headBlock,
+    ctx ? `\n--- EARLIER CONTEXT (already processed — for understanding only, do NOT create a task from these lines) ---\n${ctx}` : "",
+    `\n--- NEW MESSAGES (create a task ONLY from these) ---\n${fresh}`,
+  ].filter(Boolean).join("\n");
+}
+
 // ── Business-hours math ──────────────────────────────────────────────────────
 // "Business hours" here = clock hours that fall on a business DAY. A business
 // day is Mon–Fri (Sun=0 and Sat=6 are weekend) — matching the convention this
@@ -1198,7 +1250,7 @@ Build the task by READING the content:
 The TRACKING-TASK / QUOTED-TEXT / ONE-TASK-PER-EMAIL rules above are for
 inbound messages and DO NOT apply to Drive documents.`;
 
-const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request / is still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>, not\n    replying to them. Title starts with "לעקוב מול <name>" or\n    "לוודא ש<name> חוזר על <topic>". The description must say the user\n    already sent it and is waiting for the other side's answer.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.`;
+const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request / is still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>, not\n    replying to them. Title starts with "לעקוב מול <name>" or\n    "לוודא ש<name> חוזר על <topic>". The description must say the user\n    already sent it and is waiting for the other side's answer.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.\nDATE ANCHOR (mandatory): the task's date is the [ts] of the message the\ntask is actually about — NEVER the current date. If the relevant message is\nfrom 9 ביוני, the task is about 9 ביוני even if you are reading it on 12\nביוני. Do not write today's date over an older matter. When an "EARLIER\nCONTEXT" / "NEW MESSAGES" split is present, build the task from the NEW\nMESSAGES section only; the earlier context is there to help you understand\nthe new lines, not to be turned into its own task.`;
 
 const GMAIL_SENT_TASK_RULES = `\n\n═══ SENT-EMAIL DIRECTION RULE (mandatory) ═══\nThis email was SENT BY THE USER — the From: address is the user's own.\nThe user is the SENDER, not the recipient. NEVER turn the user's own\nrequest into a to-do FOR the user.\n  • If the user ASKED the recipient to do / pay / send / transfer\n    something → the user is now WAITING ON the recipient. The next step\n    is to follow up or confirm the OTHER side acted — NOT to perform the\n    action the user requested from them. Title starts with\n    "לעקוב אחרי <נמען>" or "לוודא ש<נמען> …".\n  • If the user COMMITTED to do something themselves (אשלח / אעביר /\n    אבדוק / a time pledge) → the user owes a follow-through. Title starts\n    with the committed verb / "להשלים מול <נמען> …".\n  • If nothing is pending (closure, thank-you, pure FYI) → return [].\nDIRECTION GUARD (mandatory): money or an action the user REQUESTED from\nthe recipient flows TOWARD the user — never title it as the user\npaying / sending / transferring TO the recipient. owner_contact and any\nnamed party must be the RECIPIENT, never the user themselves.`;
 
@@ -1239,7 +1291,7 @@ DIRECTION GUARD: do not invert payer/payee. If the user's org is the one
 RECEIVING money (merchant / payee), never title the task as the user needing
 to pay, update billing, or fix their own card.`;
 
-async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }, modelOverride?: string) {
+async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }, modelOverride?: string, waHighWater?: string | null) {
   // modelOverride is set only on the escalation pass (see end of function), so
   // the recursion is bounded to a single re-run on the stronger model.
   const model = modelOverride ?? sys.summary_model;
@@ -1306,7 +1358,14 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   if (contactMemory) context += contactMemory;
   const taskUserName: string = settings.__userName ?? "";
   if (taskUserName) context += `\n\nUser's first name: ${taskUserName}. Use "${taskUserName}" instead of "המשתמש" in all Hebrew fields (title_he, description, reason_he).`;
-  const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${bodyForClassify(msg, truncate)}`;
+  // WhatsApp only: split the rolling transcript at the chat's high-water mark
+  // so the builder extracts a task ONLY from messages newer than the last
+  // burst already processed — stops days-old matters from being rebuilt as
+  // fresh tasks stamped today (T736/T737). Non-WhatsApp bodies are unchanged.
+  const builderBody = isWhatsApp(msg) && waHighWater
+    ? splitWhatsAppByHighWater(bodyForClassify(msg, truncate), waHighWater)
+    : bodyForClassify(msg, truncate);
+  const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${builderBody}`;
   // Mandatory output-contract addendum, appended AFTER the (possibly
   // admin-overridden) staticPrompt so every task object carries a "confidence"
   // field even when a tenant has customized edge_task_builder. Without it a
@@ -1360,7 +1419,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
     sys.task_escalation_model &&
     sys.task_escalation_model !== model
   ) {
-    const escalated = await createTasksFromMessage(msg, sys, settings, userId, projectContext, sys.task_escalation_model);
+    const escalated = await createTasksFromMessage(msg, sys, settings, userId, projectContext, sys.task_escalation_model, waHighWater);
     return {
       ...escalated,
       // Cheap-pass first, escalated last, so the log shows each model's verdict.
@@ -1991,6 +2050,8 @@ NEVER match on person alone. NEVER match on topic alone. Two DIFFERENT meetings 
 
 ACTION GATE (mandatory — applies even when 2+ pillars above agree): a match ALSO requires the SAME underlying obligation/action. From a single high-volume sender (Amazon, a bank, a marketplace, a SaaS) "same party + a nearby date" is NOT sufficient on its own. "Review / skip an upcoming delivery", "fix a failed or expired payment method", "track a shipment", "claim a refund", and "a price-change notice" are DIFFERENT obligations even when they arrive from the same sender in the same week — do NOT merge one into another. Merge ONLY when the new item is the SAME obligation: a follow-up about the very same delivery, invoice, appointment, reference/order number, or decision.
 
+DUNNING EXCEPTION (mandatory): a bill, its payment reminder, its overdue / past-due / "interest is accruing" notice, and a final/collection warning about the SAME account, invoice, or service address are the SAME obligation — the one debt escalating over time, NOT separate matters. Match them even though the wording and the amount differ (an overdue notice shows a different running balance than the original bill). Signals that it is the same debt: identical account number, invoice number, service address, or property. Example: "Your DEP water bill is available" (675 Rutland Rd) and "Let us help with your overdue balance — interest is accruing" (675 Rutland Rd) from NoReply@mail.dep.nyc.gov are the SAME obligation → match.
+
 Return ONLY valid JSON, no markdown:
 {"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew: name the 2+ matching specifics — date, party, subject>"}
 OR
@@ -2001,7 +2062,7 @@ async function findDuplicateOpenTask(
   probe: DupeProbe,
   sys: SystemParams,
   refId: string,
-): Promise<{ taskId: string; serial: string; confidence: "high" | "medium"; reason: string; closed: boolean } | null> {
+): Promise<{ taskId: string; serial: string; confidence: "high" | "medium"; reason: string; closed: boolean; status: string } | null> {
   // Need SOMETHING to match on. Contact/date are the strong signals, but many
   // WhatsApp items carry neither — for those the TEXT is the signal
   // (token-overlap recall below). For WhatsApp, probe.title is the chat's
@@ -2128,6 +2189,7 @@ async function findDuplicateOpenTask(
         confidence: parsed.confidence,
         reason: String(parsed.reason_he ?? ""),
         closed: !["inbox", "in_progress"].includes(String(chosen.status)),
+        status: String(chosen.status),
       };
     }
   } catch { /* ignore parse errors — treat as no match */ }
@@ -2214,6 +2276,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // Medium-confidence cross-source duplicate: stamped onto the task we are
   // about to create (set in Path 2.5, applied in Path 3).
   let dupSuggestionTaskId: string | null = null;
+  // Context tag for a task that re-surfaces a matter the user already set
+  // aside (dismissed/archived) — e.g. a DEP dunning notice after the original
+  // bill task was dismissed. Prepended to the created task's description in
+  // Path 3 so the user sees it's a return/escalation, not a fresh ask the
+  // system forgot about. Null on the normal path.
+  let resendContext: string | null = null;
 
   // User reclassified this message as actionable via the log UI — bypass
   // preClassify skip/defer/informational logic and force actionable after AI.
@@ -2642,18 +2710,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   if (!linkedTaskId && classification === "actionable" && !whatsappWantsNew) {
     try {
       const dup = await findDuplicateOpenTask(msg.user_id, buildProbe(msg), sys, msg.id);
-      if (dup && dup.confidence === "high" && dup.closed) {
-        // The same obligation was already handled and the task is closed
-        // (completed / archived / dismissed). A re-sent reminder must NOT spawn a
-        // fresh task that nags the user about something they already dealt
-        // with. Leave linkedTaskId null so Path 3 below skips creation, mark
-        // the message a follow-up, and record the suppression for the log.
+      if (dup && dup.confidence === "high" && dup.closed && dup.status === "completed") {
+        // The matched task is COMPLETED — the user finished this. A re-send
+        // must NOT spawn a fresh task that nags about something done. Leave
+        // linkedTaskId null so Path 3 skips creation, mark a follow-up, log.
         classification = "actionable_followup";
-        classificationReason = `re-sent duplicate of already-handled ${dup.serial || dup.taskId} (high) — skipped creating a new task — ${dup.reason}`;
+        classificationReason = `re-sent duplicate of completed ${dup.serial || dup.taskId} (high) — skipped creating a new task — ${dup.reason}`;
         await supabase.from("log_entries").insert({
           user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "duplicate",
           ...msgLogFields(msg), classification_reason: classificationReason,
         });
+      } else if (dup && dup.confidence === "high" && dup.closed) {
+        // The matched task was DISMISSED or ARCHIVED — the user set it aside,
+        // but a later message about the SAME matter may be an escalation that
+        // now matters (the canonical case: a DEP water bill task dismissed,
+        // then a "your balance is overdue, interest is accruing" notice). Do
+        // NOT suppress — create the task in Path 3, but TAG it with context so
+        // the user sees it's a return of something they shelved, not a fresh
+        // ask the system forgot. (User decision 2026-06-12: tag, don't suppress.)
+        const verb = dup.status === "dismissed" ? "דחית" : "העברת לארכיון";
+        resendContext = `↩ חזרה של עניין ש${verb} (${dup.serial || dup.taskId}) — ${dup.reason}`;
+        classificationReason = `escalation of ${dup.status} ${dup.serial || dup.taskId} (high) — tagged, not suppressed — ${dup.reason}`;
       } else if (dup && dup.confidence === "high") {
         await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason);
         linkedTaskId = dup.taskId;
@@ -2742,7 +2819,31 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           if (brief) projectContext = { projectId: projectMatch.projectId, brief };
         }
 
-        const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext);
+        // WhatsApp high-water: the latest message timestamp already processed
+        // in a PRIOR burst for this chat. The builder will only mine messages
+        // newer than this, so days-old matters that linger in the rolling
+        // 20-message window aren't rebuilt as fresh tasks. whatsapp_echo rows
+        // are independent per-memo (no rolling window), so they get no gate.
+        let waHighWater: string | null = null;
+        if (msg.source_type === "whatsapp") {
+          const chatId = msg.metadata?.chatId as string | undefined;
+          if (chatId) {
+            const { data: prevBurst } = await supabase
+              .from("source_messages")
+              .select("received_at")
+              .eq("user_id", msg.user_id)
+              .eq("source_type", "whatsapp")
+              .eq("processing_status", "processed")
+              .neq("id", msg.id)
+              .filter("metadata->>chatId", "eq", chatId)
+              .lt("received_at", msg.received_at)
+              .order("received_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            waHighWater = (prevBurst?.received_at as string | null) ?? null;
+          }
+        }
+        const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext, undefined, waHighWater);
         taskConfidence = taskResult.confidence;
         taskTrail = taskResult.taskTrail;
         totalInputTokens += taskResult.inputTokens;
@@ -2836,33 +2937,54 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               const tDup = await findDuplicateOpenTask(msg.user_id, buildProbeFromTask(msg, task), sys, msg.id);
               if (tDup && tDup.confidence === "high") {
                 if (tDup.closed) {
-                  // Already handled and closed (completed/archived/dismissed):
-                  // do NOT re-create the same ask the user already disposed of.
-                  classification = "actionable_followup";
-                  classificationReason = `re-extracted duplicate of already-handled ${tDup.serial || tDup.taskId} — skipped re-creating "${task.title_he}" — ${tDup.reason}`;
-                  await supabase.from("log_entries").insert({
-                    user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "duplicate",
-                    ...msgLogFields(msg), classification_reason: classificationReason,
-                  });
+                  // A dismissed/archived EMAIL match is an escalation of a
+                  // matter the user shelved (DEP dunning after the bill task was
+                  // dismissed): surface it, TAGGED, instead of suppressing. But
+                  // completed matches (truly done) and WhatsApp re-extractions
+                  // (the same ask re-mined from a rolling transcript — the
+                  // T665→T685 respawn) stay suppressed.
+                  const escalation = tDup.status !== "completed" && !isWhatsApp(msg);
+                  if (escalation) {
+                    if (!resendContext) {
+                      const verb = tDup.status === "dismissed" ? "דחית" : "העברת לארכיון";
+                      resendContext = `↩ חזרה של עניין ש${verb} (${tDup.serial || tDup.taskId}) — ${tDup.reason}`;
+                    }
+                    // fall through to create the (tagged) task below
+                  } else {
+                    classification = "actionable_followup";
+                    classificationReason = `re-extracted duplicate of already-handled ${tDup.serial || tDup.taskId} — skipped re-creating "${task.title_he}" — ${tDup.reason}`;
+                    await supabase.from("log_entries").insert({
+                      user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "duplicate",
+                      ...msgLogFields(msg), classification_reason: classificationReason,
+                    });
+                    continue;
+                  }
+                } else {
+                  // Open duplicate: fold this message into the existing task
+                  // rather than spawning a parallel one. Don't push it into
+                  // createdTaskIds — the deferred-follow-up snooze below must only
+                  // touch tasks this burst actually created, never a pre-existing
+                  // open task.
+                  await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason);
+                  if (!firstTaskId) firstTaskId = tDup.taskId;
                   continue;
                 }
-                // Open duplicate: fold this message into the existing task
-                // rather than spawning a parallel one. Don't push it into
-                // createdTaskIds — the deferred-follow-up snooze below must only
-                // touch tasks this burst actually created, never a pre-existing
-                // open task.
-                await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason);
-                if (!firstTaskId) firstTaskId = tDup.taskId;
-                continue;
               }
             } catch (e) {
               await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process_dupe", status: "failed", ...msgLogFields(msg), error_message: `per-task dedup failed: ${(e as Error).message}` });
             }
 
+            // Prepend the re-surfacing context tag (set in Path 2.5 when this
+            // matter matches a task the user dismissed/archived) onto the first
+            // task only, so it reads as a return/escalation rather than a fresh
+            // ask. firstTaskId is still null for the first task in the loop.
+            const taggedDescription = (!firstTaskId && resendContext)
+              ? `${resendContext}\n\n${task.description ?? ""}`
+              : task.description;
             const { data: newTask } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
-              description: task.description, task_type: taskType, priority: task.priority || "medium",
+              description: taggedDescription, task_type: taskType, priority: task.priority || "medium",
               // CHECK constraint on tasks.size — only pass through valid values.
               size: task.size === "quick" ? "quick" : "regular",
               status: "inbox", manually_verified: false,
@@ -2872,7 +2994,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               related_contact_email: msg.sender_email, ai_confidence: 0.8, ai_model_used: taskResult.model,
               // Stamp the medium-confidence dup suggestion onto the first task only.
               suggested_duplicate_of: firstTaskId ? null : dupSuggestionTaskId,
-              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: task.description }],
+              updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: taggedDescription }],
             }).select("id").single();
             if (newTask) {
               const isFirst = !firstTaskId;
