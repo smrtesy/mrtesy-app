@@ -69,7 +69,13 @@ const FALLBACK_PARAMS: SystemParams = {
   escalate_low_confidence: false,
   escalation_model: "claude-sonnet-4-6",
   escalate_task_low_confidence: false,
-  task_escalation_model: "claude-opus-4-8",
+  // Was Opus-4.8. Opus escalation cost ~$1/day on only ~8 task-builds/day
+  // (~$0.13 each) for a marginal quality gain over Sonnet on already-uncertain
+  // extractions. Set to Sonnet so the escalation guard (task_escalation_model
+  // !== summary_model) makes the re-run a no-op — the base Sonnet result stands
+  // and no second model call is paid. Flip back to a stronger model here (and
+  // in smrttask_system_params) if the low-confidence task rate justifies it.
+  task_escalation_model: "claude-sonnet-4-6",
 };
 
 async function loadSystemParams(): Promise<SystemParams> {
@@ -379,7 +385,7 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   return { result: "needs_claude" };
 }
 
-type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } };
 
 // Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
 // or a low surrogate not preceded by a high one). They arise when a body is
@@ -394,12 +400,21 @@ function stripLoneSurrogates(s: string): string {
 }
 
 // Mark a large, message-invariant instruction block for prompt caching.
-// The cached prefix must be byte-identical across calls to hit (5-min TTL),
-// so ALL per-message context (identity, memory, project, body) must live in
-// the user message, never here. The ai-process cron runs every minute — well
-// inside the 5-minute TTL — so the cached prefix stays warm and reads dominate.
+// The cached prefix must be byte-identical across calls to hit, so ALL
+// per-message context (identity, memory, project, body) must live in the user
+// message, never here.
+//
+// TTL is 1 hour (not the 5-minute default). The cron now runs every 3 minutes
+// (migration 20260610000100) and only when there is pending work, so during
+// quiet stretches — nights, gaps between email bursts — the 5-minute window
+// lapsed and the next classify/task call paid a full cache WRITE again. Real
+// usage showed cache_write nearly matching cache_read on the Sonnet classify
+// path (~1.4k written per call), i.e. the prefix was being rewritten about
+// half the time. A 1-hour TTL costs 2x on the write (vs 1.25x) but keeps the
+// prefix warm across those gaps, so writes collapse to roughly one per active
+// hour and the rest become 0.1x reads — a net win for this bursty workload.
 function cachedSystem(staticPrompt: string): SystemBlock[] {
-  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
+  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
 }
 
 async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
