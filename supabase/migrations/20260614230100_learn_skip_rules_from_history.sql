@@ -74,8 +74,9 @@ BEGIN
       'סינון אוטומטי שנלמד מההיסטוריה: %s הודעות מ-%s, אף אחת מעולם לא הפכה למשימה. אישור הכלל יחסוך עיבוד AI על שולח זה.',
       c.total, c.sender
     ),
-    false,                                            -- pending, not active
+    false,                                            -- is_active: pending, not active
     'system',
+    'pending',                                         -- suggestion_status (table default is 'approved' — must be explicit)
     least(0.990, 0.800 + (c.total::numeric / 200.0))::numeric(4,3),
     'smrttask'
   FROM candidates c
