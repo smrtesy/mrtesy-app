@@ -406,7 +406,7 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   return { result: "needs_claude" };
 }
 
-type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } };
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
 
 // Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
 // or a low surrogate not preceded by a high one). They arise when a body is
@@ -421,21 +421,20 @@ function stripLoneSurrogates(s: string): string {
 }
 
 // Mark a large, message-invariant instruction block for prompt caching.
-// The cached prefix must be byte-identical across calls to hit, so ALL
-// per-message context (identity, memory, project, body) must live in the user
-// message, never here.
+// The cached prefix must be byte-identical across calls to hit (5-min TTL),
+// so ALL per-message context (identity, memory, project, body) must live in
+// the user message, never here. The ai-process cron runs every few minutes —
+// within the 5-minute TTL while messages keep arriving — so the cached prefix
+// stays warm and reads dominate during active periods.
 //
-// TTL is 1 hour (not the 5-minute default). The cron now runs every 3 minutes
-// (migration 20260610000100) and only when there is pending work, so during
-// quiet stretches — nights, gaps between email bursts — the 5-minute window
-// lapsed and the next classify/task call paid a full cache WRITE again. Real
-// usage showed cache_write nearly matching cache_read on the Sonnet classify
-// path (~1.4k written per call), i.e. the prefix was being rewritten about
-// half the time. A 1-hour TTL costs 2x on the write (vs 1.25x) but keeps the
-// prefix warm across those gaps, so writes collapse to roughly one per active
-// hour and the rest become 0.1x reads — a net win for this bursty workload.
+// NOTE: a 1-hour TTL (`ttl: "1h"`) was tried to cut cache rewrites during quiet
+// gaps, but the Messages API rejects the `ttl` field with HTTP 400 unless the
+// request also carries `anthropic-beta: extended-cache-ttl-2025-04-11` (which
+// callClaude does not send). Reverted to the default 5-minute ephemeral cache.
+// If revisiting: add the beta header AND validate via the shadow-eval endpoint
+// before deploying, since this code path is the production classifier.
 function cachedSystem(staticPrompt: string): SystemBlock[] {
-  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
+  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
 async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
@@ -3311,7 +3310,7 @@ async function runShadowEval(reqUrl: URL): Promise<Response> {
         const haiku = await analyzeWithMemory(msg, null, settings, sys, HAIKU_EVAL_MODEL);
         rows.push({ ...base, haiku_class: haiku.classification, haiku_confidence: haiku.confidence });
       } catch (e) {
-        rows.push({ ...base, haiku_class: "ERROR", haiku_confidence: String((e as Error).message).slice(0, 40) });
+        rows.push({ ...base, haiku_class: "ERROR", haiku_confidence: String((e as Error).message).slice(0, 180) });
       }
     }));
   }
