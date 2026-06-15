@@ -37,7 +37,7 @@ interface SendResult {
 export async function enqueueCampaignWhatsapp(orgId: string, campaignId: string): Promise<number> {
   const { data: campaign, error: cErr } = await db
     .from("smrtreach_campaigns")
-    .select("audience, channel, status, scheduled_at, country_filter")
+    .select("audience, channel, status, scheduled_at, country_filter, ignore_send_window")
     .eq("org_id", orgId)
     .eq("id", campaignId)
     .maybeSingle();
@@ -73,7 +73,9 @@ export async function enqueueCampaignWhatsapp(orgId: string, campaignId: string)
     recipients = recipients.slice(0, cap);
   }
 
-  const scheduledAt = campaign.scheduled_at ? new Date(campaign.scheduled_at as string).toISOString() : null;
+  // "Send now" ignores the campaign schedule (rows become due immediately).
+  const ignoreWindow = campaign.ignore_send_window === true;
+  const scheduledAt = !ignoreWindow && campaign.scheduled_at ? new Date(campaign.scheduled_at as string).toISOString() : null;
   const rows = recipients.map((r) => ({
     org_id: orgId,
     campaign_id: campaignId,
@@ -184,9 +186,11 @@ export async function processWhatsappQueue(orgId: string, limit = 100): Promise<
   async function campaignSendable(campaignId: string): Promise<boolean> {
     if (sendableCache.has(campaignId)) return sendableCache.get(campaignId)!;
     const { data: c } = await db
-      .from("smrtreach_campaigns").select("status").eq("org_id", orgId).eq("id", campaignId).maybeSingle();
+      .from("smrtreach_campaigns").select("status, ignore_send_window").eq("org_id", orgId).eq("id", campaignId).maybeSingle();
     const detail = await getDetail(campaignId);
-    const w = detail ? withinSendWindow(detail.sendHours, detail.excludeShabbat) : { ok: false };
+    // "Send now" bypasses the send-window/Shabbat rule.
+    const ignoreWindow = c?.ignore_send_window === true;
+    const w = ignoreWindow ? { ok: true } : detail ? withinSendWindow(detail.sendHours, detail.excludeShabbat) : { ok: false };
     const ok = c?.status === "sending" && w.ok;
     sendableCache.set(campaignId, ok);
     return ok;

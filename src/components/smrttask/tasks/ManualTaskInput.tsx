@@ -2,18 +2,19 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Home, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Home, AlignLeft, ListChecks, Paperclip, CalendarDays, Clock } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { dueUrgency } from "@/lib/workdays";
+import { RecurrenceEditor, type RecurrenceModel } from "./RecurrenceEditor";
 
 interface ManualTaskInputProps {
   open: boolean;
@@ -28,32 +29,28 @@ interface ProjectOption {
   parent_id: string | null;
 }
 
-// Recurrence kinds offered in the UI. They map to the compact recurrence_rule
-// the backend understands (see server/.../recurrence.ts).
-type RecurrenceKind = "none" | "daily" | "weekly" | "weekdays" | "monthly" | "yearly" | "hebrew";
-
-// Sunday-first, matching JS getDay() (0=Sun .. 6=Sat) and the BYDAY codes.
-const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
-
-function buildRecurrenceRule(kind: RecurrenceKind, weekdays: number[]): string | null {
-  switch (kind) {
-    case "none":     return null;
-    case "daily":    return "FREQ=DAILY";
-    case "weekly":   return "FREQ=WEEKLY";
-    case "weekdays": return weekdays.length ? `FREQ=WEEKLY;BYDAY=${weekdays.slice().sort().map((d) => WEEKDAY_CODES[d]).join(",")}` : null;
-    case "monthly":  return "FREQ=MONTHLY";
-    case "yearly":   return "FREQ=YEARLY";
-    case "hebrew":   return "FREQ=HEBREW_YEARLY";
-  }
+interface DraftSubtask {
+  id: string;
+  title: string;
 }
 
 const LAST_INFO_PROJECT_KEY = "smrtesy:lastInfoProject";
+const DRAFT_KEY = "smrtesy:manualTaskDraft";
+
+function newId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `st-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
 
 /**
- * The "new" dialog — two tabs:
+ * The "new" dialog — a centered modal with two tabs:
  *   task (default): fast capture. Title + Enter is enough; the task lands on
- *     the desk as ⚡quick unless toggled. No project picker — projects belong
- *     to the info world.
+ *     the desk as ⚡quick "on the desk" unless toggled. Description and subtasks
+ *     are opt-in (revealed by their own buttons). The whole task draft
+ *     auto-saves to localStorage so a stray close never loses typed text.
  *   info: a knowledge piece for a project's info board (title optional).
  */
 export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputProps) {
@@ -61,6 +58,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const tCommon = useTranslations("common");
   const locale = useLocale();
   const blocked = useWorkCalendar();
+  const dir = locale === "he" ? "rtl" : "ltr";
 
   const [tab, setTab] = useState<"task" | "info">("task");
 
@@ -70,11 +68,14 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const [isHome, setIsHome] = useState(false);
   const [dueDate, setDueDate] = useState("");
   const [dueTime, setDueTime] = useState("");
-  const [recurrence, setRecurrence] = useState<RecurrenceKind>("none");
-  const [weekdays, setWeekdays] = useState<number[]>([]);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [recurrence, setRecurrence] = useState<RecurrenceModel>({ rule: null, until: null });
+  const [recurResetKey, setRecurResetKey] = useState(0);
+  const [showDescription, setShowDescription] = useState(false);
   const [description, setDescription] = useState("");
+  const [showSubtasks, setShowSubtasks] = useState(false);
+  const [subtasks, setSubtasks] = useState<DraftSubtask[]>([]);
   const [loading, setLoading] = useState(false);
+  const hydrated = useRef(false);
 
   // ── info tab state ──────────────────────────────────────────────────────
   const [infoTitle, setInfoTitle] = useState("");
@@ -94,10 +95,12 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setIsHome(false);
     setDueDate("");
     setDueTime("");
-    setRecurrence("none");
-    setWeekdays([]);
-    setMoreOpen(false);
+    setRecurrence({ rule: null, until: null });
+    setRecurResetKey((k) => k + 1);
+    setShowDescription(false);
     setDescription("");
+    setShowSubtasks(false);
+    setSubtasks([]);
     setInfoTitle("");
     setInfoBody("");
     setProjectId("");
@@ -105,7 +108,40 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setNewProjectName("");
     setInfoFile(null);
     setLoading(false);
+    try { window.localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
   }, []);
+
+  // Hydrate the task draft once each time the dialog opens.
+  useEffect(() => {
+    if (!open) { hydrated.current = false; return; }
+    try {
+      const raw = window.localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw) as Partial<{
+          title: string; showDescription: boolean; description: string;
+          showSubtasks: boolean; subtasks: DraftSubtask[];
+          size: "quick" | "regular"; isHome: boolean; dueDate: string; dueTime: string;
+        }>;
+        setTitle(d.title ?? "");
+        setShowDescription(!!d.showDescription);
+        setDescription(d.description ?? "");
+        setShowSubtasks(!!d.showSubtasks);
+        setSubtasks(Array.isArray(d.subtasks) ? d.subtasks : []);
+        setSize(d.size === "regular" ? "regular" : "quick");
+        setIsHome(!!d.isHome);
+        setDueDate(d.dueDate ?? "");
+        setDueTime(d.dueTime ?? "");
+      }
+    } catch { /* ignore a corrupt draft */ }
+    hydrated.current = true;
+  }, [open]);
+
+  // Auto-save the task draft as the user types (after hydration, while open).
+  useEffect(() => {
+    if (!open || !hydrated.current) return;
+    const draft = { title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime };
+    try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* ignore quota */ }
+  }, [open, title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime]);
 
   // Load projects when the info tab is first needed; remember the last target.
   useEffect(() => {
@@ -137,7 +173,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   }, [open, tab]);
 
   function handleClose() {
-    reset();
+    // Note: we deliberately do NOT reset here — the draft survives a close so
+    // the user can reopen and keep typing. reset() runs only after a successful
+    // create (which clears the draft) or an explicit cancel on the info tab.
     onClose();
   }
 
@@ -148,15 +186,16 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const rootProjects = projects.filter((p) => !p.parent_id || !byId.has(p.parent_id));
   const subProjects = projectId ? projects.filter((p) => p.parent_id === projectId) : [];
 
-  function toggleWeekday(day: number) {
-    setWeekdays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
+  // ── subtasks ──────────────────────────────────────────────────────────────
+  function addSubtask() {
+    setShowSubtasks(true);
+    setSubtasks((prev) => [...prev, { id: newId(), title: "" }]);
   }
-
-  function handleRecurrenceChange(kind: RecurrenceKind) {
-    setRecurrence(kind);
-    if (kind === "weekdays" && weekdays.length === 0 && dueDate) {
-      setWeekdays([new Date(`${dueDate}T00:00:00`).getDay()]);
-    }
+  function updateSubtask(id: string, value: string) {
+    setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, title: value } : s)));
+  }
+  function removeSubtask(id: string) {
+    setSubtasks((prev) => prev.filter((s) => s.id !== id));
   }
 
   // ── create: task ────────────────────────────────────────────────────────
@@ -171,12 +210,12 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       toast.error(t("timeNeedsDate"));
       return;
     }
-    if (recurrence !== "none" && !dueDate) {
+    if (recurrence.rule && !dueDate) {
       toast.error(t("recurrenceNeedsDate"));
       return;
     }
-    if (recurrence === "weekdays" && weekdays.length === 0) {
-      toast.error(t("recurrenceNeedsWeekday"));
+    if (recurrence.rule && recurrence.endNeedsDate) {
+      toast.error(t("recurrenceNeedsEndDate"));
       return;
     }
     setLoading(true);
@@ -187,11 +226,21 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         size,
       };
       if (isHome) body.context = "home";
-      if (description.trim()) body.description = description.trim();
+      if (showDescription && description.trim()) body.description = description.trim();
       if (dueDate) body.due_date = dueDate;
       if (dueTime) body.due_time = dueTime;
-      const recurrenceRule = buildRecurrenceRule(recurrence, weekdays);
-      if (recurrenceRule) body.recurrence_rule = recurrenceRule;
+      if (recurrence.rule) body.recurrence_rule = recurrence.rule;
+      if (recurrence.until) body.recurrence_until = recurrence.until;
+      const checklist = subtasks
+        .filter((s) => s.title.trim())
+        .map((s) => ({
+          id: s.id,
+          title: s.title.trim(),
+          done: false,
+          created_at: new Date().toISOString(),
+          created_by: "user" as const,
+        }));
+      if (checklist.length) body.checklist = checklist;
       // A manual task goes straight onto the desk (pinned) — UNLESS it got a
       // far-off deadline, in which case it belongs in the waiting list and
       // the 3-day rule will promote it when the time comes. Position =
@@ -242,8 +291,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       toast.error(t("info.projectRequired"));
       return;
     }
-    const body = infoBody.trim();
-    if (!body && !infoTitle.trim()) {
+    const infoBodyTrimmed = infoBody.trim();
+    if (!infoBodyTrimmed && !infoTitle.trim()) {
       toast.error(t("info.bodyRequired"));
       return;
     }
@@ -251,7 +300,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     try {
       const { item } = await api<{ item: { id: string } }>(`/api/projects/${targetId}/info-items`, {
         method: "POST",
-        body: { title: infoTitle.trim() || body.slice(0, 80), body },
+        body: { title: infoTitle.trim() || infoBodyTrimmed.slice(0, 80), body: infoBodyTrimmed },
       });
       if (infoFile && item?.id) {
         const data = await fileToBase64(infoFile);
@@ -273,47 +322,111 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   }
 
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && handleClose()}>
-      <SheetContent side="bottom" className="h-auto max-h-[90vh] flex flex-col">
-        <SheetHeader>
-          <SheetTitle className="text-start">{t("title")}</SheetTitle>
-          <SheetDescription className="text-start">{t("description")}</SheetDescription>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto p-5">
+        {/* Visually-compact title; the tabs sit right under it. */}
+        <DialogTitle className="text-start text-base">{t("title")}</DialogTitle>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as "task" | "info")} dir={locale === "he" ? "rtl" : "ltr"}>
-          <TabsList className="w-full">
-            <TabsTrigger value="task" className="flex-1">{t("tabTask")}</TabsTrigger>
-            <TabsTrigger value="info" className="flex-1">{t("tabInfo")}</TabsTrigger>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as "task" | "info")} dir={dir} className="mt-1">
+          <TabsList className="h-8 w-auto self-start">
+            <TabsTrigger value="task" className="px-3 py-1 text-xs">{t("tabTask")}</TabsTrigger>
+            <TabsTrigger value="info" className="px-3 py-1 text-xs">{t("tabInfo")}</TabsTrigger>
           </TabsList>
 
           {/* ── TASK ─────────────────────────────────────────────────── */}
-          <TabsContent value="task" className="mt-3 space-y-4 overflow-y-auto">
-            <div className="flex gap-2">
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && title.trim() && !loading) handleCreateTask();
-                }}
-                placeholder={t("titlePlaceholder")}
-                dir="auto"
-                autoFocus
-                className="flex-1"
-              />
-              <Button onClick={handleCreateTask} disabled={loading || !title.trim()} className="gap-1 shrink-0">
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                {t("create")}
-              </Button>
+          <TabsContent value="task" className="mt-3 space-y-3">
+            {/* Central title row */}
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter on the title → create immediately. With no due date the
+                // task lands on the desk as a quick "on the desk" task.
+                if (e.key === "Enter" && title.trim() && !loading) {
+                  e.preventDefault();
+                  handleCreateTask();
+                }
+              }}
+              placeholder={t("titlePlaceholder")}
+              dir={dir}
+              autoFocus
+              className="text-base"
+            />
+
+            {/* Add description / add subtask */}
+            <div className="flex flex-wrap gap-2">
+              {!showDescription && (
+                <button
+                  type="button"
+                  onClick={() => setShowDescription(true)}
+                  className="flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <AlignLeft className="h-3.5 w-3.5" />
+                  {t("addDescription")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={addSubtask}
+                className="flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                <ListChecks className="h-3.5 w-3.5" />
+                {t("addSubtask")}
+              </button>
             </div>
 
-            {/* Size + context toggles */}
-            <div className="flex flex-wrap items-center gap-3">
+            {showDescription && (
+              <Textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t("descriptionPlaceholder")}
+                dir="auto"
+                className="min-h-[72px]"
+                autoFocus
+              />
+            )}
+
+            {showSubtasks && subtasks.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">{t("subtasksLabel")}</div>
+                {subtasks.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2">
+                    <Input
+                      value={s.title}
+                      onChange={(e) => updateSubtask(s.id, e.target.value)}
+                      placeholder={t("subtaskPlaceholder")}
+                      dir="auto"
+                      className="h-8 flex-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSubtask(s.id)}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label={tCommon("delete")}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addSubtask}
+                  className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("addSubtask")}
+                </button>
+              </div>
+            )}
+
+            {/* One row: quick/regular · home · date · time */}
+            <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-lg border p-0.5">
                 <button
                   type="button"
                   onClick={() => setSize("quick")}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
                     size === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
                   )}
                 >
@@ -324,7 +437,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                   type="button"
                   onClick={() => setSize("regular")}
                   className={cn(
-                    "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
                     size === "regular" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                   )}
                 >
@@ -336,7 +449,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 type="button"
                 onClick={() => setIsHome((v) => !v)}
                 className={cn(
-                  "flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
                   isHome ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
                 )}
                 aria-pressed={isHome}
@@ -344,82 +457,36 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 <Home className="h-3.5 w-3.5" />
                 {t("contextHome")}
               </button>
-            </div>
 
-            {/* Due date + time + recurrence */}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <div>
-                <label className="text-xs font-medium">{t("dueDateLabel")}</label>
-                <DatePicker value={dueDate} onChange={setDueDate} />
+              <div className="flex items-center gap-1">
+                <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+                <DatePicker value={dueDate} onChange={setDueDate} className="h-8" />
               </div>
-              <div>
-                <label className="text-xs font-medium">{t("dueTimeLabel")}</label>
-                <Input type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} dir="ltr" />
-              </div>
-              <div className="col-span-2 sm:col-span-1">
-                <label className="text-xs font-medium">{t("recurrenceLabel")}</label>
-                <select
-                  value={recurrence}
-                  onChange={(e) => handleRecurrenceChange(e.target.value as RecurrenceKind)}
-                  className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-                  dir="auto"
-                >
-                  <option value="none">{t("recurrenceNone")}</option>
-                  <option value="daily">{t("recurrenceDaily")}</option>
-                  <option value="weekly">{t("recurrenceWeekly")}</option>
-                  <option value="weekdays">{t("recurrenceWeekdays")}</option>
-                  <option value="monthly">{t("recurrenceMonthly")}</option>
-                  <option value="yearly">{t("recurrenceYearly")}</option>
-                  <option value="hebrew">{t("recurrenceHebrew")}</option>
-                </select>
+
+              <div className="flex items-center gap-1">
+                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  type="time"
+                  value={dueTime}
+                  onChange={(e) => setDueTime(e.target.value)}
+                  dir="ltr"
+                  className="h-8 w-[7.5rem]"
+                />
               </div>
             </div>
 
-            {recurrence === "weekdays" && (
-              <div className="flex flex-wrap gap-1">
-                {WEEKDAY_CODES.map((_, day) => (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => toggleWeekday(day)}
-                    className={`h-9 w-9 rounded-full border text-sm transition-colors ${
-                      weekdays.includes(day)
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background text-muted-foreground"
-                    }`}
-                    aria-pressed={weekdays.includes(day)}
-                  >
-                    {t(`weekdayShort.${day}`)}
-                  </button>
-                ))}
-              </div>
-            )}
-            {recurrence === "hebrew" && (
-              <p className="text-[11px] text-muted-foreground" dir="auto">{t("recurrenceHebrewHint")}</p>
-            )}
+            {/* Recurrence — Google-Calendar style */}
+            <RecurrenceEditor dueDate={dueDate} onChange={setRecurrence} resetKey={recurResetKey} />
 
-            {/* More: description */}
-            <button
-              type="button"
-              className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-              onClick={() => setMoreOpen((v) => !v)}
-            >
-              {moreOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-              {t("moreOptions")}
-            </button>
-            {moreOpen && (
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder={t("descriptionPlaceholder")}
-                dir="auto"
-                className="min-h-[80px]"
-              />
-            )}
+            {/* Create — at the bottom of the window */}
+            <Button onClick={handleCreateTask} disabled={loading || !title.trim()} className="w-full gap-1">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              {t("create")}
+            </Button>
           </TabsContent>
 
           {/* ── INFO ─────────────────────────────────────────────────── */}
-          <TabsContent value="info" className="mt-3 space-y-4 overflow-y-auto">
+          <TabsContent value="info" className="mt-3 space-y-4">
             <Input
               value={infoTitle}
               onChange={(e) => setInfoTitle(e.target.value)}
@@ -516,7 +583,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
             </div>
 
             <div className="flex gap-2 pt-1">
-              <Button variant="outline" onClick={handleClose} className="gap-1">
+              <Button variant="outline" onClick={() => { reset(); onClose(); }} className="gap-1">
                 <X className="h-4 w-4" />
                 {tCommon("cancel")}
               </Button>
@@ -531,8 +598,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
             </div>
           </TabsContent>
         </Tabs>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 

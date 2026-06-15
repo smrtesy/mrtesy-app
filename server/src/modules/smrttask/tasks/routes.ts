@@ -24,7 +24,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
-import { nextOccurrence, isValidRecurrenceRule } from "./recurrence";
+import { nextOccurrence, isValidRecurrenceRule, normalizeRecurrence } from "./recurrence";
 
 const router = Router();
 
@@ -312,6 +312,20 @@ router.post("/tasks", async (req: Request, res: Response) => {
   let updates: Record<string, unknown>;
   try { updates = pickUpdates(body); }
   catch (e) { return res.status(400).json({ error: (e as Error).message }); }
+
+  // COUNT ("ends after N occurrences") is resolved into a concrete
+  // recurrence_until here, anchored on the task's start (due_date), then
+  // stripped from the stored rule — the spawn engine never tracks COUNT.
+  if (typeof updates.recurrence_rule === "string") {
+    const start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    const normalized = normalizeRecurrence(updates.recurrence_rule, start);
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
+  }
 
   const payload = {
     user_id: req.user!.id,
