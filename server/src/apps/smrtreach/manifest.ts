@@ -46,6 +46,10 @@ export const manifest: AppManifest = {
       "smrtcrm_group_members",
       "smrtcrm_tags",
       "smrtcrm_tag_assignments",
+      // Gmail sending reuses the platform's per-user Google OAuth: the org's
+      // members and their connected Gmail credentials (read-only).
+      "org_members",
+      "user_credentials",
     ],
     writes: [
       "smrtreach_campaigns",
@@ -58,6 +62,7 @@ export const manifest: AppManifest = {
       "smrtreach_logs",
       "smrtreach_senders",
       "smrtreach_settings",
+      "smrtreach_gmail_quota",
       // Auto-tag on completion (botsite "קמפיין: <name>"): Reach creates/assigns
       // a CRM tag for the sent audience so it's reusable as a future audience.
       // Direct org-scoped write (same client audience-service reads with) — the
