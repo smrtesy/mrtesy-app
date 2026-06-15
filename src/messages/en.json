@@ -1613,6 +1613,11 @@
     "audienceGroup": "Group",
     "audienceTag": "Tag",
     "audienceSegment": "Segment",
+    "sendNowConfirm": "Send to all recipients now? It goes out immediately — ignoring Shabbat, send-hours and any schedule.",
+    "sendNowNote": "\"Send now\" sends immediately, ignoring Shabbat, send-hours, schedule and rate limit. If a test batch is set, only it is sent and the campaign pauses for review. To send while honoring those limits, set a time under \"When to send\" and click \"Schedule send\".",
+    "scheduleSend": "Schedule send",
+    "scheduleSendConfirm": "Schedule this campaign? It will send at the set time, honoring send-hours and the Shabbat rule.",
+    "scheduleSendStarted": "Campaign scheduled — {queued} queued. Will send at the set time.",
     "status": {
       "draft": "Draft",
       "approved": "Approved",

@@ -405,6 +405,23 @@ router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => 
   const testBatch = (campaign.test_batch_size as number | null) ?? 0;
   const firstBatch = testBatch && testBatch > 0 ? testBatch : 50;
 
+  // mode "now" (default — the "שלח עכשיו" button) sends immediately, ignoring
+  // send-hours / Shabbat / schedule / rate. mode "scheduled" honors them and,
+  // when the client passes scheduled_at, persists it so the send uses exactly
+  // the time the user sees (not a stale value).
+  const mode = req.body?.mode === "scheduled" ? "scheduled" : "now";
+  if (mode === "now") {
+    await db.from("smrtreach_campaigns")
+      .update({ ignore_send_window: true, scheduled_at: null })
+      .eq("org_id", orgId).eq("id", req.params.id);
+  } else {
+    const patch: Record<string, unknown> = { ignore_send_window: false };
+    if (req.body?.scheduled_at !== undefined) {
+      patch.scheduled_at = typeof req.body.scheduled_at === "string" ? req.body.scheduled_at : null;
+    }
+    await db.from("smrtreach_campaigns").update(patch).eq("org_id", orgId).eq("id", req.params.id);
+  }
+
   try {
     let queued = 0;
     const totals = { sent: 0, failed: 0 };
