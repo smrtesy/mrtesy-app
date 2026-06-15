@@ -169,7 +169,7 @@ const EMAIL_COLS = [
 ] as const;
 const WHATSAPP_COLS = [
   "bot_ref", "template", "template_lang", "template_params", "recipient_cap",
-  "body_text", "send_hours", "exclude_shabbat",
+  "body_text", "send_hours", "exclude_shabbat", "tz_hour",
 ] as const;
 
 // Upsert per-channel detail (email/whatsapp).
@@ -601,6 +601,49 @@ router.get("/reach/campaigns/:id/log", async (req: Request, res: Response) => {
     .range(offset, offset + limit - 1);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ rows: data ?? [], total: count ?? 0 });
+});
+
+// Cross-campaign deliverability dashboard — the most recent campaigns with
+// their sent/open/click/bounce aggregates and rates.
+router.get("/reach/deliverability", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const limit = Math.min(Number(req.query.limit) || 10, 50);
+  const { data: campaigns, error } = await db
+    .from("smrtreach_campaigns")
+    .select("id, name, channel, status, created_at")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!campaigns || campaigns.length === 0) return res.json({ rows: [] });
+
+  const count = (table: string, field: string, value: string, campaignId: string) =>
+    db.from(table).select("id", { count: "exact", head: true })
+      .eq("org_id", orgId).eq("campaign_id", campaignId).eq(field, value);
+
+  const rows = await Promise.all(
+    campaigns.map(async (c) => {
+      const id = c.id as string;
+      const [{ count: sent }, { count: failed }, { count: opens }, { count: clicks }, { count: bounces }, { count: complaints }] =
+        await Promise.all([
+          count("smrtreach_logs", "status", "sent", id),
+          count("smrtreach_logs", "status", "failed", id),
+          count("smrtreach_tracking", "event", "open", id),
+          count("smrtreach_tracking", "event", "click", id),
+          count("smrtreach_tracking", "event", "bounce", id),
+          count("smrtreach_tracking", "event", "complaint", id),
+        ]);
+      const s = sent ?? 0;
+      const pct = (n: number) => (s > 0 ? Math.round((n / s) * 1000) / 10 : 0);
+      return {
+        id, name: c.name, channel: c.channel, status: c.status, created_at: c.created_at,
+        sent: s, failed: failed ?? 0, opens: opens ?? 0, clicks: clicks ?? 0,
+        bounces: bounces ?? 0, complaints: complaints ?? 0,
+        open_rate: pct(opens ?? 0), click_rate: pct(clicks ?? 0), bounce_rate: pct(bounces ?? 0),
+      };
+    }),
+  );
+  res.json({ rows });
 });
 
 export default router;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import Link from "next/link";
-import { Plus, Loader2, Mail, MessageCircle, Layers, ChevronLeft } from "lucide-react";
+import { Plus, Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3 } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -39,6 +39,17 @@ interface Named {
   name: string;
 }
 
+interface DeliverabilityRow {
+  id: string;
+  name: string;
+  channel: Channel;
+  sent: number;
+  failed: number;
+  open_rate: number;
+  click_rate: number;
+  bounce_rate: number;
+}
+
 const ALL_CONTACTS = "all:";
 
 export function CampaignsClient() {
@@ -46,6 +57,8 @@ export function CampaignsClient() {
   const locale = useLocale();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [deliverability, setDeliverability] = useState<DeliverabilityRow[] | null>(null);
+  const [loadingDeliv, setLoadingDeliv] = useState(false);
   const [tags, setTags] = useState<Named[]>([]);
   const [groups, setGroups] = useState<Named[]>([]);
   const [segments, setSegments] = useState<Named[]>([]);
@@ -118,6 +131,19 @@ export function CampaignsClient() {
     }
   }
 
+  async function toggleDeliverability() {
+    if (deliverability) { setDeliverability(null); return; }
+    setLoadingDeliv(true);
+    try {
+      const { rows } = await api<{ rows: DeliverabilityRow[] }>("/api/reach/deliverability");
+      setDeliverability(rows);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingDeliv(false);
+    }
+  }
+
   function ChannelIcon({ channel }: { channel: Channel }) {
     if (channel === "email") return <Mail className="h-4 w-4" />;
     if (channel === "whatsapp") return <MessageCircle className="h-4 w-4" />;
@@ -126,12 +152,47 @@ export function CampaignsClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <Button onClick={toggleDeliverability} variant="outline" className="gap-2" disabled={loadingDeliv}>
+          {loadingDeliv ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
+          {deliverability ? t("hideDeliverability") : t("deliverability")}
+        </Button>
         <Button onClick={() => setCreateOpen(true)} className="gap-2">
           <Plus className="h-4 w-4" />
           {t("newCampaign")}
         </Button>
       </div>
+
+      {deliverability && (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-muted-foreground">
+              <tr>
+                <th className="p-2 text-start">{t("colName")}</th>
+                <th className="p-2 text-start">{t("statSent")}</th>
+                <th className="p-2 text-start">{t("statFailed")}</th>
+                <th className="p-2 text-start">{t("openRate")}</th>
+                <th className="p-2 text-start">{t("clickRate")}</th>
+                <th className="p-2 text-start">{t("bounceRate")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deliverability.length === 0 ? (
+                <tr><td colSpan={6} className="p-3 text-center text-muted-foreground">{t("noCampaigns")}</td></tr>
+              ) : deliverability.map((d) => (
+                <tr key={d.id} className="border-t">
+                  <td className="p-2 font-medium">{d.name}</td>
+                  <td className="p-2">{d.sent}</td>
+                  <td className="p-2">{d.failed}</td>
+                  <td className="p-2">{d.open_rate}%</td>
+                  <td className="p-2">{d.click_rate}%</td>
+                  <td className="p-2">{d.bounce_rate}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground">

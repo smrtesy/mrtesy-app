@@ -21,6 +21,7 @@ import { resolveAudience } from "./audience-service";
 import type { AudienceRef } from "./audience-service";
 import { sendEmail, SesNotConfiguredError } from "./ses-client";
 import { sendViaGmail, listOrgGmailAccounts, NoGmailAccountError, GmailQuotaExhaustedError } from "./gmail-client";
+import { filterDeliverableEmails } from "./email-validator";
 import {
   withinSendWindow,
   filterEmailByFrequency,
@@ -212,10 +213,10 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
   if (!detail) throw new Error("campaign has no email content");
 
   let recipients = await resolveAudience(orgId, (campaign.audience ?? {}) as AudienceRef, "email");
-  // Drop empty + syntactically-invalid addresses before they reach SES
-  // (botsite emailValidator parity — syntax level; MX is left to SES bounce).
-  const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-  recipients = recipients.filter((r) => r.email && EMAIL_RE.test(r.email));
+  // Drop empty / syntactically-invalid / no-MX addresses before they reach the
+  // sender (botsite emailValidator parity — syntax + DNS MX per domain, cached).
+  const deliverable = await filterDeliverableEmails(recipients.map((r) => r.email as string).filter(Boolean));
+  recipients = recipients.filter((r) => r.email && deliverable.has(r.email));
 
   // Country filter (campaignBroadcast.js parity) — matches by phone prefix.
   const countryFilter = campaign.country_filter as string | null;
