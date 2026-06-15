@@ -406,7 +406,7 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   return { result: "needs_claude" };
 }
 
-type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } };
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
 
 // Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
 // or a low surrogate not preceded by a high one). They arise when a body is
@@ -421,21 +421,20 @@ function stripLoneSurrogates(s: string): string {
 }
 
 // Mark a large, message-invariant instruction block for prompt caching.
-// The cached prefix must be byte-identical across calls to hit, so ALL
-// per-message context (identity, memory, project, body) must live in the user
-// message, never here.
+// The cached prefix must be byte-identical across calls to hit (5-min TTL),
+// so ALL per-message context (identity, memory, project, body) must live in
+// the user message, never here. The ai-process cron runs every few minutes —
+// within the 5-minute TTL while messages keep arriving — so the cached prefix
+// stays warm and reads dominate during active periods.
 //
-// TTL is 1 hour (not the 5-minute default). The cron now runs every 3 minutes
-// (migration 20260610000100) and only when there is pending work, so during
-// quiet stretches — nights, gaps between email bursts — the 5-minute window
-// lapsed and the next classify/task call paid a full cache WRITE again. Real
-// usage showed cache_write nearly matching cache_read on the Sonnet classify
-// path (~1.4k written per call), i.e. the prefix was being rewritten about
-// half the time. A 1-hour TTL costs 2x on the write (vs 1.25x) but keeps the
-// prefix warm across those gaps, so writes collapse to roughly one per active
-// hour and the rest become 0.1x reads — a net win for this bursty workload.
+// NOTE: a 1-hour TTL (`ttl: "1h"`) was tried to cut cache rewrites during quiet
+// gaps, but the Messages API rejects the `ttl` field with HTTP 400 unless the
+// request also carries `anthropic-beta: extended-cache-ttl-2025-04-11` (which
+// callClaude does not send). Reverted to the default 5-minute ephemeral cache.
+// If revisiting: add the beta header AND validate via the shadow-eval endpoint
+// before deploying, since this code path is the production classifier.
 function cachedSystem(staticPrompt: string): SystemBlock[] {
-  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
+  return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } }];
 }
 
 async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
@@ -3240,6 +3239,89 @@ function modelTypeFromName(model: string): "haiku" | "sonnet" | "opus" {
   return "sonnet";
 }
 
+// ── Shadow eval (tiered-classifier validation) ─────────────────────────────
+// Reachable ONLY via `?action=shadow_eval` behind the cron secret; the cron
+// sends a bare body and never hits it, so the production path is unchanged.
+// Replays recent already-classified messages through the REAL classifier
+// (analyzeWithMemory) on Haiku and records Haiku's verdict next to the stored
+// production verdict (Sonnet, post-2026-06-11) for offline agreement analysis.
+// Writes ONLY to shadow_eval_results — never source_messages or tasks.
+const HAIKU_EVAL_MODEL = "claude-haiku-4-5-20251001";
+
+async function buildEvalSettings(userId: string): Promise<any> {
+  const [settingsRes, promptsRes, userAuthRes] = await Promise.all([
+    supabase.from("user_settings").select("*").eq("user_id", userId).single(),
+    supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).eq("prompt_key", "edge_classifier"),
+    supabase.auth.admin.getUserById(userId),
+  ]);
+  const settings: any = settingsRes.data ?? {};
+  const promptMap = new Map((promptsRes.data ?? []).map((p: any) => [p.prompt_key, p.content as string]));
+  settings.__prompts = { classifier: promptMap.get("edge_classifier") || undefined };
+  const rawFullName = ((userAuthRes.data?.user?.user_metadata?.full_name as string | undefined) || "").trim();
+  settings.__userName = rawFullName.split(/\s+/)[0] || "";
+  settings.__authEmail = ((userAuthRes.data?.user?.email as string | undefined) || "").toLowerCase();
+  // Conservative simplification: omit per-user correction hints in shadow.
+  // Their absence can only make Haiku LESS accurate, so it biases the eval
+  // toward understating agreement — a safe direction for a go/no-go gate.
+  settings.__personalRules = "";
+  return settings;
+}
+
+async function runShadowEval(reqUrl: URL): Promise<Response> {
+  const sample = Math.min(Math.max(parseInt(reqUrl.searchParams.get("sample") || "150", 10) || 150, 1), 400);
+  const since = reqUrl.searchParams.get("since") || "2026-06-12"; // post Sonnet-switch → stored class = Sonnet
+  const runId = crypto.randomUUID();
+  const sys = await loadSystemParams();
+
+  const { data: msgs, error } = await supabase
+    .from("source_messages")
+    .select("id,user_id,source_type,sender_email,sender,subject,body_text,raw_content,reply_to_context,metadata,ai_classification,received_at")
+    .is("skip_reason", null)
+    .not("ai_classification", "is", null)
+    .gte("received_at", since)
+    .order("received_at", { ascending: false })
+    .limit(sample);
+  if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+
+  const settingsCache = new Map<string, any>();
+  const rows: any[] = [];
+  const list = msgs ?? [];
+  const CONC = 6;
+  for (let i = 0; i < list.length; i += CONC) {
+    const chunk = list.slice(i, i + CONC);
+    await Promise.all(chunk.map(async (msg: any) => {
+      const subj = String(msg.subject || "");
+      const bodyAll = `${subj}\n${bodyForAI(msg)}`.toLowerCase();
+      const base = {
+        run_id: runId,
+        message_id: msg.id,
+        user_id: msg.user_id,
+        source_type: msg.source_type,
+        sender_email: msg.sender_email,
+        stored_class: String(msg.ai_classification || "").toLowerCase(),
+        is_whatsapp: isWhatsApp(msg),
+        is_reply: /^\s*(re|fwd|fw|תגובה|הועבר)\s*:/i.test(subj) || !!(msg.reply_to_context && String(msg.reply_to_context).trim()),
+        has_ask: bodyAll.includes("?") || /\b(can you|could you|please|kindly)\b/.test(bodyAll) || bodyAll.includes("תוכל") || bodyAll.includes("האם") || bodyAll.includes("בבקשה"),
+        has_meeting: hasMeetingInvite(bodyForAI(msg)),
+      };
+      try {
+        let settings = settingsCache.get(msg.user_id);
+        if (!settings) { settings = await buildEvalSettings(msg.user_id); settingsCache.set(msg.user_id, settings); }
+        const haiku = await analyzeWithMemory(msg, null, settings, sys, HAIKU_EVAL_MODEL);
+        rows.push({ ...base, haiku_class: haiku.classification, haiku_confidence: haiku.confidence });
+      } catch (e) {
+        rows.push({ ...base, haiku_class: "ERROR", haiku_confidence: String((e as Error).message).slice(0, 180) });
+      }
+    }));
+  }
+  let insertError: string | null = null;
+  for (let i = 0; i < rows.length; i += 100) {
+    const { error: insErr } = await supabase.from("shadow_eval_results").insert(rows.slice(i, i + 100));
+    if (insErr) { insertError = insErr.message; console.error("[shadow_eval] insert error:", insErr.message); }
+  }
+  return new Response(JSON.stringify({ run_id: runId, evaluated: rows.length, insertError }), { headers: { "Content-Type": "application/json" } });
+}
+
 Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization")?.replace("Bearer ", "");
@@ -3268,6 +3350,16 @@ Deno.serve(async (req) => {
       gmailLabelMapCache.clear();
       const result = await relabelGmailForUser(targetUserId);
       return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
+    }
+
+    // Shadow-eval mode (admin-only): replay recent messages through the
+    // classifier on Haiku and record verdicts for offline tiered-classifier
+    // analysis. Read-only w.r.t. the pipeline (writes only shadow_eval_results).
+    if (reqUrl.searchParams.get("action") === "shadow_eval") {
+      if (authHeader !== cronSecret && req.headers.get("x-cron-secret") !== cronSecret) {
+        return new Response("Forbidden — admin only", { status: 403 });
+      }
+      return await runShadowEval(reqUrl);
     }
 
     // Idle probe — most cron ticks have nothing pending, so bail with one
