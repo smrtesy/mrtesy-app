@@ -60,13 +60,12 @@ export function CampaignsClient() {
   const [deliverability, setDeliverability] = useState<DeliverabilityRow[] | null>(null);
   const [loadingDeliv, setLoadingDeliv] = useState(false);
   const [tags, setTags] = useState<Named[]>([]);
-  const [groups, setGroups] = useState<Named[]>([]);
   const [segments, setSegments] = useState<Named[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  // audienceKey is "<kind>:<id?>" — kind ∈ all|tag|group|segment.
+  // audienceKey is "<kind>:<id?>" — kind ∈ all|tag|segment.
   const [form, setForm] = useState<{ name: string; channel: Channel; audienceKey: string }>({
     name: "",
     channel: "email",
@@ -86,19 +85,17 @@ export function CampaignsClient() {
   }, []);
 
   const loadAudiences = useCallback(async () => {
-    // Audiences come from smrtCRM (tags / groups / segments). If smrtCRM isn't
+    // Audiences come from smrtCRM (tags / segments). If smrtCRM isn't
     // enabled for this org, fall back silently to "all contacts".
     try {
-      const [{ tags }, { groups }, { segments }] = await Promise.all([
+      const [{ tags }, { segments }] = await Promise.all([
         api<{ tags: Named[] }>("/api/crm/tags"),
-        api<{ groups: Named[] }>("/api/crm/groups"),
         api<{ segments: Named[] }>("/api/crm/segments"),
       ]);
       setTags(tags ?? []);
-      setGroups(groups ?? []);
       setSegments(segments ?? []);
     } catch {
-      setTags([]); setGroups([]); setSegments([]);
+      setTags([]); setSegments([]);
     }
   }, []);
 
@@ -264,9 +261,6 @@ export function CampaignsClient() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL_CONTACTS}>{t("audienceAll")}</SelectItem>
-                  {groups.map((g) => (
-                    <SelectItem key={`group:${g.id}`} value={`group:${g.id}`}>{t("audienceGroup")}: {g.name}</SelectItem>
-                  ))}
                   {tags.map((tag) => (
                     <SelectItem key={`tag:${tag.id}`} value={`tag:${tag.id}`}>{t("audienceTag")}: {tag.name}</SelectItem>
                   ))}

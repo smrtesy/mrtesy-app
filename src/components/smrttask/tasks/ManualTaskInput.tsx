@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Home, AlignLeft, ListChecks, Paperclip, CalendarDays, Clock } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Home, AlignLeft, ListChecks, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -74,8 +74,14 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const [description, setDescription] = useState("");
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [subtasks, setSubtasks] = useState<DraftSubtask[]>([]);
+  const [taskFiles, setTaskFiles] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const hydrated = useRef(false);
+  // Focus management: the id of a subtask row we just created via Enter.
+  const [focusSubtaskId, setFocusSubtaskId] = useState<string | null>(null);
+  const subtaskRefs = useRef(new Map<string, HTMLInputElement | null>());
+  const taskFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── info tab state ──────────────────────────────────────────────────────
   const [infoTitle, setInfoTitle] = useState("");
@@ -101,6 +107,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setDescription("");
     setShowSubtasks(false);
     setSubtasks([]);
+    setTaskFiles([]);
     setInfoTitle("");
     setInfoBody("");
     setProjectId("");
@@ -187,15 +194,40 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const subProjects = projectId ? projects.filter((p) => p.parent_id === projectId) : [];
 
   // ── subtasks ──────────────────────────────────────────────────────────────
-  function addSubtask() {
+  function addSubtask(afterId?: string) {
+    const id = newId();
     setShowSubtasks(true);
-    setSubtasks((prev) => [...prev, { id: newId(), title: "" }]);
+    setSubtasks((prev) => {
+      if (!afterId) return [...prev, { id, title: "" }];
+      const idx = prev.findIndex((s) => s.id === afterId);
+      const next = prev.slice();
+      next.splice(idx + 1, 0, { id, title: "" });
+      return next;
+    });
+    setFocusSubtaskId(id); // focus the new row (Enter → new subtask line)
   }
   function updateSubtask(id: string, value: string) {
     setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, title: value } : s)));
   }
   function removeSubtask(id: string) {
     setSubtasks((prev) => prev.filter((s) => s.id !== id));
+    subtaskRefs.current.delete(id);
+  }
+
+  // Focus a freshly-added subtask row once it's in the DOM.
+  useEffect(() => {
+    if (!focusSubtaskId) return;
+    subtaskRefs.current.get(focusSubtaskId)?.focus();
+    setFocusSubtaskId(null);
+  }, [focusSubtaskId, subtasks]);
+
+  // ── task files (attach + drag-drop) ───────────────────────────────────────
+  function addTaskFiles(files: FileList | File[] | null) {
+    const arr = Array.from(files ?? []);
+    if (arr.length) setTaskFiles((prev) => [...prev, ...arr]);
+  }
+  function removeTaskFile(idx: number) {
+    setTaskFiles((prev) => prev.filter((_, i) => i !== idx));
   }
 
   // ── create: task ────────────────────────────────────────────────────────
@@ -208,10 +240,6 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     }
     if (dueTime && !dueDate) {
       toast.error(t("timeNeedsDate"));
-      return;
-    }
-    if (recurrence.rule && !dueDate) {
-      toast.error(t("recurrenceNeedsDate"));
       return;
     }
     if (recurrence.rule && recurrence.endNeedsDate) {
@@ -250,7 +278,33 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
       }
 
-      await api<{ task: unknown }>("/api/tasks", { method: "POST", body });
+      const { task: created } = await api<{ task: { id: string } }>("/api/tasks", { method: "POST", body });
+
+      // Attach any files: upload each to the task-materials bucket, then
+      // write the materials array back onto the task (read-modify-write).
+      if (taskFiles.length && created?.id) {
+        const materials: Record<string, unknown>[] = [];
+        for (const f of taskFiles) {
+          try {
+            const data = await fileToBase64(f);
+            const up = await api<{ url: string; file_path: string; file_size: number; file_mime: string; filename: string }>(
+              `/api/tasks/${created.id}/materials/upload`,
+              { method: "POST", body: { filename: f.name, mime: f.type || undefined, data } },
+            );
+            materials.push({
+              id: newId(), type: "file", title: up.filename,
+              url: up.url, file_path: up.file_path, file_size: up.file_size, file_mime: up.file_mime,
+              created_at: new Date().toISOString(), created_by: "user",
+            });
+          } catch (err) {
+            toast.error(t("attachFailed", { error: (err as Error).message }));
+          }
+        }
+        if (materials.length) {
+          await api(`/api/tasks/${created.id}`, { method: "PATCH", body: { task_materials: materials } });
+        }
+      }
+
       toast.success(goesToWaiting ? t("createdToWaiting", { date: dueDate }) : t("created"));
       reset();
       onCreated();
@@ -367,7 +421,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               )}
               <button
                 type="button"
-                onClick={addSubtask}
+                onClick={() => addSubtask()}
                 className="flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
               >
                 <ListChecks className="h-3.5 w-3.5" />
@@ -380,7 +434,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={t("descriptionPlaceholder")}
-                dir="auto"
+                dir={dir}
                 className="min-h-[72px]"
                 autoFocus
               />
@@ -392,10 +446,18 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 {subtasks.map((s) => (
                   <div key={s.id} className="flex items-center gap-2">
                     <Input
+                      ref={(el) => { subtaskRefs.current.set(s.id, el); }}
                       value={s.title}
                       onChange={(e) => updateSubtask(s.id, e.target.value)}
+                      onKeyDown={(e) => {
+                        // Enter → drop to a fresh subtask row (Shift+Enter is free).
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          addSubtask(s.id);
+                        }
+                      }}
                       placeholder={t("subtaskPlaceholder")}
-                      dir="auto"
+                      dir={dir}
                       className="h-8 flex-1"
                     />
                     <button
@@ -410,7 +472,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 ))}
                 <button
                   type="button"
-                  onClick={addSubtask}
+                  onClick={() => addSubtask()}
                   className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -419,7 +481,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               </div>
             )}
 
-            {/* One row: quick/regular · home · date · time */}
+            {/* Quick/regular · home · attach */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-lg border p-0.5">
                 <button
@@ -458,21 +520,55 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 {t("contextHome")}
               </button>
 
-              <div className="flex items-center gap-1">
-                <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
-                <DatePicker value={dueDate} onChange={setDueDate} className="h-8" />
-              </div>
+              {/* Attach a file — click to pick, or drag a file onto the button. */}
+              <input
+                ref={taskFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { addTaskFiles(e.target.files); e.target.value = ""; }}
+              />
+              <button
+                type="button"
+                onClick={() => taskFileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); addTaskFiles(e.dataTransfer.files); }}
+                className={cn(
+                  "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
+                  dragOver ? "border-primary bg-primary/10 text-primary border-dashed" : "text-muted-foreground",
+                )}
+                title={t("attachDropHint")}
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+                {t("attachFile")}
+              </button>
+            </div>
 
-              <div className="flex items-center gap-1">
-                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  type="time"
-                  value={dueTime}
-                  onChange={(e) => setDueTime(e.target.value)}
-                  dir="ltr"
-                  className="h-8 w-[7.5rem]"
-                />
+            {/* Attached files */}
+            {taskFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {taskFiles.map((f, i) => (
+                  <span key={`${f.name}-${i}`} className="flex items-center gap-1 rounded border px-2 py-0.5 text-xs text-muted-foreground" dir="ltr">
+                    {f.name}
+                    <button type="button" onClick={() => removeTaskFile(i)} aria-label={tCommon("delete")}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
               </div>
+            )}
+
+            {/* Due date + time — on one row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <DatePicker value={dueDate} onChange={setDueDate} className="h-8" />
+              <Input
+                type="time"
+                value={dueTime}
+                onChange={(e) => setDueTime(e.target.value)}
+                dir="ltr"
+                className="h-8 w-[7.5rem]"
+              />
             </div>
 
             {/* Recurrence — Google-Calendar style */}
@@ -491,13 +587,13 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               value={infoTitle}
               onChange={(e) => setInfoTitle(e.target.value)}
               placeholder={t("info.titlePlaceholder")}
-              dir="auto"
+              dir={dir}
             />
             <Textarea
               value={infoBody}
               onChange={(e) => setInfoBody(e.target.value)}
               placeholder={t("info.bodyPlaceholder")}
-              dir="auto"
+              dir={dir}
               className="min-h-[120px]"
             />
 
@@ -566,7 +662,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
                 placeholder={projectId ? t("info.newSubProjectPlaceholder") : t("info.newProjectPlaceholder")}
-                dir="auto"
+                dir={dir}
                 className="flex-1"
               />
               <Button

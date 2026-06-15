@@ -40,6 +40,7 @@ interface Tag {
 }
 
 const ALL_TAGS = "__all__";
+const ALL_SEGMENTS = "__all__";
 const emptyForm = { first_name: "", last_name: "", phone: "", email: "" };
 
 export function ContactsClient() {
@@ -48,10 +49,12 @@ export function ContactsClient() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [total, setTotal] = useState(0);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [segments, setSegments] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string>(ALL_TAGS);
+  const [segmentFilter, setSegmentFilter] = useState<string>(ALL_SEGMENTS);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -60,12 +63,28 @@ export function ContactsClient() {
   const [form, setForm] = useState(emptyForm);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // When true the bulk action targets every contact matching the active filter,
+  // not just the ids in `selected` (which only ever holds the loaded page).
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
   const [bulkTag, setBulkTag] = useState<string>(ALL_TAGS);
+
+  // The filter currently applied to the list, in the shape the bulk API expects.
+  const currentFilter = useCallback(() => {
+    const f: Record<string, unknown> = {};
+    if (search.trim()) f.q = search.trim();
+    if (tagFilter !== ALL_TAGS) f.tag_id = tagFilter;
+    if (segmentFilter !== ALL_SEGMENTS) f.segment_id = segmentFilter;
+    return f;
+  }, [search, tagFilter, segmentFilter]);
 
   const loadTags = useCallback(async () => {
     try {
-      const { tags } = await api<{ tags: Tag[] }>("/api/crm/tags");
-      setTags(tags);
+      const [tagsRes, segsRes] = await Promise.all([
+        api<{ tags: Tag[] }>("/api/crm/tags"),
+        api<{ segments: Tag[] }>("/api/crm/segments"),
+      ]);
+      setTags(tagsRes.tags);
+      setSegments(segsRes.segments);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -77,18 +96,20 @@ export function ContactsClient() {
       const params = new URLSearchParams();
       if (search.trim()) params.set("q", search.trim());
       if (tagFilter !== ALL_TAGS) params.set("tag_id", tagFilter);
+      if (segmentFilter !== ALL_SEGMENTS) params.set("segment_id", segmentFilter);
       const { contacts, total } = await api<{ contacts: Contact[]; total: number }>(
         `/api/crm/contacts?${params.toString()}`,
       );
       setContacts(contacts);
       setTotal(total);
       setSelected(new Set());
+      setSelectAllMatching(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [search, tagFilter]);
+  }, [search, tagFilter, segmentFilter]);
 
   useEffect(() => {
     loadTags();
@@ -165,6 +186,7 @@ export function ContactsClient() {
   }
 
   function toggleSelect(id: string) {
+    setSelectAllMatching(false);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -173,12 +195,30 @@ export function ContactsClient() {
     });
   }
 
+  const allOnPageSelected = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
+
+  function toggleSelectPage() {
+    setSelectAllMatching(false);
+    setSelected(allOnPageSelected ? new Set() : new Set(contacts.map((c) => c.id)));
+  }
+
+  function clearSelection() {
+    setSelectAllMatching(false);
+    setSelected(new Set());
+  }
+
+  // How many contacts the next bulk action will affect, and the body that targets them.
+  const affectedCount = selectAllMatching ? total : selected.size;
+  function bulkScope(): Record<string, unknown> {
+    return selectAllMatching ? { filter: currentFilter() } : { contact_ids: [...selected] };
+  }
+
   async function bulkAddTag() {
-    if (bulkTag === ALL_TAGS || selected.size === 0) return;
+    if (bulkTag === ALL_TAGS || affectedCount === 0) return;
     try {
       await api("/api/crm/contacts/bulk", {
         method: "POST",
-        body: { action: "add_tag", contact_ids: [...selected], tag_id: bulkTag },
+        body: { action: "add_tag", tag_id: bulkTag, ...bulkScope() },
       });
       toast.success(t("bulkTagged"));
       loadContacts();
@@ -188,12 +228,12 @@ export function ContactsClient() {
   }
 
   async function bulkDelete() {
-    if (selected.size === 0) return;
+    if (affectedCount === 0) return;
     if (!window.confirm(t("bulkDeleteConfirm"))) return;
     try {
       await api("/api/crm/contacts/bulk", {
         method: "POST",
-        body: { action: "delete", contact_ids: [...selected] },
+        body: { action: "delete", ...bulkScope() },
       });
       toast.success(t("contactDeleted"));
       loadContacts();
@@ -222,7 +262,7 @@ export function ContactsClient() {
             />
           </div>
           <Select value={tagFilter} onValueChange={setTagFilter}>
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-40">
               <SelectValue placeholder={t("filterByTag")} />
             </SelectTrigger>
             <SelectContent>
@@ -234,6 +274,21 @@ export function ContactsClient() {
               ))}
             </SelectContent>
           </Select>
+          {segments.length > 0 && (
+            <Select value={segmentFilter} onValueChange={setSegmentFilter}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder={t("filterBySegment")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SEGMENTS}>{t("allSegments")}</SelectItem>
+                {segments.map((seg) => (
+                  <SelectItem key={seg.id} value={seg.id}>
+                    {seg.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button onClick={() => setImportOpen(true)} variant="outline" className="gap-2">
@@ -249,31 +304,47 @@ export function ContactsClient() {
 
       {/* Bulk action bar */}
       {selected.size > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-accent/40 px-3 py-2">
-          <span className="text-sm font-medium">{t("selectedCount", { count: selected.size })}</span>
-          <Select value={bulkTag} onValueChange={setBulkTag}>
-            <SelectTrigger className="h-8 w-44">
-              <SelectValue placeholder={t("filterByTag")} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_TAGS}>{t("chooseTag")}</SelectItem>
-              {tags.map((tag) => (
-                <SelectItem key={tag.id} value={tag.id}>{tag.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button size="sm" variant="outline" onClick={bulkAddTag} disabled={bulkTag === ALL_TAGS} className="gap-1">
-            <TagIcon className="h-4 w-4" />
-            {t("bulkAddTag")}
-          </Button>
-          <Button size="sm" variant="outline" onClick={bulkDelete} className="gap-1 text-status-late">
-            <Trash2 className="h-4 w-4" />
-            {t("bulkDelete")}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} className="gap-1 ms-auto">
-            <X className="h-4 w-4" />
-            {t("clearSelection")}
-          </Button>
+        <div className="space-y-2 rounded-lg border bg-accent/40 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">
+              {selectAllMatching
+                ? t("allMatchingSelected", { count: total })
+                : t("selectedCount", { count: selected.size })}
+            </span>
+            <Select value={bulkTag} onValueChange={setBulkTag}>
+              <SelectTrigger className="h-8 w-44">
+                <SelectValue placeholder={t("filterByTag")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_TAGS}>{t("chooseTag")}</SelectItem>
+                {tags.map((tag) => (
+                  <SelectItem key={tag.id} value={tag.id}>{tag.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button size="sm" variant="outline" onClick={bulkAddTag} disabled={bulkTag === ALL_TAGS} className="gap-1">
+              <TagIcon className="h-4 w-4" />
+              {t("bulkAddTag")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={bulkDelete} className="gap-1 text-status-late">
+              <Trash2 className="h-4 w-4" />
+              {t("bulkDelete")}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={clearSelection} className="gap-1 ms-auto">
+              <X className="h-4 w-4" />
+              {t("clearSelection")}
+            </Button>
+          </div>
+          {/* Offer to extend selection from the loaded page to every match. */}
+          {allOnPageSelected && total > contacts.length && (
+            <button
+              type="button"
+              onClick={() => setSelectAllMatching((v) => !v)}
+              className="text-sm font-medium text-primary underline-offset-2 hover:underline"
+            >
+              {selectAllMatching ? t("clearSelection") : t("selectAllMatching", { count: total })}
+            </button>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">{t("totalCount", { count: total })}</p>
@@ -289,7 +360,18 @@ export function ContactsClient() {
           {t("noContacts")}
         </div>
       ) : (
-        <ul className="divide-y rounded-lg border">
+        <div className="rounded-lg border">
+          <div className="flex items-center gap-3 border-b bg-muted/40 px-4 py-2">
+            <input
+              type="checkbox"
+              checked={allOnPageSelected}
+              onChange={toggleSelectPage}
+              aria-label={t("selectAll")}
+              className="h-4 w-4 shrink-0 accent-primary"
+            />
+            <span className="text-sm text-muted-foreground">{t("selectAll")}</span>
+          </div>
+        <ul className="divide-y">
           {contacts.map((c) => (
             <li key={c.id} className="flex items-center gap-3 px-4 py-3">
               <input
@@ -326,6 +408,7 @@ export function ContactsClient() {
             </li>
           ))}
         </ul>
+        </div>
       )}
 
       {/* Add / edit dialog */}
