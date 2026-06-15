@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/select";
 
 interface Named { id: string; name: string }
-interface Segment { id: string; name: string }
 
 const ANY = "__any__";
 
@@ -25,12 +24,10 @@ export function CrmManagePanel() {
   const t = useTranslations("smrtCRM");
 
   const [tags, setTags] = useState<Named[]>([]);
-  const [groups, setGroups] = useState<Named[]>([]);
-  const [segments, setSegments] = useState<Segment[]>([]);
+  const [segments, setSegments] = useState<Named[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [newTag, setNewTag] = useState("");
-  const [newGroup, setNewGroup] = useState("");
   const [segName, setSegName] = useState("");
   const [segTag, setSegTag] = useState<string>(ANY);
   const [segHasEmail, setSegHasEmail] = useState(false);
@@ -39,13 +36,11 @@ export function CrmManagePanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [tagsRes, groupsRes, segsRes] = await Promise.all([
+      const [tagsRes, segsRes] = await Promise.all([
         api<{ tags: Named[] }>("/api/crm/tags"),
-        api<{ groups: Named[] }>("/api/crm/groups"),
-        api<{ segments: Segment[] }>("/api/crm/segments"),
+        api<{ segments: Named[] }>("/api/crm/segments"),
       ]);
       setTags(tagsRes.tags);
-      setGroups(groupsRes.groups);
       setSegments(segsRes.segments);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -70,18 +65,6 @@ export function CrmManagePanel() {
     } finally { setBusy(false); }
   }
 
-  async function createGroup() {
-    if (!newGroup.trim()) return;
-    setBusy(true);
-    try {
-      await api("/api/crm/groups", { method: "POST", body: { name: newGroup.trim() } });
-      setNewGroup("");
-      load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally { setBusy(false); }
-  }
-
   async function createSegment() {
     if (!segName.trim()) return;
     setBusy(true);
@@ -97,7 +80,7 @@ export function CrmManagePanel() {
     } finally { setBusy(false); }
   }
 
-  async function remove(kind: "tags" | "groups" | "segments", id: string) {
+  async function remove(kind: "tags" | "segments", id: string) {
     try {
       await api(`/api/crm/${kind}/${id}`, { method: "DELETE" });
       load();
@@ -115,10 +98,13 @@ export function CrmManagePanel() {
   }
 
   return (
-    <div className="grid gap-6 rounded-lg border p-5 lg:grid-cols-3">
-      {/* Tags */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">{t("tagsTitle")}</h2>
+    <div className="grid gap-4 lg:grid-cols-2">
+      {/* Tags — static labels you (or the bot) attach to a contact */}
+      <section className="space-y-4 rounded-lg border p-5">
+        <header className="space-y-1">
+          <h2 className="text-lg font-semibold">{t("tagsTitle")}</h2>
+          <p className="text-sm text-muted-foreground">{t("tagsDesc")}</p>
+        </header>
         <div className="flex gap-2">
           <Input value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder={t("newName")} />
           <Button size="icon" onClick={createTag} disabled={busy} aria-label={t("addBtn")}>
@@ -128,21 +114,12 @@ export function CrmManagePanel() {
         <ManagedList items={tags} empty={t("noTags")} onDelete={(id) => remove("tags", id)} deleteLabel={t("deleteBtn")} />
       </section>
 
-      {/* Groups */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">{t("groupsTitle")}</h2>
-        <div className="flex gap-2">
-          <Input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} placeholder={t("newName")} />
-          <Button size="icon" onClick={createGroup} disabled={busy} aria-label={t("addBtn")}>
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-        <ManagedList items={groups} empty={t("noGroups")} onDelete={(id) => remove("groups", id)} deleteLabel={t("deleteBtn")} />
-      </section>
-
-      {/* Segments */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">{t("segmentsTitle")}</h2>
+      {/* Segments — saved dynamic queries ("smart groups"); read by smrtReach */}
+      <section className="space-y-4 rounded-lg border p-5">
+        <header className="space-y-1">
+          <h2 className="text-lg font-semibold">{t("segmentsTitle")}</h2>
+          <p className="text-sm text-muted-foreground">{t("segmentsDesc")}</p>
+        </header>
         <div className="space-y-2">
           <Input value={segName} onChange={(e) => setSegName(e.target.value)} placeholder={t("newName")} />
           <Select value={segTag} onValueChange={setSegTag}>

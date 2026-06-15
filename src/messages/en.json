@@ -1601,7 +1601,7 @@
   },
   "smrtCRM": {
     "title": "Contacts",
-    "subtitle": "All your organization's contacts in one place — by tags, groups and audiences",
+    "subtitle": "All your organization's contacts in one place — by tags and segments",
     "searchPlaceholder": "Search by name, phone or email",
     "filterByTag": "Filter by tag",
     "allTags": "All tags",
@@ -1648,8 +1648,9 @@
     "bulkDeleteConfirm": "Delete all selected?",
     "clearSelection": "Clear",
     "tagsTitle": "Tags",
-    "groupsTitle": "Groups",
+    "tagsDesc": "Labels for categorizing contacts. A contact can carry several tags, and some are created automatically by the bot.",
     "segmentsTitle": "Segments",
+    "segmentsDesc": "A smart group — a rule that updates itself (e.g. \"everyone with tag X who also has an email\"). Available as an audience in smrtReach.",
     "newName": "New name",
     "addBtn": "Add",
     "deleteBtn": "Delete",
@@ -1677,7 +1678,7 @@
       "intro": "smrtCRM is your organization's shared contact database. It ingests contacts from the bot, from CSV import and from manual entry — keeping every one tagged with the source it came from.",
       "point1": "Each contact gets a tag for the project it came from — contacts from multiple sources get multiple tags.",
       "point2": "The system detects duplicates by phone and email and merges them automatically, so you never get duplicate records.",
-      "point3": "Search, filter by tag and import lists — and the audiences built here are available to smrtReach for outreach."
+      "point3": "Search, filter by tag or segment and import lists — and the segments built here are available to smrtReach for outreach."
     }
   },
   "smrtBot": {
