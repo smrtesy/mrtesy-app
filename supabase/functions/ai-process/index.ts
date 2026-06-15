@@ -65,7 +65,7 @@ const FALLBACK_PARAMS: SystemParams = {
   body_truncate_project: 500,
   body_truncate_task: 6000,
   whatsapp_matter_routing: true,
-  whatsapp_debounce_seconds: 90,
+  whatsapp_debounce_seconds: 600,
   escalate_low_confidence: false,
   escalation_model: "claude-sonnet-4-6",
   escalate_task_low_confidence: false,

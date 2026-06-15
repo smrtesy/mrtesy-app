@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock } from "lucide-react";
+import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -34,6 +34,7 @@ interface EmailDetail {
   reply_to: string | null;
   html_body: string | null;
   language: string | null;
+  provider: string | null;
   priority: string | null;
   send_hours: { start?: number; end?: number } | null;
   exclude_shabbat: boolean | null;
@@ -80,8 +81,9 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const [schedule, setSchedule] = useState<{ scheduled_at: string; country_filter: string; test_batch_size: string }>({
     scheduled_at: "", country_filter: "all", test_batch_size: "",
   });
+  const [gmailAccounts, setGmailAccounts] = useState<string[]>([]);
   const [email, setEmail] = useState<EmailDetail>({
-    subject: "", preview: "", sender: null, reply_to: "", html_body: "", language: "he",
+    subject: "", preview: "", sender: null, reply_to: "", html_body: "", language: "he", provider: "ses",
     priority: "normal", send_hours: {}, exclude_shabbat: true, rate_limit: null, sto_enabled: false,
   });
   const [wa, setWa] = useState<WhatsappDetail>({
@@ -115,6 +117,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           subject: detail.email.subject ?? "", preview: detail.email.preview ?? "",
           sender: detail.email.sender ?? null, reply_to: detail.email.reply_to ?? "",
           html_body: detail.email.html_body ?? "", language: detail.email.language ?? "he",
+          provider: detail.email.provider ?? "ses",
           priority: detail.email.priority ?? "normal", send_hours: detail.email.send_hours ?? {},
           exclude_shabbat: detail.email.exclude_shabbat ?? true, rate_limit: detail.email.rate_limit ?? null,
           sto_enabled: detail.email.sto_enabled ?? false,
@@ -144,6 +147,11 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     if (!campaign) return;
     if (campaign.channel === "whatsapp" || campaign.channel === "both") {
       api<{ bots: Bot[] }>("/api/bot/bots").then(({ bots }) => setBots(bots)).catch(() => setBots([]));
+    }
+    if (campaign.channel === "email" || campaign.channel === "both") {
+      api<{ accounts: { email: string }[] }>("/api/reach/gmail/accounts")
+        .then(({ accounts }) => setGmailAccounts(accounts.map((a) => a.email)))
+        .catch(() => setGmailAccounts([]));
     }
   }, [campaign]);
 
@@ -179,6 +187,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
         body: {
           subject: email.subject || null, preview: email.preview || null, sender: email.sender,
           reply_to: email.reply_to || null, html_body: email.html_body || null, language: email.language,
+          provider: email.provider,
           priority: email.priority, send_hours: sendHoursPayload(email.send_hours),
           exclude_shabbat: email.exclude_shabbat, rate_limit: email.rate_limit || null,
           sto_enabled: email.sto_enabled,
@@ -253,9 +262,25 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     }
   }
 
+  async function gmassTest() {
+    if (!window.confirm(t("gmassConfirm"))) return;
+    setBusy(true);
+    try {
+      const r = await api<{ sent: number; failed: number; resultsUrl: string }>(
+        `/api/reach/campaigns/${campaignId}/inbox-test`, { method: "POST" },
+      );
+      toast.success(t("gmassSent", { sent: r.sent }));
+      window.open(r.resultsUrl, "_blank", "noopener");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send(mode: "now" | "scheduled") {
     const emailEnabled = campaign!.channel === "email" || campaign!.channel === "both";
-    if (emailEnabled && !email.sender) { toast.error(t("selectSenderFirst")); return; }
+    if (emailEnabled && email.provider !== "gmail" && !email.sender) { toast.error(t("selectSenderFirst")); return; }
     if (!window.confirm(mode === "now" ? t("sendNowConfirm") : t("scheduleSendConfirm"))) return;
     setSending(true);
     try {
@@ -417,12 +442,12 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           <h2 className="text-lg font-semibold">{t("emailContent")}</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-sm">
-              <span className="text-muted-foreground">{t("sender")}</span>
-              <Select value={email.sender ?? NONE} onValueChange={(v) => setEmail((e) => ({ ...e, sender: v === NONE ? null : v }))}>
-                <SelectTrigger><SelectValue placeholder={t("selectSender")} /></SelectTrigger>
+              <span className="text-muted-foreground">{t("provider")}</span>
+              <Select value={email.provider ?? "ses"} onValueChange={(v) => setEmail((e) => ({ ...e, provider: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>{t("selectSender")}</SelectItem>
-                  {senders.map((s) => <SelectItem key={s.id} value={s.email}>{s.label ? `${s.label} · ${s.email}` : s.email}</SelectItem>)}
+                  <SelectItem value="ses">{t("providerSes")}</SelectItem>
+                  <SelectItem value="gmail">{t("providerGmail")}</SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -434,6 +459,24 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
               </Select>
             </label>
           </div>
+          {email.provider === "gmail" ? (
+            <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
+              {gmailAccounts.length > 0
+                ? t("gmailAccountsConnected", { accounts: gmailAccounts.join(", ") })
+                : t("gmailNoAccounts")}
+            </p>
+          ) : (
+            <label className="grid gap-1 text-sm">
+              <span className="text-muted-foreground">{t("sender")}</span>
+              <Select value={email.sender ?? NONE} onValueChange={(v) => setEmail((e) => ({ ...e, sender: v === NONE ? null : v }))}>
+                <SelectTrigger><SelectValue placeholder={t("selectSender")} /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>{t("selectSender")}</SelectItem>
+                  {senders.map((s) => <SelectItem key={s.id} value={s.email}>{s.label ? `${s.label} · ${s.email}` : s.email}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("subject")}</span>
             <Input value={email.subject ?? ""} onChange={(e) => setEmail((s) => ({ ...s, subject: e.target.value }))} />
@@ -553,6 +596,9 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={sendTest} disabled={busy} variant="outline" className="gap-2"><FlaskConical className="h-4 w-4" />{t("sendTest")}</Button>
+          {emailEnabled && (
+            <Button onClick={gmassTest} disabled={busy} variant="outline" className="gap-2"><Inbox className="h-4 w-4" />{t("gmassTest")}</Button>
+          )}
           <Button onClick={previewRecipients} variant="outline" className="gap-2"><Eye className="h-4 w-4" />{t("previewRecipients")}</Button>
           {recipientCount !== null && (
             <span className="inline-flex items-center gap-1 text-sm text-muted-foreground"><Users className="h-4 w-4" />{t("recipientsCount", { count: recipientCount })}</span>
