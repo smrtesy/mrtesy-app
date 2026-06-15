@@ -2500,6 +2500,25 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       classificationTrail = analysis.classificationTrail;
       classificationConfidence = analysis.confidence;
     } catch (e) {
+      const errMsg = String((e as Error).message || "");
+      // Transient / provider-outage errors (billing or low-credit, rate limit,
+      // overload, 5xx, network) must NEVER count toward the permanent give-up.
+      // Otherwise an outage silently buries every message that arrives during
+      // it as "informational" — the 2026-06-14 low-credit outage did exactly
+      // that to 100+ messages, including personal WhatsApp chats that were real
+      // tasks. Keep these PENDING and leave retry_count untouched, so the cron
+      // auto-reprocesses them every tick and they classify the moment the
+      // outage clears — no manual reset, no give-up. Anthropic returns these
+      // failures with no token billing, so retrying through an outage is free.
+      const isTransient =
+        /\b(429|500|502|503|504|529)\b/.test(errMsg) ||
+        /rate.?limit|overloaded|over capacity|timeout|timed out|network|fetch failed|ECONNRESET|connection (?:reset|error|closed)|socket hang/i.test(errMsg) ||
+        /credit balance|billing|insufficient|quota|payment|account is not active|spending limit/i.test(errMsg);
+      if (isTransient) {
+        await supabase.from("source_messages").update({ processing_status: "pending", processing_lock_at: null }).eq("id", msg.id);
+        await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: `transient — will auto-retry until provider recovers: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
+        return;
+      }
       const retryCount = (msg.retry_count || 0) + 1;
       // After 3 failed AI attempts we give up gracefully — mark the message
       // processed/informational (it won't be re-selected) and log the error.
