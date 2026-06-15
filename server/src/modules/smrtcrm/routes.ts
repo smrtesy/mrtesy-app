@@ -40,7 +40,6 @@ interface ContactFilter {
   q?: string;
   tag_id?: string | null;
   segment_id?: string | null;
-  group_id?: string | null;
   has_email?: boolean;
 }
 
@@ -91,17 +90,6 @@ async function matchingContactIds(orgId: string, f: ContactFilter): Promise<stri
     restrictIds = (data ?? []).map((r) => r.contact_id as string);
     if (restrictIds.length === 0) return [];
   }
-  if (f.group_id) {
-    const { data, error } = await db
-      .from("smrtcrm_group_members")
-      .select("contact_id")
-      .eq("org_id", orgId)
-      .eq("group_id", f.group_id);
-    if (error) throw new Error(error.message);
-    const groupIds = (data ?? []).map((r) => r.contact_id as string);
-    restrictIds = restrictIds ? restrictIds.filter((id) => groupIds.includes(id)) : groupIds;
-    if (restrictIds.length === 0) return [];
-  }
 
   let query = db.from("smrtcrm_contacts").select("id").eq("org_id", orgId);
   if (restrictIds) query = query.in("id", restrictIds);
@@ -130,12 +118,11 @@ function chunk<T>(arr: T[], size = 500): T[][] {
 // CONTACTS
 // ============================================================
 
-// GET /crm/contacts?q=&tag_id=&segment_id=&group_id=&has_email=&limit=&offset=
+// GET /crm/contacts?q=&tag_id=&segment_id=&has_email=&limit=&offset=
 router.get("/crm/contacts", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const segmentId = typeof req.query.segment_id === "string" ? req.query.segment_id : null;
-  const groupId = typeof req.query.group_id === "string" ? req.query.group_id : null;
 
   // A segment is a saved filter — fold its tag/has_email into the live filter.
   let tagId: string | null;
@@ -153,7 +140,7 @@ router.get("/crm/contacts", async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
 
-  // Resolve the id set for tag/group filters first (cheap, indexed).
+  // Resolve the id set for the tag filter first (cheap, indexed).
   let restrictIds: string[] | null = null;
   if (tagId) {
     const { data, error } = await db
@@ -163,16 +150,6 @@ router.get("/crm/contacts", async (req: Request, res: Response) => {
       .eq("tag_id", tagId);
     if (error) return res.status(500).json({ error: error.message });
     restrictIds = (data ?? []).map((r) => r.contact_id as string);
-  }
-  if (groupId) {
-    const { data, error } = await db
-      .from("smrtcrm_group_members")
-      .select("contact_id")
-      .eq("org_id", orgId)
-      .eq("group_id", groupId);
-    if (error) return res.status(500).json({ error: error.message });
-    const groupIds = (data ?? []).map((r) => r.contact_id as string);
-    restrictIds = restrictIds ? restrictIds.filter((id) => groupIds.includes(id)) : groupIds;
   }
 
   // An empty restrict set means "no matches" — short-circuit.
@@ -292,17 +269,16 @@ router.delete("/crm/contacts/:id", async (req: Request, res: Response) => {
 });
 
 // POST /crm/contacts/bulk
-//   { action, contact_ids[], tag_id?, group_id? }              — explicit ids
+//   { action, contact_ids[], tag_id? }                         — explicit ids
 //   { action, filter: {q,tag_id,segment_id,has_email}, ... }   — "select all matching"
 // `filter` is resolved to the full matching id set server-side, so the client
 // never has to enumerate ids when the user picks "select all by the filter".
 router.post("/crm/contacts/bulk", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
-  const { action, contact_ids, tag_id, group_id, filter } = (req.body ?? {}) as {
+  const { action, contact_ids, tag_id, filter } = (req.body ?? {}) as {
     action?: string;
     contact_ids?: string[];
     tag_id?: string;
-    group_id?: string;
     filter?: ContactFilter;
   };
 
@@ -339,15 +315,6 @@ router.post("/crm/contacts/bulk", async (req: Request, res: Response) => {
           .eq("org_id", orgId)
           .eq("tag_id", tag_id)
           .in("contact_id", batch);
-        if (error) throw new Error(error.message);
-      }
-    } else if (action === "add_group") {
-      if (!group_id) return res.status(400).json({ error: "group_id is required for add_group" });
-      for (const batch of chunk(ids)) {
-        const rows = batch.map((cid) => ({ org_id: orgId, contact_id: cid, group_id }));
-        const { error } = await db
-          .from("smrtcrm_group_members")
-          .upsert(rows, { onConflict: "group_id,contact_id" });
         if (error) throw new Error(error.message);
       }
     } else if (action === "delete") {
@@ -412,49 +379,6 @@ router.delete("/crm/tags/:id", async (req: Request, res: Response) => {
 });
 
 // ============================================================
-// GROUPS
-// ============================================================
-
-router.get("/crm/groups", async (req: Request, res: Response) => {
-  const { data, error } = await db
-    .from("smrtcrm_groups")
-    .select("*")
-    .eq("org_id", req.org!.id)
-    .order("name");
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ groups: data ?? [] });
-});
-
-router.post("/crm/groups", async (req: Request, res: Response) => {
-  const orgId = req.org!.id;
-  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-  if (!name) return res.status(400).json({ error: "name is required" });
-
-  const { data, error } = await db
-    .from("smrtcrm_groups")
-    .insert({ org_id: orgId, created_by: req.user!.id, name, description: req.body?.description ?? null })
-    .select("*")
-    .single();
-
-  if (error) {
-    await notifyError(orgId, "smrtcrm", { title: "Failed to create group", body: error.message });
-    return res.status(500).json({ error: error.message });
-  }
-  await emitEvent(orgId, "smrtcrm", "group.created", "group", data.id, { name });
-  res.status(201).json({ group: data });
-});
-
-router.delete("/crm/groups/:id", async (req: Request, res: Response) => {
-  const { error } = await db
-    .from("smrtcrm_groups")
-    .delete()
-    .eq("org_id", req.org!.id)
-    .eq("id", req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true });
-});
-
-// ============================================================
 // SEGMENTS (saved dynamic queries — CRM-1; read by smrtReach as audiences)
 // ============================================================
 
@@ -491,15 +415,14 @@ router.post("/crm/segments", async (req: Request, res: Response) => {
 // CSV IMPORT
 // ============================================================
 // The frontend parses the CSV and posts the mapped rows here, plus an optional
-// tag/group to apply to every row. Each row goes through upsertContact, so the
+// tag to apply to every row. Each row goes through upsertContact, so the
 // dedup logic (CRM-3) handles duplicates automatically.
 
 router.post("/crm/import", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
-  const { rows, tag_id, group_id } = (req.body ?? {}) as {
+  const { rows, tag_id } = (req.body ?? {}) as {
     rows?: ImportRow[];
     tag_id?: string;
-    group_id?: string;
   };
 
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -524,15 +447,6 @@ router.post("/crm/import", async (req: Request, res: Response) => {
       if (result.outcome === "created") created++;
       else merged++;
       if (tag_id) await assignTag(orgId, result.id, tag_id);
-      if (group_id) {
-        const { error } = await db
-          .from("smrtcrm_group_members")
-          .upsert(
-            { org_id: orgId, group_id, contact_id: result.id },
-            { onConflict: "group_id,contact_id" },
-          );
-        if (error) throw new Error(error.message);
-      }
     } catch (e) {
       skipped++;
       if (errors.length < 20) errors.push(e instanceof Error ? e.message : String(e));

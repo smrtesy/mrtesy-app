@@ -42,8 +42,6 @@ export const manifest: AppManifest = {
     reads: [
       "smrtcrm_contacts",
       "smrtcrm_segments",
-      "smrtcrm_groups",
-      "smrtcrm_group_members",
       "smrtcrm_tags",
       "smrtcrm_tag_assignments",
     ],

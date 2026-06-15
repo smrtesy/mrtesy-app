@@ -1,8 +1,8 @@
 /**
  * smrtReach — audience resolution.
  *
- * Resolves a campaign's audience (a reference to a smrtCRM segment / group /
- * tag / "all") into a concrete recipient list. This is the cross-app READ
+ * Resolves a campaign's audience (a reference to a smrtCRM segment / tag /
+ * "all") into a concrete recipient list. This is the cross-app READ
  * declared in the manifest (entities.reads). It uses the org-scoped db client
  * directly — no code is imported from smrtCRM, honoring the platform's
  * no-cross-app-import rule.
@@ -17,13 +17,12 @@ import { db } from "../../db";
 export type Channel = "whatsapp" | "email" | "both";
 
 export interface AudienceRef {
-  kind: "all" | "segment" | "group" | "tag";
+  kind: "all" | "segment" | "tag";
   id?: string;
 }
 
 export interface SegmentFilter {
   tag_id?: string;
-  group_id?: string;
   has_email?: boolean;
   source?: string;
 }
@@ -47,17 +46,6 @@ async function contactIdsForTag(orgId: string, tagId: string): Promise<string[]>
   return (data ?? []).map((r) => r.contact_id as string);
 }
 
-/** Look up the contact ids belonging to a group (org-scoped). */
-async function contactIdsForGroup(orgId: string, groupId: string): Promise<string[]> {
-  const { data, error } = await db
-    .from("smrtcrm_group_members")
-    .select("contact_id")
-    .eq("org_id", orgId)
-    .eq("group_id", groupId);
-  if (error) throw new Error(`audience group lookup: ${error.message}`);
-  return (data ?? []).map((r) => r.contact_id as string);
-}
-
 /**
  * Resolve an audience reference into recipients, filtered for the channel's
  * deliverability requirements.
@@ -72,8 +60,6 @@ export async function resolveAudience(
 
   if (audience.kind === "tag" && audience.id) {
     restrictIds = await contactIdsForTag(orgId, audience.id);
-  } else if (audience.kind === "group" && audience.id) {
-    restrictIds = await contactIdsForGroup(orgId, audience.id);
   } else if (audience.kind === "segment" && audience.id) {
     const { data: seg, error } = await db
       .from("smrtcrm_segments")
@@ -84,13 +70,9 @@ export async function resolveAudience(
     if (error) throw new Error(`audience segment lookup: ${error.message}`);
     const filter = (seg?.filter ?? {}) as SegmentFilter;
 
-    // Intersect tag/group id sets declared in the segment filter.
+    // Intersect the tag id set declared in the segment filter.
     if (filter.tag_id) {
       restrictIds = await contactIdsForTag(orgId, filter.tag_id);
-    }
-    if (filter.group_id) {
-      const groupIds = await contactIdsForGroup(orgId, filter.group_id);
-      restrictIds = restrictIds ? restrictIds.filter((id) => groupIds.includes(id)) : groupIds;
     }
     // has_email / source are applied as column filters below via the segment.
     if (restrictIds && restrictIds.length === 0) return [];
