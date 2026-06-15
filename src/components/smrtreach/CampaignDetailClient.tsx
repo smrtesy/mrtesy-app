@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play } from "lucide-react";
+import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -253,16 +253,24 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     }
   }
 
-  async function send() {
+  async function send(mode: "now" | "scheduled") {
     const emailEnabled = campaign!.channel === "email" || campaign!.channel === "both";
     if (emailEnabled && !email.sender) { toast.error(t("selectSenderFirst")); return; }
-    if (!window.confirm(t("sendConfirm"))) return;
+    if (!window.confirm(mode === "now" ? t("sendNowConfirm") : t("scheduleSendConfirm"))) return;
     setSending(true);
     try {
+      const body =
+        mode === "scheduled"
+          ? { mode, scheduled_at: schedule.scheduled_at ? new Date(schedule.scheduled_at).toISOString() : null }
+          : { mode };
       const r = await api<{ queued: number; sent: number; paused: boolean }>(
-        `/api/reach/campaigns/${campaignId}/send`, { method: "POST" },
+        `/api/reach/campaigns/${campaignId}/send`, { method: "POST", body },
       );
-      toast.success(r.paused ? t("testBatchSent", { sent: r.sent }) : t("sendStarted", { queued: r.queued, sent: r.sent }));
+      toast.success(
+        r.paused ? t("testBatchSent", { sent: r.sent })
+        : mode === "scheduled" ? t("scheduleSendStarted", { queued: r.queued })
+        : t("sendStarted", { queued: r.queued, sent: r.sent }),
+      );
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -549,10 +557,16 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           {recipientCount !== null && (
             <span className="inline-flex items-center gap-1 text-sm text-muted-foreground"><Users className="h-4 w-4" />{t("recipientsCount", { count: recipientCount })}</span>
           )}
-          <Button onClick={send} disabled={sending} className="gap-2 ms-auto">
+          {schedule.scheduled_at && (
+            <Button onClick={() => send("scheduled")} disabled={sending} variant="outline" className="gap-2 ms-auto">
+              <CalendarClock className="h-4 w-4" />{t("scheduleSend")}
+            </Button>
+          )}
+          <Button onClick={() => send("now")} disabled={sending} className={`gap-2 ${schedule.scheduled_at ? "" : "ms-auto"}`}>
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{t("sendNow")}
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">{t("sendNowNote")}</p>
       </div>
     </div>
   );
