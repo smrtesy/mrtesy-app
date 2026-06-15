@@ -2515,8 +2515,21 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         /rate.?limit|overloaded|over capacity|timeout|timed out|network|fetch failed|ECONNRESET|connection (?:reset|error|closed)|socket hang/i.test(errMsg) ||
         /credit balance|billing|insufficient|quota|payment|account is not active|spending limit/i.test(errMsg);
       if (isTransient) {
-        await supabase.from("source_messages").update({ processing_status: "pending", processing_lock_at: null }).eq("id", msg.id);
-        await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: `transient — will auto-retry until provider recovers: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
+        // Keep it pending so it auto-processes when the provider recovers, with
+        // retry_count untouched — but bound the wait: a message that somehow
+        // ALWAYS draws a transient-looking error (e.g. a permanent 400 whose
+        // body happens to contain "500", or a genuine days-long outage) must
+        // not loop forever re-billing every tick. After 24h of transient
+        // failures, flag it for admin review (dead_letter) instead — visible
+        // and recoverable, never silently buried as "informational".
+        const ageMs = msg.received_at ? Date.now() - new Date(msg.received_at).getTime() : 0;
+        const tooOld = ageMs > 24 * 60 * 60 * 1000;
+        await supabase.from("source_messages").update(
+          tooOld
+            ? { processing_status: "processed", dead_letter: true, skip_reason: "ai_transient_failure_timeout", processing_lock_at: null }
+            : { processing_status: "pending", processing_lock_at: null },
+        ).eq("id", msg.id);
+        await supabase.from("log_entries").insert({ user_id: msg.user_id, level: tooOld ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: `${tooOld ? "transient >24h — flagged dead_letter for review" : "transient — will auto-retry until provider recovers"}: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
         return;
       }
       const retryCount = (msg.retry_count || 0) + 1;
