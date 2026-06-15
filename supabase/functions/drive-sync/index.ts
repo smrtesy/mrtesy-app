@@ -158,6 +158,10 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const OCR_MODEL = "claude-haiku-4-5-20251001";
 const OCR_MAX_BYTES = 10 * 1024 * 1024; // 10MB raw (~13MB base64) — under the API request cap
 const OCR_MAX_OUTPUT_TOKENS = 4096;
+// OCR (download + base64 + a vision call per file) is heavy: transcribing a
+// whole backlog in one invocation trips the edge runtime's WORKER_RESOURCE_LIMIT.
+// Cap OCR work per run and drain the rest on subsequent runs (see syncUserDrive).
+const OCR_MAX_PER_RUN = 3;
 
 // Haiku $/MTok — matches the haiku branch of ai-process estimateCost so the
 // drive_ocr rows in ai_usage cost the same as everything else in the ledger.
@@ -483,7 +487,29 @@ async function syncUserDrive(userId: string) {
     (f) => Array.isArray(f.parents) && f.parents.some((p: string) => folderSet.has(p)),
   );
 
+  // Source ids we've already OCR'd in a previous run (body_text already filled).
+  // Lets a backlog drain over several runs without re-transcribing finished
+  // files and without blowing the per-invocation compute budget.
+  const ocrFileIds = files
+    .filter((f) => f.id && (f.mimeType === "application/pdf" || (f.mimeType || "").startsWith("image/")))
+    .map((f) => f.id);
+  const alreadyOcred = new Set<string>();
+  if (ocrFileIds.length > 0) {
+    const { data: doneRows } = await supabase
+      .from("source_messages")
+      .select("source_id")
+      .eq("user_id", userId)
+      .eq("source_type", "google_drive")
+      .not("body_text", "is", null)
+      .in("source_id", ocrFileIds);
+    for (const r of doneRows || []) alreadyOcred.add(r.source_id);
+  }
+
   let synced = 0;
+  let ocrCount = 0;
+  // True if we skipped at least one file that still needs OCR because we hit the
+  // per-run cap — tells the checkpoint logic below to keep scanning next run.
+  let ocrDeferred = false;
   for (const file of files) {
     if (!file.name) continue;
 
@@ -492,10 +518,20 @@ async function syncUserDrive(userId: string) {
     // back to vision OCR — otherwise scanned documents never produce a task.
     let bodyText = await fetchFileContent(token, file.id, file.mimeType || "");
     if (!bodyText) {
-      bodyText = await ocrBinaryFile(
-        token, file.id, file.mimeType || "", file.name, userId,
-        file.size != null ? Number(file.size) : undefined,
-      );
+      const isBinary = file.mimeType === "application/pdf" || (file.mimeType || "").startsWith("image/");
+      if (isBinary) {
+        // Already transcribed on a prior run — don't pay for it again.
+        if (alreadyOcred.has(file.id)) continue;
+        // Per-run OCR budget spent — defer this file to the next run.
+        if (ocrCount >= OCR_MAX_PER_RUN) { ocrDeferred = true; continue; }
+        // Count the attempt (the expensive part), not just success, so the
+        // per-run compute budget holds even when a file yields no text.
+        ocrCount++;
+        bodyText = await ocrBinaryFile(
+          token, file.id, file.mimeType || "", file.name, userId,
+          file.size != null ? Number(file.size) : undefined,
+        );
+      }
     }
 
     await supabase.from("source_messages").upsert({
@@ -512,33 +548,36 @@ async function syncUserDrive(userId: string) {
     synced++;
   }
 
-  // Persist the next pageToken so subsequent runs use /changes incrementally.
-  if (!pageToken) {
-    const tokenResp = await fetch(
-      "https://www.googleapis.com/drive/v3/changes/startPageToken",
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (tokenResp.ok) {
-      const tokenData = await tokenResp.json();
-      await supabase.from("sync_state").upsert({
-        user_id: userId, source: "google_drive",
-        checkpoint: tokenData.startPageToken,
-        last_synced_at: new Date().toISOString(),
-        messages_synced_total: synced,
-        last_error: null, consecutive_failures: 0,
-      }, { onConflict: "user_id,source" });
+  // Advance the checkpoint only once the OCR backlog is drained. While work is
+  // deferred we leave the position untouched (omit `checkpoint` from the upsert
+  // so it keeps its current value) — the remaining files then reappear on the
+  // next run and get transcribed. Initial scan → startPageToken (go
+  // incremental); incremental → the next /changes token.
+  let checkpointToWrite: string | null | undefined; // undefined = leave unchanged
+  if (!ocrDeferred) {
+    if (!pageToken) {
+      const tokenResp = await fetch(
+        "https://www.googleapis.com/drive/v3/changes/startPageToken",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (tokenResp.ok) checkpointToWrite = (await tokenResp.json()).startPageToken;
+    } else if (nextCheckpoint) {
+      checkpointToWrite = nextCheckpoint;
     }
-  } else if (nextCheckpoint) {
-    await supabase.from("sync_state").upsert({
-      user_id: userId, source: "google_drive",
-      checkpoint: nextCheckpoint,
-      last_synced_at: new Date().toISOString(),
-      messages_synced_total: (syncState?.messages_synced_total || 0) + synced,
-      last_error: null, consecutive_failures: 0,
-    }, { onConflict: "user_id,source" });
   }
 
-  return { synced };
+  const stateUpdate: Record<string, unknown> = {
+    user_id: userId,
+    source: "google_drive",
+    last_synced_at: new Date().toISOString(),
+    messages_synced_total: (pageToken ? (syncState?.messages_synced_total || 0) : 0) + synced,
+    last_error: null,
+    consecutive_failures: 0,
+  };
+  if (checkpointToWrite !== undefined) stateUpdate.checkpoint = checkpointToWrite;
+  await supabase.from("sync_state").upsert(stateUpdate, { onConflict: "user_id,source" });
+
+  return { synced, ocrDeferred };
 }
 
 Deno.serve(async (req) => {
