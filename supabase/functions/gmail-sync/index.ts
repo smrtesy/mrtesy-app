@@ -30,7 +30,10 @@ async function notifyDisconnect(userId: string, reason: string) {
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "error",
+      // notifications.type CHECK allows only info|warning|success|action_required.
+      // "error" was silently rejected, so this disconnect alert never reached
+      // the user. A dead connection needs a re-OAuth → action_required.
+      type: "action_required",
       title: "Gmail מנותק",
       body: `חיבור Gmail נותק (${reason}). יש להתחבר מחדש בהגדרות → חיבורים.`,
       link: "/settings",
@@ -62,11 +65,18 @@ async function notifySyncError(
 
   const dedupMs = urgency === "error" ? 15 * 60 * 1000 : 60 * 60 * 1000;
 
+  // notifications.type CHECK allows only info|warning|success|action_required.
+  // "error" was silently rejected by the constraint, so error-urgency sync
+  // alerts never reached the user. Map urgency → a valid type (blocked sync =
+  // action_required) and use it for BOTH the dedup lookup and the insert so
+  // de-duplication still matches.
+  const notifType = urgency === "error" ? "action_required" : "warning";
+
   const { data: existing } = await supabase
     .from("notifications")
     .select("id")
     .eq("user_id", userId)
-    .eq("type", urgency)
+    .eq("type", notifType)
     .eq("title", title)
     .eq("is_read", false)
     .gt("created_at", new Date(Date.now() - dedupMs).toISOString())
@@ -78,7 +88,7 @@ async function notifySyncError(
     user_id: userId,
     org_id: membership.org_id,
     app_slug: "smrttask",
-    type: urgency,
+    type: notifType,
     title,
     body: message.substring(0, 500),
     link: "/log",
