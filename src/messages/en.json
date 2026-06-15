@@ -563,7 +563,11 @@
     "restored": "Item restored to inbox",
     "learnFromThis": "Teach the AI from this (the explanation is saved as a correction)",
     "learnScopePersonal": "Just for me",
-    "learnScopeGeneral": "General rule"
+    "learnScopeGeneral": "General rule",
+    "resolvedTitle": "Resolved themselves ({count})",
+    "resolvedHint": "Suggestions that closed after you already handled them in the conversation. Confirm done, or reopen.",
+    "confirmDone": "Done",
+    "reopen": "Reopen"
   },
   "merge": {
     "step1Title": "Choose merge target",
@@ -1448,6 +1452,8 @@
     "excludeCalendar": "Exclude from scan",
     "skipAddresses": "Skip Addresses ({count})",
     "skipAddressesEmpty": "No blocked addresses. Add a rule with trigger from= / to= / domain= to block a sender or domain.",
+    "contentSkip": "Content phrases to skip ({count})",
+    "contentSkipEmpty": "No content phrases. History-learned suggestions will appear here for approval.",
     "botPhones": "Bot Phones ({count})",
     "otherRules": "Other Rules ({count})",
     "pendingSuggestions": "Pending AI Suggestions ({count})",

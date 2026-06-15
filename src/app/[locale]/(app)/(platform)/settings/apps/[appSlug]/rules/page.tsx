@@ -290,12 +290,18 @@ export default function SettingsRulesPage() {
       (r.rule_type === "skip" || r.rule_type === "skip_spam") &&
       /^(from|to|domain)=/i.test(r.trigger),
   );
+  // Content-phrase skip rules (trigger `contains=<phrase>`) — shown under their
+  // own heading and the phrase rendered without the `contains=` prefix.
+  const contentSkipRules = activeRules.filter(
+    (r) => r.rule_type === "skip" && /^contains=/i.test(r.trigger),
+  );
   const botRules = activeRules.filter((r) => r.rule_type === "bot");
   const otherRules = activeRules.filter(
     (r) =>
       !categoryRules.includes(r) &&
       !calendarRules.includes(r) &&
       !skipAddressRules.includes(r) &&
+      !contentSkipRules.includes(r) &&
       !botRules.includes(r) &&
       !["style", "preference", "financial"].includes(r.rule_type),
   );
@@ -466,6 +472,55 @@ export default function SettingsRulesPage() {
               >
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-mono truncate">{rule.trigger}</span>
+                  {rule.reason && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{rule.reason}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => toggleRule(rule.id, rule.is_active)}
+                    title={rule.is_active ? t("disable") : t("enable")}
+                  >
+                    {rule.is_active ? (
+                      <ToggleRight className="h-4 w-4 text-status-ok" />
+                    ) : (
+                      <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                    onClick={() => deleteRule(rule.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Content phrases to skip — contains= rules */}
+      <Card>
+        <CardHeader className="p-4 pb-2 md:p-6 md:pb-2">
+          <CardTitle className="text-base">{t("contentSkip", { count: contentSkipRules.length })}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 px-4 pb-4 md:px-6 md:pb-6">
+          {contentSkipRules.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1">{t("contentSkipEmpty")}</p>
+          ) : (
+            contentSkipRules.map((rule) => (
+              <div
+                key={rule.id}
+                className={`flex items-start gap-3 rounded-lg border p-3 ${!rule.is_active ? "opacity-50" : ""}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-mono truncate">&quot;{rule.trigger.replace(/^contains=/i, "")}&quot;</span>
                   {rule.reason && (
                     <p className="text-xs text-muted-foreground mt-0.5">{rule.reason}</p>
                   )}

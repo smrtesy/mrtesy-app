@@ -7,8 +7,9 @@ import { api } from "@/lib/api/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -46,6 +47,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const blocked = useWorkCalendar();
 
   const [suggestions, setSuggestions] = useState<Task[]>([]);
+  // Suggestions that resolved themselves before you approved them: a WhatsApp
+  // matter that opened as a suggestion and then closed when you replied (T740).
+  // They go to status=pending_completion + unverified, which neither the
+  // suggestions list (inbox+unverified) nor the task list (verified) shows —
+  // so without this they vanished silently. Surfaced as a "resolved itself"
+  // strip you can confirm (→done) or reopen (→back to a suggestion).
+  const [resolved, setResolved] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -89,12 +97,15 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     if (!initialLoadDoneRef.current) setLoading(true);
     try {
       // mine=true → personal scope; the API also hides draft-plan tasks.
+      // Pull inbox suggestions AND pending_completion (suggestions that closed
+      // themselves before approval), then split by status below.
       const { tasks } = await api<{ tasks: Task[] }>(
-        "/api/tasks?status=inbox&verified=false&has_source=true&mine=true&limit=1000",
+        "/api/tasks?status=inbox,pending_completion&verified=false&has_source=true&mine=true&limit=1000",
       );
+      const all = tasks ?? [];
       // Urgency order: earliest effective deadline first, undated last,
       // newest-first within each group.
-      const sorted = [...(tasks ?? [])].sort((a, b) => {
+      const sorted = all.filter((t) => t.status === "inbox").sort((a, b) => {
         const da = effectiveDeadline(a);
         const db = effectiveDeadline(b);
         if (da && db && da !== db) return da.localeCompare(db);
@@ -103,6 +114,11 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         return (b.created_at ?? "").localeCompare(a.created_at ?? "");
       });
       setSuggestions(sorted);
+      // Newest-resolved first — these are "did you notice this closed?" cards.
+      setResolved(
+        all.filter((t) => t.status === "pending_completion")
+          .sort((a, b) => (b.status_changed_at ?? b.created_at ?? "").localeCompare(a.status_changed_at ?? a.created_at ?? "")),
+      );
       setSelected(new Set());
       // Re-bind editTask to the freshly fetched row so an open TaskDetail
       // sheet renders the saved values instead of the pre-save snapshot.
@@ -163,6 +179,23 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       ids.forEach((id) => next.delete(id));
       return next;
     });
+  }
+
+  // A self-resolved suggestion: confirm it's done (→ archived) or reopen it
+  // back into the suggestion inbox if it wasn't actually finished.
+  function handleConfirmResolved(taskId: string) {
+    setResolved((prev) => prev.filter((s) => s.id !== taskId));
+    toast.success(tTasks("actions.complete"));
+    api(`/api/tasks/${taskId}/complete`, { method: "POST" })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
+  function handleReopenResolved(taskId: string) {
+    setResolved((prev) => prev.filter((s) => s.id !== taskId));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox" } })
+      .then(() => { fetchSuggestions(); onUpdate?.(); })
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
   function handleApprove(taskId: string) {
@@ -292,12 +325,41 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       {/* Plan assignments awaiting my accept/decline */}
       <PlanProposals locale={locale} onChanged={() => { onUpdate?.(); }} />
 
-      {suggestions.length === 0 ? (
+      {/* Suggestions that closed themselves before you approved them (T740):
+          surfaced here so they don't vanish silently. Confirm → archived;
+          reopen → back into the suggestion inbox. */}
+      {resolved.length > 0 && (
+        <div className="rounded-lg border border-status-ok/30 bg-status-ok-bg/40 p-3 space-y-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-status-ok">
+            <Check className="h-3.5 w-3.5 shrink-0" />
+            <span dir="auto">{t("resolvedTitle", { count: resolved.length })}</span>
+          </p>
+          <p className="text-[11px] text-muted-foreground" dir="auto">{t("resolvedHint")}</p>
+          {resolved.map((task) => {
+            const rTitle = locale === "he" && task.title_he ? task.title_he : task.title;
+            return (
+              <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
+                <span className="min-w-0 flex-1 truncate text-sm line-through opacity-70" dir="auto">{rTitle}</span>
+                <Button size="sm" variant="ghost" className="h-7 gap-1 text-status-ok" onClick={() => handleConfirmResolved(task.id)}>
+                  <Check className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{t("confirmDone")}</span>
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 gap-1 text-muted-foreground" onClick={() => handleReopenResolved(task.id)}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{t("reopen")}</span>
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {suggestions.length === 0 && resolved.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noSuggestions")}</p>
         </div>
-      ) : (
+      ) : suggestions.length === 0 ? null : (
         <div className="space-y-3">
           <SuggestionToolbar
             total={suggestions.length}

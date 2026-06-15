@@ -563,7 +563,11 @@
     "restored": "הפריט הוחזר לתיבת הנכנסות",
     "learnFromThis": "תלמד מזה את ה-AI להבא (ההסבר יישמר כתיקון)",
     "learnScopePersonal": "רק בשבילי",
-    "learnScopeGeneral": "כלל כללי"
+    "learnScopeGeneral": "כלל כללי",
+    "resolvedTitle": "נפתרו מעצמם ({count})",
+    "resolvedHint": "הצעות שנסגרו אחרי שכבר טיפלת בהן בשיחה. אשר שבוצעו או החזר להצעה.",
+    "confirmDone": "בוצע",
+    "reopen": "החזר"
   },
   "merge": {
     "step1Title": "בחירת יעד למיזוג",
@@ -1448,6 +1452,8 @@
     "excludeCalendar": "החרג מסריקה",
     "skipAddresses": "כתובות לדילוג ({count})",
     "skipAddressesEmpty": "אין כתובות חסומות. הוסף כלל עם טריגר from= / to= / domain= כדי לחסום שולח או דומיין.",
+    "contentSkip": "ביטויי תוכן לדילוג ({count})",
+    "contentSkipEmpty": "אין ביטויי תוכן. הצעות שנלמדו מההיסטוריה יופיעו כאן לאישור.",
     "botPhones": "טלפוני בוטים ({count})",
     "otherRules": "כללים נוספים ({count})",
     "pendingSuggestions": "הצעות AI ממתינות ({count})",

@@ -82,6 +82,7 @@ export interface Task {
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;
+  status_changed_at: string | null;
   created_at: string;
   updated_at: string;
   project_id: string | null;

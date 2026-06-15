@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -26,12 +27,39 @@ async function notifyDisconnect(userId: string, reason: string) {
       user_id: userId,
       org_id: membership.org_id,
       app_slug: "smrttask",
-      type: "sync_disconnected",
+      // Must be one of the notifications_type_check values
+      // (info|warning|success|action_required) — anything else is silently
+      // rejected by the CHECK constraint and the user never sees it.
+      type: "action_required",
       title: "Google Drive disconnected",
       body: `Drive connection was lost (${reason}). Please reconnect in Settings → Connections.`,
       link: "/settings",
     }).then(() => {}, () => {});
   }
+}
+
+// Mark Drive as disconnected after an unrecoverable auth failure (missing
+// credentials or a dead refresh token). Sets drive_connected=false so the
+// account drops out of the cron loop until the user re-OAuths, records the
+// failure, and notifies the user — but ONLY on the true→false transition, so a
+// dead connection never pages the user every cron tick.
+async function markDriveDisconnected(userId: string, reason: string, prevFailures: number) {
+  const { data: prev } = await supabase
+    .from("user_settings")
+    .select("drive_connected")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
+
+  await supabase.from("sync_state").upsert({
+    user_id: userId,
+    source: "google_drive",
+    last_error: reason,
+    consecutive_failures: prevFailures + 1,
+  }, { onConflict: "user_id,source" });
+
+  if (prev?.drive_connected) await notifyDisconnect(userId, reason);
 }
 
 async function refreshGoogleToken(userId: string, service: string): Promise<string> {
@@ -42,7 +70,10 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
     .eq("service", service)
     .single();
 
-  if (!cred) throw new Error(`No ${service} credentials found`);
+  // "AUTH:" prefix marks an unrecoverable auth failure that the caller turns
+  // into a disconnect (drive_connected=false + one notification). Transient
+  // errors throw without the prefix and are retried on the next cron run.
+  if (!cred) throw new Error("AUTH: no google_drive credentials found");
 
   if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
     return cred.access_token;
@@ -60,23 +91,11 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   });
 
   if (!resp.ok) {
-    const err = await resp.text();
+    // 401/400 from the token endpoint means the refresh token is dead — the
+    // user must re-OAuth. Other statuses (429/5xx) are transient: throw plainly
+    // so the run fails this tick but retries next time without disconnecting.
     if (resp.status === 401 || resp.status === 400) {
-      await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
-      // Record the error in sync_state so it's visible in admin logs
-      const { data: syncState } = await supabase
-        .from("sync_state")
-        .select("consecutive_failures")
-        .eq("user_id", userId)
-        .eq("source", "google_drive")
-        .maybeSingle();
-      await supabase.from("sync_state").upsert({
-        user_id: userId,
-        source: "google_drive",
-        last_error: `Token refresh failed: ${err}`,
-        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
-      }, { onConflict: "user_id,source" });
-      await notifyDisconnect(userId, `token refresh failed (${resp.status})`);
+      throw new Error(`AUTH: token refresh failed (${resp.status})`);
     }
     throw new Error(`Token refresh failed: ${resp.status}`);
   }
@@ -130,6 +149,133 @@ async function fetchFileContent(token: string, fileId: string, mimeType: string)
     if (!resp.ok) return "";
     const text = await resp.text();
     return text.substring(0, 10000); // Limit to 10KB
+  } catch {
+    return "";
+  }
+}
+
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+const OCR_MODEL = "claude-haiku-4-5-20251001";
+const OCR_MAX_BYTES = 10 * 1024 * 1024; // 10MB raw (~13MB base64) — under the API request cap
+const OCR_MAX_OUTPUT_TOKENS = 4096;
+// OCR (download + base64 + a vision call per file) is heavy: a vision call on a
+// multi-page scan can take ~minute, and the edge runtime caps a request at
+// ~150s wall-clock (HTTP 546). Cap OCR per run AND time-box each call so one
+// slow/hung file can't consume the whole budget; the rest drain on later runs.
+const OCR_MAX_PER_RUN = 2;
+const OCR_DOWNLOAD_TIMEOUT_MS = 25_000;
+const OCR_API_TIMEOUT_MS = 50_000;
+// Worst case per run ≈ OCR_MAX_PER_RUN × (download + api) ≈ 2 × 75s = 150s, but
+// downloads are near-instant in practice, so realistic worst is ≈ 2 × 50s, well
+// under the runtime's ~150s wall-clock ceiling.
+
+// fetch() with a hard timeout — aborts (and the await rejects, caught by the
+// caller) instead of hanging until the platform kills the whole invocation.
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Haiku $/MTok — matches the haiku branch of ai-process estimateCost so the
+// drive_ocr rows in ai_usage cost the same as everything else in the ledger.
+function estimateHaikuCost(inputTokens: number, outputTokens: number): number {
+  return (inputTokens * 0.80 + outputTokens * 4) / 1_000_000;
+}
+
+// Scanned PDFs (ScanSnap and similar) and photos are image-only: they have no
+// text layer, so fetchFileContent returns "" and the document reaches
+// ai-process with an empty body and never becomes a task. Hand the raw bytes
+// to a vision-capable model and return the transcription, which gets stored as
+// body_text — the contract ai-process consumes. Best-effort: any failure
+// returns "" (unchanged from the pre-OCR behavior).
+async function ocrBinaryFile(
+  token: string,
+  fileId: string,
+  mimeType: string,
+  fileName: string,
+  userId: string,
+  sizeBytes?: number,
+): Promise<string> {
+  if (!ANTHROPIC_API_KEY) return "";
+  const isPdf = mimeType === "application/pdf";
+  const isImage = mimeType.startsWith("image/");
+  if (!isPdf && !isImage) return "";
+  if (sizeBytes && sizeBytes > OCR_MAX_BYTES) return "";
+
+  let base64: string;
+  try {
+    const resp = await fetchWithTimeout(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      OCR_DOWNLOAD_TIMEOUT_MS,
+    );
+    if (!resp.ok) return "";
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    if (bytes.byteLength > OCR_MAX_BYTES) return "";
+    base64 = encodeBase64(bytes);
+  } catch {
+    return "";
+  }
+
+  const mediaBlock = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+    : { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } };
+
+  try {
+    const resp = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: OCR_MODEL,
+        max_tokens: OCR_MAX_OUTPUT_TOKENS,
+        messages: [{
+          role: "user",
+          content: [
+            mediaBlock,
+            {
+              type: "text",
+              text:
+                `Transcribe ALL text in this document ("${fileName}") as plain text. ` +
+                `Preserve names, dates, monetary amounts, reference / case / invoice numbers, ` +
+                `addresses and any URLs exactly as written — do not summarize or paraphrase. ` +
+                `For forms, keep each field label next to its value. ` +
+                `Output only the transcribed text. If there is no readable text, output exactly NO_TEXT.`,
+            },
+          ],
+        }],
+      }),
+    }, OCR_API_TIMEOUT_MS);
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    const text: string = (data.content?.[0]?.text || "").trim();
+
+    // Best-effort cost ledger row (mirrors ai-process). Never blocks the sync.
+    try {
+      await supabase.from("ai_usage").insert({
+        user_id: userId,
+        provider: "anthropic",
+        component: "drive_ocr",
+        model: OCR_MODEL,
+        input_tokens: data.usage?.input_tokens || 0,
+        output_tokens: data.usage?.output_tokens || 0,
+        cache_read_tokens: data.usage?.cache_read_input_tokens || 0,
+        cache_write_tokens: data.usage?.cache_creation_input_tokens || 0,
+        cost_usd: estimateHaikuCost(data.usage?.input_tokens || 0, data.usage?.output_tokens || 0),
+        ref_id: fileId,
+      });
+    } catch { /* ledger must not break the pipeline */ }
+
+    if (!text || text === "NO_TEXT") return "";
+    return text.substring(0, 10000);
   } catch {
     return "";
   }
@@ -198,24 +344,31 @@ async function syncUserDrive(userId: string) {
     .eq("source", "google_drive")
     .single();
 
-  if (syncState && syncState.consecutive_failures >= 5) {
-    return { skipped: true, reason: "Too many failures" };
-  }
-
+  // No permanent circuit-breaker here: a brief failure streak (e.g. a
+  // transient missing-credentials window) must never brick Drive sync forever.
+  // Auth failures flip drive_connected=false (so the account leaves the loop
+  // until the user re-OAuths) and transient failures simply retry next tick —
+  // either way a reconnected user recovers automatically.
   let token: string;
   try {
     token = await refreshGoogleToken(userId, "google_drive");
   } catch (e) {
     const errMsg = (e as Error).message;
-    await supabase.from("sync_state").upsert(
-      {
-        user_id: userId,
-        source: "google_drive",
-        last_error: errMsg,
-        consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
-      },
-      { onConflict: "user_id,source" }
-    );
+    if (errMsg.startsWith("AUTH:")) {
+      // Unrecoverable auth failure → disconnect + notify once, then drop out.
+      await markDriveDisconnected(userId, errMsg.slice(5).trim(), syncState?.consecutive_failures ?? 0);
+    } else {
+      // Transient (network / 5xx / rate limit) → record and retry next run.
+      await supabase.from("sync_state").upsert(
+        {
+          user_id: userId,
+          source: "google_drive",
+          last_error: errMsg,
+          consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1,
+        },
+        { onConflict: "user_id,source" }
+      );
+    }
     return { error: errMsg };
   }
 
@@ -257,33 +410,57 @@ async function syncUserDrive(userId: string) {
 
   // Collected file list across all batched queries / change pages.
   let files: any[] = [];
-  let newChangesToken: string | undefined;
+  // The Drive checkpoint to persist after this run. Always moves forward so we
+  // never re-stall on an old token.
+  let nextCheckpoint: string | undefined;
 
   if (pageToken) {
-    // Incremental — single /changes fetch (paginated by next cron run).
-    const url = `https://www.googleapis.com/drive/v3/changes?pageToken=${pageToken}&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink,parents)),newStartPageToken,nextPageToken`;
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      if (resp.status === 400) {
-        // Stale checkpoint after re-auth. Self-heal: clear it so the next
-        // run does a fresh initial scan instead of looping on 400 forever.
+    // Incremental — walk the /changes feed from our saved checkpoint.
+    // /changes is paginated: only the FINAL page carries newStartPageToken,
+    // while intermediate pages carry nextPageToken. The previous version
+    // fetched a single page and only advanced the checkpoint when
+    // newStartPageToken was present — so an account with a backlog of changes
+    // got stuck replaying page 1 forever and never ingested newer files.
+    // Follow nextPageToken (capped per run) and ALWAYS persist a forward
+    // checkpoint: newStartPageToken when we reach the end, otherwise the next
+    // page token so the following cron run resumes where we left off.
+    const MAX_PAGES = 10;
+    let cursor: string | undefined = pageToken;
+    let pages = 0;
+    while (cursor && pages < MAX_PAGES) {
+      const url = `https://www.googleapis.com/drive/v3/changes?pageToken=${cursor}` +
+        `&fields=changes(file(id,name,mimeType,modifiedTime,webViewLink,parents,size)),newStartPageToken,nextPageToken` +
+        `&pageSize=100`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        if (resp.status === 400) {
+          // Stale checkpoint after re-auth. Self-heal: clear it so the next
+          // run does a fresh initial scan instead of looping on 400 forever.
+          await supabase.from("sync_state").upsert({
+            user_id: userId, source: "google_drive",
+            checkpoint: null, last_error: null, consecutive_failures: 0,
+          }, { onConflict: "user_id,source" });
+          return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+        }
         await supabase.from("sync_state").upsert({
           user_id: userId, source: "google_drive",
-          checkpoint: null, last_error: null, consecutive_failures: 0,
+          last_error: `Drive API: ${resp.status} ${errText}`,
+          consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
         }, { onConflict: "user_id,source" });
-        return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
+        throw new Error(`Drive API: ${resp.status}`);
       }
-      await supabase.from("sync_state").upsert({
-        user_id: userId, source: "google_drive",
-        last_error: `Drive API: ${resp.status} ${errText}`,
-        consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
-      }, { onConflict: "user_id,source" });
-      throw new Error(`Drive API: ${resp.status}`);
+      const data = await resp.json();
+      files.push(...((data.changes || []).map((c: any) => c.file).filter(Boolean)));
+      pages++;
+      if (data.newStartPageToken) { nextCheckpoint = data.newStartPageToken; break; }
+      cursor = data.nextPageToken;
     }
-    const data = await resp.json();
-    files = (data.changes || []).map((c: any) => c.file).filter(Boolean);
-    newChangesToken = data.newStartPageToken;
+    // Capped before reaching the end → resume from the page we stopped at.
+    // If a malformed page returns neither token, fall back to the incoming
+    // checkpoint so we re-write (never silently skip persistence) and retry
+    // the same token next tick rather than re-stalling on it.
+    if (!nextCheckpoint) nextCheckpoint = cursor ?? pageToken;
   } else {
     // Initial scan: batch the folder set into chunks that fit under
     // Drive's `q` length cap (~2KB) and fan out across all of them.
@@ -300,7 +477,7 @@ async function syncUserDrive(userId: string) {
       do {
         const url =
           `https://www.googleapis.com/drive/v3/files?q=${baseQ}` +
-          `&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents),nextPageToken` +
+          `&fields=files(id,name,mimeType,modifiedTime,webViewLink,parents,size),nextPageToken` +
           `&orderBy=modifiedTime+desc&pageSize=100` +
           (batchPage ? `&pageToken=${batchPage}` : "");
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -329,12 +506,52 @@ async function syncUserDrive(userId: string) {
     (f) => Array.isArray(f.parents) && f.parents.some((p: string) => folderSet.has(p)),
   );
 
+  // Source ids we've already OCR'd in a previous run (body_text already filled).
+  // Lets a backlog drain over several runs without re-transcribing finished
+  // files and without blowing the per-invocation compute budget.
+  const ocrFileIds = files
+    .filter((f) => f.id && (f.mimeType === "application/pdf" || (f.mimeType || "").startsWith("image/")))
+    .map((f) => f.id);
+  const alreadyOcred = new Set<string>();
+  if (ocrFileIds.length > 0) {
+    const { data: doneRows } = await supabase
+      .from("source_messages")
+      .select("source_id")
+      .eq("user_id", userId)
+      .eq("source_type", "google_drive")
+      .not("body_text", "is", null)
+      .in("source_id", ocrFileIds);
+    for (const r of doneRows || []) alreadyOcred.add(r.source_id);
+  }
+
   let synced = 0;
+  let ocrCount = 0;
+  // True if we skipped at least one file that still needs OCR because we hit the
+  // per-run cap — tells the checkpoint logic below to keep scanning next run.
+  let ocrDeferred = false;
   for (const file of files) {
     if (!file.name) continue;
 
-    // Fetch content for text-based files
-    const bodyText = await fetchFileContent(token, file.id, file.mimeType || "");
+    // Text-based files (Docs/Sheets/plain text) export directly. Binary files
+    // with no text layer (scanned PDFs, images) come back empty here, so fall
+    // back to vision OCR — otherwise scanned documents never produce a task.
+    let bodyText = await fetchFileContent(token, file.id, file.mimeType || "");
+    if (!bodyText) {
+      const isBinary = file.mimeType === "application/pdf" || (file.mimeType || "").startsWith("image/");
+      if (isBinary) {
+        // Already transcribed on a prior run — don't pay for it again.
+        if (alreadyOcred.has(file.id)) continue;
+        // Per-run OCR budget spent — defer this file to the next run.
+        if (ocrCount >= OCR_MAX_PER_RUN) { ocrDeferred = true; continue; }
+        // Count the attempt (the expensive part), not just success, so the
+        // per-run compute budget holds even when a file yields no text.
+        ocrCount++;
+        bodyText = await ocrBinaryFile(
+          token, file.id, file.mimeType || "", file.name, userId,
+          file.size != null ? Number(file.size) : undefined,
+        );
+      }
+    }
 
     await supabase.from("source_messages").upsert({
       user_id: userId,
@@ -350,33 +567,36 @@ async function syncUserDrive(userId: string) {
     synced++;
   }
 
-  // Persist the next pageToken so subsequent runs use /changes incrementally.
-  if (!pageToken) {
-    const tokenResp = await fetch(
-      "https://www.googleapis.com/drive/v3/changes/startPageToken",
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (tokenResp.ok) {
-      const tokenData = await tokenResp.json();
-      await supabase.from("sync_state").upsert({
-        user_id: userId, source: "google_drive",
-        checkpoint: tokenData.startPageToken,
-        last_synced_at: new Date().toISOString(),
-        messages_synced_total: synced,
-        last_error: null, consecutive_failures: 0,
-      }, { onConflict: "user_id,source" });
+  // Advance the checkpoint only once the OCR backlog is drained. While work is
+  // deferred we leave the position untouched (omit `checkpoint` from the upsert
+  // so it keeps its current value) — the remaining files then reappear on the
+  // next run and get transcribed. Initial scan → startPageToken (go
+  // incremental); incremental → the next /changes token.
+  let checkpointToWrite: string | null | undefined; // undefined = leave unchanged
+  if (!ocrDeferred) {
+    if (!pageToken) {
+      const tokenResp = await fetch(
+        "https://www.googleapis.com/drive/v3/changes/startPageToken",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (tokenResp.ok) checkpointToWrite = (await tokenResp.json()).startPageToken;
+    } else if (nextCheckpoint) {
+      checkpointToWrite = nextCheckpoint;
     }
-  } else if (newChangesToken) {
-    await supabase.from("sync_state").upsert({
-      user_id: userId, source: "google_drive",
-      checkpoint: newChangesToken,
-      last_synced_at: new Date().toISOString(),
-      messages_synced_total: (syncState?.messages_synced_total || 0) + synced,
-      last_error: null, consecutive_failures: 0,
-    }, { onConflict: "user_id,source" });
   }
 
-  return { synced };
+  const stateUpdate: Record<string, unknown> = {
+    user_id: userId,
+    source: "google_drive",
+    last_synced_at: new Date().toISOString(),
+    messages_synced_total: (pageToken ? (syncState?.messages_synced_total || 0) : 0) + synced,
+    last_error: null,
+    consecutive_failures: 0,
+  };
+  if (checkpointToWrite !== undefined) stateUpdate.checkpoint = checkpointToWrite;
+  await supabase.from("sync_state").upsert(stateUpdate, { onConflict: "user_id,source" });
+
+  return { synced, ocrDeferred };
 }
 
 Deno.serve(async (req) => {
@@ -392,8 +612,14 @@ Deno.serve(async (req) => {
 
       const results = [];
       for (const user of users || []) {
-        const result = await syncUserDrive(user.user_id);
-        results.push({ user_id: user.user_id, ...result });
+        // Isolate per-user: a throw from one account (e.g. a Drive API error)
+        // must not abort the sync for everyone after it in the loop.
+        try {
+          const result = await syncUserDrive(user.user_id);
+          results.push({ user_id: user.user_id, ...result });
+        } catch (e) {
+          results.push({ user_id: user.user_id, error: (e as Error).message });
+        }
       }
       return new Response(JSON.stringify({ results }), {
         headers: { "Content-Type": "application/json" },
