@@ -382,6 +382,27 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
     if (filteredLabel) return { result: "skip", skipReason: `gmail_category:${filteredLabel}` };
   }
 
+  // Deterministic content-skip layer. Phrases (rules_memory `contains=<phrase>`)
+  // were mined from history with ~100% precision on the no-task corpus — every
+  // matching phrase was a transactional close-out ("payment received", "your
+  // receipt") or a bulk marker ("newsletter"), and ZERO of the user's real
+  // tasks contained them. Restricted to FIRST-CONTACT inbound email: a bulk /
+  // transactional notice is never a reply in a live human thread, and that
+  // guard neutralizes the only collision risk found — a phrase quoted inside a
+  // "Re:" conversation (e.g. "...the package was delivered, but can you..."),
+  // which is a real ask, not a receipt.
+  const contentSkip: string[] = Array.isArray(settings.__contentSkip) ? settings.__contentSkip : [];
+  if (contentSkip.length > 0 && sourceType === "gmail") {
+    const subj = String(msg.subject || "");
+    const isReply = /^\s*(re|fwd|fw|תגובה|הועבר)\s*:/i.test(subj)
+      || !!(msg.reply_to_context && String(msg.reply_to_context).trim());
+    if (!isReply) {
+      const haystack = `${subj}\n${msg.body_text || ""}`.toLowerCase();
+      const hit = contentSkip.find((p) => p && haystack.includes(p));
+      if (hit) return { result: "skip", skipReason: `content_skip: ${hit}` };
+    }
+  }
+
   return { result: "needs_claude" };
 }
 
@@ -3281,7 +3302,7 @@ Deno.serve(async (req) => {
       const [settingsRes, categoryRulesRes, skipRulesRes, promptsRes, userAuthRes, correctionsRes] = await Promise.all([
         supabase.from("user_settings").select("*").eq("user_id", userId).single(),
         supabase.from("rules_memory").select("trigger, is_active").eq("user_id", userId).ilike("trigger", "category=%"),
-        supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%"),
+        supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%,trigger.ilike.contains=%"),
         supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
         supabase.auth.admin.getUserById(userId),
         supabase.from("task_corrections").select("note, correction_type, old_value, new_value").eq("user_id", userId).eq("scope", "personal").eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(25),
@@ -3293,14 +3314,23 @@ Deno.serve(async (req) => {
       // not in user_settings.skip_recipients/skip_senders).
       const toSkip = new Set<string>();
       const fromSkip = new Set<string>();
+      // Content-skip phrases (trigger `contains=<phrase>`) — deterministic
+      // "never a task" markers learned from history (e.g. "payment received",
+      // "your package"). Stored as rules_memory rows so they show in the rules
+      // UI and are individually toggleable; preClassify enforces them.
+      const contentSkip: string[] = [];
       for (const r of (skipRulesRes.data ?? [])) {
-        const m = String(r.trigger).match(/^(to|from)=(.+)$/i);
+        const trig = String(r.trigger);
+        const cm = trig.match(/^contains=(.+)$/i);
+        if (cm) { contentSkip.push(cm[1].toLowerCase()); continue; }
+        const m = trig.match(/^(to|from)=(.+)$/i);
         if (!m) continue;
         if (m[1].toLowerCase() === "to") toSkip.add(m[2].toLowerCase());
         else fromSkip.add(m[2].toLowerCase());
       }
       settings.__toSkip = toSkip;
       settings.__fromSkip = fromSkip;
+      settings.__contentSkip = contentSkip;
       // Admin-editable prompt overrides (fallback to the inline defaults). Loaded
       // once per user per run so the cached system prefix stays stable.
       const promptMap = new Map((promptsRes.data ?? []).map((p: any) => [p.prompt_key, p.content as string]));
