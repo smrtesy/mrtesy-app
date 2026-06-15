@@ -314,8 +314,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
-  const snoozeTask = snoozeTaskId ? suggestions.find((s) => s.id === snoozeTaskId) : null;
-
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
@@ -511,7 +509,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         open={!!snoozeTaskId}
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
-        maxDate={snoozeTask ? effectiveDeadline(snoozeTask) : null}
       />
 
       <MergeModal

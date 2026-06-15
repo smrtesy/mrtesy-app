@@ -24,7 +24,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
-import { nextOccurrence, isValidRecurrenceRule } from "./recurrence";
+import { nextOccurrence, isValidRecurrenceRule, normalizeRecurrence } from "./recurrence";
 
 const router = Router();
 
@@ -313,6 +313,20 @@ router.post("/tasks", async (req: Request, res: Response) => {
   try { updates = pickUpdates(body); }
   catch (e) { return res.status(400).json({ error: (e as Error).message }); }
 
+  // COUNT ("ends after N occurrences") is resolved into a concrete
+  // recurrence_until here, anchored on the task's start (due_date), then
+  // stripped from the stored rule — the spawn engine never tracks COUNT.
+  if (typeof updates.recurrence_rule === "string") {
+    const start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    const normalized = normalizeRecurrence(updates.recurrence_rule, start);
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
+  }
+
   const payload = {
     user_id: req.user!.id,
     organization_id: req.org!.id,
@@ -539,21 +553,18 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   // Bump snooze_count atomically via a fresh read+write — Postgres has no `+1` shorthand here.
   const { data: current } = await db
     .from("tasks")
-    .select("snooze_count, due_date, latest_finish")
+    .select("snooze_count")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
   if (!current) return res.status(404).json({ error: "task not found in this org" });
 
-  // Never let a snooze hide a task past its EFFECTIVE deadline (the earlier
-  // of due_date and the plan engine's latest_finish) — clamp to that morning.
-  // The UI blocks this too; this is the backstop.
-  const due = current.due_date as string | null;
-  const lf = current.latest_finish as string | null;
-  const deadline = due && lf ? (due < lf ? due : lf) : (due || lf);
-  if (deadline && until.slice(0, 10) > deadline) {
-    until = `${deadline}T06:00:00.000Z`;
-  }
+  // The chosen snooze time is always honored as-is. We deliberately do NOT
+  // clamp it back to the task's deadline: when the deadline was today or in
+  // the past, clamping produced a moment already behind us, so the next
+  // reminders-check run woke the task immediately — turning every snooze into
+  // a no-op and resurfacing the task over and over (the T271 loop). The user
+  // owns when they want to see the task again.
 
   const { data, error } = await db
     .from("tasks")

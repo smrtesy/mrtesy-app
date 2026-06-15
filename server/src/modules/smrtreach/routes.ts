@@ -25,7 +25,8 @@ import { resolveAudience } from "./audience-service";
 import type { AudienceRef, Channel } from "./audience-service";
 import { enqueueCampaignEmail, processEmailQueue } from "./send-service";
 import { enqueueCampaignWhatsapp, processWhatsappQueue } from "./wa-send-service";
-import { sendTestMessage } from "./test-send";
+import { sendTestMessage, sendGmassInboxTest, GMASS_SEEDS, GMASS_RESULTS_BASE } from "./test-send";
+import { listOrgGmailAccounts } from "./gmail-client";
 
 const router = Router();
 
@@ -163,7 +164,7 @@ function pick<T extends Record<string, unknown>>(body: T, keys: readonly string[
 }
 
 const EMAIL_COLS = [
-  "subject", "preview", "sender", "reply_to", "html_body", "language",
+  "subject", "preview", "sender", "reply_to", "html_body", "language", "provider",
   "priority", "send_hours", "exclude_shabbat", "rate_limit", "cooldown_seconds", "sto_enabled",
 ] as const;
 const WHATSAPP_COLS = [
@@ -405,6 +406,23 @@ router.post("/reach/campaigns/:id/send", async (req: Request, res: Response) => 
   const testBatch = (campaign.test_batch_size as number | null) ?? 0;
   const firstBatch = testBatch && testBatch > 0 ? testBatch : 50;
 
+  // mode "now" (default — the "שלח עכשיו" button) sends immediately, ignoring
+  // send-hours / Shabbat / schedule / rate. mode "scheduled" honors them and,
+  // when the client passes scheduled_at, persists it so the send uses exactly
+  // the time the user sees (not a stale value).
+  const mode = req.body?.mode === "scheduled" ? "scheduled" : "now";
+  if (mode === "now") {
+    await db.from("smrtreach_campaigns")
+      .update({ ignore_send_window: true, scheduled_at: null })
+      .eq("org_id", orgId).eq("id", req.params.id);
+  } else {
+    const patch: Record<string, unknown> = { ignore_send_window: false };
+    if (req.body?.scheduled_at !== undefined) {
+      patch.scheduled_at = typeof req.body.scheduled_at === "string" ? req.body.scheduled_at : null;
+    }
+    await db.from("smrtreach_campaigns").update(patch).eq("org_id", orgId).eq("id", req.params.id);
+  }
+
   try {
     let queued = 0;
     const totals = { sent: 0, failed: 0 };
@@ -474,6 +492,34 @@ router.post("/reach/campaigns/:id/test", async (req: Request, res: Response) => 
     res.json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    res.status(400).json({ error: msg });
+  }
+});
+
+// Connected Gmail accounts available to send from (for the provider picker).
+router.get("/reach/gmail/accounts", async (req: Request, res: Response) => {
+  try {
+    const accounts = await listOrgGmailAccounts(req.org!.id);
+    res.json({ accounts: accounts.map((a) => ({ email: a.email })) });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// GMass seed list + results-page base (for the inbox-placement test UI).
+router.get("/reach/gmass/seeds", (_req: Request, res: Response) => {
+  res.json({ seeds: GMASS_SEEDS, resultsBase: GMASS_RESULTS_BASE });
+});
+
+// Send the campaign to the GMass seeds and return the results URL.
+router.post("/reach/campaigns/:id/inbox-test", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  try {
+    const result = await sendGmassInboxTest(orgId, req.params.id);
+    res.json(result);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifyError(orgId, "smrtreach", { title: "GMass inbox test failed", body: msg });
     res.status(400).json({ error: msg });
   }
 });

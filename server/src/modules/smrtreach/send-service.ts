@@ -20,6 +20,7 @@ import { emitEvent } from "../../lib/platform";
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef } from "./audience-service";
 import { sendEmail, SesNotConfiguredError } from "./ses-client";
+import { sendViaGmail, listOrgGmailAccounts, NoGmailAccountError, GmailQuotaExhaustedError } from "./gmail-client";
 import {
   withinSendWindow,
   filterEmailByFrequency,
@@ -168,7 +169,7 @@ function wrapLinks(html: string, campaignId: string, contactId: string): string 
 export async function enqueueCampaignEmail(orgId: string, campaignId: string): Promise<number> {
   const { data: campaign, error: cErr } = await db
     .from("smrtreach_campaigns")
-    .select("audience, channel, status, scheduled_at, country_filter")
+    .select("audience, channel, status, scheduled_at, country_filter, ignore_send_window")
     .eq("org_id", orgId)
     .eq("id", campaignId)
     .maybeSingle();
@@ -185,20 +186,30 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
 
   const { data: detail, error: dErr } = await db
     .from("smrtreach_campaign_email")
-    .select("sender, priority, sto_enabled, cooldown_seconds")
+    .select("sender, priority, sto_enabled, cooldown_seconds, provider")
     .eq("campaign_id", campaignId)
     .maybeSingle();
   if (dErr) throw new Error(dErr.message);
-  if (!detail?.sender) throw new Error("campaign has no sender set");
 
-  // The sender must be one of the org's managed verified senders.
-  const { data: sender } = await db
-    .from("smrtreach_senders")
-    .select("email")
-    .eq("org_id", orgId)
-    .eq("email", detail.sender)
-    .maybeSingle();
-  if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
+  const provider = (detail?.provider as string) ?? "ses";
+  if (provider === "gmail") {
+    // Gmail provider: the org must have at least one connected Gmail account.
+    const accounts = await listOrgGmailAccounts(orgId);
+    if (accounts.length === 0) {
+      throw new Error("no connected Gmail account — connect Gmail in settings before sending via Gmail");
+    }
+  } else {
+    if (!detail?.sender) throw new Error("campaign has no sender set");
+    // The sender must be one of the org's managed verified senders.
+    const { data: sender } = await db
+      .from("smrtreach_senders")
+      .select("email")
+      .eq("org_id", orgId)
+      .eq("email", detail.sender)
+      .maybeSingle();
+    if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
+  }
+  if (!detail) throw new Error("campaign has no email content");
 
   let recipients = await resolveAudience(orgId, (campaign.audience ?? {}) as AudienceRef, "email");
   // Drop empty + syntactically-invalid addresses before they reach SES
@@ -220,18 +231,20 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
   recipients = recipients.filter((r) => !r.contact_id || keep.has(r.contact_id));
   if (recipients.length === 0) return 0;
 
-  // Per-row schedule: base = campaign.scheduled_at (or now); STO overrides per
+  // "Send now" (ignore_send_window): blast immediately — no per-row schedule,
+  // no STO. Otherwise base = campaign.scheduled_at (or now); STO overrides per
   // contact with the soonest occurrence of their best open hour.
-  const base = campaign.scheduled_at ? new Date(campaign.scheduled_at as string) : new Date();
-  const baseIso = campaign.scheduled_at ? base.toISOString() : null;
+  const ignoreWindow = campaign.ignore_send_window === true;
+  const base = !ignoreWindow && campaign.scheduled_at ? new Date(campaign.scheduled_at as string) : new Date();
+  const baseIso = !ignoreWindow && campaign.scheduled_at ? base.toISOString() : null;
   let optimal = new Map<string, number>();
-  if (detail.sto_enabled) {
+  if (detail.sto_enabled && !ignoreWindow) {
     optimal = await optimalSendHours(orgId, contactIds);
   }
 
   const rows = recipients.map((r) => {
     let scheduledAt = baseIso;
-    if (detail.sto_enabled && r.contact_id && optimal.has(r.contact_id)) {
+    if (!ignoreWindow && detail.sto_enabled && r.contact_id && optimal.has(r.contact_id)) {
       scheduledAt = nextOccurrenceOfHour(optimal.get(r.contact_id)!, base).toISOString();
     }
     return {
@@ -276,6 +289,7 @@ interface EmailDetail {
   sendHours: SendHours;
   excludeShabbat: boolean;
   rateLimit: number | null;
+  provider: string;
 }
 
 /**
@@ -316,7 +330,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
     if (detailCache.has(campaignId)) return detailCache.get(campaignId)!;
     const { data } = await db
       .from("smrtreach_campaign_email")
-      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit")
+      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit, provider")
       .eq("campaign_id", campaignId)
       .maybeSingle();
     if (!data) { detailCache.set(campaignId, null); return null; }
@@ -325,12 +339,13 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       subject: (data.subject as string) ?? "",
       preview: (data.preview as string) ?? "",
       html: (data.html_body as string) ?? "",
-      from: data.sender as string,
+      from: (data.sender as string) ?? "",
       replyTo: (data.reply_to as string | null) ?? null,
       region,
       sendHours: (data.send_hours as SendHours | null) ?? {},
       excludeShabbat: (data.exclude_shabbat as boolean | null) ?? true,
       rateLimit: (data.rate_limit as number | null) ?? null,
+      provider: (data.provider as string) ?? "ses",
     };
     detailCache.set(campaignId, detail);
     return detail;
@@ -341,15 +356,18 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
   async function campaignSendable(campaignId: string): Promise<boolean> {
     if (statusOk.has(campaignId)) return statusOk.get(campaignId)! && (windowOk.get(campaignId) ?? false);
     const { data: c } = await db
-      .from("smrtreach_campaigns").select("status").eq("org_id", orgId).eq("id", campaignId).maybeSingle();
+      .from("smrtreach_campaigns").select("status, ignore_send_window").eq("org_id", orgId).eq("id", campaignId).maybeSingle();
     const sendable = c?.status === "sending";
     statusOk.set(campaignId, sendable);
     const detail = await getDetail(campaignId);
-    const w = detail ? withinSendWindow(detail.sendHours, detail.excludeShabbat) : { ok: false };
+    // "Send now" bypasses the send-window/Shabbat rule and the rate limit.
+    const ignoreWindow = c?.ignore_send_window === true;
+    const w = ignoreWindow ? { ok: true } : detail ? withinSendWindow(detail.sendHours, detail.excludeShabbat) : { ok: false };
     windowOk.set(campaignId, w.ok);
     // Initialize the per-tick rate cap. cron runs ~every minute, so the per-tick
-    // budget is rate_limit/60 (≈ rate_limit emails/hour overall).
-    const cap = detail?.rateLimit && detail.rateLimit > 0 ? Math.max(1, Math.ceil(detail.rateLimit / 60)) : Infinity;
+    // budget is rate_limit/60 (≈ rate_limit emails/hour overall). Unlimited when
+    // "send now".
+    const cap = !ignoreWindow && detail?.rateLimit && detail.rateLimit > 0 ? Math.max(1, Math.ceil(detail.rateLimit / 60)) : Infinity;
     perCampaignCap.set(campaignId, cap);
     return sendable && w.ok;
   }
@@ -384,7 +402,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
   for (const row of pending) {
     touchedCampaigns.add(row.campaign_id as string);
     const detail = await getDetail(row.campaign_id as string);
-    if (!detail || !detail.from) {
+    if (!detail || (detail.provider !== "gmail" && !detail.from)) {
       await db.from("smrtreach_queue").update({ status: "failed", error: "missing email detail/sender" }).eq("id", row.id);
       failed++;
       continue;
@@ -406,14 +424,10 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       openPixel(campaignId, contactId);
 
     try {
-      const { messageId } = await sendEmail({
-        region: detail.region,
-        from: detail.from,
-        to: row.to_address as string,
-        subject,
-        html,
-        replyTo: detail.replyTo,
-      });
+      const { messageId } =
+        detail.provider === "gmail"
+          ? await sendViaGmail(orgId, { to: row.to_address as string, subject, html, replyTo: detail.replyTo })
+          : await sendEmail({ region: detail.region, from: detail.from, to: row.to_address as string, subject, html, replyTo: detail.replyTo });
       // Check the terminal status write: if it silently failed the row would
       // stick at 'sending' and wedge the campaign's drain check.
       const { error: markErr } = await db
@@ -432,6 +446,12 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       });
       sent++;
     } catch (e) {
+      // Gmail daily cap reached: release the row back to pending (retry later,
+      // e.g. tomorrow) WITHOUT logging a failure, and stop this tick's batch.
+      if (e instanceof GmailQuotaExhaustedError) {
+        await db.from("smrtreach_queue").update({ status: "pending", claimed_at: null }).eq("id", row.id);
+        break;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       const { error: markErr } = await db
         .from("smrtreach_queue")
@@ -448,7 +468,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       });
       failed++;
       // Stop early on a config error — every row would fail the same way.
-      if (e instanceof SesNotConfiguredError) break;
+      if (e instanceof SesNotConfiguredError || e instanceof NoGmailAccountError) break;
     }
   }
 
