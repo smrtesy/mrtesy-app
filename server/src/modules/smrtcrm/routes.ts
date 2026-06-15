@@ -32,16 +32,124 @@ const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtcrm"));
 
 // ============================================================
+// SHARED FILTERING
+// ============================================================
+
+/** The set of filters a contact list / bulk action can be scoped by. */
+interface ContactFilter {
+  q?: string;
+  tag_id?: string | null;
+  segment_id?: string | null;
+  group_id?: string | null;
+  has_email?: boolean;
+}
+
+/**
+ * A segment is a saved query (its `filter` JSONB mirrors ContactFilter), so
+ * picking a segment is equivalent to applying its stored tag/has_email filter.
+ * Returns the effective tag_id / has_email after folding the segment in.
+ */
+async function resolveSegment(
+  orgId: string,
+  f: ContactFilter,
+): Promise<{ tagId: string | null; hasEmail: boolean }> {
+  let tagId = f.tag_id ?? null;
+  let hasEmail = f.has_email ?? false;
+  if (f.segment_id) {
+    const { data, error } = await db
+      .from("smrtcrm_segments")
+      .select("filter")
+      .eq("org_id", orgId)
+      .eq("id", f.segment_id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const seg = (data?.filter ?? {}) as { tag_id?: string; has_email?: boolean };
+    if (seg.tag_id) tagId = seg.tag_id;
+    if (seg.has_email) hasEmail = true;
+  }
+  return { tagId, hasEmail };
+}
+
+/**
+ * Resolve a filter to the full set of matching contact ids (no pagination).
+ * Used by "select all matching the filter" bulk actions so the client never
+ * has to enumerate thousands of ids itself.
+ */
+async function matchingContactIds(orgId: string, f: ContactFilter): Promise<string[]> {
+  const { tagId, hasEmail } = await resolveSegment(orgId, f);
+
+  // Mirror the GET /crm/contacts restrict logic so "select all matching" can
+  // never target a wider set than the list the user is looking at.
+  let restrictIds: string[] | null = null;
+  if (tagId) {
+    const { data, error } = await db
+      .from("smrtcrm_tag_assignments")
+      .select("contact_id")
+      .eq("org_id", orgId)
+      .eq("tag_id", tagId);
+    if (error) throw new Error(error.message);
+    restrictIds = (data ?? []).map((r) => r.contact_id as string);
+    if (restrictIds.length === 0) return [];
+  }
+  if (f.group_id) {
+    const { data, error } = await db
+      .from("smrtcrm_group_members")
+      .select("contact_id")
+      .eq("org_id", orgId)
+      .eq("group_id", f.group_id);
+    if (error) throw new Error(error.message);
+    const groupIds = (data ?? []).map((r) => r.contact_id as string);
+    restrictIds = restrictIds ? restrictIds.filter((id) => groupIds.includes(id)) : groupIds;
+    if (restrictIds.length === 0) return [];
+  }
+
+  let query = db.from("smrtcrm_contacts").select("id").eq("org_id", orgId);
+  if (restrictIds) query = query.in("id", restrictIds);
+  if (hasEmail) query = query.not("email", "is", null);
+  if (f.q) {
+    const safe = f.q.replace(/[,()*\\]/g, " ");
+    const like = `%${safe}%`;
+    query = query.or(
+      `first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},email.ilike.${like}`,
+    );
+  }
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => r.id as string);
+}
+
+/** Split a large id list so a single PostgREST request never blows the URL/IN limit. */
+function chunk<T>(arr: T[], size = 500): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+// ============================================================
 // CONTACTS
 // ============================================================
 
-// GET /crm/contacts?q=&tag_id=&group_id=&has_email=&limit=&offset=
+// GET /crm/contacts?q=&tag_id=&segment_id=&group_id=&has_email=&limit=&offset=
 router.get("/crm/contacts", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-  const tagId = typeof req.query.tag_id === "string" ? req.query.tag_id : null;
+  const segmentId = typeof req.query.segment_id === "string" ? req.query.segment_id : null;
   const groupId = typeof req.query.group_id === "string" ? req.query.group_id : null;
-  const hasEmail = req.query.has_email === "true";
+
+  // A segment is a saved filter — fold its tag/has_email into the live filter.
+  let tagId: string | null;
+  let hasEmail: boolean;
+  try {
+    ({ tagId, hasEmail } = await resolveSegment(orgId, {
+      tag_id: typeof req.query.tag_id === "string" ? req.query.tag_id : null,
+      segment_id: segmentId,
+      has_email: req.query.has_email === "true",
+    }));
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
 
@@ -183,55 +291,78 @@ router.delete("/crm/contacts/:id", async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// POST /crm/contacts/bulk  — { action, contact_ids, tag_id?, group_id? }
+// POST /crm/contacts/bulk
+//   { action, contact_ids[], tag_id?, group_id? }              — explicit ids
+//   { action, filter: {q,tag_id,segment_id,has_email}, ... }   — "select all matching"
+// `filter` is resolved to the full matching id set server-side, so the client
+// never has to enumerate ids when the user picks "select all by the filter".
 router.post("/crm/contacts/bulk", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
-  const { action, contact_ids, tag_id, group_id } = (req.body ?? {}) as {
+  const { action, contact_ids, tag_id, group_id, filter } = (req.body ?? {}) as {
     action?: string;
     contact_ids?: string[];
     tag_id?: string;
     group_id?: string;
+    filter?: ContactFilter;
   };
 
-  if (!action || !Array.isArray(contact_ids) || contact_ids.length === 0) {
-    return res.status(400).json({ error: "action and a non-empty contact_ids array are required" });
-  }
-
   try {
+    let ids: string[];
+    if (Array.isArray(contact_ids) && contact_ids.length > 0) {
+      ids = contact_ids;
+    } else if (filter) {
+      ids = await matchingContactIds(orgId, filter);
+    } else {
+      return res
+        .status(400)
+        .json({ error: "a non-empty contact_ids array or a filter is required" });
+    }
+
+    if (!action) return res.status(400).json({ error: "action is required" });
+    if (ids.length === 0) return res.json({ ok: true, affected: 0 });
+
     if (action === "add_tag") {
       if (!tag_id) return res.status(400).json({ error: "tag_id is required for add_tag" });
-      const rows = contact_ids.map((cid) => ({ org_id: orgId, contact_id: cid, tag_id }));
-      const { error } = await db
-        .from("smrtcrm_tag_assignments")
-        .upsert(rows, { onConflict: "contact_id,tag_id" });
-      if (error) throw new Error(error.message);
+      for (const batch of chunk(ids)) {
+        const rows = batch.map((cid) => ({ org_id: orgId, contact_id: cid, tag_id }));
+        const { error } = await db
+          .from("smrtcrm_tag_assignments")
+          .upsert(rows, { onConflict: "contact_id,tag_id" });
+        if (error) throw new Error(error.message);
+      }
     } else if (action === "remove_tag") {
       if (!tag_id) return res.status(400).json({ error: "tag_id is required for remove_tag" });
-      const { error } = await db
-        .from("smrtcrm_tag_assignments")
-        .delete()
-        .eq("org_id", orgId)
-        .eq("tag_id", tag_id)
-        .in("contact_id", contact_ids);
-      if (error) throw new Error(error.message);
+      for (const batch of chunk(ids)) {
+        const { error } = await db
+          .from("smrtcrm_tag_assignments")
+          .delete()
+          .eq("org_id", orgId)
+          .eq("tag_id", tag_id)
+          .in("contact_id", batch);
+        if (error) throw new Error(error.message);
+      }
     } else if (action === "add_group") {
       if (!group_id) return res.status(400).json({ error: "group_id is required for add_group" });
-      const rows = contact_ids.map((cid) => ({ org_id: orgId, contact_id: cid, group_id }));
-      const { error } = await db
-        .from("smrtcrm_group_members")
-        .upsert(rows, { onConflict: "group_id,contact_id" });
-      if (error) throw new Error(error.message);
+      for (const batch of chunk(ids)) {
+        const rows = batch.map((cid) => ({ org_id: orgId, contact_id: cid, group_id }));
+        const { error } = await db
+          .from("smrtcrm_group_members")
+          .upsert(rows, { onConflict: "group_id,contact_id" });
+        if (error) throw new Error(error.message);
+      }
     } else if (action === "delete") {
-      const { error } = await db
-        .from("smrtcrm_contacts")
-        .delete()
-        .eq("org_id", orgId)
-        .in("id", contact_ids);
-      if (error) throw new Error(error.message);
+      for (const batch of chunk(ids)) {
+        const { error } = await db
+          .from("smrtcrm_contacts")
+          .delete()
+          .eq("org_id", orgId)
+          .in("id", batch);
+        if (error) throw new Error(error.message);
+      }
     } else {
       return res.status(400).json({ error: `unknown action: ${action}` });
     }
-    res.json({ ok: true, affected: contact_ids.length });
+    res.json({ ok: true, affected: ids.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await notifyError(orgId, "smrtcrm", { title: "Bulk action failed", body: msg });
