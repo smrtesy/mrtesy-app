@@ -20,6 +20,7 @@ import { emitEvent } from "../../lib/platform";
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef } from "./audience-service";
 import { sendEmail, SesNotConfiguredError } from "./ses-client";
+import { sendViaGmail, listOrgGmailAccounts, NoGmailAccountError, GmailQuotaExhaustedError } from "./gmail-client";
 import {
   withinSendWindow,
   filterEmailByFrequency,
@@ -185,20 +186,30 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
 
   const { data: detail, error: dErr } = await db
     .from("smrtreach_campaign_email")
-    .select("sender, priority, sto_enabled, cooldown_seconds")
+    .select("sender, priority, sto_enabled, cooldown_seconds, provider")
     .eq("campaign_id", campaignId)
     .maybeSingle();
   if (dErr) throw new Error(dErr.message);
-  if (!detail?.sender) throw new Error("campaign has no sender set");
 
-  // The sender must be one of the org's managed verified senders.
-  const { data: sender } = await db
-    .from("smrtreach_senders")
-    .select("email")
-    .eq("org_id", orgId)
-    .eq("email", detail.sender)
-    .maybeSingle();
-  if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
+  const provider = (detail?.provider as string) ?? "ses";
+  if (provider === "gmail") {
+    // Gmail provider: the org must have at least one connected Gmail account.
+    const accounts = await listOrgGmailAccounts(orgId);
+    if (accounts.length === 0) {
+      throw new Error("no connected Gmail account — connect Gmail in settings before sending via Gmail");
+    }
+  } else {
+    if (!detail?.sender) throw new Error("campaign has no sender set");
+    // The sender must be one of the org's managed verified senders.
+    const { data: sender } = await db
+      .from("smrtreach_senders")
+      .select("email")
+      .eq("org_id", orgId)
+      .eq("email", detail.sender)
+      .maybeSingle();
+    if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
+  }
+  if (!detail) throw new Error("campaign has no email content");
 
   let recipients = await resolveAudience(orgId, (campaign.audience ?? {}) as AudienceRef, "email");
   // Drop empty + syntactically-invalid addresses before they reach SES
@@ -278,6 +289,7 @@ interface EmailDetail {
   sendHours: SendHours;
   excludeShabbat: boolean;
   rateLimit: number | null;
+  provider: string;
 }
 
 /**
@@ -318,7 +330,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
     if (detailCache.has(campaignId)) return detailCache.get(campaignId)!;
     const { data } = await db
       .from("smrtreach_campaign_email")
-      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit")
+      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit, provider")
       .eq("campaign_id", campaignId)
       .maybeSingle();
     if (!data) { detailCache.set(campaignId, null); return null; }
@@ -327,12 +339,13 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       subject: (data.subject as string) ?? "",
       preview: (data.preview as string) ?? "",
       html: (data.html_body as string) ?? "",
-      from: data.sender as string,
+      from: (data.sender as string) ?? "",
       replyTo: (data.reply_to as string | null) ?? null,
       region,
       sendHours: (data.send_hours as SendHours | null) ?? {},
       excludeShabbat: (data.exclude_shabbat as boolean | null) ?? true,
       rateLimit: (data.rate_limit as number | null) ?? null,
+      provider: (data.provider as string) ?? "ses",
     };
     detailCache.set(campaignId, detail);
     return detail;
@@ -389,7 +402,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
   for (const row of pending) {
     touchedCampaigns.add(row.campaign_id as string);
     const detail = await getDetail(row.campaign_id as string);
-    if (!detail || !detail.from) {
+    if (!detail || (detail.provider !== "gmail" && !detail.from)) {
       await db.from("smrtreach_queue").update({ status: "failed", error: "missing email detail/sender" }).eq("id", row.id);
       failed++;
       continue;
@@ -411,14 +424,10 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       openPixel(campaignId, contactId);
 
     try {
-      const { messageId } = await sendEmail({
-        region: detail.region,
-        from: detail.from,
-        to: row.to_address as string,
-        subject,
-        html,
-        replyTo: detail.replyTo,
-      });
+      const { messageId } =
+        detail.provider === "gmail"
+          ? await sendViaGmail(orgId, { to: row.to_address as string, subject, html, replyTo: detail.replyTo })
+          : await sendEmail({ region: detail.region, from: detail.from, to: row.to_address as string, subject, html, replyTo: detail.replyTo });
       // Check the terminal status write: if it silently failed the row would
       // stick at 'sending' and wedge the campaign's drain check.
       const { error: markErr } = await db
@@ -437,6 +446,12 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       });
       sent++;
     } catch (e) {
+      // Gmail daily cap reached: release the row back to pending (retry later,
+      // e.g. tomorrow) WITHOUT logging a failure, and stop this tick's batch.
+      if (e instanceof GmailQuotaExhaustedError) {
+        await db.from("smrtreach_queue").update({ status: "pending", claimed_at: null }).eq("id", row.id);
+        break;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       const { error: markErr } = await db
         .from("smrtreach_queue")
@@ -453,7 +468,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       });
       failed++;
       // Stop early on a config error — every row would fail the same way.
-      if (e instanceof SesNotConfiguredError) break;
+      if (e instanceof SesNotConfiguredError || e instanceof NoGmailAccountError) break;
     }
   }
 
