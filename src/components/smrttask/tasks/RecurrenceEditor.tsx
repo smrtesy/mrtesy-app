@@ -20,7 +20,13 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { cn } from "@/lib/utils";
 
 export type RecurrenceFreq = "none" | "daily" | "weekly" | "monthly" | "yearly" | "hebrew";
-export type RecurrenceModel = { rule: string | null; until: string | null };
+export type RecurrenceModel = {
+  rule: string | null;
+  until: string | null;
+  /** True when "Ends → on date" is selected but no date was picked yet — the
+   *  parent blocks creation so a promised end never silently becomes endless. */
+  endNeedsDate?: boolean;
+};
 
 const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
 
@@ -116,7 +122,7 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
     // Ends after N → COUNT (the create route resolves it into recurrence_until).
     if (endsMode === "after" && count >= 1) parts.push(`COUNT=${count}`);
     const until = endsMode === "on" ? (endDate || null) : null;
-    return { rule: parts.join(";"), until };
+    return { rule: parts.join(";"), until, endNeedsDate: endsMode === "on" && !endDate };
   }
 
   function toggleWeekday(day: number) {

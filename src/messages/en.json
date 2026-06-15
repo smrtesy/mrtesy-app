@@ -59,7 +59,6 @@
     "subtasksLabel": "Subtasks",
     "subtaskPlaceholder": "Subtask…",
     "recurrenceNeedsEndDate": "Pick an end date for the repeat",
-    "recurrenceCountMin": "Occurrences must be at least 1",
     "recur": {
       "everyLabel": "Repeat every",
       "freqDaily": "day",

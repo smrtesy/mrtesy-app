@@ -59,7 +59,6 @@
     "subtasksLabel": "תת-משימות",
     "subtaskPlaceholder": "תת-משימה…",
     "recurrenceNeedsEndDate": "צריך לבחור תאריך סיום לחזרה",
-    "recurrenceCountMin": "מספר הפעמים חייב להיות לפחות 1",
     "recur": {
       "everyLabel": "חזרה כל",
       "freqDaily": "יום",

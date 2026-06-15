@@ -214,6 +214,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       toast.error(t("recurrenceNeedsDate"));
       return;
     }
+    if (recurrence.rule && recurrence.endNeedsDate) {
+      toast.error(t("recurrenceNeedsEndDate"));
+      return;
+    }
     setLoading(true);
     try {
       const body: Record<string, unknown> = {
