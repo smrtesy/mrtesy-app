@@ -1452,6 +1452,8 @@
     "excludeCalendar": "Exclude from scan",
     "skipAddresses": "Skip Addresses ({count})",
     "skipAddressesEmpty": "No blocked addresses. Add a rule with trigger from= / to= / domain= to block a sender or domain.",
+    "contentSkip": "Content phrases to skip ({count})",
+    "contentSkipEmpty": "No content phrases. History-learned suggestions will appear here for approval.",
     "botPhones": "Bot Phones ({count})",
     "otherRules": "Other Rules ({count})",
     "pendingSuggestions": "Pending AI Suggestions ({count})",

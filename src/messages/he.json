@@ -1452,6 +1452,8 @@
     "excludeCalendar": "החרג מסריקה",
     "skipAddresses": "כתובות לדילוג ({count})",
     "skipAddressesEmpty": "אין כתובות חסומות. הוסף כלל עם טריגר from= / to= / domain= כדי לחסום שולח או דומיין.",
+    "contentSkip": "ביטויי תוכן לדילוג ({count})",
+    "contentSkipEmpty": "אין ביטויי תוכן. הצעות שנלמדו מההיסטוריה יופיעו כאן לאישור.",
     "botPhones": "טלפוני בוטים ({count})",
     "otherRules": "כללים נוספים ({count})",
     "pendingSuggestions": "הצעות AI ממתינות ({count})",
