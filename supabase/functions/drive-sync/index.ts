@@ -158,10 +158,28 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const OCR_MODEL = "claude-haiku-4-5-20251001";
 const OCR_MAX_BYTES = 10 * 1024 * 1024; // 10MB raw (~13MB base64) — under the API request cap
 const OCR_MAX_OUTPUT_TOKENS = 4096;
-// OCR (download + base64 + a vision call per file) is heavy: transcribing a
-// whole backlog in one invocation trips the edge runtime's WORKER_RESOURCE_LIMIT.
-// Cap OCR work per run and drain the rest on subsequent runs (see syncUserDrive).
-const OCR_MAX_PER_RUN = 3;
+// OCR (download + base64 + a vision call per file) is heavy: a vision call on a
+// multi-page scan can take ~minute, and the edge runtime caps a request at
+// ~150s wall-clock (HTTP 546). Cap OCR per run AND time-box each call so one
+// slow/hung file can't consume the whole budget; the rest drain on later runs.
+const OCR_MAX_PER_RUN = 2;
+const OCR_DOWNLOAD_TIMEOUT_MS = 25_000;
+const OCR_API_TIMEOUT_MS = 50_000;
+// Worst case per run ≈ OCR_MAX_PER_RUN × (download + api) ≈ 2 × 75s = 150s, but
+// downloads are near-instant in practice, so realistic worst is ≈ 2 × 50s, well
+// under the runtime's ~150s wall-clock ceiling.
+
+// fetch() with a hard timeout — aborts (and the await rejects, caught by the
+// caller) instead of hanging until the platform kills the whole invocation.
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // Haiku $/MTok — matches the haiku branch of ai-process estimateCost so the
 // drive_ocr rows in ai_usage cost the same as everything else in the ledger.
@@ -191,9 +209,10 @@ async function ocrBinaryFile(
 
   let base64: string;
   try {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
       { headers: { Authorization: `Bearer ${token}` } },
+      OCR_DOWNLOAD_TIMEOUT_MS,
     );
     if (!resp.ok) return "";
     const bytes = new Uint8Array(await resp.arrayBuffer());
@@ -208,7 +227,7 @@ async function ocrBinaryFile(
     : { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } };
 
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    const resp = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -234,7 +253,7 @@ async function ocrBinaryFile(
           ],
         }],
       }),
-    });
+    }, OCR_API_TIMEOUT_MS);
     if (!resp.ok) return "";
     const data = await resp.json();
     const text: string = (data.content?.[0]?.text || "").trim();
