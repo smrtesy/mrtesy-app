@@ -3268,25 +3268,32 @@ async function buildEvalSettings(userId: string): Promise<any> {
 }
 
 async function runShadowEval(reqUrl: URL): Promise<Response> {
-  const sample = Math.min(Math.max(parseInt(reqUrl.searchParams.get("sample") || "150", 10) || 150, 1), 400);
+  // Small per-invocation batch (the worker has a CPU/wall-clock cap, and each
+  // message is a live Haiku classify). Resumable: skips messages already
+  // evaluated OK, so calling this repeatedly walks through fresh messages.
+  const sample = Math.min(Math.max(parseInt(reqUrl.searchParams.get("sample") || "30", 10) || 30, 1), 60);
   const since = reqUrl.searchParams.get("since") || "2026-06-12"; // post Sonnet-switch → stored class = Sonnet
-  const runId = crypto.randomUUID();
+  const runId = reqUrl.searchParams.get("run_id") || crypto.randomUUID();
   const sys = await loadSystemParams();
 
-  const { data: msgs, error } = await supabase
+  // Already-evaluated (non-ERROR) message ids — so re-invocations advance.
+  const { data: done } = await supabase.from("shadow_eval_results").select("message_id").neq("haiku_class", "ERROR");
+  const doneIds = new Set((done ?? []).map((r: any) => r.message_id));
+
+  const { data: candidates, error } = await supabase
     .from("source_messages")
     .select("id,user_id,source_type,sender_email,sender,subject,body_text,raw_content,reply_to_context,metadata,ai_classification,received_at")
     .is("skip_reason", null)
     .not("ai_classification", "is", null)
     .gte("received_at", since)
     .order("received_at", { ascending: false })
-    .limit(sample);
+    .limit(sample + doneIds.size + 50);
   if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 
   const settingsCache = new Map<string, any>();
   const rows: any[] = [];
-  const list = msgs ?? [];
-  const CONC = 6;
+  const list = (candidates ?? []).filter((m: any) => !doneIds.has(m.id)).slice(0, sample);
+  const CONC = 4;
   for (let i = 0; i < list.length; i += CONC) {
     const chunk = list.slice(i, i + CONC);
     await Promise.all(chunk.map(async (msg: any) => {
