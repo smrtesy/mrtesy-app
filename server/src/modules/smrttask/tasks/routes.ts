@@ -539,21 +539,18 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   // Bump snooze_count atomically via a fresh read+write — Postgres has no `+1` shorthand here.
   const { data: current } = await db
     .from("tasks")
-    .select("snooze_count, due_date, latest_finish")
+    .select("snooze_count")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
   if (!current) return res.status(404).json({ error: "task not found in this org" });
 
-  // Never let a snooze hide a task past its EFFECTIVE deadline (the earlier
-  // of due_date and the plan engine's latest_finish) — clamp to that morning.
-  // The UI blocks this too; this is the backstop.
-  const due = current.due_date as string | null;
-  const lf = current.latest_finish as string | null;
-  const deadline = due && lf ? (due < lf ? due : lf) : (due || lf);
-  if (deadline && until.slice(0, 10) > deadline) {
-    until = `${deadline}T06:00:00.000Z`;
-  }
+  // The chosen snooze time is always honored as-is. We deliberately do NOT
+  // clamp it back to the task's deadline: when the deadline was today or in
+  // the past, clamping produced a moment already behind us, so the next
+  // reminders-check run woke the task immediately — turning every snooze into
+  // a no-op and resurfacing the task over and over (the T271 loop). The user
+  // owns when they want to see the task again.
 
   const { data, error } = await db
     .from("tasks")

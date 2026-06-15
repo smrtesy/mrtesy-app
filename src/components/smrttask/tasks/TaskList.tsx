@@ -406,8 +406,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     setDsTaskId(taskId); setDsDescription(description); setDsOpen(true);
   }
 
-  const snoozeTask = snoozeTaskId ? tasks.find((task) => task.id === snoozeTaskId) : null;
-
   // ── render ─────────────────────────────────────────────────────────────────
 
   const contextChips: { key: ContextFilter; label: string; icon?: typeof Home }[] = [
@@ -696,7 +694,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         open={!!snoozeTaskId}
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
-        maxDate={snoozeTask ? effectiveDeadline(snoozeTask) : null}
       />
     </>
   );
