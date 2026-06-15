@@ -27,7 +27,6 @@
     "recurrenceYearly": "כל שנה (תאריך לועזי)",
     "recurrenceHebrew": "כל שנה (תאריך עברי)",
     "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
-    "recurrenceNeedsDate": "כדי ליצור משימה חוזרת צריך לבחור תאריך יעד",
     "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
     "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
     "weekdayShort": {
@@ -75,7 +74,6 @@
       "yearsUnit": "שנים",
       "onDaysLabel": "בימים",
       "monthlyMode": "בכל חודש",
-      "monthlyByDay": "ביום {day} בחודש",
       "monthlyByDayOption": "ביום קבוע בחודש",
       "monthlyByWeekday": "ב{weekday} ה-{ord} בחודש",
       "monthlyByLastWeekday": "ב{weekday} האחרון בחודש",

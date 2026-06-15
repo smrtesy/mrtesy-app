@@ -314,10 +314,13 @@ router.post("/tasks", async (req: Request, res: Response) => {
   catch (e) { return res.status(400).json({ error: (e as Error).message }); }
 
   // COUNT ("ends after N occurrences") is resolved into a concrete
-  // recurrence_until here, anchored on the task's start (due_date), then
-  // stripped from the stored rule — the spawn engine never tracks COUNT.
+  // recurrence_until here, then stripped from the stored rule — the spawn
+  // engine never tracks COUNT. Anchor on the task's start (due_date) when set;
+  // otherwise on today, so "ends after N" with no due date still terminates
+  // instead of recurring forever (the spawn loop bases on due_date ?? today).
   if (typeof updates.recurrence_rule === "string") {
-    const start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    const start = (typeof updates.due_date === "string" ? updates.due_date : undefined)
+      ?? new Date().toISOString().slice(0, 10);
     const normalized = normalizeRecurrence(updates.recurrence_rule, start);
     if (normalized) {
       updates.recurrence_rule = normalized.rule;

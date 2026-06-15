@@ -27,7 +27,6 @@
     "recurrenceYearly": "Every year (Gregorian)",
     "recurrenceHebrew": "Every year (Hebrew date)",
     "recurrenceHebrewHint": "Repeats on the Hebrew date of the due date (e.g. every Tu BiShvat).",
-    "recurrenceNeedsDate": "A recurring task needs a due date",
     "recurrenceNeedsWeekday": "Pick at least one weekday",
     "timeNeedsDate": "A time needs a due date too",
     "weekdayShort": {
@@ -75,7 +74,6 @@
       "yearsUnit": "years",
       "onDaysLabel": "On days",
       "monthlyMode": "Each month",
-      "monthlyByDay": "Monthly on day {day}",
       "monthlyByDayOption": "On a day of the month",
       "monthlyByWeekday": "Monthly on the {ord} {weekday}",
       "monthlyByLastWeekday": "Monthly on the last {weekday}",
