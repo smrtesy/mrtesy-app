@@ -49,7 +49,7 @@ export function WhatsAppPanel() {
     <aside
       dir={isHe ? "rtl" : "ltr"}
       aria-label={t("title")}
-      className="fixed inset-0 z-50 flex flex-col bg-card md:inset-y-0 md:end-0 md:start-auto md:z-30 md:w-[50vw] md:border-s md:shadow-xl"
+      className="fixed inset-0 z-[60] flex flex-col bg-card md:inset-y-0 md:end-0 md:start-auto md:w-[50vw] md:border-s md:shadow-xl"
     >
       <div className="flex items-center gap-2 border-b bg-muted/40 p-2">
         <span className="flex-1 truncate text-sm font-semibold">{t("title")}</span>

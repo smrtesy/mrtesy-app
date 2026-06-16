@@ -17,6 +17,7 @@ import { effectiveDeadline } from "@/lib/workdays";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
 import type { Task } from "@/types/task";
 
 interface MarathonStats {
@@ -61,6 +62,7 @@ export function MarathonMode({
   const t = useTranslations("marathon");
   const tTasks = useTranslations("tasks");
   const tDetail = useTranslations("taskDetailExt");
+  const waPanel = useWhatsAppPanel();
   const blocked = useWorkCalendar();
   // Snapshot the queue at start: list refetches during the run must not
   // reshuffle what the runner sees.
@@ -235,6 +237,12 @@ export function MarathonMode({
   const materials = detail?.task_materials ?? [];
   const driveDocs = (detail?.linked_drive_docs ?? []).filter((d) => !!d.url);
   const sourceUrl = detail?.source_messages?.source_url ?? current?.source_messages?.source_url ?? null;
+  // WhatsApp sources open in the in-app docked panel (consistent with the task
+  // lists / log) instead of launching the external WhatsApp client.
+  const isWaSource = sourceUrl ? /wa\.me\//.test(sourceUrl) : false;
+  const sourceWaPhone = isWaSource
+    ? ((sourceUrl ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "")
+    : "";
   // Plan tasks carry their plan/stage on the desk row — the "where this lives".
   const planLabel = current?.plan_id
     ? [
@@ -377,9 +385,22 @@ export function MarathonMode({
               <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{t("attachments")}</h3>
               <div className="flex flex-wrap gap-1.5">
                 {sourceUrl && (
-                  <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={chipCls}>
-                    <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{t("source")}</span>
-                  </a>
+                  isWaSource ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sourceWaPhone) waPanel.openChat(sourceWaPhone);
+                        else waPanel.open();
+                      }}
+                      className={chipCls}
+                    >
+                      <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{t("source")}</span>
+                    </button>
+                  ) : (
+                    <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={chipCls}>
+                      <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{t("source")}</span>
+                    </a>
+                  )
                 )}
                 {driveDocs.map((d, i) => (
                   <a key={`d${i}`} href={d.url} target="_blank" rel="noopener noreferrer" className={chipCls}>
