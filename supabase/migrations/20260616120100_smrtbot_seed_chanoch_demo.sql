@@ -43,14 +43,8 @@ BEGIN
     -- ── CHANOCH flow: AI project manager (routed by number/tag) ──
     (v_org, v_bot, 'chanoch_main', 'menu', 'תפריט חנוך', 'שלום חנוך 👋',
       '📥 שלח לי הודעה קולית, טקסט או לינק ואסווג אותו אוטומטית לפרויקט.' || chr(10) || chr(10) || 'מה תרצה לעשות?',
-      '[{"id":"chanoch_projects","title":"📂 הפרויקטים שלי"},{"id":"chanoch_recent","title":"🕒 פריטים אחרונים"},{"id":"chanoch_help","title":"❓ עזרה"}]'::jsonb,
+      '[{"id":"pm_projects","title":"📂 הפרויקטים שלי"},{"id":"pm_recent","title":"🕒 פריטים אחרונים"},{"id":"chanoch_help","title":"❓ עזרה"}]'::jsonb,
       NULL, 'live', 'system', 10, true),
-    (v_org, v_bot, 'chanoch_projects', 'menu', 'פרויקטים', 'הפרויקטים שלי 📂',
-      'כאן תראה את רשימת הפרויקטים ותת-הפרויקטים שלך, עם הידע שנצבר בכל אחד.',
-      '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'chanoch_main', 'live', 'system', 11, true),
-    (v_org, v_bot, 'chanoch_recent', 'menu', 'פריטים אחרונים', 'פריטים אחרונים 🕒',
-      'עשרת הפריטים האחרונים שנשמרו, לפי תאריך.',
-      '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'chanoch_main', 'live', 'system', 12, true),
     (v_org, v_bot, 'chanoch_help', 'menu', 'עזרה חנוך', 'איך אני עובד? 📖',
       'שלח מידע (קול/טקסט/לינק) ואסווג אותו לפרויקט. לפני כל שמירה תאשר, תתקן או תדחה. אפשר גם לנהל פרויקטים, תת-פרויקטים ומשימות בשפה חופשית.',
       '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'chanoch_main', 'live', 'system', 13, true)
@@ -84,8 +78,8 @@ BEGIN
   INSERT INTO smrtbot_phone_routes
     (org_id, bot_id, label, match_type, match_value, response_mode, target_node_key, reply_text, priority, active, env)
   VALUES
-    (v_org, v_bot, 'חנוך — מנהל פרויקטים (AI)', 'phone', '972500000001', 'node', 'chanoch_main', NULL, 10, true, 'live'),
-    (v_org, v_bot, 'VIP (לפי תגית)', 'tag', 'vip', 'node', 'chanoch_main', NULL, 20, true, 'live'),
+    (v_org, v_bot, 'חנוך — מנהל פרויקטים (AI)', 'phone', '972500000001', 'ai_pm', 'chanoch_main', NULL, 10, true, 'live'),
+    (v_org, v_bot, 'VIP (לפי תגית)', 'tag', 'vip', 'ai_pm', 'chanoch_main', NULL, 20, true, 'live'),
     (v_org, v_bot, 'חיוג מחו"ל (קידומת)', 'prefix', '1', 'node', 'main', NULL, 80, true, 'live'),
     (v_org, v_bot, 'מספר חסום (דוגמה לתשובה קבועה)', 'phone', '972500000099', 'reply', NULL,
       'מצטערים, השירות אינו זמין עבור מספר זה.', 90, true, 'live');

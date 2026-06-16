@@ -21,6 +21,7 @@ import { whatsappChannel, type BotChannel } from "./channel";
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
 import { handleTrackingAction, handleTrackingText } from "./tracking";
+import { handlePmAction, handlePmText } from "./projects";
 import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
 import { aiAnswer, type KbEntry } from "./ai-answer";
 
@@ -176,7 +177,7 @@ function rootFor(nodes: MenuNode[], rootKey?: string | null): MenuNode | null {
 interface PhoneRoute {
   match_type: "phone" | "prefix" | "tag";
   match_value: string;
-  response_mode: "node" | "reply";
+  response_mode: "node" | "reply" | "ai_pm";
   target_node_key: string | null;
   reply_text: string | null;
   reply_buttons: { id?: string; title?: string; label?: string; value?: string }[] | null;
@@ -451,6 +452,7 @@ export async function handleInbound(
     // rest of the engine runs rooted on that number's own flow.
     const route = await matchPhoneRoute(orgId, bot.id, env, phone, tags);
     let effectiveRootKey: string | null = null;
+    const pmMode = route?.response_mode === "ai_pm";
     if (route) {
       // A 'reply' route answers free text with a fixed message. Button clicks
       // (message.buttonId) fall through to the normal engine so a reply's own
@@ -463,7 +465,9 @@ export async function handleInbound(
         await logMsg(orgId, bot.id, phone, "OUT", env, buttons.length > 0 ? "buttons" : "text", body, "phone_route");
         return;
       }
-      if (route.response_mode === "node") effectiveRootKey = route.target_node_key || null;
+      // 'node' and 'ai_pm' both root the menu at target_node_key (ai_pm keeps a
+      // menu for reserved buttons; free text goes to the classifier below).
+      effectiveRootKey = route.target_node_key || null;
     }
 
     // Referral credit on first contact via a share deep link ("...הגעתי דרך <phone>").
@@ -484,6 +488,7 @@ export async function handleInbound(
     const action = message.buttonId ?? text;
     if (action && (await handleGameAction(bot, env, phone, action, channel))) return;
     if (action && (await handleTrackingAction(bot, env, phone, action, channel))) return;
+    if (action && action.startsWith("pm_") && (await handlePmAction(bot, env, phone, action, channel))) return;
 
     const nodes = await loadNodes(orgId, bot.id, env);
 
@@ -509,6 +514,13 @@ export async function handleInbound(
         await routeNode(channel, orgId, bot, env, phone, action, nodes, effectiveRootKey);
         return;
       }
+    }
+
+    // 4a. AI project-manager mode: free text that didn't match a button/node
+    //     goes to the classifier (confirm-before-save), not FAQ.
+    if (text && pmMode) {
+      await handlePmText(bot, env, phone, text, channel);
+      return;
     }
 
     // 4. Existing user's free text with no match → FAQ search.

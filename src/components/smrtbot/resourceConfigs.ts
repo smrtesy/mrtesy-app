@@ -191,7 +191,7 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "label", type: "text" },
       { key: "match_type", type: "select", options: ["phone", "prefix", "tag"], required: true },
       { key: "match_value", type: "textarea", required: true },
-      { key: "response_mode", type: "select", options: ["node", "reply"], required: true },
+      { key: "response_mode", type: "select", options: ["node", "reply", "ai_pm"], required: true },
       { key: "target_node_key", type: "text" },
       { key: "reply_text", type: "textarea" },
       { key: "reply_buttons", type: "buttons" },
@@ -230,6 +230,25 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "minutes", type: "number" },
     ],
   },
+  "pm-projects": {
+    resource: "pm-projects",
+    columns: ["name", "phone", "entry_count", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "name", type: "text" },
+      { key: "description", type: "textarea" },
+      { key: "status", type: "select", options: ["active", "archived"] },
+    ],
+  },
+  "pm-entries": {
+    resource: "pm-entries",
+    columns: ["phone", "type", "summary", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "summary", type: "textarea" },
+      { key: "status", type: "select", options: ["pending", "confirmed", "discarded"] },
+    ],
+  },
   questions: {
     resource: "questions",
     columns: ["phone", "message_text", "status"],
@@ -255,5 +274,6 @@ export const RESOURCES: Record<string, ResourceConfig> = {
 export const RESOURCE_ORDER = [
   "menu", "messages", "knowledge", "phone-routes", "holidays",
   "auto-messages", "scheduled", "missions", "trivia", "coupons", "raffles",
-  "children", "contacts", "study-sessions", "prayers", "questions", "feedback",
+  "children", "contacts", "study-sessions", "prayers",
+  "pm-projects", "pm-entries", "questions", "feedback",
 ] as const;

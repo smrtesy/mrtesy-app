@@ -138,6 +138,20 @@ const CRUD: CrudOpts[] = [
     updatable: ["in_minyan", "minutes"],
   },
   {
+    // AI project-manager data (engine-managed). Admins can rename/archive
+    // projects and re-status entries.
+    resource: "pm-projects",
+    table: "smrtbot_pm_projects",
+    orderBy: "entry_count",
+    updatable: ["name", "description", "status"],
+  },
+  {
+    resource: "pm-entries",
+    table: "smrtbot_pm_entries",
+    orderBy: "created_at",
+    updatable: ["summary", "status"],
+  },
+  {
     resource: "questions",
     table: "smrtbot_questions",
     orderBy: "created_at",
