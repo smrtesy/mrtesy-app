@@ -3,6 +3,9 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { Sidebar } from "@/components/platform/layout/Sidebar";
 import { getEnabledAppsForUserInOrg } from "@/lib/apps/server";
+import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
+import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
+import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 
 export default async function AppLayout({
   children,
@@ -69,17 +72,31 @@ export default async function AppLayout({
     }
   }
 
+  const hasSmrtTask = enabledApps.includes("smrttask");
+
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* Desktop Sidebar */}
       <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
-      {/* Main content — data-sidebar-main lets globals.css drop the inline-start
-          margin when the user collapses the sidebar from Sidebar.tsx. */}
-      <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
-        <div className="w-full max-w-4xl mx-auto p-4 md:p-6">
-          {children}
-        </div>
-      </main>
+      {/* WhatsApp side-panel: lets the operator keep a conversation open
+          alongside the task lists. Provider wraps the content so entry points
+          (SourceLink / QuickAction / log) can open it; the docked panel + FAB
+          render only for smrtTask users. */}
+      <WhatsAppPanelProvider>
+        {/* Main content — data-sidebar-main lets globals.css drop the inline-start
+            margin when the user collapses the sidebar from Sidebar.tsx. */}
+        <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
+          <div className="w-full max-w-4xl mx-auto p-4 md:p-6">
+            {children}
+          </div>
+        </main>
+        {hasSmrtTask && (
+          <>
+            <WhatsAppPanel />
+            <WhatsAppPanelFab />
+          </>
+        )}
+      </WhatsAppPanelProvider>
     </div>
   );
 }

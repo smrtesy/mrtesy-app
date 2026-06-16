@@ -131,6 +131,18 @@ body[data-chat-fullscreen="true"] main[data-sidebar-main] > div {
   padding: 0 !important;
 }
 
+/* WhatsApp side-panel docked — set by WhatsAppPanel via `data-wa-panel` on
+   <body>. The panel is position:fixed on the inline-end half of the viewport;
+   this pushes the main content out from under it so both stay usable. Desktop
+   only — on mobile the panel is a full-screen overlay and needs no push. The
+   panel opening also collapses the sidebar (margin-inline-start drops to 0 via
+   the data-sidebar-collapsed rule above), so content fills the remaining half. */
+@media (min-width: 768px) {
+  body[data-wa-panel="true"] main[data-sidebar-main] {
+    margin-inline-end: 50vw;
+  }
+}
+
 /* Wide-content mode — set by PlanBoardClient via `data-content-wide` on <body>.
    Drops the inner wrapper's 896px cap so the (scrollable) board fills the whole
    main area and grows as the window widens, with only a small side gutter. */
