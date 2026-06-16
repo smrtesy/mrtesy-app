@@ -161,6 +161,68 @@ function findRootNode(nodes: MenuNode[]): MenuNode | null {
   );
 }
 
+/** Effective root for this conversation. A phone-route may override the entry
+ *  node for a specific number (rootKey); otherwise fall back to findRootNode. */
+function rootFor(nodes: MenuNode[], rootKey?: string | null): MenuNode | null {
+  if (rootKey) {
+    const node = nodes.find((n) => n.node_key === rootKey);
+    if (node) return node;
+  }
+  return findRootNode(nodes);
+}
+
+// ── per-phone routing (smrtbot_phone_routes) ────────────────────────────────
+interface PhoneRoute {
+  match_type: "phone" | "prefix" | "tag";
+  match_value: string;
+  response_mode: "node" | "reply";
+  target_node_key: string | null;
+  reply_text: string | null;
+  reply_buttons: { id?: string; title?: string; label?: string; value?: string }[] | null;
+}
+
+/** Split a rule's match_value (comma/newline separated) into trimmed tokens. */
+function splitValues(raw: string | null): string[] {
+  return (raw ?? "")
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function routeMatches(route: PhoneRoute, phone: string, tags: string[]): boolean {
+  const values = splitValues(route.match_value);
+  if (route.match_type === "phone") {
+    return values.includes(phone);
+  }
+  if (route.match_type === "prefix") {
+    return values.some((v) => phone.startsWith(v.endsWith("*") ? v.slice(0, -1) : v));
+  }
+  // tag
+  return values.some((v) => tags.includes(v));
+}
+
+/** First matching route (by ascending priority), or null. */
+async function matchPhoneRoute(
+  orgId: string,
+  botId: string,
+  env: BotEnv,
+  phone: string,
+  tags: string[],
+): Promise<PhoneRoute | null> {
+  const { data } = await db
+    .from("smrtbot_phone_routes")
+    .select("match_type, match_value, response_mode, target_node_key, reply_text, reply_buttons")
+    .eq("org_id", orgId)
+    .eq("bot_id", botId)
+    .eq("env", env)
+    .eq("active", true)
+    .order("priority", { ascending: true });
+  for (const r of (data as PhoneRoute[]) ?? []) {
+    if (routeMatches(r, phone, tags)) return r;
+  }
+  return null;
+}
+
 function buttonOf(b: MenuNode["buttons"][number]): ReplyButton | null {
   const id = b.id ?? b.value;
   const title = b.title ?? b.label;
@@ -224,6 +286,7 @@ async function routeNode(
   phone: string,
   nodeKey: string,
   nodes: MenuNode[],
+  rootKey?: string | null,
 ): Promise<boolean> {
   const node = nodes.find((n) => n.node_key === nodeKey);
   if (!node) return false;
@@ -232,13 +295,13 @@ async function routeNode(
   if (node.type === "action") {
     const act = node.action || node.node_key;
     if (act === "nav_home") {
-      const root = findRootNode(nodes);
+      const root = rootFor(nodes, rootKey);
       if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
       return true;
     }
     if (act === "nav_back") {
       const s = await getState(bot.id, phone);
-      const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? findRootNode(nodes);
+      const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? rootFor(nodes, rootKey);
       if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
       return true;
     }
@@ -369,17 +432,35 @@ export async function handleInbound(
     // First-contact detection (for referral credit + new-user welcome).
     const { data: existingUser } = await db
       .from("smrtbot_wa_users")
-      .select("id")
+      .select("id, tags")
       .eq("bot_id", bot.id)
       .eq("phone", phone)
       .maybeSingle();
     const existed = !!existingUser;
+    const tags = splitValues((existingUser?.tags as string | null) ?? null);
 
     await touchUser(orgId, bot, phone, message.name ?? null);
     await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
 
     const state = await getState(bot.id, phone);
     const text = (message.text ?? "").trim();
+
+    // Per-number routing override. A rule may give this phone a fixed canned
+    // reply (short-circuit) or a different entry node (effectiveRootKey) so the
+    // rest of the engine runs rooted on that number's own flow.
+    const route = await matchPhoneRoute(orgId, bot.id, env, phone, tags);
+    let effectiveRootKey: string | null = null;
+    if (route) {
+      if (route.response_mode === "reply") {
+        const buttons = (route.reply_buttons ?? []).map(buttonOf).filter((b): b is ReplyButton => b !== null);
+        const body = route.reply_text || "";
+        if (buttons.length > 0) await channel.buttons(body, buttons.slice(0, 3));
+        else if (body) await channel.text(body);
+        await logMsg(orgId, bot.id, phone, "OUT", env, buttons.length > 0 ? "buttons" : "text", body, "phone_route");
+        return;
+      }
+      effectiveRootKey = route.target_node_key || null;
+    }
 
     // Referral credit on first contact via a share deep link ("...הגעתי דרך <phone>").
     if (!existed && text) {
@@ -403,12 +484,12 @@ export async function handleInbound(
     // 2b. Navigation + video/holiday/search actions sent as raw button ids.
     if (action) {
       if (action === "nav_home") {
-        const root = findRootNode(nodes);
+        const root = rootFor(nodes, effectiveRootKey);
         if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
         return;
       }
       if (action === "nav_back") {
-        const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? findRootNode(nodes);
+        const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? rootFor(nodes, effectiveRootKey);
         if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
         return;
       }
@@ -419,7 +500,7 @@ export async function handleInbound(
     if (action) {
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
-        await routeNode(channel, orgId, bot, env, phone, action, nodes);
+        await routeNode(channel, orgId, bot, env, phone, action, nodes, effectiveRootKey);
         return;
       }
     }
@@ -430,8 +511,9 @@ export async function handleInbound(
       return;
     }
 
-    // 5. New users / empty input → root menu so they land on the welcome.
-    const root = findRootNode(nodes);
+    // 5. New users / empty input → root menu so they land on the welcome
+    //    (their per-number entry node, if a route assigned one).
+    const root = rootFor(nodes, effectiveRootKey);
     if (root) await sendMenuNode(channel, orgId, bot.id, env, phone, root);
   } catch (e) {
     const { message: msg, stack } = errInfo(e);

@@ -47,6 +47,7 @@ export const manifest: AppManifest = {
       "smrtbot_bots",
       "smrtbot_bot_access",
       "smrtbot_wa_users",
+      "smrtbot_phone_routes",
       "smrtbot_menu_nodes",
       "smrtbot_messages",
       "smrtbot_missions",

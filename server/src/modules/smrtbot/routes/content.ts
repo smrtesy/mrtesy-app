@@ -106,6 +106,25 @@ const CRUD: CrudOpts[] = [
     updatable: ["phone", "message", "status", "admin_note"],
   },
   {
+    resource: "phone-routes",
+    table: "smrtbot_phone_routes",
+    required: ["match_type", "match_value", "response_mode"],
+    hasEnv: true,
+    orderBy: "priority",
+    updatable: [
+      "label", "match_type", "match_value", "response_mode", "target_node_key",
+      "reply_text", "reply_buttons", "priority", "active", "env",
+    ],
+  },
+  {
+    // Edit-only from the UI (readOnlyCreate): rows are engine-managed
+    // (UNIQUE bot_id,phone), so admins tag/rename existing contacts here.
+    resource: "contacts",
+    table: "smrtbot_wa_users",
+    orderBy: "created_at",
+    updatable: ["name", "tags", "wa_opted_out"],
+  },
+  {
     resource: "questions",
     table: "smrtbot_questions",
     orderBy: "created_at",

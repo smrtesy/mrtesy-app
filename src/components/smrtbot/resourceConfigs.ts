@@ -183,6 +183,34 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "active_reminders", type: "bool" },
     ],
   },
+  "phone-routes": {
+    resource: "phone-routes",
+    columns: ["label", "match_type", "match_value", "response_mode", "priority", "env"],
+    hasEnv: true,
+    fields: [
+      { key: "label", type: "text" },
+      { key: "match_type", type: "select", options: ["phone", "prefix", "tag"], required: true },
+      { key: "match_value", type: "textarea", required: true },
+      { key: "response_mode", type: "select", options: ["node", "reply"], required: true },
+      { key: "target_node_key", type: "text" },
+      { key: "reply_text", type: "textarea" },
+      { key: "priority", type: "number" },
+      ENV, ACTIVE,
+    ],
+  },
+  contacts: {
+    resource: "contacts",
+    columns: ["phone", "name", "tags", "last_interaction_at"],
+    // Rows are created by the engine on first contact (UNIQUE bot_id,phone).
+    // Admins edit them here (mainly to set tags for tag-based routing) rather
+    // than create — a manual create would collide with the engine's row.
+    readOnlyCreate: true,
+    fields: [
+      { key: "name", type: "text" },
+      { key: "tags", type: "text" },
+      { key: "wa_opted_out", type: "bool" },
+    ],
+  },
   questions: {
     resource: "questions",
     columns: ["phone", "message_text", "status"],
@@ -206,7 +234,7 @@ export const RESOURCES: Record<string, ResourceConfig> = {
 };
 
 export const RESOURCE_ORDER = [
-  "menu", "messages", "missions", "trivia", "knowledge", "holidays",
-  "auto-messages", "scheduled", "coupons", "raffles", "children",
-  "questions", "feedback",
+  "menu", "messages", "knowledge", "phone-routes", "holidays",
+  "auto-messages", "scheduled", "missions", "trivia", "coupons", "raffles",
+  "children", "contacts", "questions", "feedback",
 ] as const;

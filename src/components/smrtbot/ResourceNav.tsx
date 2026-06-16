@@ -33,7 +33,8 @@ const SECTIONS: Section[] = [
     labelKey: "secContent",
     items: [
       { seg: "menu" }, { seg: "messages" }, { seg: "knowledge" },
-      { seg: "auto-messages" }, { seg: "scheduled" }, { seg: "holidays" },
+      { seg: "phone-routes" }, { seg: "auto-messages" }, { seg: "scheduled" },
+      { seg: "holidays" },
     ],
   },
   {
@@ -55,7 +56,11 @@ const SECTIONS: Section[] = [
     key: "data",
     icon: BarChart3,
     labelKey: "secData",
-    items: [{ seg: "stats", labelKey: "statsTitle" }, { seg: "logs", labelKey: "logsTitle" }],
+    items: [
+      { seg: "stats", labelKey: "statsTitle" },
+      { seg: "logs", labelKey: "logsTitle" },
+      { seg: "contacts" },
+    ],
   },
   {
     key: "settings",
