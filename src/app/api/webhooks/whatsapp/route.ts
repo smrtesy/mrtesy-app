@@ -76,6 +76,13 @@ interface MetaMessage {
   chat_name?: string;
   isGroup?: boolean;
   history_context?: { status?: string };
+  // Present on `type: "unsupported"` messages. `errors[0].code` distinguishes
+  // 131051 (message type the Cloud API can't process) from 131060 (message
+  // couldn't be synced from a companion/linked device under Coexistence —
+  // "This message is unavailable"). `unsupported.type` is Meta's sub-type hint
+  // (e.g. view_once, poll_creation, list) or "unknown".
+  errors?: Array<{ code?: number; title?: string; message?: string }>;
+  unsupported?: { type?: string };
 }
 
 interface MetaContact {
@@ -986,16 +993,33 @@ async function buildMessageRow(
       break;
     }
 
-    case "unsupported":
     case "revoke":
-      // Meta sends `revoke` when the sender deletes a message in
-      // WhatsApp (the "Delete for everyone" action). `unsupported` is
-      // Meta's fallback for message types the API can't surface (e.g.,
-      // certain ephemeral payloads). We mark them as deleted in the
-      // conversation log so the UI shows a clear "Message deleted"
-      // placeholder instead of a cryptic "unrecognized type".
+      // The sender deleted the message in WhatsApp ("Delete for everyone").
+      // This is a genuine deletion, so the "deleted" placeholder is correct.
       body = "[הודעה נמחקה]";
       break;
+
+    case "unsupported": {
+      // NOT a deletion — Meta could not surface the message to the Cloud API,
+      // so there is no media/text to download. Label honestly by the error
+      // code so the user knows a real message arrived (and where to find it)
+      // instead of believing the sender deleted it:
+      //   131060 → Coexistence/companion-device sync gap ("This message is
+      //            unavailable"). The message exists on the user's phone but
+      //            never reached the API — nothing is recoverable here.
+      //   131051 → message type the Cloud API doesn't support (view_once,
+      //            poll, list, group_invite, …); `unsupported.type` names it.
+      const code = m.errors?.[0]?.code ?? null;
+      const sub = m.unsupported?.type ?? null;
+      if (code === 131060) {
+        body = "[הודעה לא זמינה — WhatsApp לא העביר אותה לאפליקציה (מכשיר מקושר). בדוק בטלפון]";
+      } else if (sub && sub !== "unknown") {
+        body = `[הודעה לא נתמכת: ${sub} — בדוק בטלפון]`;
+      } else {
+        body = "[הודעה לא נתמכת — לא ניתן להציג כאן. בדוק בטלפון]";
+      }
+      break;
+    }
 
     default:
       body = `[סוג לא מזוהה: ${type}]`;
@@ -1077,8 +1101,15 @@ async function persistMediaBlobToStorage(
 ): Promise<PersistedDoc> {
   const buf = Buffer.from(blob.base64, "base64");
 
-  const safeName = filename.replace(/[/\\]+/g, "_").slice(0, 200);
-  const path = `${userId}/${wamid}-${safeName}`;
+  // Supabase Storage rejects object keys containing non-ASCII characters
+  // (a Hebrew document filename like "אישור.pdf" → "Invalid key", which is
+  // why documents with Hebrew names silently failed to store while images —
+  // keyed off the wamid — always worked). Build the key purely from the wamid
+  // (always ASCII) plus an extension, and keep the sender's original filename
+  // only as display metadata (returned, not used in the key).
+  const safeBase = wamid.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80);
+  const ext = extensionFor(filename, blob.mimeType || declaredMime);
+  const path = `${userId}/${safeBase}${ext ? `.${ext}` : ""}`;
 
   const { error: uploadErr } = await db.storage.from("whatsapp-media").upload(path, buf, {
     contentType: blob.mimeType || declaredMime || "application/octet-stream",
@@ -1086,7 +1117,37 @@ async function persistMediaBlobToStorage(
   });
   if (uploadErr) throw new Error(`storage upload: ${uploadErr.message}`);
 
-  return { path, filename: safeName, size: buf.length };
+  return { path, filename, size: buf.length };
+}
+
+/**
+ * Pick a safe (ASCII) file extension for a storage key. Prefers the original
+ * filename's extension when it's plain ASCII (e.g. ".pdf", ".docx"), otherwise
+ * falls back to a MIME→ext map. Returns "" when nothing is known.
+ */
+function extensionFor(filename: string | null, mime: string | null): string {
+  const fromName = filename?.match(/\.([A-Za-z0-9]{1,8})$/)?.[1];
+  if (fromName) return fromName.toLowerCase();
+  const m = (mime ?? "").toLowerCase().split(";")[0].trim();
+  const map: Record<string, string> = {
+    "application/pdf": "pdf",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "audio/ogg": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/wav": "wav",
+    "video/mp4": "mp4",
+    "text/plain": "txt",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  };
+  return map[m] ?? "";
 }
 
 function filenameForImage(wamid: string, mime: string): string {
