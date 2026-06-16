@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -96,6 +96,15 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length]);
+
+  // "Reply to a specific message" state — WhatsApp Desktop UX. Lives here
+  // (not in ComposeBox) because the trigger is a per-bubble action while
+  // the quote preview + send live in the composer. Cleared when the user
+  // switches chats so a stale quote never carries over.
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  useEffect(() => {
+    setReplyTo(null);
+  }, [chatId]);
 
   // Build a lookup for reactions: target_wamid → reaction emojis.
   // We keep at most one reaction per direction (matches WhatsApp UX:
@@ -335,6 +344,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
             relatedTasks={tasksByMessageId.get(m.id) ?? []}
             locale={locale}
             canReact={withinWindow}
+            onReply={() => setReplyTo(m)}
             onReact={async (emoji) => {
               try {
                 await api("/api/whatsapp/messages/react", {
@@ -357,6 +367,8 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         chatId={chatId}
         withinWindow={withinWindow}
         windowExpiresAt={windowExpiresAt}
+        replyTo={replyTo}
+        onClearReply={() => setReplyTo(null)}
         onSent={onMessageSent}
       />
     </div>
@@ -375,17 +387,31 @@ function ComposeBox({
   chatId,
   withinWindow,
   windowExpiresAt,
+  replyTo,
+  onClearReply,
   onSent,
 }: {
   chatId: string;
   withinWindow: boolean;
   windowExpiresAt: Date | null;
+  /** When set, the next message is sent as a reply quoting this message
+   *  (mirrors WhatsApp Desktop). Null = normal send. */
+  replyTo: Message | null;
+  /** Clears the active reply (X on the quote bar / after a successful send). */
+  onClearReply: () => void;
   onSent?: () => void;
 }) {
   const t = useTranslations("whatsappPage");
   const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the composer the moment the user picks a message to reply to,
+  // so they can start typing immediately (WhatsApp Desktop behaviour).
+  useEffect(() => {
+    if (replyTo) textareaRef.current?.focus();
+  }, [replyTo]);
 
   // Prefill the composer when arriving from a smrtTask "open in WhatsApp"
   // draft (?draft=…). Read once, then strip the param so it doesn't refill
@@ -571,18 +597,26 @@ function ComposeBox({
       toast.error(t("windowClosedShort"));
       return;
     }
-    // Drop the textarea + suggestion immediately so the operator can
-    // start typing the next message while Meta's send call (~1-2s)
-    // finishes in the background.
+    // Capture the reply target before we clear it — the send is async and
+    // the quote bar is dismissed optimistically below.
+    const replyToWamid = replyTo?.wamid ?? null;
+    // Drop the textarea + suggestion + reply quote immediately so the
+    // operator can start typing the next message while Meta's send call
+    // (~1-2s) finishes in the background.
     setText("");
     setSuggestion(null);
     setEnglishApproved(false);
     lastCheckedRef.current = "";
+    onClearReply();
     setSending(true);
     try {
       await api("/api/whatsapp/messages/send", {
         method: "POST",
-        body: { to_phone: chatId, text: trimmed },
+        body: {
+          to_phone: chatId,
+          text: trimmed,
+          ...(replyToWamid ? { reply_to_wamid: replyToWamid } : {}),
+        },
       });
       onSent?.();
     } catch (e) {
@@ -684,6 +718,42 @@ function ComposeBox({
         </div>
       )}
 
+      {/* Reply quote bar — WhatsApp Desktop shows the message you're
+          replying to directly above the input, with an X to cancel. The
+          accent bar colour matches the quoted message's direction (green
+          for your own outgoing, primary for the contact's incoming). */}
+      {replyTo && withinWindow && (
+        <div className="flex items-stretch gap-2 rounded bg-muted/60">
+          <div
+            className={`flex-1 min-w-0 rounded border-s-4 bg-muted px-2 py-1 ${
+              replyTo.direction === "outgoing" ? "border-status-ok" : "border-primary"
+            }`}
+            dir={detectMessageDir(replyTo.body_text)}
+          >
+            <p className="text-[10px] font-medium text-muted-foreground">
+              {t("replyingTo", {
+                name:
+                  replyTo.direction === "outgoing"
+                    ? t("you")
+                    : replyTo.from_name?.trim() || replyTo.from_phone || t("contact"),
+              })}
+            </p>
+            <p className="line-clamp-1 break-words text-[11px] text-muted-foreground/80">
+              {replyTo.body_text?.slice(0, 200) || `[${replyTo.message_type}]`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClearReply}
+            className="shrink-0 self-center rounded-full p-1 hover:bg-muted"
+            aria-label={t("cancelReply")}
+            title={t("cancelReply")}
+          >
+            <X className="h-4 w-4 text-muted-foreground" />
+          </button>
+        </div>
+      )}
+
       <div className="flex gap-2 items-end">
         <Button
           type="button"
@@ -697,6 +767,7 @@ function ComposeBox({
           {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
         </Button>
         <Textarea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -748,6 +819,7 @@ function MessageBubble({
   locale,
   canReact,
   onReact,
+  onReply,
 }: {
   message: Message;
   reactions: Array<{ emoji: string; direction: string }>;
@@ -756,10 +828,12 @@ function MessageBubble({
   /** Tasks created from this specific message (heuristic match). */
   relatedTasks: ChatTask[];
   locale: string;
-  /** When false, the react button is hidden (24h window closed). */
+  /** When false, the react + reply buttons are hidden (24h window closed). */
   canReact: boolean;
   /** Called with the selected emoji (or "" to remove). */
   onReact: (emoji: string) => void;
+  /** Start a reply quoting this message (WhatsApp Desktop UX). */
+  onReply: () => void;
 }) {
   const t = useTranslations("whatsappPage");
   const isOutgoing = message.direction === "outgoing";
@@ -845,16 +919,19 @@ function MessageBubble({
             the OPPOSITE edge of the bubble's alignment so it doesn't crowd
             the content side. */}
         {canReact && msgDir === "rtl" && (
-          <ReactionButton
-            myReaction={myReaction}
-            pickerOpen={pickerOpen}
-            pickerRef={pickerRef}
-            onTogglePicker={() => setPickerOpen((v) => !v)}
-            onPick={(emoji) => {
-              setPickerOpen(false);
-              onReact(emoji);
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-0.5">
+            <ReplyButton onReply={onReply} label={t("reply")} />
+            <ReactionButton
+              myReaction={myReaction}
+              pickerOpen={pickerOpen}
+              pickerRef={pickerRef}
+              onTogglePicker={() => setPickerOpen((v) => !v)}
+              onPick={(emoji) => {
+                setPickerOpen(false);
+                onReact(emoji);
+              }}
+            />
+          </div>
         )}
         <div
           dir={msgDir}
@@ -1042,16 +1119,19 @@ function MessageBubble({
         {/* React button on the LTR side — same component, just rendered
             after the bubble so flex order puts it on the visual left. */}
         {canReact && msgDir === "ltr" && (
-          <ReactionButton
-            myReaction={myReaction}
-            pickerOpen={pickerOpen}
-            pickerRef={pickerRef}
-            onTogglePicker={() => setPickerOpen((v) => !v)}
-            onPick={(emoji) => {
-              setPickerOpen(false);
-              onReact(emoji);
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-0.5">
+            <ReactionButton
+              myReaction={myReaction}
+              pickerOpen={pickerOpen}
+              pickerRef={pickerRef}
+              onTogglePicker={() => setPickerOpen((v) => !v)}
+              onPick={(emoji) => {
+                setPickerOpen(false);
+                onReact(emoji);
+              }}
+            />
+            <ReplyButton onReply={onReply} label={t("reply")} />
+          </div>
         )}
       </div>
 
@@ -1244,6 +1324,26 @@ function ReactionButton({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Compact reply button that floats alongside each message bubble, mirroring
+ * WhatsApp Desktop's hover affordance. Tapping it lifts the message into the
+ * composer as a quote. Always rendered (discoverable on mobile where there's
+ * no hover) but only visible on hover on desktop, matching ReactionButton.
+ */
+function ReplyButton({ onReply, label }: { onReply: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onReply}
+      className="opacity-0 group-hover:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
+      aria-label={label}
+      title={label}
+    >
+      <Reply className="h-4 w-4 text-muted-foreground" />
+    </button>
   );
 }
 
