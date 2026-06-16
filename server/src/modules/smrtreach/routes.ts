@@ -26,7 +26,6 @@ import type { AudienceRef, Channel } from "./audience-service";
 import { enqueueCampaignEmail, processEmailQueue } from "./send-service";
 import { enqueueCampaignWhatsapp, processWhatsappQueue } from "./wa-send-service";
 import { sendTestMessage, sendGmassInboxTest, GMASS_SEEDS, GMASS_RESULTS_BASE } from "./test-send";
-import { listOrgGmailAccounts } from "./gmail-client";
 
 const router = Router();
 
@@ -243,6 +242,76 @@ router.get("/reach/campaigns/:id/recipients", async (req: Request, res: Response
 });
 
 // ============================================================
+// PER-CAMPAIGN SENDER ALLOCATION
+// ============================================================
+// For an email campaign: which senders (from the master list) to send from,
+// and how many from each. Supersedes the single campaign_email.sender when set.
+
+router.get("/reach/campaigns/:id/senders", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await ownsCampaign(orgId, req.params.id))) {
+    return res.status(404).json({ error: "campaign not found" });
+  }
+  const { data, error } = await db
+    .from("smrtreach_campaign_senders")
+    .select("sender_id, send_count")
+    .eq("org_id", orgId)
+    .eq("campaign_id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ allocations: data ?? [] });
+});
+
+// Replace the whole allocation for a campaign. Body: { allocations: [{ sender_id, send_count }] }.
+// Each sender must belong to the org; send_count must be a positive int and is
+// clamped to the sender's fixed daily_cap (the per-address ceiling set in settings).
+router.put("/reach/campaigns/:id/senders", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const campaignId = req.params.id;
+  if (!(await ownsCampaign(orgId, campaignId))) {
+    return res.status(404).json({ error: "campaign not found" });
+  }
+  const input = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
+
+  // Validate sender ids against this org's master list (also gives us daily_cap).
+  const { data: senders, error: sErr } = await db
+    .from("smrtreach_senders")
+    .select("id, daily_cap")
+    .eq("org_id", orgId);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+  const capById = new Map((senders ?? []).map((s) => [s.id as string, (s.daily_cap as number | null) ?? null]));
+
+  const rows: { campaign_id: string; org_id: string; sender_id: string; send_count: number }[] = [];
+  const seen = new Set<string>();
+  for (const a of input) {
+    const senderId = typeof a?.sender_id === "string" ? a.sender_id : "";
+    if (!senderId || !capById.has(senderId) || seen.has(senderId)) continue;
+    let count = Number(a?.send_count);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    count = Math.floor(count);
+    const cap = capById.get(senderId);
+    if (cap != null) count = Math.min(count, cap);
+    seen.add(senderId);
+    rows.push({ campaign_id: campaignId, org_id: orgId, sender_id: senderId, send_count: count });
+  }
+
+  // Replace: clear then insert the validated set (empty = use fallback sender).
+  const { error: delErr } = await db
+    .from("smrtreach_campaign_senders")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("campaign_id", campaignId);
+  if (delErr) return res.status(500).json({ error: delErr.message });
+  if (rows.length > 0) {
+    const { error: insErr } = await db.from("smrtreach_campaign_senders").insert(rows);
+    if (insErr) {
+      await notifyError(orgId, "smrtreach", { title: "Failed to save sender allocation", body: insErr.message });
+      return res.status(500).json({ error: insErr.message });
+    }
+  }
+  res.json({ ok: true, allocations: rows.map((r) => ({ sender_id: r.sender_id, send_count: r.send_count })) });
+});
+
+// ============================================================
 // TEMPLATES
 // ============================================================
 
@@ -315,20 +384,35 @@ router.get("/reach/senders", async (req: Request, res: Response) => {
   res.json({ senders: data ?? [] });
 });
 
+/** Parse a positive-int daily cap from the body. Returns undefined if absent. */
+function parseDailyCap(raw: unknown): number | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined; // ignore invalid
+  return Math.floor(n);
+}
+
+// SES sender addresses are added here. Gmail inboxes are added via the OAuth
+// flow (POST'ing one here would create a dangling sender with no token), so
+// this route always creates provider='ses'.
 router.post("/reach/senders", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return res.status(400).json({ error: "a valid email is required" });
   }
+  const cap = parseDailyCap(req.body?.daily_cap);
   const { data, error } = await db
     .from("smrtreach_senders")
     .insert({
       org_id: orgId,
       created_by: req.user!.id,
       email,
+      provider: "ses",
       label: req.body?.label?.trim() || null,
       reply_to: req.body?.reply_to?.trim()?.toLowerCase() || null,
+      daily_cap: cap === undefined ? null : cap,
     })
     .select("*")
     .single();
@@ -339,6 +423,29 @@ router.post("/reach/senders", async (req: Request, res: Response) => {
   res.status(201).json({ sender: data });
 });
 
+// Edit a sender's label / reply_to / fixed daily cap (works for SES + Gmail).
+router.patch("/reach/senders/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const patch: Record<string, unknown> = {};
+  if (req.body?.label !== undefined) patch.label = req.body.label?.trim() || null;
+  if (req.body?.reply_to !== undefined) patch.reply_to = req.body.reply_to?.trim()?.toLowerCase() || null;
+  const cap = parseDailyCap(req.body?.daily_cap);
+  if (cap !== undefined) patch.daily_cap = cap;
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "no updatable fields provided" });
+  }
+  const { data, error } = await db
+    .from("smrtreach_senders")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "sender not found" });
+  res.json({ sender: data });
+});
+
 router.delete("/reach/senders/:id", async (req: Request, res: Response) => {
   const { error } = await db
     .from("smrtreach_senders")
@@ -347,6 +454,20 @@ router.delete("/reach/senders/:id", async (req: Request, res: Response) => {
     .eq("id", req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// Independent Gmail inboxes connected for sending (status for the settings UI).
+// The OAuth material lives in smrtreach_gmail_accounts (service-role only); we
+// expose only the safe fields, keyed by sender_id so the UI can merge with the
+// senders list.
+router.get("/reach/gmail-accounts", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtreach_gmail_accounts")
+    .select("sender_id, email, disabled, last_error, created_at")
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ accounts: data ?? [] });
 });
 
 // ============================================================
@@ -493,16 +614,6 @@ router.post("/reach/campaigns/:id/test", async (req: Request, res: Response) => 
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     res.status(400).json({ error: msg });
-  }
-});
-
-// Connected Gmail accounts available to send from (for the provider picker).
-router.get("/reach/gmail/accounts", async (req: Request, res: Response) => {
-  try {
-    const accounts = await listOrgGmailAccounts(req.org!.id);
-    res.json({ accounts: accounts.map((a) => ({ email: a.email })) });
-  } catch (e) {
-    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 

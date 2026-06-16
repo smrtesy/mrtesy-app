@@ -38,6 +38,11 @@ export async function GET(request: Request) {
     case "drive":
       scopes = "openid email https://www.googleapis.com/auth/drive.readonly";
       break;
+    case "reach_gmail":
+      // Independent Gmail inbox for smrtReach sending. Minimal scope: send only
+      // (plus openid/email to discover which inbox was authorized).
+      scopes = "openid email https://www.googleapis.com/auth/gmail.send";
+      break;
     default:
       return NextResponse.json({ error: "Invalid service" }, { status: 400 });
   }
@@ -46,6 +51,12 @@ export async function GET(request: Request) {
   const nonce = crypto.randomUUID();
   const statePayload: Record<string, string> = { service, nonce };
   if (redirect) statePayload.redirect = redirect;
+  // smrtReach inboxes are org-owned: bind the active org (from the subdomain
+  // cookie set by middleware) into state so the callback stores it correctly.
+  if (service === "reach_gmail") {
+    const orgId = (await cookies()).get("smrt_org_id")?.value;
+    if (orgId) statePayload.org_id = orgId;
+  }
   const state = Buffer.from(JSON.stringify(statePayload)).toString(
     "base64url"
   );
