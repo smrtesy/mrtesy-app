@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -36,7 +37,7 @@ export function QuickAction({
   const t = useTranslations("tasks.actions");
   const tCommon = useTranslations("common");
   const { locale } = useParams<{ locale: string }>();
-  const router = useRouter();
+  const waPanel = useWhatsAppPanel();
 
   // WhatsApp-sourced tasks (or WhatsApp draft actions) open the draft inside
   // the built-in WhatsApp chat for editing & sending, instead of a Gmail draft.
@@ -133,9 +134,9 @@ export function QuickAction({
     }
     onDone();
     onClose();
-    router.push(
-      `/${locale}/whatsapp?chat_id=${encodeURIComponent(contactPhone)}&draft=${encodeURIComponent(result)}`,
-    );
+    // Open the conversation in the docked side-panel (with the generated
+    // draft) instead of navigating away — the task list stays in place.
+    waPanel.openChat(contactPhone, result);
   }
 
   async function handleGmailDraft() {

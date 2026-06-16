@@ -196,6 +196,9 @@
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",
+    "openPanel": "פתח וואטסאפ",
+    "closePanel": "סגור וואטסאפ",
+    "expandFull": "פתח במסך מלא",
     "threadCount": "{count, plural, one {שיחה אחת} other {# שיחות}}",
     "noThreads": "אין עדיין הודעות. ברגע שיגיעו, הן יופיעו כאן.",
     "selectAThread": "בחר שיחה כדי לצפות בהודעות",

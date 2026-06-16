@@ -196,6 +196,9 @@
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",
+    "openPanel": "Open WhatsApp",
+    "closePanel": "Close WhatsApp",
+    "expandFull": "Open full page",
     "threadCount": "{count, plural, one {1 chat} other {# chats}}",
     "noThreads": "No messages yet. They'll show up here once they arrive.",
     "selectAThread": "Select a chat to view its messages",

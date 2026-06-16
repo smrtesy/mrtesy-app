@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight, Search, X } from "lucide-react";
 import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
+import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
 
 const sourceIcons: Record<string, string> = {
   gmail: "📧",
@@ -91,6 +92,7 @@ interface SourceEntry {
 export function LogPageClient({ locale }: { locale: string }) {
   const t = useTranslations("log");
   const tLog = useTranslations("logPage");
+  const waPanel = useWhatsAppPanel();
   const supabase = createClient();
   const [logs, setLogs] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -574,13 +576,20 @@ export function LogPageClient({ locale }: { locale: string }) {
                     const isWa = log.source_type === "whatsapp" || log.source_type === "whatsapp_echo";
                     if (isWa) {
                       const phone = ((log.source_url ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
-                      const href = phone
-                        ? `/${locale}/whatsapp?chat_id=${encodeURIComponent(phone)}`
-                        : `/${locale}/whatsapp`;
                       return (
-                        <a href={href} className="shrink-0 text-muted-foreground hover:text-primary" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="shrink-0 text-muted-foreground hover:text-primary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Open the conversation in the docked side-panel
+                            // rather than navigating away from the log.
+                            if (phone) waPanel.openChat(phone);
+                            else waPanel.open();
+                          }}
+                        >
                           <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
+                        </button>
                       );
                     }
                     return (

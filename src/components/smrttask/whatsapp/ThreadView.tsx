@@ -79,6 +79,9 @@ interface Props {
   onBack: () => void;
   /** Called after a successful send so the parent can refetch immediately. */
   onMessageSent?: () => void;
+  /** One-shot draft to prefill the composer (e.g. from a smrtTask "reply in
+   *  WhatsApp" action surfaced in the side-panel, where there's no ?draft= URL). */
+  initialDraft?: string | null;
   /** Called after the user renames the contact so the parent can refresh
    *  the thread list (so the new name appears in the left pane too). */
   onContactRenamed?: () => void;
@@ -86,7 +89,7 @@ interface Props {
 
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed }: Props) {
+export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed, initialDraft }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -369,6 +372,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         windowExpiresAt={windowExpiresAt}
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
+        initialDraft={initialDraft}
         onSent={onMessageSent}
       />
     </div>
@@ -389,6 +393,7 @@ function ComposeBox({
   windowExpiresAt,
   replyTo,
   onClearReply,
+  initialDraft,
   onSent,
 }: {
   chatId: string;
@@ -399,6 +404,8 @@ function ComposeBox({
   replyTo: Message | null;
   /** Clears the active reply (X on the quote bar / after a successful send). */
   onClearReply: () => void;
+  /** One-shot prefill (from the side-panel; the full page uses ?draft=). */
+  initialDraft?: string | null;
   onSent?: () => void;
 }) {
   const t = useTranslations("whatsappPage");
@@ -428,6 +435,16 @@ function ComposeBox({
       window.history.replaceState(null, "", url.toString());
     }
   }, [searchParams]);
+
+  // Prop-driven prefill (side-panel path — no URL param to read). Shares the
+  // consume guard with the ?draft= path so neither double-fills the textarea.
+  useEffect(() => {
+    if (draftConsumedRef.current) return;
+    if (initialDraft && initialDraft.trim()) {
+      draftConsumedRef.current = true;
+      setText(initialDraft);
+    }
+  }, [initialDraft]);
   const [transcribing, setTranscribing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);

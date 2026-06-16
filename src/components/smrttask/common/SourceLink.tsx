@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
 import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
 import { SourceMessageReader } from "./SourceMessageReader";
 
 
@@ -42,7 +42,7 @@ interface SourceLinkProps {
  * opens the original message/doc in a new tab.
  */
 export function SourceLink({ source, stopPropagation, className }: SourceLinkProps) {
-  const { locale } = useParams<{ locale: string }>();
+  const waPanel = useWhatsAppPanel();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
   // In-app email reader, opened on mobile Gmail taps (see handleClick below).
@@ -62,22 +62,25 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
   const isWhatsapp = row.source_type === "whatsapp" || row.source_type === "whatsapp_echo";
   if (isWhatsapp) {
     // Backend stores wa.me/<digits-only>; we still strip non-digits defensively
-    // so a malformed URL (e.g. wa.me/+972…) degrades to "open WhatsApp tab"
-    // rather than silently linking to an unknown chat.
+    // so a malformed URL (e.g. wa.me/+972…) degrades to "open the chat list"
+    // rather than silently opening an unknown conversation.
     const phone = ((row.source_url ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
-    const href = phone
-      ? `/${locale ?? "he"}/whatsapp?chat_id=${encodeURIComponent(phone)}`
-      : `/${locale ?? "he"}/whatsapp`;
     return (
-      <a
-        href={href}
-        onClick={(e) => { if (stopPropagation) e.stopPropagation(); }}
-        title={`${label} — open in WhatsApp tab`}
+      <button
+        type="button"
+        onClick={(e) => {
+          if (stopPropagation) e.stopPropagation();
+          // Surface the conversation in the docked side-panel — keeps the
+          // current list (tasks/inbox/log) in place instead of navigating away.
+          if (phone) waPanel.openChat(phone);
+          else waPanel.open();
+        }}
+        title={`${label} — open in WhatsApp`}
         className={cn(base, interactive, className)}
       >
         <Icon className="h-3 w-3" />
         <span>{label}</span>
-      </a>
+      </button>
     );
   }
 
