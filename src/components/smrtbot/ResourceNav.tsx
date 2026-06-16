@@ -62,6 +62,8 @@ const SECTIONS: Section[] = [
       { seg: "contacts" },
       { seg: "study-sessions" },
       { seg: "prayers" },
+      { seg: "pm-projects" },
+      { seg: "pm-entries" },
     ],
   },
   {
