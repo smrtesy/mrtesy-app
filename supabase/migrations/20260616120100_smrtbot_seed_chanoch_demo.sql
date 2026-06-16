@@ -35,19 +35,11 @@ BEGIN
     (org_id, bot_id, node_key, type, label, title_he, body_text, buttons, parent_key, env, category, sort_order, active)
   VALUES
     -- ── DEFAULT flow: study / prayer tracking (every number) ──
+    -- ── DEFAULT flow: buttons map to tracking actions (see tracking.ts) ──
     (v_org, v_bot, 'main', 'menu', 'תפריט ראשי', 'שלום 👋',
       '📥 דווח לי על לימוד או תפילה ואעקוב עבורך.' || chr(10) || chr(10) || 'מה תרצה לעשות?',
-      '[{"id":"report_prayer","title":"🙏 דיווח שחרית"},{"id":"my_status","title":"📊 הסטטוס שלי היום"},{"id":"period_report","title":"📅 דוח תקופתי"}]'::jsonb,
+      '[{"id":"study_start","title":"▶️ התחלתי ללמוד"},{"id":"study_end","title":"⏹️ סיימתי"},{"id":"prayer_report","title":"🙏 דיווח שחרית"},{"id":"study_status","title":"📊 הסטטוס שלי"}]'::jsonb,
       NULL, 'live', 'system', 0, true),
-    (v_org, v_bot, 'report_prayer', 'menu', 'דיווח שחרית', 'דיווח על שחרית 🙏',
-      'כאן מדווחים על תפילת שחרית: שעת התחלה, שעת סיום, ובמניין או ביחידות. הדיווח משמש לסטטיסטיקה.',
-      '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'main', 'live', 'system', 1, true),
-    (v_org, v_bot, 'my_status', 'menu', 'סטטוס יומי', 'הסטטוס שלי היום 📊',
-      'סיכום יומי: כמה למדת מול היעד, סשנים שנרשמו, ודיווח שחרית.',
-      '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'main', 'live', 'system', 2, true),
-    (v_org, v_bot, 'period_report', 'menu', 'דוח תקופתי', 'דוח תקופתי 📅',
-      'דוח על פני התקופה: מצטבר מול יעד, קצב, ואחוז ביצוע ביום המקורי.',
-      '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'main', 'live', 'system', 3, true),
     -- ── CHANOCH flow: AI project manager (routed by number/tag) ──
     (v_org, v_bot, 'chanoch_main', 'menu', 'תפריט חנוך', 'שלום חנוך 👋',
       '📥 שלח לי הודעה קולית, טקסט או לינק ואסווג אותו אוטומטית לפרויקט.' || chr(10) || chr(10) || 'מה תרצה לעשות?',

@@ -60,6 +60,8 @@ const SECTIONS: Section[] = [
       { seg: "stats", labelKey: "statsTitle" },
       { seg: "logs", labelKey: "logsTitle" },
       { seg: "contacts" },
+      { seg: "study-sessions" },
+      { seg: "prayers" },
     ],
   },
   {

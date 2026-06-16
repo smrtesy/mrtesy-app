@@ -125,6 +125,19 @@ const CRUD: CrudOpts[] = [
     updatable: ["name", "tags", "wa_opted_out"],
   },
   {
+    // Tracking data (engine-managed). Admins can correct minutes/status.
+    resource: "study-sessions",
+    table: "smrtbot_study_sessions",
+    orderBy: "started_at",
+    updatable: ["status", "minutes"],
+  },
+  {
+    resource: "prayers",
+    table: "smrtbot_prayers",
+    orderBy: "prayer_date",
+    updatable: ["in_minyan", "minutes"],
+  },
+  {
     resource: "questions",
     table: "smrtbot_questions",
     orderBy: "created_at",

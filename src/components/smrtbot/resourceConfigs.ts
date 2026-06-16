@@ -4,7 +4,7 @@
  * resolve via t(`f_<key>`) with a fallback to the raw key, so adding an i18n key
  * is optional (technical fields show their column name).
  */
-export type FieldType = "text" | "textarea" | "number" | "bool" | "select";
+export type FieldType = "text" | "textarea" | "number" | "bool" | "select" | "buttons";
 
 export interface FieldDef {
   key: string;
@@ -194,6 +194,7 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "response_mode", type: "select", options: ["node", "reply"], required: true },
       { key: "target_node_key", type: "text" },
       { key: "reply_text", type: "textarea" },
+      { key: "reply_buttons", type: "buttons" },
       { key: "priority", type: "number" },
       ENV, ACTIVE,
     ],
@@ -209,6 +210,24 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "name", type: "text" },
       { key: "tags", type: "text" },
       { key: "wa_opted_out", type: "bool" },
+    ],
+  },
+  "study-sessions": {
+    resource: "study-sessions",
+    columns: ["phone", "started_at", "minutes", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "status", type: "select", options: ["active", "completed", "cancelled"] },
+      { key: "minutes", type: "number" },
+    ],
+  },
+  prayers: {
+    resource: "prayers",
+    columns: ["phone", "prayer_date", "minutes", "in_minyan"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "in_minyan", type: "bool" },
+      { key: "minutes", type: "number" },
     ],
   },
   questions: {
@@ -236,5 +255,5 @@ export const RESOURCES: Record<string, ResourceConfig> = {
 export const RESOURCE_ORDER = [
   "menu", "messages", "knowledge", "phone-routes", "holidays",
   "auto-messages", "scheduled", "missions", "trivia", "coupons", "raffles",
-  "children", "contacts", "questions", "feedback",
+  "children", "contacts", "study-sessions", "prayers", "questions", "feedback",
 ] as const;

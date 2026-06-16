@@ -20,6 +20,7 @@ import { resolveCreds, type BotEnv, type ReplyButton } from "./wa";
 import { whatsappChannel, type BotChannel } from "./channel";
 import { reportError, errInfo } from "./report-error";
 import { handleGameAction, handleGameText, processReferral } from "./game";
+import { handleTrackingAction, handleTrackingText } from "./tracking";
 import { handleVideoNode, handleVideoAction, handleSearchText } from "./videos";
 import { aiAnswer, type KbEntry } from "./ai-answer";
 
@@ -451,7 +452,10 @@ export async function handleInbound(
     const route = await matchPhoneRoute(orgId, bot.id, env, phone, tags);
     let effectiveRootKey: string | null = null;
     if (route) {
-      if (route.response_mode === "reply") {
+      // A 'reply' route answers free text with a fixed message. Button clicks
+      // (message.buttonId) fall through to the normal engine so a reply's own
+      // buttons can still navigate (their id may be a node_key / nav action).
+      if (route.response_mode === "reply" && !message.buttonId) {
         const buttons = (route.reply_buttons ?? []).map(buttonOf).filter((b): b is ReplyButton => b !== null);
         const body = route.reply_text || "";
         if (buttons.length > 0) await channel.buttons(body, buttons.slice(0, 3));
@@ -459,7 +463,7 @@ export async function handleInbound(
         await logMsg(orgId, bot.id, phone, "OUT", env, buttons.length > 0 ? "buttons" : "text", body, "phone_route");
         return;
       }
-      effectiveRootKey = route.target_node_key || null;
+      if (route.response_mode === "node") effectiveRootKey = route.target_node_key || null;
     }
 
     // Referral credit on first contact via a share deep link ("...הגעתי דרך <phone>").
@@ -468,16 +472,18 @@ export async function handleInbound(
       if (m && m[1] !== phone) await processReferral(bot, env, phone, m[1]);
     }
 
-    // 1. Mid-flow text input (game onboarding / profile edit / reminder / search).
+    // 1. Mid-flow text input (prayer report / game onboarding / search).
     if (text && state.expectedInput) {
-      if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text, channel);
+      if (String(state.expectedInput).startsWith("PRAYER_")) await handleTrackingText(bot, env, phone, text, state, channel);
+      else if (state.expectedInput === "SEARCH") await handleSearchText(bot, env, phone, text, channel);
       else await handleGameText(bot, env, phone, text, state, channel);
       return;
     }
 
-    // 2. Game action (button id or a text that maps to a game action).
+    // 2. Game / tracking action (button id or text that maps to an action).
     const action = message.buttonId ?? text;
     if (action && (await handleGameAction(bot, env, phone, action, channel))) return;
+    if (action && (await handleTrackingAction(bot, env, phone, action, channel))) return;
 
     const nodes = await loadNodes(orgId, bot.id, env);
 
