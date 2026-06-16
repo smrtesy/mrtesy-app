@@ -406,7 +406,7 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   return { result: "needs_claude" };
 }
 
-type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } };
 
 // Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
 // or a low surrogate not preceded by a high one). They arise when a body is
@@ -3397,6 +3397,17 @@ Deno.serve(async (req) => {
     if (reqUrl.searchParams.get("action") === "shadow_eval") {
       if (authHeader !== cronSecret && req.headers.get("x-cron-secret") !== cronSecret) {
         return new Response("Forbidden — admin only", { status: 403 });
+      }
+      // Isolated probe: does the API accept cache_control ttl:"1h" (no beta
+      // header)? One throwaway call — does NOT touch production classify.
+      if (reqUrl.searchParams.get("test_1h") === "1") {
+        const block: SystemBlock[] = [{ type: "text", text: "You are a test harness. ".repeat(40), cache_control: { type: "ephemeral", ttl: "1h" } }];
+        try {
+          const r = await callClaude("claude-sonnet-4-6", block, "Reply with the single word OK.", 10, { component: "shadow_1h_probe" });
+          return new Response(JSON.stringify({ ok: true, ttl_1h_accepted: true, reply: r.text.slice(0, 30) }), { headers: { "Content-Type": "application/json" } });
+        } catch (e) {
+          return new Response(JSON.stringify({ ok: false, ttl_1h_accepted: false, error: String((e as Error).message).slice(0, 240) }), { headers: { "Content-Type": "application/json" } });
+        }
       }
       return await runShadowEval(reqUrl);
     }
