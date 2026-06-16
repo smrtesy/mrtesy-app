@@ -16,7 +16,7 @@ import { emitEvent } from "../../lib/platform";
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef } from "./audience-service";
 import { maybeCompleteCampaign } from "./send-service";
-import { withinSendWindow, matchesCountry, type SendHours } from "./send-window";
+import { withinSendWindow, matchesCountry, tzForPhone, nextOccurrenceOfHourInTz, type SendHours } from "./send-window";
 
 const SMRTBOT_SEND_URL =
   process.env.SMRTBOT_INTERNAL_URL ??
@@ -52,7 +52,7 @@ export async function enqueueCampaignWhatsapp(orgId: string, campaignId: string)
 
   const { data: detail, error: dErr } = await db
     .from("smrtreach_campaign_whatsapp")
-    .select("bot_ref, template, body_text, recipient_cap")
+    .select("bot_ref, template, body_text, recipient_cap, tz_hour")
     .eq("campaign_id", campaignId)
     .maybeSingle();
   if (dErr) throw new Error(dErr.message);
@@ -74,17 +74,27 @@ export async function enqueueCampaignWhatsapp(orgId: string, campaignId: string)
   }
 
   // "Send now" ignores the campaign schedule (rows become due immediately).
+  // Otherwise: a tz_hour sends each recipient at that LOCAL hour in their own
+  // timezone (derived from phone prefix); else the campaign-level scheduled_at.
   const ignoreWindow = campaign.ignore_send_window === true;
-  const scheduledAt = !ignoreWindow && campaign.scheduled_at ? new Date(campaign.scheduled_at as string).toISOString() : null;
-  const rows = recipients.map((r) => ({
-    org_id: orgId,
-    campaign_id: campaignId,
-    channel: "whatsapp",
-    contact_id: r.contact_id,
-    to_address: r.phone as string,
-    status: "pending",
-    scheduled_at: scheduledAt,
-  }));
+  const tzHour = (detail.tz_hour as number | null) ?? null;
+  const campaignScheduled = !ignoreWindow && campaign.scheduled_at ? new Date(campaign.scheduled_at as string) : new Date();
+  const fallbackIso = !ignoreWindow && campaign.scheduled_at ? campaignScheduled.toISOString() : null;
+  const rows = recipients.map((r) => {
+    let scheduledAt = fallbackIso;
+    if (!ignoreWindow && tzHour !== null) {
+      scheduledAt = nextOccurrenceOfHourInTz(tzHour, tzForPhone(r.phone), campaignScheduled).toISOString();
+    }
+    return {
+      org_id: orgId,
+      campaign_id: campaignId,
+      channel: "whatsapp",
+      contact_id: r.contact_id,
+      to_address: r.phone as string,
+      status: "pending",
+      scheduled_at: scheduledAt,
+    };
+  });
   if (rows.length === 0) return 0;
 
   let queued = 0;

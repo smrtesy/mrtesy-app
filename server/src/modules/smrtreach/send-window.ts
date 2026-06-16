@@ -227,6 +227,48 @@ export async function filterEmailByFrequency(
   return { keep, droppedFrequency, droppedCooldown };
 }
 
+// ─── Per-recipient timezone (campaignBroadcast.js parity) ─────
+// Representative IANA timezone by phone dialing prefix, so a campaign can send
+// at a target LOCAL hour for each recipient (e.g. 10:00 their time).
+const TZ_BY_PREFIX: { prefix: string; tz: string }[] = [
+  { prefix: "972", tz: "Asia/Jerusalem" },
+  { prefix: "44", tz: "Europe/London" },
+  { prefix: "33", tz: "Europe/Paris" },
+  { prefix: "49", tz: "Europe/Berlin" },
+  { prefix: "31", tz: "Europe/Amsterdam" },
+  { prefix: "32", tz: "Europe/Brussels" },
+  { prefix: "34", tz: "Europe/Madrid" },
+  { prefix: "39", tz: "Europe/Rome" },
+  { prefix: "1", tz: "America/New_York" }, // US/Canada — representative (Eastern)
+];
+
+/** Representative IANA timezone for a phone, or UTC if unknown. */
+export function tzForPhone(phone: string | null | undefined): string {
+  if (!phone) return "UTC";
+  const digits = phone.replace(/[^0-9]/g, "");
+  // Longest prefix wins (972 before 9, 1 last).
+  const match = [...TZ_BY_PREFIX].sort((a, b) => b.prefix.length - a.prefix.length).find((p) => digits.startsWith(p.prefix));
+  return match?.tz ?? "UTC";
+}
+
+/** Current hour (0-23) in an arbitrary IANA timezone. */
+function hourInTz(tz: string, at: Date): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hour12: false }).format(at);
+  const n = parseInt(h === "24" ? "0" : h, 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+/** Soonest top-of-hour at/after `from` whose local hour in `tz` equals `hour`. */
+export function nextOccurrenceOfHourInTz(hour: number, tz: string, from: Date = new Date()): Date {
+  const base = new Date(from);
+  base.setUTCMinutes(0, 0, 0);
+  for (let i = 0; i < 48; i++) {
+    const test = new Date(base.getTime() + i * 3_600_000);
+    if (test.getTime() >= from.getTime() && hourInTz(tz, test) === hour) return test;
+  }
+  return from;
+}
+
 // ─── Country filter (campaignBroadcast.js parity) ─────────────
 // Matches a normalized phone (E.164 digits, no '+') by dialing prefix.
 const COUNTRY_PREFIXES: Record<string, string[]> = {

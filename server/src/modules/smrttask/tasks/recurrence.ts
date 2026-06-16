@@ -29,7 +29,7 @@
 import { HDate } from "@hebcal/core";
 
 const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
-const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY", "HEBREW_YEARLY"]);
+const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY", "HEBREW_YEARLY", "HEBREW_MONTHLY"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface ParsedRule {
@@ -37,6 +37,7 @@ interface ParsedRule {
   interval: number;            // >= 1
   byday: number[];             // 0=Sun .. 6=Sat — WEEKLY only
   bydayOrdinal: { ordinal: number; weekday: number } | null; // MONTHLY nth weekday
+  bymonthday: number | null;   // MONTHLY day-of-month (1..31)
   count: number | null;        // occurrences incl. the first; null = open-ended
 }
 
@@ -83,9 +84,16 @@ function parseRule(rule: string): ParsedRule | null {
         .filter((i) => i >= 0);
       if (byday.length === 0) return null; // BYDAY given but garbage
     }
-    // BYDAY on DAILY/YEARLY/HEBREW_YEARLY is meaningless — ignore it.
+    // BYDAY on DAILY/YEARLY/HEBREW_* is meaningless — ignore it.
   }
-  return { freq, interval, byday, bydayOrdinal, count };
+
+  let bymonthday: number | null = null;
+  if (parts.BYMONTHDAY !== undefined && freq === "MONTHLY") {
+    const n = parseInt(parts.BYMONTHDAY, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 31) return null;
+    bymonthday = n;
+  }
+  return { freq, interval, byday, bydayOrdinal, bymonthday, count };
 }
 
 /** Light validator for the create/update routes. */
@@ -201,6 +209,23 @@ function stepOnce(rule: string, baseDateStr: string): string | null {
         }
         return null;
       }
+      if (parsed.bymonthday) {
+        // A fixed day-of-month. Skip months that are too short for the day
+        // (e.g. day 31 in a 30-day month) — Google Calendar does the same.
+        let y = base.getUTCFullYear();
+        let m = base.getUTCMonth() + step;
+        for (let i = 0; i < 48; i++) {
+          y += Math.floor(m / 12);
+          m = ((m % 12) + 12) % 12;
+          const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+          if (parsed.bymonthday <= daysInMonth) {
+            const d = new Date(Date.UTC(y, m, parsed.bymonthday));
+            if (d.getTime() > base.getTime()) return toDateOnly(d);
+          }
+          m += step;
+        }
+        return null;
+      }
       const d = new Date(base);
       d.setUTCMonth(d.getUTCMonth() + step);
       return toDateOnly(d);
@@ -209,6 +234,26 @@ function stepOnce(rule: string, baseDateStr: string): string | null {
       const d = new Date(base);
       d.setUTCFullYear(d.getUTCFullYear() + step);
       return toDateOnly(d);
+    }
+    case "HEBREW_MONTHLY": {
+      // Same Hebrew day-of-month, `interval` Hebrew months later. HDate.add
+      // handles month-length and year-boundary (incl. leap Adar) arithmetic.
+      // Anchor on local midnight so the greg() result never drifts a day.
+      const [by, bm, bd] = baseDateStr.slice(0, 10).split("-").map(Number);
+      const localBase = new Date(by, (bm ?? 1) - 1, bd ?? 1);
+      try {
+        const g = new HDate(localBase).add(step, "month").greg();
+        const y = g.getFullYear();
+        const m = String(g.getMonth() + 1).padStart(2, "0");
+        const d = String(g.getDate()).padStart(2, "0");
+        return `${y}-${m}-${d}`;
+      } catch {
+        localBase.setMonth(localBase.getMonth() + step);
+        const y = localBase.getFullYear();
+        const m = String(localBase.getMonth() + 1).padStart(2, "0");
+        const d = String(localBase.getDate()).padStart(2, "0");
+        return `${y}-${m}-${d}`;
+      }
     }
     case "HEBREW_YEARLY": {
       // HDate works in the *local* calendar: HDate(jsDate) reads local Y/M/D and
@@ -249,6 +294,9 @@ function buildCanonical(p: ParsedRule): string {
   }
   if (p.freq === "MONTHLY" && p.bydayOrdinal) {
     parts.push(`BYDAY=${p.bydayOrdinal.ordinal}${WEEKDAY_CODES[p.bydayOrdinal.weekday]}`);
+  }
+  if (p.freq === "MONTHLY" && !p.bydayOrdinal && p.bymonthday) {
+    parts.push(`BYMONTHDAY=${p.bymonthday}`);
   }
   return parts.join(";");
 }

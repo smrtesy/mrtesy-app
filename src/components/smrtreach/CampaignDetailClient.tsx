@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox } from "lucide-react";
+import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox, RefreshCw } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -50,6 +50,15 @@ interface WhatsappDetail {
   recipient_cap: number | null;
   send_hours: { start?: number; end?: number } | null;
   exclude_shabbat: boolean | null;
+  tz_hour: number | null;
+}
+interface WaTemplate {
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  body: string;
+  paramCount: number;
 }
 interface Sender { id: string; email: string; label: string | null }
 interface Bot { id: string; name: string }
@@ -88,10 +97,14 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   });
   const [wa, setWa] = useState<WhatsappDetail>({
     bot_ref: null, template: "", template_lang: "he", template_params: [], body_text: "",
-    recipient_cap: null, send_hours: {}, exclude_shabbat: true,
+    recipient_cap: null, send_hours: {}, exclude_shabbat: true, tz_hour: null,
   });
   const [waMode, setWaMode] = useState<"template" | "text">("template");
   const [paramsText, setParamsText] = useState("");
+  const [waTemplates, setWaTemplates] = useState<WaTemplate[]>([]);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [showTemplateGuide, setShowTemplateGuide] = useState(false);
 
   const [testTo, setTestTo] = useState({ email: "", phone: "" });
   const [logRows, setLogRows] = useState<LogRow[] | null>(null);
@@ -129,6 +142,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           template_lang: detail.whatsapp.template_lang ?? "he", template_params: detail.whatsapp.template_params ?? [],
           body_text: detail.whatsapp.body_text ?? "", recipient_cap: detail.whatsapp.recipient_cap ?? null,
           send_hours: detail.whatsapp.send_hours ?? {}, exclude_shabbat: detail.whatsapp.exclude_shabbat ?? true,
+          tz_hour: detail.whatsapp.tz_hour ?? null,
         });
         setWaMode(detail.whatsapp.template ? "template" : detail.whatsapp.body_text ? "text" : "template");
         setParamsText(detail.whatsapp.template_params?.length ? JSON.stringify(detail.whatsapp.template_params, null, 2) : "");
@@ -154,6 +168,26 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
         .catch(() => setGmailAccounts([]));
     }
   }, [campaign]);
+
+  const loadTemplates = useCallback(async (botRef: string) => {
+    setLoadingTemplates(true);
+    setTemplatesError(null);
+    try {
+      const { templates } = await api<{ templates: WaTemplate[] }>(`/api/bot/bots/${botRef}/wa/templates`);
+      setWaTemplates(templates);
+    } catch (e) {
+      setWaTemplates([]);
+      setTemplatesError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingTemplates(false);
+    }
+  }, []);
+
+  // Auto-load templates whenever a bot is selected.
+  useEffect(() => {
+    if (wa.bot_ref) loadTemplates(wa.bot_ref);
+    else setWaTemplates([]);
+  }, [wa.bot_ref, loadTemplates]);
 
   function sendHoursPayload(h: { start?: number; end?: number } | null): Record<string, number> {
     if (h && typeof h.start === "number" && typeof h.end === "number") return { start: h.start, end: h.end };
@@ -226,6 +260,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           recipient_cap: wa.recipient_cap || null,
           send_hours: sendHoursPayload(wa.send_hours),
           exclude_shabbat: wa.exclude_shabbat,
+          tz_hour: wa.tz_hour,
         },
       });
       toast.success(t("contentSaved"));
@@ -548,20 +583,84 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
           {waMode === "template" ? (
             <>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-sm">
-                  <span className="text-muted-foreground">{t("templateName")}</span>
-                  <Input value={wa.template ?? ""} onChange={(e) => setWa((w) => ({ ...w, template: e.target.value }))} />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span className="text-muted-foreground">{t("templateLang")}</span>
-                  <Input value={wa.template_lang ?? "he"} onChange={(e) => setWa((w) => ({ ...w, template_lang: e.target.value }))} />
-                </label>
+              {!wa.bot_ref ? (
+                <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">{t("selectBotForTemplates")}</p>
+              ) : (
+                <>
+                  {/* Approved templates pulled live from Meta. */}
+                  {(() => {
+                    const approved = waTemplates.filter((x) => x.status === "APPROVED");
+                    const selected = waTemplates.find((x) => x.name === wa.template && x.language === wa.template_lang);
+                    return (
+                      <>
+                        <div className="flex items-end gap-2">
+                          <label className="grid flex-1 gap-1 text-sm">
+                            <span className="text-muted-foreground">{t("templateApproved")}</span>
+                            <Select
+                              value={selected ? `${selected.name}|||${selected.language}` : NONE}
+                              onValueChange={(v) => {
+                                if (v === NONE) return;
+                                const [name, language] = v.split("|||");
+                                setWa((w) => ({ ...w, template: name, template_lang: language }));
+                              }}
+                            >
+                              <SelectTrigger><SelectValue placeholder={t("selectTemplate")} /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={NONE}>{t("selectTemplate")}</SelectItem>
+                                {approved.map((x) => (
+                                  <SelectItem key={`${x.name}|||${x.language}`} value={`${x.name}|||${x.language}`}>
+                                    {x.name} · {x.language} · {x.category}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </label>
+                          <Button type="button" onClick={() => loadTemplates(wa.bot_ref!)} disabled={loadingTemplates} variant="outline" size="icon" title={t("refreshTemplates")}>
+                            {loadingTemplates ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                        {templatesError && <p className="text-xs text-destructive">{t("templatesError")}: {templatesError}</p>}
+                        {!templatesError && approved.length === 0 && !loadingTemplates && (
+                          <p className="text-xs text-muted-foreground">{t("noTemplatesFound")}</p>
+                        )}
+                        {selected && (
+                          <div className="rounded-md bg-muted/40 p-2 text-xs">
+                            <div className="whitespace-pre-wrap text-muted-foreground" dir="auto">{selected.body}</div>
+                            {selected.paramCount > 0 && (
+                              <div className="mt-1 font-medium">{t("templateParamsNeeded", { count: selected.paramCount })}</div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-muted-foreground">{t("templateParams")}</span>
+                    <Textarea value={paramsText} onChange={(e) => setParamsText(e.target.value)} rows={4} dir="ltr" placeholder={t("templateParamsHint")} />
+                  </label>
+                </>
+              )}
+              {/* How to add a new template (collapsible guidance). */}
+              <div className="rounded-md border">
+                <button type="button" onClick={() => setShowTemplateGuide((s) => !s)} className="flex w-full items-center justify-between p-2 text-sm font-medium">
+                  <span>{t("templateGuideTitle")}</span>
+                  <span className="text-muted-foreground">{showTemplateGuide ? "−" : "+"}</span>
+                </button>
+                {showTemplateGuide && (
+                  <div className="space-y-2 border-t p-3 text-xs text-muted-foreground">
+                    <ol className="list-decimal space-y-1 ps-4">
+                      <li>{t("templateGuide1")}</li>
+                      <li>{t("templateGuide2")}</li>
+                      <li>{t("templateGuide3")}</li>
+                      <li>{t("templateGuide4")}</li>
+                      <li>{t("templateGuide5")}</li>
+                    </ol>
+                    <a href="https://business.facebook.com/wa/manage/message-templates/" target="_blank" rel="noopener noreferrer" className="inline-block font-medium text-foreground underline">
+                      {t("openWaManager")}
+                    </a>
+                  </div>
+                )}
               </div>
-              <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">{t("templateParams")}</span>
-                <Textarea value={paramsText} onChange={(e) => setParamsText(e.target.value)} rows={4} dir="ltr" placeholder={t("templateParamsHint")} />
-              </label>
             </>
           ) : (
             <label className="grid gap-1 text-sm">
@@ -576,6 +675,11 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
               <Input type="number" min={0} value={wa.recipient_cap ?? ""} onChange={(e) => setWa((w) => ({ ...w, recipient_cap: e.target.value ? Number(e.target.value) : null }))} />
             </label>
             <HourRange t={t} value={wa.send_hours ?? {}} onChange={(h) => setWa((w) => ({ ...w, send_hours: h }))} />
+            <label className="grid gap-1 text-sm">
+              <span className="text-muted-foreground">{t("tzHour")}</span>
+              <Input type="number" min={0} max={23} value={wa.tz_hour ?? ""} placeholder={t("tzHourHint")}
+                onChange={(e) => setWa((w) => ({ ...w, tz_hour: e.target.value === "" ? null : Number(e.target.value) }))} />
+            </label>
             <div className="flex items-end">
               <Toggle label={t("excludeShabbat")} checked={!!wa.exclude_shabbat} onChange={(v) => setWa((w) => ({ ...w, exclude_shabbat: v }))} />
             </div>

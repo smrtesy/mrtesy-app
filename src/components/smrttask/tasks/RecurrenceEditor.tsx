@@ -65,7 +65,8 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
   const [freq, setFreq] = useState<RecurrenceFreq>("none");
   const [interval, setIntervalN] = useState(1);
   const [weekdays, setWeekdays] = useState<number[]>([]);
-  const [monthlyMode, setMonthlyMode] = useState<"day" | "nth" | "last">("day");
+  const [monthlyMode, setMonthlyMode] = useState<"day" | "nth" | "last" | "hebrew">("day");
+  const [monthDay, setMonthDay] = useState(1);
   const [endsMode, setEndsMode] = useState<"never" | "on" | "after">("never");
   const [endDate, setEndDate] = useState("");
   const [count, setCount] = useState(5);
@@ -76,6 +77,7 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
     setIntervalN(1);
     setWeekdays([]);
     setMonthlyMode("day");
+    setMonthDay(1);
     setEndsMode("never");
     setEndDate("");
     setCount(5);
@@ -88,6 +90,11 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
     if (freq === "weekly" && weekdays.length === 0) {
       setWeekdays([anchor.weekday]);
     }
+    // Seed the day-of-month from the anchor when monthly is first chosen; the
+    // user can then pick any day independently of the due date.
+    if (freq === "monthly") {
+      setMonthDay(anchor.dayOfMonth);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [freq]);
 
@@ -98,26 +105,29 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
   useEffect(() => {
     onChangeRef.current(buildModel());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freq, interval, weekdays, monthlyMode, endsMode, endDate, count, dueDate]);
+  }, [freq, interval, weekdays, monthlyMode, monthDay, endsMode, endDate, count, dueDate]);
 
   function buildModel(): RecurrenceModel {
     if (freq === "none") return { rule: null, until: null };
-    const parts: string[] = [];
-    const withInterval = freq !== "hebrew" && interval > 1;
+    let freqToken: string;
     switch (freq) {
-      case "daily":   parts.push("FREQ=DAILY"); break;
-      case "weekly":  parts.push("FREQ=WEEKLY"); break;
-      case "monthly": parts.push("FREQ=MONTHLY"); break;
-      case "yearly":  parts.push("FREQ=YEARLY"); break;
-      case "hebrew":  parts.push("FREQ=HEBREW_YEARLY"); break;
+      case "daily":   freqToken = "FREQ=DAILY"; break;
+      case "weekly":  freqToken = "FREQ=WEEKLY"; break;
+      case "monthly": freqToken = monthlyMode === "hebrew" ? "FREQ=HEBREW_MONTHLY" : "FREQ=MONTHLY"; break;
+      case "yearly":  freqToken = "FREQ=YEARLY"; break;
+      case "hebrew":  freqToken = "FREQ=HEBREW_YEARLY"; break;
     }
-    if (withInterval) parts.push(`INTERVAL=${interval}`);
+    const parts: string[] = [freqToken];
+    // The Gregorian yearly "hebrew" frequency has no interval control.
+    if (freq !== "hebrew" && interval > 1) parts.push(`INTERVAL=${interval}`);
     if (freq === "weekly" && weekdays.length) {
       parts.push(`BYDAY=${weekdays.slice().sort((a, b) => a - b).map((d) => WEEKDAY_CODES[d]).join(",")}`);
     }
     if (freq === "monthly") {
+      if (monthlyMode === "day")  parts.push(`BYMONTHDAY=${monthDay}`);
       if (monthlyMode === "nth")  parts.push(`BYDAY=${anchor.nth}${WEEKDAY_CODES[anchor.weekday]}`);
       if (monthlyMode === "last") parts.push(`BYDAY=-1${WEEKDAY_CODES[anchor.weekday]}`);
+      // "hebrew" needs no extra segment — the Hebrew day is read from the base date.
     }
     // Ends after N → COUNT (the create route resolves it into recurrence_until).
     if (endsMode === "after" && count >= 1) parts.push(`COUNT=${count}`);
@@ -200,27 +210,47 @@ export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
             </div>
           )}
 
-          {/* Monthly — by day-of-month vs by weekday position */}
+          {/* Monthly — by day-of-month / weekday position / Hebrew date */}
           {freq === "monthly" && (
-            <select
-              value={monthlyMode}
-              onChange={(e) => setMonthlyMode(e.target.value as "day" | "nth" | "last")}
-              className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-              dir="auto"
-            >
-              <option value="day">{t("recur.monthlyByDay", { day: anchor.dayOfMonth })}</option>
-              <option value="nth">
-                {t("recur.monthlyByWeekday", {
-                  weekday: t(`weekdayLong.${anchor.weekday}`),
-                  ord: ordinalLabel(anchor.nth, locale),
-                })}
-              </option>
-              {anchor.isLast && (
-                <option value="last">
-                  {t("recur.monthlyByLastWeekday", { weekday: t(`weekdayLong.${anchor.weekday}`) })}
+            <div className="space-y-2">
+              <select
+                value={monthlyMode}
+                onChange={(e) => setMonthlyMode(e.target.value as "day" | "nth" | "last" | "hebrew")}
+                className="w-full rounded border px-2 py-1.5 text-sm bg-background"
+                dir={locale === "he" ? "rtl" : "ltr"}
+              >
+                <option value="day">{t("recur.monthlyByDayOption")}</option>
+                <option value="nth">
+                  {t("recur.monthlyByWeekday", {
+                    weekday: t(`weekdayLong.${anchor.weekday}`),
+                    ord: ordinalLabel(anchor.nth, locale),
+                  })}
                 </option>
+                {anchor.isLast && (
+                  <option value="last">
+                    {t("recur.monthlyByLastWeekday", { weekday: t(`weekdayLong.${anchor.weekday}`) })}
+                  </option>
+                )}
+                <option value="hebrew">{t("recur.monthlyHebrew")}</option>
+              </select>
+
+              {/* Pick the day-of-month (1..31), independent of the due date. */}
+              {monthlyMode === "day" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">{t("recur.dayLabel")}</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={monthDay}
+                    onChange={(e) => setMonthDay(Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+                    className="w-16"
+                    dir="ltr"
+                  />
+                  <span className="text-sm text-muted-foreground">{t("recur.ofMonth")}</span>
+                </div>
               )}
-            </select>
+            </div>
           )}
 
           {/* Hebrew-date hint */}

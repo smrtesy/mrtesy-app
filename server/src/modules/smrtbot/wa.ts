@@ -45,6 +45,47 @@ export function resolveCreds(bot: BotCreds, env: BotEnv): ResolvedCreds | null {
   return { phoneNumberId, accessToken };
 }
 
+/** A Meta message template, flattened for the smrtReach picker. */
+export interface WaTemplate {
+  name: string;
+  language: string;
+  status: string;      // APPROVED | PENDING | REJECTED | ...
+  category: string;    // MARKETING | UTILITY | AUTHENTICATION
+  body: string;        // BODY component text (with {{1}} placeholders)
+  paramCount: number;  // number of {{n}} placeholders in the body
+}
+
+/**
+ * List the WhatsApp message templates for a WABA from Meta. Read-only; used by
+ * the smrtReach campaign editor to pick an approved template. Needs the WABA id
+ * (whatsapp_business_account) and an access token with whatsapp_business_management.
+ */
+export async function listTemplates(wabaId: string, accessToken: string): Promise<WaTemplate[]> {
+  const url =
+    `https://graph.facebook.com/${META_API_VERSION}/${wabaId}/message_templates` +
+    `?fields=name,language,status,category,components&limit=200&access_token=${encodeURIComponent(accessToken)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new WhatsAppSendError(`Meta message_templates ${resp.status}`, resp.status, detail);
+  }
+  const json = (await resp.json()) as {
+    data?: { name: string; language: string; status: string; category: string; components?: { type: string; text?: string }[] }[];
+  };
+  return (json.data ?? []).map((tpl) => {
+    const body = tpl.components?.find((c) => c.type === "BODY")?.text ?? "";
+    const paramCount = (body.match(/\{\{\s*\d+\s*\}\}/g) ?? []).length;
+    return {
+      name: tpl.name,
+      language: tpl.language,
+      status: tpl.status,
+      category: tpl.category,
+      body,
+      paramCount,
+    };
+  });
+}
+
 // Per-number throttle: timestamp of the last send keyed by phone_number_id.
 const lastSentAt = new Map<string, number>();
 
