@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import Link from "next/link";
-import { Plus, Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3 } from "lucide-react";
+import { Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3, Settings } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -104,6 +104,11 @@ export function CampaignsClient() {
     loadAudiences();
   }, [loadCampaigns, loadAudiences]);
 
+  function openCreate(channel: Channel) {
+    setForm({ name: "", channel, audienceKey: ALL_CONTACTS });
+    setCreateOpen(true);
+  }
+
   async function handleCreate() {
     if (!form.name.trim()) {
       toast.error(t("nameRequired"));
@@ -149,14 +154,24 @@ export function CampaignsClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button asChild variant="ghost" className="gap-2 me-auto">
+          <Link href={`/${locale}/reach/settings`}>
+            <Settings className="h-4 w-4" />
+            {t("settingsLink")}
+          </Link>
+        </Button>
         <Button onClick={toggleDeliverability} variant="outline" className="gap-2" disabled={loadingDeliv}>
           {loadingDeliv ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
           {deliverability ? t("hideDeliverability") : t("deliverability")}
         </Button>
-        <Button onClick={() => setCreateOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          {t("newCampaign")}
+        <Button onClick={() => openCreate("email")} variant="outline" className="gap-2">
+          <Mail className="h-4 w-4" />
+          {t("createEmailCampaign")}
+        </Button>
+        <Button onClick={() => openCreate("whatsapp")} className="gap-2">
+          <MessageCircle className="h-4 w-4" />
+          {t("createWhatsappCampaign")}
         </Button>
       </div>
 
@@ -202,22 +217,26 @@ export function CampaignsClient() {
       ) : (
         <ul className="divide-y rounded-lg border">
           {campaigns.map((c) => (
-            <li key={c.id}>
+            <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-accent">
               <Link
                 href={`/${locale}/reach/campaigns/${c.id}`}
-                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-accent"
+                className="flex min-w-0 flex-1 items-center gap-3"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-muted-foreground">
-                    <ChannelIcon channel={c.channel} />
-                  </span>
-                  <span className="truncate font-medium">{c.name}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">{t(`status.${c.status}` as Parameters<typeof t>[0])}</Badge>
-                  <ChevronLeft className="h-4 w-4 text-muted-foreground rtl:rotate-0 ltr:rotate-180" />
-                </div>
+                <span className="text-muted-foreground">
+                  <ChannelIcon channel={c.channel} />
+                </span>
+                <span className="truncate font-medium">{c.name}</span>
               </Link>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">{t(`status.${c.status}` as Parameters<typeof t>[0])}</Badge>
+                <Button asChild variant="ghost" size="sm" className="gap-1">
+                  <Link href={`/${locale}/reach/campaigns/${c.id}`}>
+                    <BarChart3 className="h-4 w-4" />
+                    <span className="hidden sm:inline">{t("statistics")}</span>
+                  </Link>
+                </Button>
+                <ChevronLeft className="h-4 w-4 text-muted-foreground rtl:rotate-0 ltr:rotate-180" />
+              </div>
             </li>
           ))}
         </ul>
@@ -226,7 +245,9 @@ export function CampaignsClient() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("newCampaign")}</DialogTitle>
+            <DialogTitle>
+              {form.channel === "whatsapp" ? t("createWhatsappCampaign") : t("createEmailCampaign")}
+            </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 py-2">
             <Input
@@ -234,22 +255,6 @@ export function CampaignsClient() {
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
-            <div className="grid gap-1.5">
-              <label className="text-sm text-muted-foreground">{t("channel")}</label>
-              <Select
-                value={form.channel}
-                onValueChange={(v) => setForm((f) => ({ ...f, channel: v as Channel }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="email">{t("channelEmail")}</SelectItem>
-                  <SelectItem value="whatsapp">{t("channelWhatsapp")}</SelectItem>
-                  <SelectItem value="both">{t("channelBoth")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <div className="grid gap-1.5">
               <label className="text-sm text-muted-foreground">{t("audience")}</label>
               <Select

@@ -23,6 +23,7 @@ import {
   CalendarRange,
   Archive,
   Send,
+  Reply,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ const smrtTaskItems = [
   { key: "inboxIncoming", href: "/inbox",    icon: Bell          },
   { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
   { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
+  { key: "whatsappAutoreply", href: "/whatsapp/autoreply", icon: Reply },
   { key: "projects",      href: "/projects", icon: FolderOpen    },
   { key: "knowledge",     href: "/knowledge", icon: BookOpen     },
 ] as const;

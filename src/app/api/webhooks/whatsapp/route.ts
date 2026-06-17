@@ -35,6 +35,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import { runAutoReplies, type IncomingForReply } from "./autoreply";
 
 // We don't need the edge runtime; Node is fine here and lets us use
 // `node:crypto`, `Buffer`, and the full Supabase client without polyfills.
@@ -140,6 +141,7 @@ interface NormalizedMessage {
   fromPhone: string;
   fromName: string;
   toPhone: string;
+  isGroup: boolean;
 }
 
 interface ResolvedConnection {
@@ -587,8 +589,6 @@ function normalizeLive(
         contacts[0]?.profile?.name ??
         "";
 
-  void isGroup;
-
   return {
     meta: m,
     contacts,
@@ -600,6 +600,7 @@ function normalizeLive(
     fromPhone,
     fromName,
     toPhone,
+    isGroup,
   };
 }
 
@@ -632,6 +633,7 @@ function normalizeHistory(
     fromPhone,
     fromName: direction === "outgoing" ? "אני (היסטוריה)" : "",
     toPhone,
+    isGroup: false,
   };
 }
 
@@ -688,6 +690,24 @@ async function processUserBatch(
       await refreshSourceMessageThread(db, userId, chatId);
     } catch (e) {
       errors.push(`refresh thread ${chatId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Selective auto-reply (opt-in, allowlist-only, gated by a master switch).
+  // Live incoming messages only — never during history backfill, never groups,
+  // never bot-flagged senders (already skipped above).
+  if (!isHistoryBatch) {
+    const incoming: IncomingForReply[] = messages
+      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone))
+      .map((m) => ({ sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
+    const phoneNumberId = String(messages[0]?.metadata.phone_number_id ?? "");
+    if (incoming.length > 0 && phoneNumberId) {
+      try {
+        const apiVersion = await getMetaApiVersion(db);
+        await runAutoReplies(db, userId, phoneNumberId, accessToken, apiVersion, incoming);
+      } catch (e) {
+        errors.push(`autoreply: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   }
 

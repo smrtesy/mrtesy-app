@@ -2,7 +2,6 @@ export const dynamic = "force-dynamic";
 
 import { getTranslations } from "next-intl/server";
 import { CampaignsClient } from "@/components/smrtreach/CampaignsClient";
-import { ReachSettingsPanel } from "@/components/smrtreach/ReachSettingsPanel";
 
 export default async function ReachPage() {
   const t = await getTranslations("smrtReach");
@@ -14,7 +13,6 @@ export default async function ReachPage() {
         <p className="text-muted-foreground">{t("subtitle")}</p>
       </div>
       <CampaignsClient />
-      <ReachSettingsPanel />
     </div>
   );
 }

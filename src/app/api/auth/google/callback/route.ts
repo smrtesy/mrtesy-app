@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
@@ -14,6 +15,7 @@ export async function GET(request: Request) {
   // Validate CSRF nonce
   let service: string;
   let redirectTo: string | null = null;
+  let stateOrgId: string | null = null;
   try {
     const stateData = JSON.parse(
       Buffer.from(stateParam, "base64url").toString()
@@ -27,6 +29,7 @@ export async function GET(request: Request) {
     }
     service = stateData.service;
     redirectTo = stateData.redirect || null; // 'settings' when reconnecting
+    stateOrgId = stateData.org_id || null;   // smrtReach inbox: the owning org
     // Clear the nonce cookie
     cookieStore.delete("oauth_state_nonce");
   } catch {
@@ -91,6 +94,101 @@ export async function GET(request: Request) {
     }
   } catch (e) {
     console.warn("[google-callback] userinfo lookup failed:", e);
+  }
+
+  if (service === "reach_gmail") {
+    // Independent smrtReach sending inbox — org-owned, stored via the
+    // service-role admin client (smrtreach_gmail_accounts is service-role only).
+    const admin = createAdminSupabaseClient();
+    const back = (q: string) => NextResponse.redirect(`${origin}/${locale}/reach/settings?${q}`);
+    if (!admin) return back("error=server");
+
+    // Resolve the owning org from state (the subdomain cookie), but ONLY trust
+    // it if the authenticated user actually belongs to that org — otherwise a
+    // forged smrt_org_id cookie could write an inbox into someone else's org
+    // (this table is service-role and bypasses RLS). Fall back to the user's
+    // first membership.
+    let resolvedOrg: string | null = null;
+    if (stateOrgId) {
+      const { data: mem } = await admin
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", user.id)
+        .eq("org_id", stateOrgId)
+        .maybeSingle();
+      if (mem) resolvedOrg = stateOrgId;
+    }
+    if (!resolvedOrg) {
+      const { data: m } = await admin
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", user.id)
+        .order("joined_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      resolvedOrg = (m?.org_id as string) ?? null;
+    }
+    if (!resolvedOrg) return back("error=no_org");
+
+    // Without a refresh token we can't send long-term (Google omits it when the
+    // user already granted without prompt=consent — we force consent, so this
+    // is rare, but guard anyway).
+    if (!tokens.refresh_token) return back("error=no_refresh");
+
+    const inbox = connectedEmail.toLowerCase();
+
+    // Master-list sender row (provider gmail), one per org+email.
+    const { data: senderRow, error: senderErr } = await admin
+      .from("smrtreach_senders")
+      .upsert(
+        { org_id: resolvedOrg, created_by: user.id, email: inbox, provider: "gmail" },
+        { onConflict: "org_id,email" },
+      )
+      .select("id")
+      .single();
+    if (senderErr || !senderRow) return back("error=save");
+
+    // Create or rotate the Vault secret holding the refresh token.
+    const { data: existingAcct } = await admin
+      .from("smrtreach_gmail_accounts")
+      .select("refresh_token_secret_id")
+      .eq("org_id", resolvedOrg)
+      .eq("email", inbox)
+      .maybeSingle();
+
+    let secretId: string | null = (existingAcct?.refresh_token_secret_id as string | null) ?? null;
+    if (secretId) {
+      await admin.rpc("vault_update_secret", { secret_id: secretId, new_secret: tokens.refresh_token });
+    } else {
+      const { data: created } = await admin.rpc("vault_create_secret", {
+        new_secret: tokens.refresh_token,
+        new_name: `reach_gmail_refresh:${resolvedOrg}:${inbox}:${Date.now()}`,
+        new_description: `smrtReach Gmail refresh token for ${inbox}`,
+      });
+      secretId = (created as string | null) ?? null;
+    }
+    if (!secretId) return back("error=save");
+
+    const { error: acctErr } = await admin
+      .from("smrtreach_gmail_accounts")
+      .upsert(
+        {
+          org_id: resolvedOrg,
+          sender_id: senderRow.id as string,
+          created_by: user.id,
+          email: inbox,
+          refresh_token_secret_id: secretId,
+          access_token: tokens.access_token,
+          expires_at: expiresAt,
+          scopes: ["gmail.send"],
+          disabled: false,
+          last_error: null,
+        },
+        { onConflict: "org_id,email" },
+      );
+    if (acctErr) return back("error=save");
+
+    return back("connected=1");
   }
 
   if (service === "gmail_calendar") {
