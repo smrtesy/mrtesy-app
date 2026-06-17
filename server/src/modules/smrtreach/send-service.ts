@@ -20,7 +20,7 @@ import { emitEvent } from "../../lib/platform";
 import { resolveAudience } from "./audience-service";
 import type { AudienceRef } from "./audience-service";
 import { sendEmail, SesNotConfiguredError } from "./ses-client";
-import { sendViaGmail, listOrgGmailAccounts, NoGmailAccountError, GmailQuotaExhaustedError } from "./gmail-client";
+import { sendViaGmail, sendViaReachGmail, listOrgGmailAccounts, NoGmailAccountError, GmailQuotaExhaustedError } from "./gmail-client";
 import { filterDeliverableEmails } from "./email-validator";
 import {
   withinSendWindow,
@@ -161,6 +161,39 @@ function wrapLinks(html: string, campaignId: string, contactId: string): string 
   });
 }
 
+/** A campaign sender with its effective per-campaign budget (alloc). */
+interface AllocSender {
+  id: string;
+  email: string;
+  provider: string;
+  daily_cap: number | null;
+  alloc: number;
+}
+
+/**
+ * Split `total` recipients across the allocated senders proportionally to each
+ * sender's budget, never exceeding a sender's own alloc. Returns a per-sender
+ * count whose sum == total (total is assumed ≤ Σ alloc). The rounding
+ * remainder is handed out to senders that still have spare capacity.
+ */
+function distributeAcrossSenders(allocations: AllocSender[], total: number): number[] {
+  const totalAlloc = allocations.reduce((s, a) => s + a.alloc, 0);
+  if (totalAlloc <= 0 || total <= 0) return allocations.map(() => 0);
+  const targets = allocations.map((a) => Math.min(a.alloc, Math.floor((a.alloc / totalAlloc) * total)));
+  let assigned = targets.reduce((s, n) => s + n, 0);
+  // Distribute the remainder round-robin to senders with remaining capacity.
+  let guard = 0;
+  while (assigned < total && guard < total + allocations.length) {
+    let progressed = false;
+    for (let i = 0; i < allocations.length && assigned < total; i++) {
+      if (targets[i] < allocations[i].alloc) { targets[i]++; assigned++; progressed = true; }
+    }
+    if (!progressed) break;
+    guard++;
+  }
+  return targets;
+}
+
 /**
  * Resolve recipients for a campaign's email channel and enqueue them, honoring
  * country filter, frequency/cooldown gating, the campaign schedule and (when
@@ -191,26 +224,52 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
     .eq("campaign_id", campaignId)
     .maybeSingle();
   if (dErr) throw new Error(dErr.message);
-
-  const provider = (detail?.provider as string) ?? "ses";
-  if (provider === "gmail") {
-    // Gmail provider: the org must have at least one connected Gmail account.
-    const accounts = await listOrgGmailAccounts(orgId);
-    if (accounts.length === 0) {
-      throw new Error("no connected Gmail account — connect Gmail in settings before sending via Gmail");
-    }
-  } else {
-    if (!detail?.sender) throw new Error("campaign has no sender set");
-    // The sender must be one of the org's managed verified senders.
-    const { data: sender } = await db
-      .from("smrtreach_senders")
-      .select("email")
-      .eq("org_id", orgId)
-      .eq("email", detail.sender)
-      .maybeSingle();
-    if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
-  }
   if (!detail) throw new Error("campaign has no email content");
+
+  // Per-campaign sender allocation (the master-list subset + "how many from
+  // each"). When present it supersedes the single detail.sender / provider:
+  // recipients are partitioned across these senders, each capped by its
+  // daily_cap, and the proportional split clamps gracefully when the resolved
+  // audience is smaller than the total allocated budget.
+  const { data: allocRows, error: aErr } = await db
+    .from("smrtreach_campaign_senders")
+    .select("send_count, sender:smrtreach_senders(id, email, provider, daily_cap)")
+    .eq("campaign_id", campaignId)
+    .eq("org_id", orgId);
+  if (aErr) throw new Error(aErr.message);
+
+  const allocations: AllocSender[] = [];
+  for (const r of allocRows ?? []) {
+    const s = r.sender as unknown as { id: string; email: string; provider: string; daily_cap: number | null } | null;
+    if (!s) continue;
+    const cap = s.daily_cap ?? null;
+    const want = (r.send_count as number) ?? 0;
+    const alloc = cap != null ? Math.min(want, cap) : want;
+    if (alloc > 0) allocations.push({ id: s.id, email: s.email, provider: s.provider, daily_cap: cap, alloc });
+  }
+  const useAllocation = allocations.length > 0;
+
+  if (!useAllocation) {
+    // Fallback: single-sender / provider path (no explicit allocation).
+    const provider = (detail.provider as string) ?? "ses";
+    if (provider === "gmail") {
+      // Gmail provider: the org must have at least one connected Gmail account.
+      const accounts = await listOrgGmailAccounts(orgId);
+      if (accounts.length === 0) {
+        throw new Error("no connected Gmail account — connect Gmail in settings before sending via Gmail");
+      }
+    } else {
+      if (!detail.sender) throw new Error("campaign has no sender set");
+      // The sender must be one of the org's managed verified senders.
+      const { data: sender } = await db
+        .from("smrtreach_senders")
+        .select("email")
+        .eq("org_id", orgId)
+        .eq("email", detail.sender)
+        .maybeSingle();
+      if (!sender) throw new Error(`sender "${detail.sender}" is not a verified sender for this org`);
+    }
+  }
 
   let recipients = await resolveAudience(orgId, (campaign.audience ?? {}) as AudienceRef, "email");
   // Drop empty / syntactically-invalid / no-MX addresses before they reach the
@@ -232,6 +291,21 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
   recipients = recipients.filter((r) => !r.contact_id || keep.has(r.contact_id));
   if (recipients.length === 0) return 0;
 
+  // Allocation: assign each recipient to one of the allocated senders. The
+  // allocation IS the send budget — when the audience exceeds Σ alloc only the
+  // budgeted number are enqueued; when it's smaller, the split clamps
+  // proportionally so every recipient is covered.
+  let assignment: AllocSender[] = [];
+  if (useAllocation) {
+    const totalAlloc = allocations.reduce((s, a) => s + a.alloc, 0);
+    const effectiveTotal = Math.min(recipients.length, totalAlloc);
+    const targets = distributeAcrossSenders(allocations, effectiveTotal);
+    for (let s = 0; s < allocations.length; s++) {
+      for (let k = 0; k < targets[s]; k++) assignment.push(allocations[s]);
+    }
+    recipients = recipients.slice(0, assignment.length);
+  }
+
   // "Send now" (ignore_send_window): blast immediately — no per-row schedule,
   // no STO. Otherwise base = campaign.scheduled_at (or now); STO overrides per
   // contact with the soonest occurrence of their best open hour.
@@ -243,11 +317,16 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
     optimal = await optimalSendHours(orgId, contactIds);
   }
 
-  const rows = recipients.map((r) => {
+  // For the fallback (no allocation) SES path, record the single sender on each
+  // row for traceability; Gmail fallback leaves it null (round-robin at send).
+  const fallbackFrom = detail.provider === "gmail" ? null : (detail.sender as string | null) ?? null;
+
+  const rows = recipients.map((r, idx) => {
     let scheduledAt = baseIso;
     if (!ignoreWindow && detail.sto_enabled && r.contact_id && optimal.has(r.contact_id)) {
       scheduledAt = nextOccurrenceOfHour(optimal.get(r.contact_id)!, base).toISOString();
     }
+    const a = useAllocation ? assignment[idx] : null;
     return {
       org_id: orgId,
       campaign_id: campaignId,
@@ -256,6 +335,8 @@ export async function enqueueCampaignEmail(orgId: string, campaignId: string): P
       to_address: r.email as string,
       status: "pending",
       scheduled_at: scheduledAt,
+      sender_id: a ? a.id : null,
+      from_address: a ? a.email : fallbackFrom,
     };
   });
 
@@ -393,9 +474,24 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
     .eq("org_id", orgId)
     .eq("status", "pending")
     .in("id", claimIds)
-    .select("id, campaign_id, contact_id, to_address");
+    .select("id, campaign_id, contact_id, to_address, sender_id, from_address");
   if (error) throw new Error(error.message);
   if (!pending || pending.length === 0) return { sent: 0, failed: 0, remaining: 0 };
+
+  // Per-sender cache (the allocated send identity for a row).
+  const senderCache = new Map<string, { id: string; email: string; provider: string; daily_cap: number | null } | null>();
+  async function resolveSender(id: string) {
+    if (senderCache.has(id)) return senderCache.get(id)!;
+    const { data } = await db
+      .from("smrtreach_senders")
+      .select("id, email, provider, daily_cap")
+      .eq("org_id", orgId).eq("id", id).maybeSingle();
+    const v = data
+      ? { id: data.id as string, email: data.email as string, provider: (data.provider as string) ?? "ses", daily_cap: (data.daily_cap as number | null) ?? null }
+      : null;
+    senderCache.set(id, v);
+    return v;
+  }
 
   let sent = 0;
   let failed = 0;
@@ -403,8 +499,19 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
   for (const row of pending) {
     touchedCampaigns.add(row.campaign_id as string);
     const detail = await getDetail(row.campaign_id as string);
-    if (!detail || (detail.provider !== "gmail" && !detail.from)) {
-      await db.from("smrtreach_queue").update({ status: "failed", error: "missing email detail/sender" }).eq("id", row.id);
+    if (!detail) {
+      await db.from("smrtreach_queue").update({ status: "failed", error: "missing email detail" }).eq("id", row.id);
+      failed++;
+      continue;
+    }
+    // Resolve the sender this row was allocated to (if any). It overrides the
+    // campaign-level provider/from so a single campaign can fan out across
+    // SES + several Gmail inboxes per the allocation.
+    const allocSender = row.sender_id ? await resolveSender(row.sender_id as string) : null;
+    const provider = allocSender ? allocSender.provider : detail.provider;
+    const fromAddress = allocSender ? allocSender.email : ((row.from_address as string | null) ?? detail.from);
+    if (provider !== "gmail" && !fromAddress) {
+      await db.from("smrtreach_queue").update({ status: "failed", error: "missing sender" }).eq("id", row.id);
       failed++;
       continue;
     }
@@ -425,10 +532,15 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       openPixel(campaignId, contactId);
 
     try {
-      const { messageId } =
-        detail.provider === "gmail"
-          ? await sendViaGmail(orgId, { to: row.to_address as string, subject, html, replyTo: detail.replyTo })
-          : await sendEmail({ region: detail.region, from: detail.from, to: row.to_address as string, subject, html, replyTo: detail.replyTo });
+      const to = row.to_address as string;
+      let messageId: string | null;
+      if (provider === "gmail") {
+        messageId = allocSender
+          ? (await sendViaReachGmail(orgId, allocSender, { to, subject, html, replyTo: detail.replyTo })).messageId
+          : (await sendViaGmail(orgId, { to, subject, html, replyTo: detail.replyTo })).messageId;
+      } else {
+        messageId = (await sendEmail({ region: detail.region, from: fromAddress!, to, subject, html, replyTo: detail.replyTo })).messageId;
+      }
       // Check the terminal status write: if it silently failed the row would
       // stick at 'sending' and wedge the campaign's drain check.
       const { error: markErr } = await db
@@ -448,9 +560,12 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       sent++;
     } catch (e) {
       // Gmail daily cap reached: release the row back to pending (retry later,
-      // e.g. tomorrow) WITHOUT logging a failure, and stop this tick's batch.
+      // e.g. tomorrow) WITHOUT logging a failure. With a per-sender allocation,
+      // one capped inbox must not stop the others — skip just this row;
+      // otherwise (legacy round-robin) every account is capped, so stop.
       if (e instanceof GmailQuotaExhaustedError) {
         await db.from("smrtreach_queue").update({ status: "pending", claimed_at: null }).eq("id", row.id);
+        if (allocSender) continue;
         break;
       }
       const msg = e instanceof Error ? e.message : String(e);
@@ -469,7 +584,10 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       });
       failed++;
       // Stop early on a config error — every row would fail the same way.
-      if (e instanceof SesNotConfiguredError || e instanceof NoGmailAccountError) break;
+      // Exception: a dead ALLOCATED Gmail inbox (NoGmailAccountError) only
+      // affects rows bound to that inbox, so keep processing the rest.
+      if (e instanceof SesNotConfiguredError) break;
+      if (e instanceof NoGmailAccountError && !allocSender) break;
     }
   }
 

@@ -362,7 +362,7 @@ function StageDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{stage ? te("editStage") : te("addStage")}</DialogTitle>
+          <DialogTitle className="text-start">{stage ? te("editStage") : te("addStage")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <label className="block">
@@ -417,7 +417,7 @@ function EpisodeDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{episode ? te("editEpisode") : te("addEpisode")}</DialogTitle>
+          <DialogTitle className="text-start">{episode ? te("editEpisode") : te("addEpisode")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <label className="block">
