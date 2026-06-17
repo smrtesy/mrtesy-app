@@ -11,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
 const FIELDS = [
-  "app_secret",
   "live_wa_phone_number_id", "live_wa_access_token", "live_verify_token", "live_phone_display",
   "test_wa_phone_number_id", "test_wa_access_token", "test_verify_token", "test_phone_display",
 ] as const;
@@ -23,7 +22,6 @@ const META_APPS = "https://developers.facebook.com/apps";
 const META_SYSTEM_USERS = "https://business.facebook.com/settings/system-users";
 const META_WEBHOOKS_DOCS = "https://developers.facebook.com/docs/graph-api/webhooks/getting-started";
 const LINKS: Partial<Record<Field, string>> = {
-  app_secret: META_APPS,
   live_wa_phone_number_id: META_APPS,
   live_wa_access_token: META_SYSTEM_USERS,
   live_verify_token: META_WEBHOOKS_DOCS,
@@ -33,7 +31,6 @@ const LINKS: Partial<Record<Field, string>> = {
 };
 // Hints reuse one key per logical field (live/test share the same guidance).
 const HINT_KEY: Partial<Record<Field, string>> = {
-  app_secret: "hint_app_secret",
   live_wa_phone_number_id: "hint_phone_number_id",
   live_wa_access_token: "hint_access_token",
   live_verify_token: "hint_verify_token",
@@ -54,6 +51,11 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  // App Secrets are write-only (stored in Vault): we only learn whether each is
+  // set, never the value. Inputs hold a new value to save.
+  const [hasSecret, setHasSecret] = useState<{ live: boolean; test: boolean }>({ live: false, test: false });
+  const [secretInput, setSecretInput] = useState<{ live: string; test: string }>({ live: "", test: "" });
+  const [savingSecret, setSavingSecret] = useState<"live" | "test" | null>(null);
 
   const load = useCallback(async () => {
     const { bot } = await api<{ bot: Record<string, string | null> }>(`/api/bot/bots/${botId}`);
@@ -62,12 +64,29 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
     setForm(next);
     setSlug((bot.slug as string | null) ?? "");
     setOrgSlug((bot.org_slug as string | null) ?? "");
+    setHasSecret({ live: !!bot.live_app_secret_id, test: !!bot.test_app_secret_id });
+    setSecretInput({ live: "", test: "" });
     setLoaded(true);
   }, [botId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function saveAppSecret(env: "live" | "test") {
+    const value = secretInput[env].trim();
+    if (!value) return;
+    setSavingSecret(env);
+    try {
+      await api(`/api/bot/bots/${botId}/app-secret`, { method: "PUT", body: { env, value } });
+      toast.success(t("updated"));
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSavingSecret(null);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -181,7 +200,39 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
       <Card>
         <CardContent className="space-y-3 pt-6">
           <h2 className="font-semibold">{t("appSecretTitle")}</h2>
-          {field("app_secret")}
+          <p className="text-xs text-muted-foreground">
+            {t("appSecretVaultHint")}{" "}
+            <a href={META_APPS} target="_blank" rel="noreferrer" className="text-primary underline">{t("directLink")}</a>
+          </p>
+          {(["live", "test"] as const).map((env) => (
+            <div key={env} className="space-y-1">
+              <label className="text-sm font-medium">
+                {env === "live" ? t("appSecretLive") : t("appSecretTest")}{" "}
+                <span className={hasSecret[env] ? "text-green-600" : "text-muted-foreground"}>
+                  {hasSecret[env] ? `· ${t("appSecretSet")}` : `· ${t("appSecretUnset")}`}
+                </span>
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  dir="ltr"
+                  type="password"
+                  className="flex-1"
+                  placeholder={hasSecret[env] ? "•••••••• (" + t("appSecretReplace") + ")" : ""}
+                  value={secretInput[env]}
+                  onChange={(e) => setSecretInput((p) => ({ ...p, [env]: e.target.value }))}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={savingSecret === env || !secretInput[env].trim()}
+                  onClick={() => saveAppSecret(env)}
+                >
+                  {savingSecret === env ? "…" : t("save")}
+                </Button>
+              </div>
+            </div>
+          ))}
         </CardContent>
       </Card>
       <Card>
