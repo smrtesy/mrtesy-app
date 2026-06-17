@@ -1923,6 +1923,8 @@
     "statLeaderboard": "לוח תוצאות",
     "settingsTitle": "הגדרות",
     "settingsAddNew": "הוספת הגדרה",
+    "menuWordsTitle": "מילים שפותחות את התפריט הראשי",
+    "menuWordsHint": "מילים שכשמשתמש שולח אותן הבוט פותח את התפריט הראשי, מופרדות בפסיק. ריק = ברירת מחדל: תפריט, שלום, היי, הי, מה, menu, hi, hello.",
     "viewDiagram": "תרשים",
     "viewTable": "טבלה",
     "menuDiagramHint": "גרירה להזזה · גלילה לזום · אדום = קישור שבור",

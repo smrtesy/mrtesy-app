@@ -167,11 +167,27 @@ function findRootNode(nodes: MenuNode[]): MenuNode | null {
   );
 }
 
-// Words that always (re)open the main menu, mirroring the legacy bot's
-// reserved words. Kept out of tracking's START_WORDS ("התחלתי"/"start").
+// Default words that (re)open the main menu, mirroring the legacy bot's
+// reserved words. Overridable per-bot via the `menu_words` setting.
 const MENU_WORDS = new Set([
   "תפריט", "תפריט ראשי", "היי", "הי", "שלום", "מה", "menu", "hi", "hello",
 ]);
+
+/** Per-bot menu trigger words: the `menu_words` setting (comma/newline
+ *  separated) if set, else the defaults. */
+async function loadMenuWords(orgId: string, botId: string): Promise<Set<string>> {
+  const { data } = await db
+    .from("smrtbot_settings")
+    .select("value")
+    .eq("org_id", orgId)
+    .eq("bot_id", botId)
+    .eq("key", "menu_words")
+    .maybeSingle();
+  const v = (data?.value as string | null)?.trim();
+  if (!v) return MENU_WORDS;
+  const words = v.split(/[\n,]/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return words.length > 0 ? new Set(words) : MENU_WORDS;
+}
 
 /** Effective root for this conversation. A phone-route may override the entry
  *  node for a specific number (rootKey); otherwise fall back to findRootNode. */
@@ -539,12 +555,15 @@ export async function handleInbound(
 
     // 3b. Menu keywords always (re)open the menu — even for returning users
     //     (who would otherwise fall through to FAQ) and in ai_pm mode. Mirrors
-    //     the legacy bot's reserved words (היי/שלום/תפריט/…).
-    if (text && MENU_WORDS.has(text.toLowerCase())) {
-      const root = rootFor(nodes, effectiveRootKey);
-      if (root) {
-        await sendMenuNode(channel, orgId, bot.id, env, phone, root);
-        return;
+    //     the legacy bot's reserved words; configurable per-bot (menu_words).
+    if (text) {
+      const menuTriggers = await loadMenuWords(orgId, bot.id);
+      if (menuTriggers.has(text.toLowerCase())) {
+        const root = rootFor(nodes, effectiveRootKey);
+        if (root) {
+          await sendMenuNode(channel, orgId, bot.id, env, phone, root);
+          return;
+        }
       }
     }
 

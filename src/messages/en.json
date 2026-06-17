@@ -1924,6 +1924,8 @@
     "statLeaderboard": "Leaderboard",
     "settingsTitle": "Settings",
     "settingsAddNew": "Add a setting",
+    "menuWordsTitle": "Words that open the main menu",
+    "menuWordsHint": "Words that, when a user sends them, make the bot open the main menu — comma separated. Empty = default: תפריט, שלום, היי, הי, מה, menu, hi, hello.",
     "viewDiagram": "Diagram",
     "viewTable": "Table",
     "menuDiagramHint": "drag to pan · scroll to zoom · red = broken link",
