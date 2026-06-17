@@ -66,9 +66,12 @@ async function getState(botId: string, phone: string): Promise<State> {
   return (data?.state_json as State) ?? {};
 }
 
-async function setState(botId: string, phone: string, patch: State): Promise<void> {
-  const current = await getState(botId, phone);
-  const updated = { ...current, ...patch, lastInteractionMs: Date.now() };
+// `current` lets a caller that already holds the freshly-loaded state (e.g.
+// handleInbound → routeNode) skip the redundant read before this read-modify-
+// write. Only pass it when no state write has happened since it was loaded.
+async function setState(botId: string, phone: string, patch: State, current?: State): Promise<void> {
+  const base = current ?? (await getState(botId, phone));
+  const updated = { ...base, ...patch, lastInteractionMs: Date.now() };
   const { error } = await db
     .from("smrtbot_wa_users")
     .update({ state_json: updated, last_interaction_at: new Date().toISOString() })
@@ -288,6 +291,7 @@ async function routeNode(
   phone: string,
   nodeKey: string,
   nodes: MenuNode[],
+  state: State,
   rootKey?: string | null,
 ): Promise<boolean> {
   const node = nodes.find((n) => n.node_key === nodeKey);
@@ -302,8 +306,7 @@ async function routeNode(
       return true;
     }
     if (act === "nav_back") {
-      const s = await getState(bot.id, phone);
-      const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? rootFor(nodes, rootKey);
+      const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? rootFor(nodes, rootKey);
       if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
       return true;
     }
@@ -317,7 +320,7 @@ async function routeNode(
     return true;
   }
   // menu (default)
-  await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey });
+  await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey }, state);
   await sendMenuNode(channel, orgId, bot.id, env, phone, node);
   return true;
 }
@@ -522,7 +525,7 @@ export async function handleInbound(
     if (action) {
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
-        await routeNode(channel, orgId, bot, env, phone, action, nodes, effectiveRootKey);
+        await routeNode(channel, orgId, bot, env, phone, action, nodes, state, effectiveRootKey);
         return;
       }
     }
