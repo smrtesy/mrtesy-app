@@ -299,7 +299,14 @@
     "renameContact": "שינוי שם איש הקשר",
     "renameContactPlaceholder": "הכנס שם להצגה",
     "renameContactSave": "שמור",
-    "renameContactCancel": "ביטול"
+    "renameContactCancel": "ביטול",
+    "attachImage": "צרף תמונה",
+    "dropImageHere": "שחרר כאן כדי לצרף תמונה",
+    "imageCaptionPlaceholder": "הוסף כיתוב (לא חובה)…",
+    "sendImage": "שלח תמונה",
+    "removeImage": "הסר תמונה",
+    "unsupportedImageType": "אפשר לשלוח רק תמונות JPEG או PNG",
+    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

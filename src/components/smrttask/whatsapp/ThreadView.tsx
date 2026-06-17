@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -82,6 +82,10 @@ interface Props {
   /** One-shot draft to prefill the composer (e.g. from a smrtTask "reply in
    *  WhatsApp" action surfaced in the side-panel, where there's no ?draft= URL). */
   initialDraft?: string | null;
+  /** One-shot wamid to scroll-to + briefly highlight once messages load — set
+   *  when the user opens this chat from a task's WhatsApp source badge, so we
+   *  land on the exact source message instead of just the bottom of the chat. */
+  focusWamid?: string | null;
   /** Called after the user renames the contact so the parent can refresh
    *  the thread list (so the new name appears in the left pane too). */
   onContactRenamed?: () => void;
@@ -89,16 +93,102 @@ interface Props {
 
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed, initialDraft }: Props) {
+// Outgoing-image limits, mirroring the backend (Meta accepts JPEG/PNG up to
+// 5 MB for the `image` message type). We validate client-side too so a bad
+// paste/drop is rejected instantly with a clear toast instead of a round-trip.
+const IMAGE_ALLOWED_MIME = ["image/jpeg", "image/png"];
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_MAX_COUNT = 10;
+
+/** A locally-staged image waiting to be sent. `url` is an object URL for the
+ *  preview thumbnail and must be revoked when the image is removed/cleared. */
+interface PendingImage {
+  id: string;
+  file: File;
+  url: string;
+}
+
+/** Read a File into a base64 string (no data: prefix — the backend also strips
+ *  one defensively, but we keep the payload clean). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.replace(/^data:[^;]+;base64,/, ""));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed, initialDraft, focusWamid }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Snap to bottom on initial load and when new messages arrive.
+  // Jump to a specific source message (from a task's WhatsApp source badge).
+  // The wamid we're asked to focus, and whether we've already handled it for
+  // this value — one-shot per focus target so a background re-poll doesn't
+  // keep yanking the scroll back. `highlightWamid` drives the transient ring.
+  const [highlightWamid, setHighlightWamid] = useState<string | null>(null);
+  const handledFocusRef = useRef<string | null>(null);
+  // Whether we've already positioned the scroll for this chat (initial
+  // bottom-snap or a focus jump). Gates the "snap to bottom" so it only fires
+  // on first paint or when the user is already near the bottom.
+  const positionedRef = useRef(false);
+
+  // Auto-scroll on new messages, WhatsApp-style: jump to the bottom on first
+  // paint, and afterwards only when the user is already near the bottom.
+  // Anyone reading history further up (incl. someone who just jumped to a
+  // source message) is left in place — a fresh message won't yank them away.
   useEffect(() => {
+    // Nothing to position against yet — don't mark positioned on the empty
+    // pre-load render, or the first real batch would skip the bottom-snap.
+    if (messages.length === 0) return;
+    // While a focus jump is still pending, let the focus effect own the scroll.
+    if (focusWamid && handledFocusRef.current !== focusWamid) return;
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (!positionedRef.current || nearBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
+    positionedRef.current = true;
+  }, [messages.length, focusWamid]);
+
+  // Reset per-chat scroll/focus bookkeeping when the conversation (or the
+  // focus target) changes.
+  useEffect(() => {
+    handledFocusRef.current = null;
+    positionedRef.current = false;
+    setHighlightWamid(null);
+  }, [chatId, focusWamid]);
+
+  useEffect(() => {
+    if (!focusWamid || handledFocusRef.current === focusWamid) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    // The message must be in the loaded window. If it isn't here yet (still
+    // loading / outside the 200-message window), wait for the next render.
+    const el = container.querySelector<HTMLElement>(
+      `[data-wamid="${CSS.escape(focusWamid)}"]`,
+    );
+    if (!el) return;
+    handledFocusRef.current = focusWamid;
+    // Mark positioned so the bottom-snap effect treats this jump as the
+    // initial position and doesn't immediately pull back to the bottom.
+    positionedRef.current = true;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightWamid(focusWamid);
+  }, [focusWamid, messages]);
+  // Auto-clear the highlight ring on its own timer. Kept separate from the
+  // scroll effect so a background message re-poll (which changes `messages`)
+  // can't cancel the timer and leave the ring stuck on.
+  useEffect(() => {
+    if (!highlightWamid) return;
+    const clear = setTimeout(() => setHighlightWamid(null), 2600);
+    return () => clearTimeout(clear);
+  }, [highlightWamid]);
 
   // "Reply to a specific message" state — WhatsApp Desktop UX. Lives here
   // (not in ComposeBox) because the trigger is a per-bubble action while
@@ -108,6 +198,112 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   useEffect(() => {
     setReplyTo(null);
   }, [chatId]);
+
+  // Staged outgoing images (paste / drag-drop / attach button). Lives here
+  // rather than in ComposeBox because the drag-drop target is the whole chat
+  // surface (WhatsApp Desktop drops anywhere over the conversation), while the
+  // preview + send live in the composer below. Cleared on chat switch so a
+  // staged image never leaks into a different conversation.
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepth = useRef(0);
+
+  // Revoke object URLs when images are dropped from the queue or the chat
+  // changes, so we don't leak blob: URLs across a long session.
+  const addImages = useCallback(
+    (files: File[]) => {
+      const imgs = files.filter((f) => f.type.startsWith("image/"));
+      if (imgs.length === 0) return;
+      const accepted: File[] = [];
+      let rejectedType = false;
+      let rejectedSize = false;
+      for (const f of imgs) {
+        if (!IMAGE_ALLOWED_MIME.includes(f.type)) { rejectedType = true; continue; }
+        if (f.size > IMAGE_MAX_BYTES) { rejectedSize = true; continue; }
+        accepted.push(f);
+      }
+      if (rejectedType) toast.error(t("unsupportedImageType"));
+      if (rejectedSize) toast.error(t("imageTooLarge"));
+      if (accepted.length === 0) return;
+      setPendingImages((curr) => {
+        const room = Math.max(0, IMAGE_MAX_COUNT - curr.length);
+        const next = accepted.slice(0, room).map((file) => ({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+          url: URL.createObjectURL(file),
+        }));
+        return [...curr, ...next];
+      });
+    },
+    [t],
+  );
+
+  const removeImage = useCallback((id: string) => {
+    setPendingImages((curr) => {
+      const target = curr.find((p) => p.id === id);
+      if (target) URL.revokeObjectURL(target.url);
+      return curr.filter((p) => p.id !== id);
+    });
+  }, []);
+
+  const clearImages = useCallback(() => {
+    setPendingImages((curr) => {
+      for (const p of curr) URL.revokeObjectURL(p.url);
+      return [];
+    });
+  }, []);
+
+  // Drop staged images (and revoke their preview URLs) whenever the chat
+  // switches. Uses the functional updater so it doesn't depend on the array.
+  useEffect(() => {
+    setPendingImages((curr) => {
+      for (const p of curr) URL.revokeObjectURL(p.url);
+      return [];
+    });
+    dragDepth.current = 0;
+    setDragActive(false);
+  }, [chatId]);
+
+  // Final safety net: revoke any remaining preview URLs on unmount.
+  useEffect(() => {
+    return () => {
+      setPendingImages((curr) => {
+        for (const p of curr) URL.revokeObjectURL(p.url);
+        return curr;
+      });
+    };
+  }, []);
+
+  // Drag-and-drop over the whole chat surface (WhatsApp Desktop UX). We track
+  // enter/leave depth so the overlay doesn't flicker as the cursor moves over
+  // child elements. Only armed inside the 24h window — drops are ignored
+  // otherwise since sending is disabled.
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!withinWindow) return;
+    if (!Array.from(e.dataTransfer.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragActive(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!withinWindow) return;
+    if (!Array.from(e.dataTransfer.types ?? []).includes("Files")) return;
+    e.preventDefault();
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!withinWindow) return;
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragActive(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!withinWindow) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length > 0) addImages(files);
+  };
 
   // Build a lookup for reactions: target_wamid → reaction emojis.
   // We keep at most one reaction per direction (matches WhatsApp UX:
@@ -253,7 +449,24 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   }, [messages]);
 
   return (
-    <div className="flex h-full flex-col rounded-lg border bg-card overflow-hidden">
+    <div
+      className="relative flex h-full flex-col rounded-lg border bg-card overflow-hidden"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Drag-and-drop overlay — shown while a file is dragged over the chat
+          (WhatsApp Desktop UX). Pointer-events stay off so the underlying drag
+          events keep firing on the chat surface, not on the overlay. */}
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-primary/10 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-primary bg-card/90 px-8 py-6 text-primary shadow-lg">
+            <ImagePlus className="h-8 w-8" />
+            <p className="text-sm font-medium">{t("dropImageHere")}</p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center gap-2 border-b bg-muted/40 p-2">
         <IconButton label={t("back")} color="neutral" className="md:hidden" onClick={onBack}>
@@ -352,6 +565,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
               )}
               <MessageBubble
                 message={m}
+                highlighted={highlightWamid === m.wamid}
                 reactions={reactionsByTarget.get(m.wamid) ?? []}
                 quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
                 relatedTasks={tasksByMessageId.get(m.id) ?? []}
@@ -386,6 +600,10 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         onClearReply={() => setReplyTo(null)}
         initialDraft={initialDraft}
         onSent={onMessageSent}
+        pendingImages={pendingImages}
+        onAddImages={addImages}
+        onRemoveImage={removeImage}
+        onClearImages={clearImages}
       />
     </div>
   );
@@ -407,6 +625,10 @@ function ComposeBox({
   onClearReply,
   initialDraft,
   onSent,
+  pendingImages,
+  onAddImages,
+  onRemoveImage,
+  onClearImages,
 }: {
   chatId: string;
   withinWindow: boolean;
@@ -419,12 +641,20 @@ function ComposeBox({
   /** One-shot prefill (from the side-panel; the full page uses ?draft=). */
   initialDraft?: string | null;
   onSent?: () => void;
+  /** Images staged for sending (paste / drag-drop / attach). Owned by the
+   *  parent ThreadView so the drag-drop target can be the whole chat surface. */
+  pendingImages: PendingImage[];
+  onAddImages: (files: File[]) => void;
+  onRemoveImage: (id: string) => void;
+  onClearImages: () => void;
 }) {
   const t = useTranslations("whatsappPage");
   const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasImages = pendingImages.length > 0;
 
   // Focus the composer the moment the user picks a message to reply to,
   // so they can start typing immediately (WhatsApp Desktop behaviour).
@@ -669,8 +899,87 @@ function ComposeBox({
     sendMessage(suggestion);
   }
 
+  // Send each staged image as its own Meta `image` message. The composer text
+  // rides along as the caption on the FIRST image only (mirrors WhatsApp's
+  // single-caption-per-album behaviour); the rest go captionless. Optimistic:
+  // clear the queue + text immediately so the operator can keep working while
+  // the uploads finish in the background.
+  async function sendImages() {
+    if (!withinWindow) {
+      toast.error(t("windowClosedShort"));
+      return;
+    }
+    if (pendingImages.length === 0) return;
+    const imgs = pendingImages;
+    const caption = text.trim();
+    onClearReply();
+    setSending(true);
+    // Track which staged images actually made it out. On a mid-batch failure
+    // we drop only those from the queue and keep the rest staged (with the
+    // caption intact) so the operator can retry — rather than silently losing
+    // images that never sent.
+    const sentIds: string[] = [];
+    try {
+      // Sequential on purpose — images must arrive in the order the user
+      // staged them, so we await each send before starting the next.
+      for (let i = 0; i < imgs.length; i++) {
+        const base64 = await fileToBase64(imgs[i].file);
+        await api("/api/whatsapp/messages/send-image", {
+          method: "POST",
+          body: {
+            to_phone: chatId,
+            image_base64: base64,
+            mime_type: imgs[i].file.type,
+            filename: imgs[i].file.name,
+            ...(i === 0 && caption ? { caption } : {}),
+          },
+        });
+        sentIds.push(imgs[i].id);
+      }
+      // Full success — clear the composer + queue.
+      setText("");
+      setSuggestion(null);
+      setEnglishApproved(false);
+      lastCheckedRef.current = "";
+      onClearImages();
+      onSent?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      // Remove the ones that did send; leave the remainder staged for retry.
+      for (const id of sentIds) onRemoveImage(id);
+      if (sentIds.length > 0) onSent?.();
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleSend() {
+    // Guard the keyboard path too: the Send button is disabled while sending,
+    // but Enter bypasses it. sendImages keeps the queue populated during
+    // upload (for retry), so without this a second Enter would re-send the
+    // same images in a parallel loop.
+    if (sending) return;
+    if (hasImages) {
+      await sendImages();
+      return;
+    }
     await sendMessage(text, { restoreOnFail: true });
+  }
+
+  // Pull image files out of a paste event (screenshots, copied pictures). When
+  // an image is present we consume the paste so the (usually empty) text part
+  // doesn't also land in the textarea.
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!withinWindow) return;
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const files = items
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length > 0) {
+      e.preventDefault();
+      onAddImages(files);
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -783,7 +1092,56 @@ function ComposeBox({
         </div>
       )}
 
+      {/* Staged-image preview strip — thumbnails of pasted/dropped/attached
+          images, each with an X to drop it. The textarea below doubles as the
+          caption (applied to the first image on send). */}
+      {hasImages && (
+        <div className="flex flex-wrap gap-2 rounded border bg-muted/40 p-2">
+          {pendingImages.map((img) => (
+            <div key={img.id} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border bg-card">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img.url} alt={img.file.name} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                onClick={() => onRemoveImage(img.id)}
+                className="absolute end-0.5 top-0.5 rounded-full bg-background/90 p-0.5 text-muted-foreground shadow hover:bg-background"
+                aria-label={t("removeImage")}
+                title={t("removeImage")}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-2 items-end">
+        {/* Hidden file input behind the attach button — the primary path on
+            mobile (and a fallback to paste/drag on desktop). */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={IMAGE_ALLOWED_MIME.join(",")}
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            if (files.length > 0) onAddImages(files);
+            // Reset so re-picking the same file fires onChange again.
+            e.target.value = "";
+          }}
+        />
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          disabled={!withinWindow || transcribing}
+          onClick={() => fileInputRef.current?.click()}
+          aria-label={t("attachImage")}
+          title={t("attachImage")}
+        >
+          <ImagePlus className="h-4 w-4" />
+        </Button>
         <Button
           type="button"
           size="icon"
@@ -800,7 +1158,14 @@ function ComposeBox({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={withinWindow ? t("composePlaceholder") : t("composeDisabled")}
+          onPaste={handlePaste}
+          placeholder={
+            !withinWindow
+              ? t("composeDisabled")
+              : hasImages
+                ? t("imageCaptionPlaceholder")
+                : t("composePlaceholder")
+          }
           disabled={!withinWindow || transcribing}
           dir={dir}
           rows={1}
@@ -809,9 +1174,9 @@ function ComposeBox({
         <Button
           type="button"
           onClick={handleSend}
-          disabled={!withinWindow || !text.trim()}
+          disabled={!withinWindow || sending || (!text.trim() && !hasImages)}
           size="icon"
-          aria-label={t("send")}
+          aria-label={hasImages ? t("sendImage") : t("send")}
         >
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
@@ -842,6 +1207,7 @@ const QUICK_EMOJIS = ["❤️", "👍", "😂", "😮", "😢", "🙏"] as const
 
 function MessageBubble({
   message,
+  highlighted,
   reactions,
   quotedMessage,
   relatedTasks,
@@ -851,6 +1217,8 @@ function MessageBubble({
   onReply,
 }: {
   message: Message;
+  /** Transiently ringed when the user jumped here from a task source badge. */
+  highlighted: boolean;
   reactions: Array<{ emoji: string; direction: string }>;
   /** The original message this one replies to, if it's in the loaded thread. */
   quotedMessage?: Message;
@@ -942,7 +1310,7 @@ function MessageBubble({
   const flexAlign = msgDir === "rtl" ? "justify-end" : "justify-start";
 
   return (
-    <div className={`group flex flex-col ${flexAlign}`}>
+    <div className={`group flex flex-col ${flexAlign}`} data-wamid={message.wamid}>
       <div className={`relative flex items-center gap-1 ${flexAlign}`}>
         {/* React button — hidden by default, appears on hover. Placed on
             the OPPOSITE edge of the bubble's alignment so it doesn't crowd
@@ -964,11 +1332,11 @@ function MessageBubble({
         )}
         <div
           dir={msgDir}
-          className={`max-w-[80%] rounded-lg px-3 py-1.5 text-sm shadow-sm ${
+          className={`max-w-[80%] rounded-lg px-3 py-1.5 text-sm shadow-sm transition-shadow ${
             isOutgoing
               ? "bg-status-ok-bg text-foreground"
               : "bg-card text-foreground"
-          }`}
+          } ${highlighted ? "ring-2 ring-primary ring-offset-2 ring-offset-muted" : ""}`}
         >
         {message.from_name && !isOutgoing && (
           <p className="text-[11px] font-medium text-status-ok">{message.from_name}</p>

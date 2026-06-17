@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api/client";
@@ -12,6 +12,8 @@ interface WhatsAppReaderProps {
   initialChatId?: string | null;
   /** One-shot draft to prefill the composer for the seeded chat. */
   initialDraft?: string | null;
+  /** One-shot wamid to scroll-to + highlight when the seeded chat opens. */
+  initialFocusWamid?: string | null;
   /**
    * "split"   = two-pane grid on md+ (list beside chat) — used by the full page.
    * "stacked" = single pane that toggles list ↔ chat at every width — used by
@@ -32,6 +34,7 @@ interface WhatsAppReaderProps {
 export function WhatsAppReader({
   initialChatId = null,
   initialDraft = null,
+  initialFocusWamid = null,
   layout = "split",
   onActiveChatChange,
   className,
@@ -65,20 +68,45 @@ export function WhatsAppReader({
     }
   }, []);
 
-  const loadMessages = useCallback(async (chatId: string) => {
-    setLoadingMessages(true);
-    try {
-      const { messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
-        `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}`,
-      );
-      setMessages(m);
-      setTasks(tk ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
+  // Signatures of the last messages/tasks payloads we committed to state.
+  // The conversation re-polls every 10s; replacing the arrays on every poll
+  // forces every bubble to re-render and re-runs the (sizable) memos in
+  // ThreadView even when nothing changed. Comparing a cheap signature first
+  // lets an unchanged poll be a true no-op — the visible win the user feels
+  // as "faster". Reset on chat switch so the new chat always paints.
+  const messagesSigRef = useRef("");
+  const tasksSigRef = useRef("");
+
+  const loadMessages = useCallback(
+    async (chatId: string, opts: { background?: boolean } = {}) => {
+      // Background polls must never flash the header spinner or block the UI —
+      // only an explicit load (chat switch / send) shows the loading state.
+      if (!opts.background) setLoadingMessages(true);
+      try {
+        const { messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
+          `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}`,
+        );
+        const sig = m
+          .map((x) => `${x.id}:${x.status ?? ""}:${x.reaction_emoji ?? ""}:${x.body_text ?? ""}:${x.media_url ?? ""}`)
+          .join("|");
+        if (sig !== messagesSigRef.current) {
+          messagesSigRef.current = sig;
+          setMessages(m);
+        }
+        const tlist = tk ?? [];
+        const tsig = tlist.map((x) => `${x.id}:${x.status ?? ""}:${x.manually_verified}`).join("|");
+        if (tsig !== tasksSigRef.current) {
+          tasksSigRef.current = tsig;
+          setTasks(tlist);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!opts.background) setLoadingMessages(false);
+      }
+    },
+    [],
+  );
 
   // Optimistically zero the unread badge, ACK the read to the server, then
   // refetch so the green pill clears within one round-trip (not the next poll).
@@ -97,10 +125,23 @@ export function WhatsAppReader({
     [loadThreads],
   );
 
+  // Polling pauses while the tab is hidden (no point hitting the API for a
+  // surface nobody's looking at) and refetches the instant it's foregrounded
+  // again — so coming back to the tab shows fresh messages immediately rather
+  // than after waiting out the next interval.
   useEffect(() => {
     loadThreads();
-    const i = setInterval(loadThreads, 30_000);
-    return () => clearInterval(i);
+    const i = setInterval(() => {
+      if (!document.hidden) loadThreads();
+    }, 30_000);
+    const onVisible = () => {
+      if (!document.hidden) loadThreads();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(i);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadThreads]);
 
   useEffect(() => {
@@ -109,10 +150,22 @@ export function WhatsAppReader({
       setTasks([]);
       return;
     }
+    // New conversation → invalidate the dedup signatures so it always paints.
+    messagesSigRef.current = "";
+    tasksSigRef.current = "";
     loadMessages(selectedChatId);
     markChatRead(selectedChatId);
-    const i = setInterval(() => loadMessages(selectedChatId), 10_000);
-    return () => clearInterval(i);
+    const i = setInterval(() => {
+      if (!document.hidden) loadMessages(selectedChatId, { background: true });
+    }, 10_000);
+    const onVisible = () => {
+      if (!document.hidden) loadMessages(selectedChatId, { background: true });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(i);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [selectedChatId, loadMessages, markChatRead]);
 
   // Visibility classes per layout. "split" keeps the mobile-stacked behaviour
@@ -169,6 +222,8 @@ export function WhatsAppReader({
               // Only the originally-seeded chat gets the prefilled draft —
               // switching to another conversation must start empty.
               initialDraft={selectedChatId === initialChatId ? initialDraft : null}
+              // Same one-shot rule for the "jump to this message" anchor.
+              focusWamid={selectedChatId === initialChatId ? initialFocusWamid : null}
               onContactRenamed={loadThreads}
               onMessageSent={() => {
                 if (selectedChatId) {

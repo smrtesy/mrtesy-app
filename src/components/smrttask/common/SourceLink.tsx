@@ -20,6 +20,9 @@ type SourceRow = {
   /** source_messages PK — needed to open the in-app reader on mobile Gmail */
   id?: string | null;
   source_type: string | null;
+  /** Burst/echo source id (`wa:<chatId>:<wamid>`) — lets us deep-link the
+   *  WhatsApp reader straight to the exact message, not just the chat. */
+  source_id?: string | null;
   source_url: string | null;
   serial_display: string | null;
 };
@@ -65,6 +68,16 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
     // so a malformed URL (e.g. wa.me/+972…) degrades to "open the chat list"
     // rather than silently opening an unknown conversation.
     const phone = ((row.source_url ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
+    // Parse the originating message id from the burst/echo source_id
+    // (`wa:<chatId>:<wamid>`). Legacy thread rows (`wa:<chatId>`) carry no
+    // wamid → we just open the chat. wamids never contain ':' so taking the
+    // tail after the second colon is safe.
+    const sid = row.source_id ?? "";
+    let focusWamid: string | null = null;
+    if (sid.startsWith("wa:")) {
+      const idx = sid.indexOf(":", 3);
+      if (idx > 0) focusWamid = sid.slice(idx + 1) || null;
+    }
     return (
       <button
         type="button"
@@ -72,7 +85,8 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
           if (stopPropagation) e.stopPropagation();
           // Surface the conversation in the docked side-panel — keeps the
           // current list (tasks/inbox/log) in place instead of navigating away.
-          if (phone) waPanel.openChat(phone);
+          // When we know the exact source message, jump straight to it.
+          if (phone) waPanel.openChat(phone, null, focusWamid);
           else waPanel.open();
         }}
         title={`${label} — open in WhatsApp`}

@@ -579,7 +579,7 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
     .select(
       "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
         "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, " +
-        "linked_drive_docs, task_materials, source_messages(id, source_type, source_url, serial_display)",
+        "linked_drive_docs, task_materials, source_messages(id, source_type, source_id, source_url, serial_display)",
     )
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
@@ -1093,7 +1093,7 @@ router.get("/plan-tasks/:id/detail", async (req: Request, res: Response) => {
     .select(
       MY_TASK_FIELDS +
         ", description, task_materials, linked_drive_docs, checklist, " +
-        "source_messages(id, source_type, source_url, serial_display)",
+        "source_messages(id, source_type, source_id, source_url, serial_display)",
     )
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)

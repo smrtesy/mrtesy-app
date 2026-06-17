@@ -299,7 +299,14 @@
     "renameContact": "Rename contact",
     "renameContactPlaceholder": "Enter a display name",
     "renameContactSave": "Save",
-    "renameContactCancel": "Cancel"
+    "renameContactCancel": "Cancel",
+    "attachImage": "Attach image",
+    "dropImageHere": "Drop here to attach an image",
+    "imageCaptionPlaceholder": "Add a caption (optional)…",
+    "sendImage": "Send image",
+    "removeImage": "Remove image",
+    "unsupportedImageType": "Only JPEG or PNG images can be sent",
+    "imageTooLarge": "Image is too large (max 5MB)"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
