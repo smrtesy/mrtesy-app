@@ -4,7 +4,7 @@
  * resolve via t(`f_<key>`) with a fallback to the raw key, so adding an i18n key
  * is optional (technical fields show their column name).
  */
-export type FieldType = "text" | "textarea" | "number" | "bool" | "select";
+export type FieldType = "text" | "textarea" | "number" | "bool" | "select" | "buttons";
 
 export interface FieldDef {
   key: string;
@@ -183,6 +183,72 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "active_reminders", type: "bool" },
     ],
   },
+  "phone-routes": {
+    resource: "phone-routes",
+    columns: ["label", "match_type", "match_value", "response_mode", "priority", "env"],
+    hasEnv: true,
+    fields: [
+      { key: "label", type: "text" },
+      { key: "match_type", type: "select", options: ["phone", "prefix", "tag"], required: true },
+      { key: "match_value", type: "textarea", required: true },
+      { key: "response_mode", type: "select", options: ["node", "reply", "ai_pm"], required: true },
+      { key: "target_node_key", type: "text" },
+      { key: "reply_text", type: "textarea" },
+      { key: "reply_buttons", type: "buttons" },
+      { key: "priority", type: "number" },
+      ENV, ACTIVE,
+    ],
+  },
+  contacts: {
+    resource: "contacts",
+    columns: ["phone", "name", "tags", "last_interaction_at"],
+    // Rows are created by the engine on first contact (UNIQUE bot_id,phone).
+    // Admins edit them here (mainly to set tags for tag-based routing) rather
+    // than create — a manual create would collide with the engine's row.
+    readOnlyCreate: true,
+    fields: [
+      { key: "name", type: "text" },
+      { key: "tags", type: "text" },
+      { key: "wa_opted_out", type: "bool" },
+    ],
+  },
+  "study-sessions": {
+    resource: "study-sessions",
+    columns: ["phone", "started_at", "minutes", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "status", type: "select", options: ["active", "completed", "cancelled"] },
+      { key: "minutes", type: "number" },
+    ],
+  },
+  prayers: {
+    resource: "prayers",
+    columns: ["phone", "prayer_date", "minutes", "in_minyan"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "in_minyan", type: "bool" },
+      { key: "minutes", type: "number" },
+    ],
+  },
+  "pm-projects": {
+    resource: "pm-projects",
+    columns: ["name", "phone", "entry_count", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "name", type: "text" },
+      { key: "description", type: "textarea" },
+      { key: "status", type: "select", options: ["active", "archived"] },
+    ],
+  },
+  "pm-entries": {
+    resource: "pm-entries",
+    columns: ["phone", "type", "summary", "status"],
+    readOnlyCreate: true,
+    fields: [
+      { key: "summary", type: "textarea" },
+      { key: "status", type: "select", options: ["pending", "confirmed", "discarded"] },
+    ],
+  },
   questions: {
     resource: "questions",
     columns: ["phone", "message_text", "status"],
@@ -206,7 +272,8 @@ export const RESOURCES: Record<string, ResourceConfig> = {
 };
 
 export const RESOURCE_ORDER = [
-  "menu", "messages", "missions", "trivia", "knowledge", "holidays",
-  "auto-messages", "scheduled", "coupons", "raffles", "children",
-  "questions", "feedback",
+  "menu", "messages", "knowledge", "phone-routes", "holidays",
+  "auto-messages", "scheduled", "missions", "trivia", "coupons", "raffles",
+  "children", "contacts", "study-sessions", "prayers",
+  "pm-projects", "pm-entries", "questions", "feedback",
 ] as const;

@@ -3404,6 +3404,27 @@ Deno.serve(async (req) => {
       if (authHeader !== cronSecret && req.headers.get("x-cron-secret") !== cronSecret) {
         return new Response("Forbidden — admin only", { status: 403 });
       }
+      // Isolated probe: confirm the API actually creates a 1-HOUR cache (not a
+      // silent 5m downgrade). Two direct calls — cold write, then warm read —
+      // returning the raw usage so we can see ephemeral_1h vs ephemeral_5m.
+      // Does NOT touch production classify.
+      if (reqUrl.searchParams.get("verify_1h") === "1") {
+        const apiKey = Deno.env.get("ANTHROPIC_API_KEY")!;
+        const pad = "You are a prompt-cache verification harness. Respond with only the word OK. ".repeat(120);
+        const mkBody = () => JSON.stringify({
+          model: "claude-sonnet-4-6", max_tokens: 5,
+          system: [{ type: "text", text: pad, cache_control: { type: "ephemeral", ttl: "1h" } }],
+          messages: [{ role: "user", content: "ping" }],
+        });
+        const one = async () => {
+          const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }, body: mkBody() });
+          const d = await r.json();
+          return { status: r.status, usage: d.usage ?? null, error: d.error ?? null };
+        };
+        const write_call = await one();
+        const read_call = await one();
+        return new Response(JSON.stringify({ write_call, read_call }), { headers: { "Content-Type": "application/json" } });
+      }
       return await runShadowEval(reqUrl);
     }
 
