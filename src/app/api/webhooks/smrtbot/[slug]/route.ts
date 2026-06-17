@@ -195,28 +195,29 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     // Read the RAW body once — HMAC must run over the exact bytes Meta signed.
     const raw = await request.text();
 
-    // Authenticate the official bot: Meta signs every POST with
-    // X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret). Each bot is its
-    // own Meta app, so resolve the bot's own app_secret first, then the platform
-    // META_APP_SECRET env. An official bot CANNOT function without its secret, so
-    // require a valid signature: a missing secret (misconfigured / not yet live)
-    // or a bad/absent signature ⇒ drop. This is safe — no working official bot
-    // operates without its secret — and it actually closes the injection hole
-    // rather than relying on the secret being set.
-    // NOTE: app_secret is stored plaintext to match this table's existing
-    // wa_access_token/verify_token columns; moving smrtbot secrets to Vault
-    // (as whatsapp_connections does) is a worthwhile future hardening.
-    const appSecret = bot.app_secret ?? process.env.META_APP_SECRET ?? null;
+    // Optional Meta HMAC verification. Meta signs each POST with
+    // X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret). We verify ONLY
+    // when an App Secret is configured for the bot — if none is set the message
+    // is processed unverified (like the legacy Apps-Script bot, which did no
+    // signature check). Less secure: anyone who knows the callback URL could
+    // POST forged events; set an App Secret to enforce.
+    // NOTE: the table has a single app_secret, while a bot's live/test phone
+    // numbers may belong to different Meta apps with different secrets — so
+    // verification can only ever match one env. Leaving it empty (unverified)
+    // is the simplest way to support both; per-env secrets are a future option.
+    const appSecret = bot.app_secret?.trim() ? bot.app_secret : (process.env.META_APP_SECRET ?? null);
     const sig = request.headers.get("x-hub-signature-256") ?? "";
-    const expected = appSecret
-      ? "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex")
-      : null;
     await logHit(bot.org_id, bot.id, slug, "received", sig ? "signed" : "unsigned");
-    if (!expected || !sig || !timingSafeEqualStr(sig, expected)) {
-      console.warn(`[smrtbot-webhook] missing/invalid signature for ${slug} — rejecting`);
-      await logHit(bot.org_id, bot.id, slug, expected ? "bad_signature" : "no_app_secret", sig ? "sig_present" : "sig_absent");
-      // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
-      return new Response("ok", { status: 200 });
+    if (appSecret) {
+      const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex");
+      if (!sig || !timingSafeEqualStr(sig, expected)) {
+        console.warn(`[smrtbot-webhook] invalid signature for ${slug} — rejecting`);
+        await logHit(bot.org_id, bot.id, slug, "bad_signature", sig ? "sig_present" : "sig_absent");
+        // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
+        return new Response("ok", { status: 200 });
+      }
+    } else {
+      await logHit(bot.org_id, bot.id, slug, "unverified", "no app secret — signature not checked");
     }
 
     const payload = (() => {
