@@ -205,6 +205,8 @@
     "emptyChat": "No messages in this chat",
     "outgoing": "Outgoing",
     "history": "History",
+    "dateToday": "Today",
+    "dateYesterday": "Yesterday",
     "back": "Back",
     "openDocument": "Open document",
     "send": "Send",
