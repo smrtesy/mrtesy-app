@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -338,29 +338,41 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         {visibleMessages.length === 0 && !loading && (
           <p className="text-center text-sm text-muted-foreground py-8">{t("emptyChat")}</p>
         )}
-        {visibleMessages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            reactions={reactionsByTarget.get(m.wamid) ?? []}
-            quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
-            relatedTasks={tasksByMessageId.get(m.id) ?? []}
-            locale={locale}
-            canReact={withinWindow}
-            onReply={() => setReplyTo(m)}
-            onReact={async (emoji) => {
-              try {
-                await api("/api/whatsapp/messages/react", {
-                  method: "POST",
-                  body: { target_wamid: m.wamid, emoji },
-                });
-                onMessageSent?.();
-              } catch (e) {
-                toast.error(e instanceof Error ? e.message : String(e));
-              }
-            }}
-          />
-        ))}
+        {visibleMessages.map((m, i) => {
+          // WhatsApp-style day separators: a centered date pill before the
+          // first message of each new calendar day. Per-message dates live in
+          // the timestamp tooltip below, so the stream stays uncluttered.
+          const prev = i > 0 ? visibleMessages[i - 1] : null;
+          const showDay =
+            !prev || !isSameDay(new Date(prev.received_at), new Date(m.received_at));
+          return (
+            <Fragment key={m.id}>
+              {showDay && (
+                <DaySeparator label={formatDaySeparator(new Date(m.received_at), locale, t)} />
+              )}
+              <MessageBubble
+                message={m}
+                reactions={reactionsByTarget.get(m.wamid) ?? []}
+                quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
+                relatedTasks={tasksByMessageId.get(m.id) ?? []}
+                locale={locale}
+                canReact={withinWindow}
+                onReply={() => setReplyTo(m)}
+                onReact={async (emoji) => {
+                  try {
+                    await api("/api/whatsapp/messages/react", {
+                      method: "POST",
+                      body: { target_wamid: m.wamid, emoji },
+                    });
+                    onMessageSent?.();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+              />
+            </Fragment>
+          );
+        })}
       </div>
 
       {/* Compose box — Meta only allows free-form replies within 24h of the
@@ -1113,7 +1125,7 @@ function MessageBubble({
         )}
 
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span>
+          <span title={ts.toLocaleString(locale === "he" ? "he-IL" : "en-US", { dateStyle: "full", timeStyle: "short" })}>
             {ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
           {message.is_history && (
@@ -1280,6 +1292,50 @@ function taskLinkFor(task: ChatTask, locale: string): string {
     return `/${locale}/tasks?tab=completed&focus=${task.id}`;
   }
   return `/${locale}/tasks?focus=${task.id}`;
+}
+
+/** Centered date pill between messages from different calendar days —
+ *  WhatsApp's day-separator. */
+function DaySeparator({ label }: { label: string }) {
+  return (
+    <div className="flex justify-center py-2">
+      <span className="rounded-full bg-card/90 px-3 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/** Same calendar day in local time. */
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+/** Day-separator label: "Today" / "Yesterday" / weekday (last week) / full
+ *  date (older). Mirrors WhatsApp's grouping. */
+function formatDaySeparator(
+  date: Date,
+  locale: string,
+  t: (key: string, vals?: Record<string, string | number>) => string,
+): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const that = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((today.getTime() - that.getTime()) / 86_400_000);
+  if (diffDays === 0) return t("dateToday");
+  if (diffDays === 1) return t("dateYesterday");
+  const loc = locale === "he" ? "he-IL" : "en-US";
+  if (diffDays > 1 && diffDays < 7) return date.toLocaleDateString(loc, { weekday: "long" });
+  const sameYear = date.getFullYear() === now.getFullYear();
+  return date.toLocaleDateString(loc, {
+    day: "numeric",
+    month: "long",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
 }
 
 function formatLastSeen(date: Date, t: (key: string, vals?: Record<string, string | number>) => string): string {

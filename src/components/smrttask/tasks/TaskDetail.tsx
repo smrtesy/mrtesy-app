@@ -337,34 +337,39 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           )}
         >
-          {/* Sticky header — title, the X, and the source+date chips. ALL
-              action icons live in the bottom row, mirroring the cards. */}
+          {/* Sticky header — the full title gets row 1 on its own; the X and
+              the serial/source/date chips drop to row 2. ALL action icons live
+              in the bottom row, mirroring the cards. */}
           <div className="sticky top-0 z-10 bg-background border-b px-4 py-3 space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <DialogTitle className="text-start text-base flex-1 min-w-0 truncate" dir={dir}>{title}</DialogTitle>
+            {/* Row 1: the full title alone — no truncation, so a long title
+                wraps and stays fully readable. */}
+            <DialogTitle className="text-start text-base" dir={dir}>{title}</DialogTitle>
+            {/* Row 2: serial (T42/G127/…) + source + editable due date — same
+                cluster as on the cards — plus savedFlash and the close X pushed
+                to the trailing edge. The serial is click-to-copy so the user
+                can paste it into chat ("what happened to T42?"). */}
+            <div className="flex items-center gap-2">
+              <div dir="ltr" className="flex min-w-0 items-center gap-1.5">
+                <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
+                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
+                <DueDateChip
+                  deadline={effectiveDeadline(effectiveTask)}
+                  blocked={blocked}
+                  locked={!!effectiveTask.plan_id}
+                  onChange={effectiveTask.plan_id ? undefined : (d) => {
+                    api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: d } })
+                      .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, due_date: d } : p); })
+                      .catch((e) => toast.error((e as Error).message));
+                  }}
+                />
+              </div>
               {savedFlash && (
                 <span className="text-[10px] text-status-ok">{tDetail("savedFlash")}</span>
               )}
+              <div className="flex-1" />
               <IconButton label={tCommon("close")} color="neutral" onClick={handleDialogClose}>
                 <X />
               </IconButton>
-            </div>
-            {/* Serial (T42/G127/…) + source + editable due date — same cluster
-                as on the cards. The serial is click-to-copy so the user can
-                paste it into chat ("what happened to T42?"). */}
-            <div dir="ltr" className="flex items-center gap-1.5">
-              <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
-              {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
-              <DueDateChip
-                deadline={effectiveDeadline(effectiveTask)}
-                blocked={blocked}
-                locked={!!effectiveTask.plan_id}
-                onChange={effectiveTask.plan_id ? undefined : (d) => {
-                  api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: d } })
-                    .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, due_date: d } : p); })
-                    .catch((e) => toast.error((e as Error).message));
-                }}
-              />
             </div>
           </div>
 
