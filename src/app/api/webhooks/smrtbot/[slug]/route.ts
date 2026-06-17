@@ -108,26 +108,26 @@ interface InboundForward {
 }
 
 /** Forward an inbound message to the engine on the Railway server. Resilient:
- *  never throws — the webhook must still ack 200 to Meta. */
+ *  never throws — the webhook must still ack 200 to Meta. Returns the outcome so
+ *  the diagnostic log can show exactly why a forward didn't reach the engine. */
 async function forwardToEngine(
   botId: string,
   env: "test" | "live",
   message: InboundForward,
-): Promise<void> {
+): Promise<{ ok: boolean; detail: string }> {
   const backend = process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL;
   const secret = process.env.SMRTBOT_INTERNAL_SECRET ?? process.env.CRON_SECRET;
-  if (!backend || !secret) {
-    console.error("[smrtbot-webhook] missing BACKEND_URL / internal secret — cannot forward");
-    return;
-  }
+  if (!backend) return { ok: false, detail: "no BACKEND_URL env" };
+  if (!secret) return { ok: false, detail: "no SMRTBOT_INTERNAL_SECRET env" };
   try {
-    await fetch(`${backend}/api/bot/internal/inbound`, {
+    const res = await fetch(`${backend}/api/bot/internal/inbound`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-smrtbot-secret": secret },
       body: JSON.stringify({ bot_id: botId, env, message }),
     });
+    return { ok: res.ok, detail: `HTTP ${res.status}` };
   } catch (e) {
-    console.error("[smrtbot-webhook] forward failed", e instanceof Error ? e.message : String(e));
+    return { ok: false, detail: `fetch error: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -244,15 +244,16 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
           const buttonId =
             m.interactive?.button_reply?.id ?? m.interactive?.list_reply?.id ?? undefined;
           const text = m.text?.body ?? undefined;
-          await logHit(bot.org_id, bot.id, slug, "forwarded", `${m.from}|${m.type ?? "text"}|env=${env}`);
           // Forward to the engine on the Railway server (it persists the
-          // inbound log + runs the conversation flow + sends the reply).
-          await forwardToEngine(bot.id, env, {
+          // inbound log + runs the conversation flow + sends the reply), and
+          // record the forward OUTCOME so a stuck hop is visible in the log.
+          const r = await forwardToEngine(bot.id, env, {
             from: m.from,
             type: m.type ?? "text",
             text,
             buttonId,
           });
+          await logHit(bot.org_id, bot.id, slug, r.ok ? "forwarded_ok" : "forward_failed", `${m.from}|env=${env}|${r.detail}`);
         }
       }
     }
