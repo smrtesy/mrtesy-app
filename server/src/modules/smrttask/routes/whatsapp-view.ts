@@ -398,6 +398,114 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
 const META_API_VERSION = process.env.META_API_VERSION ?? "v21.0";
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+// Outgoing image constraints. Meta's Cloud API documents JPEG and PNG as the
+// supported still-image formats; anything else is rejected at the API anyway,
+// so we fail fast with a clear message. 5 MB is Meta's hard cap for images.
+const SEND_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const SEND_IMAGE_ALLOWED_MIME = new Set(["image/jpeg", "image/png"]);
+
+/**
+ * Refresh (or create) the per-burst source_messages row for an outgoing
+ * WhatsApp message so the smrtTask classifier / dashboards see it on the next
+ * pass. Reads the last 20 messages straight from whatsapp_messages, so the
+ * caller must have inserted the new outgoing row BEFORE calling this. Keyed by
+ * `wa:<chatId>:<wamid>` (one immutable row per burst, mirrors the webhook's
+ * refreshSourceMessageThread). Best-effort: never throws — a stale thread row
+ * is cosmetic, and the webhook echo refreshes it later.
+ */
+async function refreshThreadSourceMessageRow(
+  userId: string,
+  chatId: string,
+  wamid: string,
+  nowIso: string,
+): Promise<void> {
+  try {
+    const { data: lastMsgs } = await db
+      .from("whatsapp_messages")
+      .select("direction, body_text, received_at, from_phone, from_name")
+      .eq("user_id", userId)
+      .eq("chat_id", chatId)
+      .order("received_at", { ascending: false })
+      .limit(20);
+
+    if (!lastMsgs || lastMsgs.length === 0) return;
+
+    const ordered = [...lastMsgs].reverse();
+    const last = ordered[ordered.length - 1];
+    const latestIncoming = [...ordered].reverse().find((m) => m.direction === "incoming");
+    // User-defined name overrides everything else if set.
+    const { data: stateRow } = await db
+      .from("whatsapp_chat_state")
+      .select("custom_name")
+      .eq("user_id", userId)
+      .eq("chat_id", chatId)
+      .maybeSingle();
+    const customName = (stateRow?.custom_name as string | null)?.trim() || null;
+    const chatName =
+      customName ||
+      (latestIncoming?.from_name as string | null) ||
+      (last.from_name as string | null) ||
+      (last.from_phone as string | null) ||
+      chatId;
+    const fromPhone =
+      (latestIncoming?.from_phone as string | null) ||
+      (last.from_phone as string | null) ||
+      chatId;
+    const conversationLines = ordered
+      .map((mm) => {
+        const ts = String(mm.received_at ?? "").slice(0, 16);
+        const dir = String(mm.direction ?? "incoming").toUpperCase();
+        const t = String(mm.body_text ?? "").replace(/\s+/g, " ").trim();
+        return `[${dir} ${ts}] ${t}`;
+      })
+      .join("\n");
+    const rawContent = [
+      `Chat: ${chatName}`,
+      `Phone: ${fromPhone}`,
+      `Group: false`,
+      `\n--- CONVERSATION (last 20 messages) ---`,
+      conversationLines,
+    ].join("\n");
+
+    // One IMMUTABLE source_message per burst, keyed by the sent message's
+    // wamid (wa:<chatId>:<wamid>). The message we just sent is OUTGOING,
+    // stamped as lastDirection so the pipeline defers it as a follow-up.
+    // ignoreDuplicates so the webhook echo of the same wamid is a no-op.
+    const burstSourceId = `wa:${chatId}:${wamid}`;
+    await db.from("source_messages").upsert(
+      {
+        user_id: userId,
+        source_type: "whatsapp",
+        source_id: burstSourceId,
+        sender: chatName,
+        subject: chatName,
+        body_text: (last.body_text as string | null)?.trim().slice(0, 1000) ?? "",
+        raw_content: rawContent.slice(0, 3000),
+        received_at: nowIso,
+        source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
+        reply_to_context: fromPhone,
+        processing_status: "pending",
+        metadata: { chatId, chatName, fromPhone, isGroup: false, lastDirection: "outgoing", lastWamid: wamid },
+      },
+      { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+    );
+    // Supersede any earlier still-pending, unlocked burst row for this chat so
+    // only the newest burst reaches the classifier (coalescing).
+    await db
+      .from("source_messages")
+      .update({ processing_status: "processed", ai_classification: "superseded", processed_at: nowIso })
+      .eq("user_id", userId)
+      .eq("source_type", "whatsapp")
+      .eq("processing_status", "pending")
+      .is("processing_lock_at", null)
+      .filter("metadata->>chatId", "eq", chatId)
+      .lte("received_at", nowIso)
+      .neq("source_id", burstSourceId);
+  } catch (e) {
+    console.warn("[whatsapp-send] source_messages refresh failed:", e);
+  }
+}
+
 router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Response) => {
   const { to_phone, text, reply_to_wamid } = (req.body ?? {}) as {
     to_phone?: string;
@@ -524,101 +632,198 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   );
 
   // Refresh the source_messages thread row so Part 3 / dashboards see the
-  // new message right away. Same shape part2-whatsapp used to produce.
-  // (We don't fail the send response if this errors — the row is in
-  // whatsapp_messages already and the webhook echo will refresh later.)
-  try {
-    const { data: lastMsgs } = await db
-      .from("whatsapp_messages")
-      .select("direction, body_text, received_at, from_phone, from_name")
-      .eq("user_id", req.user!.id)
-      .eq("chat_id", chatId)
-      .order("received_at", { ascending: false })
-      .limit(20);
+  // new message right away. Best-effort — the row is already in
+  // whatsapp_messages and the webhook echo will refresh later.
+  await refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
 
-    if (lastMsgs && lastMsgs.length > 0) {
-      const ordered = [...lastMsgs].reverse();
-      const last = ordered[ordered.length - 1];
-      const latestIncoming = [...ordered]
-        .reverse()
-        .find((m) => m.direction === "incoming");
-      // User-defined name overrides everything else if set.
-      const { data: stateRow } = await db
-        .from("whatsapp_chat_state")
-        .select("custom_name")
-        .eq("user_id", req.user!.id)
-        .eq("chat_id", chatId)
-        .maybeSingle();
-      const customName = (stateRow?.custom_name as string | null)?.trim() || null;
-      const chatName =
-        customName ||
-        (latestIncoming?.from_name as string | null) ||
-        (last.from_name as string | null) ||
-        (last.from_phone as string | null) ||
-        chatId;
-      const fromPhone =
-        (latestIncoming?.from_phone as string | null) ||
-        (last.from_phone as string | null) ||
-        chatId;
-      const conversationLines = ordered
-        .map((mm) => {
-          const ts = String(mm.received_at ?? "").slice(0, 16);
-          const dir = String(mm.direction ?? "incoming").toUpperCase();
-          const t = String(mm.body_text ?? "").replace(/\s+/g, " ").trim();
-          return `[${dir} ${ts}] ${t}`;
-        })
-        .join("\n");
-      const rawContent = [
-        `Chat: ${chatName}`,
-        `Phone: ${fromPhone}`,
-        `Group: false`,
-        `\n--- CONVERSATION (last 20 messages) ---`,
-        conversationLines,
-      ].join("\n");
+  return res.json({ ok: true, wamid });
+});
 
-      // One IMMUTABLE source_message per burst, keyed by the sent message's
-      // wamid (wa:<chatId>:<wamid>) — mirrors refreshSourceMessageThread() in
-      // the webhook so the send path and the inbound path stay consistent. The
-      // message we just sent is OUTGOING, stamped as lastDirection so the
-      // pipeline defers it as a follow-up (driven by real direction, not a
-      // guessed thread state). ignoreDuplicates so the webhook echo of the same
-      // wamid is a no-op.
-      const burstSourceId = `wa:${chatId}:${wamid}`;
-      await db.from("source_messages").upsert(
-        {
-          user_id: req.user!.id,
-          source_type: "whatsapp",
-          source_id: burstSourceId,
-          sender: chatName,
-          subject: chatName,
-          body_text: text.trim().slice(0, 1000),
-          raw_content: rawContent.slice(0, 3000),
-          received_at: nowIso,
-          source_url: `https://wa.me/${String(fromPhone).replace(/\D/g, "")}`,
-          reply_to_context: fromPhone,
-          processing_status: "pending",
-          metadata: { chatId, chatName, fromPhone, isGroup: false, lastDirection: "outgoing", lastWamid: wamid },
-        },
-        { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
-      );
-      // Supersede any earlier still-pending, unlocked burst row for this chat so
-      // only the newest burst reaches the classifier (coalescing). `lte` (not
-      // `lt`) plus the neq guard mirrors refreshSourceMessageThread(): two bursts
-      // that share a received_at to the second must not both survive as pending.
-      await db
-        .from("source_messages")
-        .update({ processing_status: "processed", ai_classification: "superseded", processed_at: nowIso })
-        .eq("user_id", req.user!.id)
-        .eq("source_type", "whatsapp")
-        .eq("processing_status", "pending")
-        .is("processing_lock_at", null)
-        .filter("metadata->>chatId", "eq", chatId)
-        .lte("received_at", nowIso)
-        .neq("source_id", burstSourceId);
-    }
-  } catch (e) {
-    console.warn("[whatsapp-send] source_messages refresh failed:", e);
+// ── Send an image via Meta Cloud API ─────────────────────────────────────
+//
+// Two-step Meta flow: (1) upload the bytes to /{phone_number_id}/media to get
+// a media id, (2) send a type=image message referencing that id. We also
+// persist the bytes to our own whatsapp-media bucket and insert an outgoing
+// whatsapp_messages row so the image renders inline immediately (the same way
+// incoming images do), without waiting for Meta's echo webhook.
+//
+// Body: { to_phone: string, image_base64: string, mime_type: string,
+//         caption?: string, filename?: string }
+// Returns: { ok: true, wamid: string }
+router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: Response) => {
+  const { to_phone, image_base64, mime_type, caption, filename } = (req.body ?? {}) as {
+    to_phone?: string;
+    image_base64?: string;
+    mime_type?: string;
+    caption?: string;
+    filename?: string;
+  };
+
+  if (!to_phone || typeof to_phone !== "string") {
+    return res.status(400).json({ error: "to_phone is required" });
   }
+  if (!image_base64 || typeof image_base64 !== "string") {
+    return res.status(400).json({ error: "image_base64 is required" });
+  }
+  const mime = (mime_type ?? "").toLowerCase().split(";")[0].trim();
+  if (!SEND_IMAGE_ALLOWED_MIME.has(mime)) {
+    return res.status(400).json({ error: "unsupported_image_type" });
+  }
+
+  // Strip a data: URL prefix if the client sent one, then decode.
+  const cleaned = image_base64.replace(/^data:[^;]+;base64,/, "");
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(cleaned, "base64");
+  } catch {
+    return res.status(400).json({ error: "invalid_base64" });
+  }
+  if (buf.length === 0) return res.status(400).json({ error: "empty_image" });
+  if (buf.length > SEND_IMAGE_MAX_BYTES) {
+    return res.status(400).json({ error: "image_too_large" });
+  }
+
+  const captionText = typeof caption === "string" ? caption.trim() : "";
+
+  // Resolve the caller's active connection + access token (same as text send).
+  const { data: conn, error: connErr } = await db
+    .from("whatsapp_connections")
+    .select("phone_number_id, access_token_secret_id")
+    .eq("user_id", req.user!.id)
+    .is("disconnected_at", null)
+    .maybeSingle();
+  if (connErr) return res.status(500).json({ error: connErr.message });
+  if (!conn) return res.status(404).json({ error: "no_whatsapp_connection" });
+
+  const secretId = conn.access_token_secret_id as string | null;
+  if (!secretId) return res.status(400).json({ error: "access_token_not_configured" });
+
+  const { data: tokenPlain, error: tokenErr } = await db.rpc("vault_read_secret", {
+    secret_id: secretId,
+  });
+  if (tokenErr) return res.status(500).json({ error: `vault: ${tokenErr.message}` });
+  const accessToken = typeof tokenPlain === "string" ? tokenPlain : null;
+  if (!accessToken) return res.status(500).json({ error: "access_token_unreadable" });
+
+  // 24h window — identical rule to the text send path.
+  const chatId = to_phone.replace(/\D/g, "");
+  const { data: lastIncoming } = await db
+    .from("whatsapp_messages")
+    .select("received_at")
+    .eq("user_id", req.user!.id)
+    .eq("chat_id", chatId)
+    .eq("direction", "incoming")
+    .order("received_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lastIncomingAt = lastIncoming?.received_at
+    ? new Date(lastIncoming.received_at).getTime()
+    : null;
+  if (lastIncomingAt === null || Date.now() - lastIncomingAt >= SEND_WINDOW_MS) {
+    return res.status(403).json({
+      error: "outside_24h_window",
+      last_incoming_at: lastIncoming?.received_at ?? null,
+    });
+  }
+
+  // Step 1 — upload the bytes to Meta to obtain a media id.
+  const ext = mime === "image/png" ? "png" : "jpg";
+  const safeName =
+    (filename && /\.[A-Za-z0-9]{1,8}$/.test(filename) ? filename : `image.${ext}`).slice(0, 80);
+  let mediaId: string;
+  try {
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", mime);
+    form.append("file", new Blob([buf], { type: mime }), safeName);
+    const uploadRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/media`,
+      { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: form },
+    );
+    const uploadJson = (await uploadRes.json().catch(() => ({}))) as {
+      id?: string;
+      error?: { message?: string };
+    };
+    if (!uploadRes.ok || !uploadJson.id) {
+      return res
+        .status(502)
+        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+    }
+    mediaId = uploadJson.id;
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+
+  // Step 2 — send the image message referencing the uploaded media id.
+  const payload: Record<string, unknown> = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: chatId,
+    type: "image",
+    image: { id: mediaId, ...(captionText ? { caption: captionText } : {}) },
+  };
+  const sendRes = await fetch(
+    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const sendJson = (await sendRes.json().catch(() => ({}))) as {
+    messages?: Array<{ id?: string }>;
+    error?: { message?: string };
+  };
+  if (!sendRes.ok) {
+    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+  }
+  const wamid = sendJson.messages?.[0]?.id ?? null;
+  if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
+
+  // Persist the bytes to our bucket so the bubble renders inline (mirrors the
+  // webhook's storage convention: "<user_id>/<wamid>.<ext>"). Best-effort —
+  // a storage failure shouldn't fail an already-sent message; the body_text
+  // caption still shows and the row is recorded.
+  const safeBase = wamid.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80);
+  const storagePath = `${req.user!.id}/${safeBase}.${ext}`;
+  let mediaUrl: string | null = null;
+  const { error: uploadErr } = await db.storage
+    .from("whatsapp-media")
+    .upload(storagePath, buf, { contentType: mime, upsert: true });
+  if (uploadErr) {
+    console.warn("[whatsapp-send-image] storage upload failed:", uploadErr.message);
+  } else {
+    mediaUrl = storagePath;
+  }
+
+  // Optimistically insert the outgoing image so the UI sees it immediately.
+  // The webhook echo upserts on (user_id, wamid) → no-op.
+  const nowIso = new Date().toISOString();
+  await db.from("whatsapp_messages").upsert(
+    {
+      user_id: req.user!.id,
+      wamid,
+      chat_id: chatId,
+      direction: "outgoing",
+      from_phone: conn.phone_number_id,
+      from_name: "אני (מהמערכת)",
+      to_phone: chatId,
+      message_type: "image",
+      body_text: captionText || null,
+      media_id: mediaId,
+      media_mime: mime,
+      media_url: mediaUrl,
+      media_filename: safeName,
+      media_size: buf.length,
+      is_reaction: false,
+      is_history: false,
+      received_at: nowIso,
+      raw_payload: { sent_via: "smrttask", api_payload: payload },
+    },
+    { onConflict: "user_id,wamid" },
+  );
+
+  await refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
 
   return res.json({ ok: true, wamid });
 });

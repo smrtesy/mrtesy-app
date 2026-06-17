@@ -121,20 +121,54 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
     headers["X-Org-Id"] = orgId;
   }
 
-  const res = await fetch(`${BACKEND}${path}`, {
-    ...opts,
-    headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
+  // Transparent retry for transient backend blips. The Railway edge proxy
+  // occasionally returns a connection reset / 502-504 with no CORS headers
+  // when the dyno is momentarily busy or restarting — the browser surfaces
+  // that as a `TypeError: Failed to fetch` (net::ERR_FAILED) or a gateway
+  // status. Retrying a SAFE request a couple of times rides out the blip so
+  // it never reaches the UI. Only GETs are retried (idempotent); a real HTTP
+  // error response (4xx, or 5xx that isn't a gateway) is thrown immediately.
+  const method = (opts.method ?? "GET").toUpperCase();
+  const isIdempotent = method === "GET";
+  const maxAttempts = isIdempotent ? 3 : 1;
+  const GATEWAY = new Set([502, 503, 504]);
 
-  const text = await res.text();
-  let json: unknown;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+  let lastNetworkErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${BACKEND}${path}`, {
+        ...opts,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (e) {
+      // Network-level failure (DNS, connection reset, CORS-blocked response).
+      lastNetworkErr = e;
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, attempt * 400));
+        continue;
+      }
+      throw e;
+    }
 
-  if (!res.ok) {
-    const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
-    throw new ApiError(res.status, errMsg, json);
+    if (GATEWAY.has(res.status) && attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, attempt * 400));
+      continue;
+    }
+
+    const text = await res.text();
+    let json: unknown;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+
+    if (!res.ok) {
+      const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
+      throw new ApiError(res.status, errMsg, json);
+    }
+
+    return json as T;
   }
 
-  return json as T;
+  // Exhausted retries on repeated network failures.
+  throw lastNetworkErr ?? new ApiError(0, "Network error");
 }
