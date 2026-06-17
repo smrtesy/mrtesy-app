@@ -57,12 +57,16 @@ export function WhatsAppReader({
     onActiveChatChange?.(selectedChatId);
   }, [selectedChatId, onActiveChatChange]);
 
-  const loadThreads = useCallback(async () => {
+  const loadThreads = useCallback(async (opts: { background?: boolean } = {}) => {
     try {
       const { threads: list } = await api<{ threads: Thread[] }>("/api/whatsapp/threads");
       setThreads(list);
+      setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // A failed background poll keeps the last good list on screen rather
+      // than blanking it with a red banner over a transient blip — the
+      // api() client already retried the request a few times.
+      if (!opts.background) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingThreads(false);
     }
@@ -99,8 +103,12 @@ export function WhatsAppReader({
           tasksSigRef.current = tsig;
           setTasks(tlist);
         }
+        setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        // Same as loadThreads: don't surface a transient background-poll
+        // failure — keep the messages already on screen. Explicit loads
+        // (chat open / after send) still report the error.
+        if (!opts.background) setError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!opts.background) setLoadingMessages(false);
       }
@@ -132,10 +140,10 @@ export function WhatsAppReader({
   useEffect(() => {
     loadThreads();
     const i = setInterval(() => {
-      if (!document.hidden) loadThreads();
+      if (!document.hidden) loadThreads({ background: true });
     }, 30_000);
     const onVisible = () => {
-      if (!document.hidden) loadThreads();
+      if (!document.hidden) loadThreads({ background: true });
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
