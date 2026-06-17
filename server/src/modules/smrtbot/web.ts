@@ -24,7 +24,7 @@ import { reportError, errInfo } from "./report-error";
 const router = Router();
 
 const BOT_FIELDS =
-  "id, org_id, slug, web_enabled, web_env, web_allowed_origins, web_greeting, web_accent_color";
+  "id, org_id, slug, timezone, web_enabled, web_env, web_allowed_origins, web_greeting, web_accent_color";
 
 function secretOk(req: Request): boolean {
   const expected = process.env.SMRTBOT_INTERNAL_SECRET || process.env.CRON_SECRET || "";
