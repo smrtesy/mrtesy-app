@@ -249,6 +249,12 @@ export const RESOURCES: Record<string, ResourceConfig> = {
       { key: "status", type: "select", options: ["pending", "confirmed", "discarded"] },
     ],
   },
+  "webhook-debug": {
+    resource: "webhook-debug",
+    columns: ["created_at", "outcome", "detail", "slug"],
+    readOnlyCreate: true,
+    fields: [],
+  },
   questions: {
     resource: "questions",
     columns: ["phone", "message_text", "status"],
@@ -275,5 +281,5 @@ export const RESOURCE_ORDER = [
   "menu", "messages", "knowledge", "phone-routes", "holidays",
   "auto-messages", "scheduled", "missions", "trivia", "coupons", "raffles",
   "children", "contacts", "study-sessions", "prayers",
-  "pm-projects", "pm-entries", "questions", "feedback",
+  "pm-projects", "pm-entries", "webhook-debug", "questions", "feedback",
 ] as const;

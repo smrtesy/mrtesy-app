@@ -31,6 +31,24 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 type Params = { params: Promise<{ slug: string }> };
 
+/** Best-effort diagnostic log of each webhook hit + outcome (smrtbot_webhook_debug).
+ *  Visible from the bot's "Webhook log" tab so connection issues are debuggable.
+ *  Never throws — diagnostics must not affect the 200 ack. */
+async function logHit(
+  orgId: string | null,
+  botId: string | null,
+  slug: string,
+  outcome: string,
+  detail?: string,
+): Promise<void> {
+  try {
+    const db = createAdminSupabaseClient();
+    if (db) await db.from("smrtbot_webhook_debug").insert({ org_id: orgId, bot_id: botId, slug, outcome, detail: detail ?? null });
+  } catch {
+    /* diagnostic only */
+  }
+}
+
 interface BotRow {
   id: string;
   org_id: string;
@@ -158,7 +176,10 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
   // Always ack 200 — Meta retries for days otherwise. Errors are logged.
   try {
     const bot = await loadBot(slug);
-    if (!bot) return new Response("ok", { status: 200 });
+    if (!bot) {
+      await logHit(null, null, slug, "bot_not_found");
+      return new Response("ok", { status: 200 });
+    }
 
     // This is the Meta Cloud API callback. Only official ('meta'-transport)
     // bots use it; unofficial ('baileys') bots receive messages over their own
@@ -167,6 +188,7 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     // so a forged caller gets no signal), which also closes the forged-payload
     // injection vector for unofficial bots.
     if (bot.transport !== "meta") {
+      await logHit(bot.org_id, bot.id, slug, "not_meta", bot.transport);
       return new Response("ok", { status: 200 });
     }
 
@@ -189,8 +211,10 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     const expected = appSecret
       ? "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex")
       : null;
+    await logHit(bot.org_id, bot.id, slug, "received", sig ? "signed" : "unsigned");
     if (!expected || !sig || !timingSafeEqualStr(sig, expected)) {
       console.warn(`[smrtbot-webhook] missing/invalid signature for ${slug} — rejecting`);
+      await logHit(bot.org_id, bot.id, slug, expected ? "bad_signature" : "no_app_secret", sig ? "sig_present" : "sig_absent");
       // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
       return new Response("ok", { status: 200 });
     }
@@ -220,6 +244,7 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
           const buttonId =
             m.interactive?.button_reply?.id ?? m.interactive?.list_reply?.id ?? undefined;
           const text = m.text?.body ?? undefined;
+          await logHit(bot.org_id, bot.id, slug, "forwarded", `${m.from}|${m.type ?? "text"}|env=${env}`);
           // Forward to the engine on the Railway server (it persists the
           // inbound log + runs the conversation flow + sends the reply).
           await forwardToEngine(bot.id, env, {
