@@ -24,6 +24,20 @@ interface Bot {
 const FIELDS = ["name", "slug", "initials", "timezone", "admin_phones"] as const;
 type Field = (typeof FIELDS)[number];
 
+const TZ_FALLBACK = [
+  "Asia/Jerusalem", "UTC", "America/New_York", "America/Chicago", "America/Los_Angeles",
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Dubai", "Asia/Istanbul",
+];
+function timezoneList(): string[] {
+  try {
+    const sv = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone");
+    if (Array.isArray(sv) && sv.length > 0) return sv;
+  } catch {
+    /* older runtimes — fall back to the curated list */
+  }
+  return TZ_FALLBACK;
+}
+
 export function BotEditForm({ botId }: { botId: string }) {
   const t = useTranslations("smrtBot");
   const [form, setForm] = useState<Record<string, string>>({});
@@ -64,7 +78,7 @@ export function BotEditForm({ botId }: { botId: string }) {
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!loaded) return <p className="text-sm text-muted-foreground">…</p>;
 
-  const field = (f: Field, opts?: { ltr?: boolean }) => (
+  const field = (f: Field, opts?: { ltr?: boolean; hint?: string }) => (
     <div className="space-y-1">
       <label className="text-sm font-medium">{t(`f_${f}`)}</label>
       <Input
@@ -72,6 +86,24 @@ export function BotEditForm({ botId }: { botId: string }) {
         value={form[f] ?? ""}
         onChange={(e) => set(f, e.target.value)}
       />
+      {opts?.hint ? <p className="text-xs text-muted-foreground">{opts.hint}</p> : null}
+    </div>
+  );
+
+  const tzField = () => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">{t("f_timezone")}</label>
+      <select
+        dir="ltr"
+        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        value={form.timezone || "Asia/Jerusalem"}
+        onChange={(e) => set("timezone", e.target.value)}
+      >
+        {timezoneList().map((z) => (
+          <option key={z} value={z}>{z}</option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground">{t("timezoneHint")}</p>
     </div>
   );
 
@@ -81,8 +113,8 @@ export function BotEditForm({ botId }: { botId: string }) {
         {field("name")}
         {field("slug", { ltr: true })}
         {field("initials", { ltr: true })}
-        {field("timezone", { ltr: true })}
-        {field("admin_phones", { ltr: true })}
+        {tzField()}
+        {field("admin_phones", { ltr: true, hint: t("adminPhonesHint") })}
       </CardContent></Card>
 
       <Button onClick={save} disabled={saving}>

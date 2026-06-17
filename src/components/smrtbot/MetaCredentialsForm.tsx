@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Copy } from "lucide-react";
+import { Copy, PlugZap } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
   const [orgSlug, setOrgSlug] = useState<string>("");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const load = useCallback(async () => {
     const { bot } = await api<{ bot: Record<string, string | null> }>(`/api/bot/bots/${botId}`);
@@ -86,6 +87,32 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
       toast.success(t("copied"));
     } catch {
       toast.error("clipboard");
+    }
+  }
+
+  // Same handshake Meta performs: GET the public callback with the verify token
+  // and a random challenge; a correct webhook echoes the challenge verbatim.
+  // Tests the SAVED config (the webhook reads the token from the DB), so save
+  // first. Same-origin fetch, no backend needed.
+  async function testConnection() {
+    const token = (form.live_verify_token || form.test_verify_token || "").trim();
+    if (!callbackUrl) return;
+    if (!token) {
+      toast.error(t("testNoToken"));
+      return;
+    }
+    setTesting(true);
+    try {
+      const nonce = `smrtesy-${Math.random().toString(36).slice(2)}`;
+      const u = `${callbackUrl}?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(token)}&hub.challenge=${encodeURIComponent(nonce)}`;
+      const res = await fetch(u);
+      const body = (await res.text()).trim();
+      if (res.ok && body === nonce) toast.success(t("testOk"));
+      else toast.error(t("testFail"));
+    } catch {
+      toast.error(t("testFail"));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -141,6 +168,13 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">{t("callbackVerifyNote")}</p>
+          <div className="flex items-center gap-2 pt-1">
+            <Button type="button" variant="secondary" size="sm" onClick={testConnection} disabled={testing || !callbackUrl}>
+              <PlugZap className="me-2 h-4 w-4" />
+              {testing ? "…" : t("testConnection")}
+            </Button>
+            <span className="text-xs text-muted-foreground">{t("testHint")}</span>
+          </div>
         </CardContent>
       </Card>
 
