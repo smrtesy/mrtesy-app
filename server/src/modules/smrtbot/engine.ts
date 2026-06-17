@@ -29,6 +29,7 @@ export interface BotRow {
   id: string;
   org_id: string;
   slug: string;
+  timezone?: string | null;
   public_phone_number?: string | null;
   live_phone_display?: string | null;
   wa_phone_number_id?: string | null;

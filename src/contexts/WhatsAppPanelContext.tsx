@@ -38,11 +38,13 @@ interface WhatsAppPanelValue {
   seedChatId: string | null;
   /** One-shot draft to prefill the composer for the seeded chat. */
   seedDraft: string | null;
+  /** One-shot wamid to scroll-to + highlight when the seeded chat opens. */
+  seedFocusWamid: string | null;
   /** Bumped on every open so the reader remounts with fresh seed values. */
   session: number;
   /** Open the panel focused on a specific conversation (optionally with a
-   *  prefilled draft). */
-  openChat: (chatId: string, draft?: string | null) => void;
+   *  prefilled draft and/or a specific message to jump to). */
+  openChat: (chatId: string, draft?: string | null, focusWamid?: string | null) => void;
   /** Open the panel without a target — shows the chat list to pick from. */
   open: () => void;
   close: () => void;
@@ -73,6 +75,7 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
   const [isOpen, setIsOpen] = useState(false);
   const [seedChatId, setSeedChatId] = useState<string | null>(null);
   const [seedDraft, setSeedDraft] = useState<string | null>(null);
+  const [seedFocusWamid, setSeedFocusWamid] = useState<string | null>(null);
   const [session, setSession] = useState(0);
 
   // Sidebar state we collapsed away on open, to restore on close. null = we
@@ -127,9 +130,10 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
   }, []);
 
   const openChat = useCallback(
-    (chatId: string, draft: string | null = null) => {
+    (chatId: string, draft: string | null = null, focusWamid: string | null = null) => {
       setSeedChatId(chatId);
       setSeedDraft(draft);
+      setSeedFocusWamid(focusWamid);
       setSession((s) => s + 1);
       setIsOpen(true);
       takeOverSidebar();
@@ -139,6 +143,7 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
 
   const open = useCallback(() => {
     setSeedDraft(null);
+    setSeedFocusWamid(null);
     setSession((s) => s + 1);
     setIsOpen(true);
     takeOverSidebar();
@@ -155,8 +160,8 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
   }, [isOpen, open, close]);
 
   const value = useMemo<WhatsAppPanelValue>(
-    () => ({ isOpen, seedChatId, seedDraft, session, openChat, open, close, toggle }),
-    [isOpen, seedChatId, seedDraft, session, openChat, open, close, toggle],
+    () => ({ isOpen, seedChatId, seedDraft, seedFocusWamid, session, openChat, open, close, toggle }),
+    [isOpen, seedChatId, seedDraft, seedFocusWamid, session, openChat, open, close, toggle],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

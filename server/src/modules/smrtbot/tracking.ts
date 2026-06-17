@@ -18,6 +18,7 @@ export interface TrackBot {
   id: string;
   org_id: string;
   slug: string;
+  timezone?: string | null;
 }
 
 type State = Record<string, unknown>;
@@ -45,9 +46,28 @@ async function setTrackState(bot: TrackBot, phone: string, patch: State): Promis
   if (error) console.error("[smrtbot/tracking] setTrackState", error.message);
 }
 
-// ── helpers ──────────────────────────────────────────────────
-function fmtTime(d: Date): string {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+// ── helpers (all time math is in the bot's timezone, not the server's) ───────
+function tzOf(bot: TrackBot): string {
+  return bot.timezone || "Asia/Jerusalem";
+}
+
+/** Minutes that `tz` is ahead of UTC at the given instant. */
+function tzOffsetMin(tz: string, date: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(date)) p[part.type] = part.value;
+  const hour = +p.hour === 24 ? 0 : +p.hour; // some runtimes render midnight as "24"
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, hour, +p.minute, +p.second);
+  return Math.round((asUTC - date.getTime()) / 60000);
+}
+
+/** "HH:MM" wall-clock time in `tz`. */
+function fmtTime(d: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 }
 
 function fmtDuration(min: number): string {
@@ -57,23 +77,29 @@ function fmtDuration(min: number): string {
   return m ? `${h} ש׳ ${m} דק׳` : `${h} ש׳`;
 }
 
-/** Parse "7:15" / "07:15" / "7.15" / "7" into a Date today at that time. */
-function parseTime(text: string): Date | null {
+/** "YYYY-MM-DD" for the given instant in `tz` (defaults to now). */
+function todayDateStr(tz: string, base: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(base);
+}
+
+/** UTC instant of local midnight (start of day) in `tz` for the given base day. */
+function startOfDayUtc(tz: string, base: Date = new Date()): Date {
+  const [y, m, d] = todayDateStr(tz, base).split("-").map(Number);
+  const asUTC = Date.UTC(y, m - 1, d, 0, 0, 0);
+  return new Date(asUTC - tzOffsetMin(tz, new Date(asUTC)) * 60000);
+}
+
+/** Parse "7:15"/"7.15"/"7" as a wall-clock time today in `tz` → UTC instant. */
+function parseTime(text: string, tz: string): Date | null {
   const cleaned = (text || "").replace(/[^\d:.]/g, " ").trim();
   const m = cleaned.match(/^(\d{1,2})(?:[:.](\d{1,2}))?$/);
   if (!m) return null;
   const h = Number(m[1]);
   const min = m[2] ? Number(m[2]) : 0;
   if (h > 23 || min > 59) return null;
-  const d = new Date();
-  d.setHours(h, min, 0, 0);
-  return d;
-}
-
-function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const [y, mo, d] = todayDateStr(tz).split("-").map(Number);
+  const asUTC = Date.UTC(y, mo - 1, d, h, min, 0);
+  return new Date(asUTC - tzOffsetMin(tz, new Date(asUTC)) * 60000);
 }
 
 function encouragement(min: number): string {
@@ -85,6 +111,7 @@ function encouragement(min: number): string {
 
 // ── study sessions ───────────────────────────────────────────
 async function startStudy(bot: TrackBot, phone: string, channel: BotChannel): Promise<void> {
+  const tz = tzOf(bot);
   const { data: active } = await db
     .from("smrtbot_study_sessions")
     .select("started_at")
@@ -95,7 +122,7 @@ async function startStudy(bot: TrackBot, phone: string, channel: BotChannel): Pr
     .limit(1)
     .maybeSingle();
   if (active) {
-    await channel.text(`⚠️ כבר יש לך סשן פתוח מ-${fmtTime(new Date(active.started_at as string))}. שלח "סיימתי" כדי לסגור אותו.`);
+    await channel.text(`⚠️ כבר יש לך סשן פתוח מ-${fmtTime(new Date(active.started_at as string), tz)}. שלח "סיימתי" כדי לסגור אותו.`);
     return;
   }
   const now = new Date();
@@ -110,10 +137,11 @@ async function startStudy(bot: TrackBot, phone: string, channel: BotChannel): Pr
     await channel.text("⚠️ לא הצלחתי לפתוח סשן, נסה שוב.");
     return;
   }
-  await channel.text(`▶️ התחלנו! סשן נפתח בשעה ${fmtTime(now)}.\nבהצלחה 💪`);
+  await channel.text(`▶️ התחלנו! סשן נפתח בשעה ${fmtTime(now, tz)}.\nבהצלחה 💪`);
 }
 
 async function endStudy(bot: TrackBot, phone: string, channel: BotChannel): Promise<void> {
+  const tz = tzOf(bot);
   const { data: active } = await db
     .from("smrtbot_study_sessions")
     .select("id, started_at")
@@ -138,9 +166,9 @@ async function endStudy(bot: TrackBot, phone: string, channel: BotChannel): Prom
     await channel.text("⚠️ לא הצלחתי לסגור את הסשן, נסה שוב.");
     return;
   }
-  const today = await sumStudyMinutes(bot, phone, startOfToday());
+  const today = await sumStudyMinutes(bot, phone, startOfDayUtc(tz));
   await channel.text(
-    `✅ נרשם סשן!\n${fmtTime(start)} — ${fmtTime(end)}\n⏱️ *${fmtDuration(minutes)}*\n\n${encouragement(minutes)}\n📚 היום סה״כ: ${fmtDuration(today)}`,
+    `✅ נרשם סשן!\n${fmtTime(start, tz)} — ${fmtTime(end, tz)}\n⏱️ *${fmtDuration(minutes)}*\n\n${encouragement(minutes)}\n📚 היום סה״כ: ${fmtDuration(today)}`,
   );
 }
 
@@ -157,12 +185,12 @@ async function sumStudyMinutes(bot: TrackBot, phone: string, since: Date): Promi
 
 // ── daily status ─────────────────────────────────────────────
 async function studyStatus(bot: TrackBot, phone: string, channel: BotChannel): Promise<void> {
-  const today = await sumStudyMinutes(bot, phone, startOfToday());
-  const weekStart = new Date(startOfToday());
-  weekStart.setDate(weekStart.getDate() - 6);
+  const tz = tzOf(bot);
+  const today = await sumStudyMinutes(bot, phone, startOfDayUtc(tz));
+  const weekStart = new Date(startOfDayUtc(tz).getTime() - 6 * 24 * 60 * 60000);
   const week = await sumStudyMinutes(bot, phone, weekStart);
 
-  const todayStr = startOfToday().toISOString().slice(0, 10);
+  const todayStr = todayDateStr(tz);
   const { data: prayer } = await db
     .from("smrtbot_prayers")
     .select("in_minyan, minutes, started_at, ended_at")
@@ -183,13 +211,14 @@ async function studyStatus(bot: TrackBot, phone: string, channel: BotChannel): P
 
 // ── prayer flow (3 steps via expectedInput) ──────────────────
 async function savePrayer(bot: TrackBot, phone: string, start: Date, end: Date, inMinyan: boolean, channel: BotChannel): Promise<void> {
+  const tz = tzOf(bot);
   const minutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
   const { error } = await db.from("smrtbot_prayers").upsert(
     {
       org_id: bot.org_id,
       bot_id: bot.id,
       phone,
-      prayer_date: startOfToday().toISOString().slice(0, 10),
+      prayer_date: todayDateStr(tz),
       started_at: start.toISOString(),
       ended_at: end.toISOString(),
       minutes,
@@ -204,7 +233,7 @@ async function savePrayer(bot: TrackBot, phone: string, start: Date, end: Date, 
     return;
   }
   await channel.text(
-    `✅ נרשם!\nשחרית ${inMinyan ? "במניין ✅" : "ביחידות"}, ${fmtTime(start)}-${fmtTime(end)} (${minutes} דק׳)\n\nיום טוב! ☀️`,
+    `✅ נרשם!\nשחרית ${inMinyan ? "במניין ✅" : "ביחידות"}, ${fmtTime(start, tz)}-${fmtTime(end, tz)} (${minutes} דק׳)\n\nיום טוב! ☀️`,
   );
 }
 
@@ -263,10 +292,11 @@ export async function handleTrackingText(
   state: State,
   channel: BotChannel,
 ): Promise<void> {
+  const tz = tzOf(bot);
   const step = String(state.expectedInput || "");
 
   if (step === "PRAYER_START") {
-    const start = parseTime(text);
+    const start = parseTime(text, tz);
     if (!start) {
       await channel.text("⚠️ לא הבנתי את השעה. נסה שוב, למשל: 7:15");
       return;
@@ -277,7 +307,7 @@ export async function handleTrackingText(
   }
 
   if (step === "PRAYER_END") {
-    const end = parseTime(text);
+    const end = parseTime(text, tz);
     if (!end) {
       await channel.text("⚠️ לא הבנתי. נסה שוב, למשל: 8:00");
       return;

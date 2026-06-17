@@ -16,6 +16,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
   const isHe = locale === "he";
 
   const initialChatId = searchParams.get("chat_id");
+  const initialFocusWamid = searchParams.get("msg");
 
   // Tell the (app) layout to drop its max-width / padding wrapper so the chat
   // surface can hit the screen edges. Cleared on unmount so other pages get
@@ -34,7 +35,12 @@ export function WhatsAppPageClient({ title }: { title: string }) {
     >
       {/* Accessibility-only title — the chat panes are the visible UI. */}
       <h1 className="sr-only">{title}</h1>
-      <WhatsAppReader layout="split" initialChatId={initialChatId} className="flex-1" />
+      <WhatsAppReader
+        layout="split"
+        initialChatId={initialChatId}
+        initialFocusWamid={initialFocusWamid}
+        className="flex-1"
+      />
     </div>
   );
 }

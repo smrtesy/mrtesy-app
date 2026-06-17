@@ -15,7 +15,7 @@ import { WhatsAppReader } from "./WhatsAppReader";
  * in the app shell — renders nothing until the panel is opened.
  */
 export function WhatsAppPanel() {
-  const { isOpen, seedChatId, seedDraft, session, close } = useWhatsAppPanel();
+  const { isOpen, seedChatId, seedDraft, seedFocusWamid, session, close } = useWhatsAppPanel();
   const pathname = usePathname();
   const { locale } = useParams();
   const t = useTranslations("whatsappPage");
@@ -41,8 +41,14 @@ export function WhatsAppPanel() {
 
   if (!visible) return null;
 
+  // Carry the focused message into the full page only while the originally
+  // seeded chat is still the active one — once the user navigates to another
+  // conversation the anchor no longer applies.
   const expandHref = activeChatId
-    ? `/${locale}/whatsapp?chat_id=${encodeURIComponent(activeChatId)}`
+    ? `/${locale}/whatsapp?chat_id=${encodeURIComponent(activeChatId)}` +
+      (seedFocusWamid && activeChatId === seedChatId
+        ? `&msg=${encodeURIComponent(seedFocusWamid)}`
+        : "")
     : `/${locale}/whatsapp`;
 
   return (
@@ -78,6 +84,7 @@ export function WhatsAppPanel() {
         layout="stacked"
         initialChatId={seedChatId}
         initialDraft={seedDraft}
+        initialFocusWamid={seedFocusWamid}
         onActiveChatChange={setActiveChatId}
         className="flex-1 p-2"
       />

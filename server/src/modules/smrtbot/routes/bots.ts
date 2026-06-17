@@ -133,7 +133,14 @@ router.get("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: Res
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Bot not found" });
-  res.json({ bot: data });
+  // Org slug lets the client build the preferred (globally-unique) webhook
+  // callback URL "<org_slug>_<bot_slug>".
+  const { data: org } = await db
+    .from("organizations")
+    .select("slug")
+    .eq("id", req.org!.id)
+    .maybeSingle();
+  res.json({ bot: { ...data, org_slug: (org?.slug as string | null) ?? null } });
 });
 
 // ── Update bot basic details + credentials ───────────────────
