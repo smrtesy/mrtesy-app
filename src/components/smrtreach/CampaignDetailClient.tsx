@@ -60,7 +60,7 @@ interface WaTemplate {
   body: string;
   paramCount: number;
 }
-interface Sender { id: string; email: string; label: string | null }
+interface Sender { id: string; email: string; label: string | null; provider: string; daily_cap: number | null }
 interface Bot { id: string; name: string }
 interface Stats {
   sent: number; failed: number; opens: number; clicks: number;
@@ -90,7 +90,12 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const [schedule, setSchedule] = useState<{ scheduled_at: string; country_filter: string; test_batch_size: string }>({
     scheduled_at: "", country_filter: "all", test_batch_size: "",
   });
-  const [gmailAccounts, setGmailAccounts] = useState<string[]>([]);
+  // Per-campaign sender allocation: which senders (from the master list) to
+  // send from, and how many from each. `included` = chosen senders;
+  // `counts` = the per-sender "how many" text inputs.
+  const [included, setIncluded] = useState<Set<string>>(new Set());
+  const [counts, setCounts] = useState<Record<string, string>>({});
+  const [savingAlloc, setSavingAlloc] = useState(false);
   const [email, setEmail] = useState<EmailDetail>({
     subject: "", preview: "", sender: null, reply_to: "", html_body: "", language: "he", provider: "ses",
     priority: "normal", send_hours: {}, exclude_shabbat: true, rate_limit: null, sto_enabled: false,
@@ -112,14 +117,17 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [detail, { senders }, stats] = await Promise.all([
+      const [detail, { senders }, stats, { allocations }] = await Promise.all([
         api<{ campaign: Campaign; email: EmailDetail | null; whatsapp: WhatsappDetail | null }>(`/api/reach/campaigns/${campaignId}`),
         api<{ senders: Sender[] }>("/api/reach/senders"),
         api<Stats>(`/api/reach/campaigns/${campaignId}/stats`),
+        api<{ allocations: { sender_id: string; send_count: number }[] }>(`/api/reach/campaigns/${campaignId}/senders`),
       ]);
       setCampaign(detail.campaign);
       setSenders(senders);
       setStats(stats);
+      setIncluded(new Set(allocations.map((a) => a.sender_id)));
+      setCounts(Object.fromEntries(allocations.map((a) => [a.sender_id, String(a.send_count)])));
       setSchedule({
         scheduled_at: detail.campaign.scheduled_at ? toLocalInput(detail.campaign.scheduled_at) : "",
         country_filter: detail.campaign.country_filter ?? "all",
@@ -161,11 +169,6 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     if (!campaign) return;
     if (campaign.channel === "whatsapp" || campaign.channel === "both") {
       api<{ bots: Bot[] }>("/api/bot/bots").then(({ bots }) => setBots(bots)).catch(() => setBots([]));
-    }
-    if (campaign.channel === "email" || campaign.channel === "both") {
-      api<{ accounts: { email: string }[] }>("/api/reach/gmail/accounts")
-        .then(({ accounts }) => setGmailAccounts(accounts.map((a) => a.email)))
-        .catch(() => setGmailAccounts([]));
     }
   }, [campaign]);
 
@@ -232,6 +235,37 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSavingEmail(false);
+    }
+  }
+
+  function toggleSender(id: string, on: boolean) {
+    setIncluded((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  function buildAllocations() {
+    return [...included]
+      .map((id) => ({ sender_id: id, send_count: Number(counts[id]) }))
+      .filter((a) => Number.isFinite(a.send_count) && a.send_count > 0);
+  }
+
+  async function saveAllocation() {
+    const allocations = buildAllocations();
+    if (included.size > 0 && allocations.length === 0) {
+      toast.error(t("allocationNeedCount"));
+      return;
+    }
+    setSavingAlloc(true);
+    try {
+      await api(`/api/reach/campaigns/${campaignId}/senders`, { method: "PUT", body: { allocations } });
+      toast.success(t("allocationSaved"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingAlloc(false);
     }
   }
 
@@ -315,10 +349,16 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
   async function send(mode: "now" | "scheduled") {
     const emailEnabled = campaign!.channel === "email" || campaign!.channel === "both";
-    if (emailEnabled && email.provider !== "gmail" && !email.sender) { toast.error(t("selectSenderFirst")); return; }
+    const allocations = buildAllocations();
+    if (emailEnabled && allocations.length === 0) { toast.error(t("allocationNeedSender")); return; }
     if (!window.confirm(mode === "now" ? t("sendNowConfirm") : t("scheduleSendConfirm"))) return;
     setSending(true);
     try {
+      // Persist the current allocation first so the server sends from exactly
+      // the addresses/amounts shown here (avoids a stale saved allocation).
+      if (emailEnabled) {
+        await api(`/api/reach/campaigns/${campaignId}/senders`, { method: "PUT", body: { allocations } });
+      }
       const body =
         mode === "scheduled"
           ? { mode, scheduled_at: schedule.scheduled_at ? new Date(schedule.scheduled_at).toISOString() : null }
@@ -369,6 +409,10 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
   const emailEnabled = campaign.channel === "email" || campaign.channel === "both";
   const waEnabled = campaign.channel === "whatsapp" || campaign.channel === "both";
+  const totalAllocated = [...included].reduce((sum, id) => {
+    const n = Number(counts[id]);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
 
   return (
     <div className="space-y-6">
@@ -475,43 +519,54 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
       {emailEnabled && (
         <div className="space-y-4 rounded-lg border p-5">
           <h2 className="text-lg font-semibold">{t("emailContent")}</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm">
-              <span className="text-muted-foreground">{t("provider")}</span>
-              <Select value={email.provider ?? "ses"} onValueChange={(v) => setEmail((e) => ({ ...e, provider: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ses">{t("providerSes")}</SelectItem>
-                  <SelectItem value="gmail">{t("providerGmail")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="grid gap-1 text-sm">
-              <span className="text-muted-foreground">{t("language")}</span>
-              <Select value={email.language ?? "he"} onValueChange={(v) => setEmail((e) => ({ ...e, language: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="he">{t("langHe")}</SelectItem><SelectItem value="en">{t("langEn")}</SelectItem></SelectContent>
-              </Select>
-            </label>
+          <label className="grid gap-1 text-sm sm:max-w-xs">
+            <span className="text-muted-foreground">{t("language")}</span>
+            <Select value={email.language ?? "he"} onValueChange={(v) => setEmail((e) => ({ ...e, language: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="he">{t("langHe")}</SelectItem><SelectItem value="en">{t("langEn")}</SelectItem></SelectContent>
+            </Select>
+          </label>
+
+          {/* Sender allocation: pick which addresses to send from and how many
+              from each (from the master list managed in settings). */}
+          <div className="space-y-2 rounded-md border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium">{t("allocationTitle")}</div>
+                <p className="text-xs text-muted-foreground">{t("allocationSubtitle")}</p>
+              </div>
+              <Button onClick={saveAllocation} disabled={savingAlloc} variant="outline" size="sm" className="gap-1">
+                {savingAlloc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("saveAllocation")}
+              </Button>
+            </div>
+            {senders.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("allocationNoSenders")}</p>
+            ) : (
+              <ul className="divide-y rounded-md border">
+                {senders.map((s) => {
+                  const on = included.has(s.id);
+                  return (
+                    <li key={s.id} className="flex items-center gap-3 px-3 py-2">
+                      <input type="checkbox" checked={on} onChange={(e) => toggleSender(s.id, e.target.checked)} className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-sm">
+                        {s.email}
+                        <Badge variant="secondary" className="ms-2">{s.provider === "gmail" ? t("providerGmail") : t("providerSes")}</Badge>
+                        {s.daily_cap != null && <span className="text-muted-foreground"> · {t("allocationCapLabel", { cap: s.daily_cap })}</span>}
+                      </span>
+                      <Input
+                        type="number" min={1} max={s.daily_cap ?? undefined}
+                        disabled={!on} className="h-8 w-28 shrink-0"
+                        placeholder={t("allocationHowMany")}
+                        value={counts[s.id] ?? ""}
+                        onChange={(e) => setCounts((c) => ({ ...c, [s.id]: e.target.value }))}
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {totalAllocated > 0 && <p className="text-xs text-muted-foreground">{t("allocationTotal", { total: totalAllocated })}</p>}
           </div>
-          {email.provider === "gmail" ? (
-            <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-              {gmailAccounts.length > 0
-                ? t("gmailAccountsConnected", { accounts: gmailAccounts.join(", ") })
-                : t("gmailNoAccounts")}
-            </p>
-          ) : (
-            <label className="grid gap-1 text-sm">
-              <span className="text-muted-foreground">{t("sender")}</span>
-              <Select value={email.sender ?? NONE} onValueChange={(v) => setEmail((e) => ({ ...e, sender: v === NONE ? null : v }))}>
-                <SelectTrigger><SelectValue placeholder={t("selectSender")} /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>{t("selectSender")}</SelectItem>
-                  {senders.map((s) => <SelectItem key={s.id} value={s.email}>{s.label ? `${s.label} · ${s.email}` : s.email}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("subject")}</span>
             <Input value={email.subject ?? ""} onChange={(e) => setEmail((s) => ({ ...s, subject: e.target.value }))} />

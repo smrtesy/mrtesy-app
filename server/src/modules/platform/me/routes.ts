@@ -396,4 +396,135 @@ router.get("/me/drive/folders/by-id", requireAuth, async (req: Request, res: Res
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WhatsApp selective auto-reply (per-user; opt-in, allowlist-only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RULE_FIELDS = [
+  "label", "match_type", "match_value", "response_mode",
+  "reply_text", "reply_buttons", "ai_instructions", "priority", "active",
+] as const;
+
+function pickRule(body: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+  for (const k of RULE_FIELDS) if (body[k] !== undefined) out[k] = body[k];
+  return out;
+}
+
+/** GET /me/whatsapp/autoreply-settings — master switch state for the user's connection. */
+router.get("/me/whatsapp/autoreply-settings", requireAuth, async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("whatsapp_connections")
+    .select("autoreply_enabled, display_phone_number")
+    .eq("user_id", req.user!.id)
+    .is("disconnected_at", null)
+    .order("connected_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ connected: !!data, enabled: !!data?.autoreply_enabled, phone: data?.display_phone_number ?? null });
+});
+
+/** PATCH /me/whatsapp/autoreply-settings { enabled } — flip the master switch. */
+router.patch("/me/whatsapp/autoreply-settings", requireAuth, async (req: Request, res: Response) => {
+  const enabled = Boolean((req.body ?? {}).enabled);
+  const { error } = await db
+    .from("whatsapp_connections")
+    .update({ autoreply_enabled: enabled })
+    .eq("user_id", req.user!.id)
+    .is("disconnected_at", null);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ enabled });
+});
+
+/** GET /me/whatsapp/autoreply-rules */
+router.get("/me/whatsapp/autoreply-rules", requireAuth, async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("whatsapp_autoreply_rules")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .order("priority", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ rules: data ?? [] });
+});
+
+/** POST /me/whatsapp/autoreply-rules */
+router.post("/me/whatsapp/autoreply-rules", requireAuth, async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!body.match_type || !body.response_mode) {
+    return res.status(400).json({ error: "match_type and response_mode are required" });
+  }
+  const { data, error } = await db
+    .from("whatsapp_autoreply_rules")
+    .insert({ ...pickRule(body), user_id: req.user!.id })
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ rule: data });
+});
+
+/** PATCH /me/whatsapp/autoreply-rules/:id */
+router.patch("/me/whatsapp/autoreply-rules/:id", requireAuth, async (req: Request, res: Response) => {
+  const updates = pickRule((req.body ?? {}) as Record<string, unknown>);
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("whatsapp_autoreply_rules")
+    .update(updates)
+    .eq("user_id", req.user!.id)
+    .eq("id", req.params.id)
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ rule: data });
+});
+
+/** DELETE /me/whatsapp/autoreply-rules/:id */
+router.delete("/me/whatsapp/autoreply-rules/:id", requireAuth, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("whatsapp_autoreply_rules")
+    .delete()
+    .eq("user_id", req.user!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/** GET /me/whatsapp/contact-tags */
+router.get("/me/whatsapp/contact-tags", requireAuth, async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("whatsapp_contact_tags")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .order("updated_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tags: data ?? [] });
+});
+
+/** PUT /me/whatsapp/contact-tags — upsert { phone, tags } on (user_id, phone). */
+router.put("/me/whatsapp/contact-tags", requireAuth, async (req: Request, res: Response) => {
+  const { phone, tags } = (req.body ?? {}) as { phone?: string; tags?: string };
+  if (!phone || !phone.trim()) return res.status(400).json({ error: "phone is required" });
+  const { data, error } = await db
+    .from("whatsapp_contact_tags")
+    .upsert(
+      { user_id: req.user!.id, phone: phone.trim(), tags: typeof tags === "string" ? tags : null },
+      { onConflict: "user_id,phone" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ tag: data });
+});
+
+/** DELETE /me/whatsapp/contact-tags/:id */
+router.delete("/me/whatsapp/contact-tags/:id", requireAuth, async (req: Request, res: Response) => {
+  const { error } = await db
+    .from("whatsapp_contact_tags")
+    .delete()
+    .eq("user_id", req.user!.id)
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 export default router;

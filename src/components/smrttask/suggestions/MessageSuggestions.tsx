@@ -583,7 +583,7 @@ function SuggestionActions({
   const isHome = task.context === "home";
 
   return (
-    <div className="flex gap-1 mt-3 items-center flex-wrap">
+    <div className="flex gap-0.5 mt-3 items-center flex-wrap [&>button]:h-8 [&>button]:w-8">
       {/* ── meta ───────────────────────────────────────────────────────── */}
       <ContextButton task={task} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
       <IconButton

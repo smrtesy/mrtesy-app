@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,19 @@ import { api } from "@/lib/api/client";
 import type { FieldDef, ResourceConfig } from "./resourceConfigs";
 
 type Row = Record<string, unknown> & { id: string };
+type BtnItem = { id: string; title: string };
+type FormVal = string | boolean | BtnItem[];
 
-function coerce(field: FieldDef, raw: string | boolean): unknown {
+function coerce(field: FieldDef, raw: FormVal): unknown {
   if (field.type === "number") return raw === "" ? null : Number(raw);
   if (field.type === "bool") return Boolean(raw);
+  if (field.type === "buttons") {
+    return Array.isArray(raw)
+      ? raw
+          .filter((b) => b.id?.trim() && b.title?.trim())
+          .map((b) => ({ id: b.id.trim(), title: b.title.trim() }))
+      : [];
+  }
   return raw === "" ? null : raw;
 }
 
@@ -30,7 +39,7 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
-  const [form, setForm] = useState<Record<string, string | boolean>>({});
+  const [form, setForm] = useState<Record<string, FormVal>>({});
   const [saving, setSaving] = useState(false);
   const [env, setEnv] = useState<"test" | "live">("live");
 
@@ -50,8 +59,8 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
   useEffect(() => { load(); }, [load]);
 
   function openNew() {
-    const init: Record<string, string | boolean> = {};
-    for (const f of config.fields) init[f.key] = f.type === "bool" ? true : "";
+    const init: Record<string, FormVal> = {};
+    for (const f of config.fields) init[f.key] = f.type === "bool" ? true : f.type === "buttons" ? [] : "";
     if (config.hasEnv) init.env = env; // default new items to the active env tab
     setForm(init);
     setEditing(null);
@@ -59,10 +68,15 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
   }
 
   function openEdit(row: Row) {
-    const init: Record<string, string | boolean> = {};
+    const init: Record<string, FormVal> = {};
     for (const f of config.fields) {
       const v = row[f.key];
-      init[f.key] = f.type === "bool" ? Boolean(v) : v == null ? "" : String(v);
+      if (f.type === "bool") init[f.key] = Boolean(v);
+      else if (f.type === "buttons") {
+        init[f.key] = Array.isArray(v)
+          ? (v as Record<string, string>[]).map((b) => ({ id: b.id ?? b.value ?? "", title: b.title ?? b.label ?? "" }))
+          : [];
+      } else init[f.key] = v == null ? "" : String(v);
     }
     setForm(init);
     setEditing(row);
@@ -217,6 +231,11 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
                     <option value="" />
                     {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
+                ) : f.type === "buttons" ? (
+                  <ButtonsField
+                    value={Array.isArray(form[f.key]) ? (form[f.key] as BtnItem[]) : []}
+                    onChange={(next) => setForm((p) => ({ ...p, [f.key]: next }))}
+                  />
                 ) : (
                   <Input
                     type={f.type === "number" ? "number" : "text"}
@@ -233,6 +252,50 @@ export function ResourceManager({ botId, config }: { botId: string; config: Reso
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/** Inline repeater for an array of reply buttons ({ id, title }). Used by the
+ *  "buttons" field type (e.g. canned-reply routes). A button's id may be a
+ *  node_key so the reply can navigate the menu when clicked. */
+function ButtonsField({ value, onChange }: { value: BtnItem[]; onChange: (next: BtnItem[]) => void }) {
+  const t = useTranslations("smrtBot");
+  const set = (i: number, patch: Partial<BtnItem>) =>
+    onChange(value.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= value.length) return;
+    const next = [...value];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  return (
+    <div className="space-y-2">
+      {value.map((b, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <Input
+            dir="auto"
+            className="flex-1"
+            placeholder={t.has("menuBtnTitle") ? t("menuBtnTitle") : "title"}
+            value={b.title}
+            onChange={(e) => set(i, { title: e.target.value })}
+          />
+          <Input
+            dir="ltr"
+            className="max-w-[40%]"
+            placeholder={t.has("menuBtnTarget") ? t("menuBtnTarget") : "id"}
+            value={b.id}
+            onChange={(e) => set(i, { id: e.target.value })}
+          />
+          <button type="button" onClick={() => move(i, -1)} className="p-1 text-muted-foreground hover:text-foreground"><ArrowUp className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => move(i, 1)} className="p-1 text-muted-foreground hover:text-foreground"><ArrowDown className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => onChange(value.filter((_, idx) => idx !== i))} className="p-1 text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...value, { id: "", title: "" }])}>
+        <Plus className="me-1 h-3.5 w-3.5" />{t.has("menuAddButton") ? t("menuAddButton") : "Add button"}
+      </Button>
     </div>
   );
 }

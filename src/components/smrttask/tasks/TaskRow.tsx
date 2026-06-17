@@ -75,98 +75,99 @@ export function TaskRow({
     <div
       onClick={() => onOpen(task)}
       className={cn(
-        // flex-nowrap with fixed-width trailing slots keeps the size/date/action
-        // columns aligned down the whole list (the title absorbs all variance).
-        "group flex flex-nowrap items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 cursor-pointer transition-colors hover:bg-accent/30",
+        // Two stacked rows: the title gets the full first row (never truncated),
+        // and all the labels/icons (⚡ size · deadline · snooze/move) drop to a
+        // second row indented under the title.
+        "group flex flex-col gap-1 rounded-lg border bg-card px-2.5 py-1.5 cursor-pointer transition-colors hover:bg-accent/30",
         isDone && "opacity-70",
         task.has_unread_update && "border-s-2 border-s-status-warn",
         task.status === "pending_completion" && "border-s-4 border-s-status-ok",
       )}
     >
-      {/* ✓ / blocked / done — compact, leaving room for the title */}
-      {isBlocked && !isDone ? (
-        <span
-          className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-status-warn-bg text-status-warn"
-          title={t("row.blockedHint", { titles: unsatisfiedNeeds.map((n) => n.title).join(", ") })}
-        >
-          <Hourglass className="h-3 w-3" />
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onToggleDone(task, !isDone); }}
-          title={isDone ? t("row.reopen") : t("actions.complete")}
-          className={cn(
-            "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border-2 text-[10px] transition-colors",
-            isDone
-              ? "border-status-ok bg-status-ok text-white hover:bg-transparent hover:text-transparent hover:border-muted-foreground/60"
-              : "border-muted-foreground/40 text-transparent hover:border-status-ok hover:text-status-ok",
-          )}
-        >
-          ✓
-        </button>
-      )}
-
-      {/* Title + inline indicators — the only flexible region. */}
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span
-          dir="auto"
-          className={cn(
-            "min-w-0 truncate text-[13px] font-medium",
-            isDone && "text-muted-foreground line-through",
-          )}
-        >
-          {title}
-        </span>
-        {task.context === "home" && (
-          <Home className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextHome")} />
-        )}
-        {task.recurrence_rule && (
-          <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
-        )}
-        {woke && !isDone && (
-          <AlarmClockCheck className="h-3 w-3 shrink-0 text-status-warn" aria-label={t("row.wokeHint")} />
-        )}
-        {planLabel && (
-          <span className="shrink-0 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground">
-            {planLabel}
+      {/* ── Row 1: ✓ + the full title (no truncation) ───────────────────── */}
+      <div className="flex items-start gap-2">
+        {/* ✓ / blocked / done */}
+        {isBlocked && !isDone ? (
+          <span
+            className="mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-status-warn-bg text-status-warn"
+            title={t("row.blockedHint", { titles: unsatisfiedNeeds.map((n) => n.title).join(", ") })}
+          >
+            <Hourglass className="h-3 w-3" />
           </span>
-        )}
-        {sitting >= AGING_LABEL_WORKDAYS && (
-          <span className="shrink-0 rounded bg-secondary px-1 py-px text-[10px] text-muted-foreground" title={t("row.sittingHint")}>
-            {t("row.sitting", { days: sitting })}
-          </span>
-        )}
-      </span>
-
-      {/* ── fixed trailing columns ──────────────────────────────────────── */}
-
-      {/* Size toggle — ⚡ filled when quick */}
-      <span className="flex w-5 shrink-0 justify-center">
-        {onSizeToggle && !isDone && (
+        ) : (
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSizeToggle(task.id, task.size === "quick" ? "regular" : "quick");
-            }}
-            title={task.size === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
+            onClick={(e) => { e.stopPropagation(); onToggleDone(task, !isDone); }}
+            title={isDone ? t("row.reopen") : t("actions.complete")}
             className={cn(
-              "flex h-5 w-5 items-center justify-center rounded transition-colors",
-              task.size === "quick"
-                ? "bg-status-warn-bg text-status-warn"
-                : "text-muted-foreground/40 hover:text-muted-foreground",
+              "mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border-2 text-[10px] transition-colors",
+              isDone
+                ? "border-status-ok bg-status-ok text-white hover:bg-transparent hover:text-transparent hover:border-muted-foreground/60"
+                : "border-muted-foreground/40 text-transparent hover:border-status-ok hover:text-status-ok",
             )}
           >
-            <Zap className="h-3 w-3" />
+            ✓
           </button>
         )}
-      </span>
 
-      {/* Deadline chip — fixed column with breathing room from the ⚡ slot,
-          end-aligned so dates line up down the list. */}
+        {/* Title + inline indicators — full width, wraps instead of truncating. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          <span
+            dir="auto"
+            className={cn(
+              "min-w-0 text-[13px] font-medium break-words",
+              isDone && "text-muted-foreground line-through",
+            )}
+          >
+            {title}
+          </span>
+          {task.context === "home" && (
+            <Home className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextHome")} />
+          )}
+          {task.recurrence_rule && (
+            <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
+          )}
+          {woke && !isDone && (
+            <AlarmClockCheck className="h-3 w-3 shrink-0 text-status-warn" aria-label={t("row.wokeHint")} />
+          )}
+          {planLabel && (
+            <span className="shrink-0 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground">
+              {planLabel}
+            </span>
+          )}
+          {sitting >= AGING_LABEL_WORKDAYS && (
+            <span className="shrink-0 rounded bg-secondary px-1 py-px text-[10px] text-muted-foreground" title={t("row.sittingHint")}>
+              {t("row.sitting", { days: sitting })}
+            </span>
+          )}
+        </span>
+      </div>
+
+      {/* ── Row 2: ⚡ size · deadline · snooze/move — indented under the title.
+           Only for non-done rows (a done row has none of these). ───────── */}
       {!isDone && (
-        <span className="ms-2 flex w-[110px] shrink-0 justify-end">
+        <div className="flex items-center gap-2 ps-[26px]">
+          {/* Size toggle — ⚡ filled when quick */}
+          {onSizeToggle && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSizeToggle(task.id, task.size === "quick" ? "regular" : "quick");
+              }}
+              title={task.size === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
+              className={cn(
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors",
+                task.size === "quick"
+                  ? "bg-status-warn-bg text-status-warn"
+                  : "text-muted-foreground/40 hover:text-muted-foreground",
+              )}
+            >
+              <Zap className="h-3 w-3" />
+            </button>
+          )}
+
+          {/* Deadline chip */}
           <DueDateChip
             deadline={deadline}
             locale={locale}
@@ -175,45 +176,45 @@ export function TaskRow({
             constrained={constrained}
             onChange={onDueChange ? (d) => onDueChange(task.id, d) : undefined}
           />
-        </span>
-      )}
 
-      {/* Snooze / move — always visible but faint; full strength on hover. */}
-      {!isDone && (
-        <span className="flex w-12 shrink-0 items-center justify-end gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-          {onSnooze && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onSnooze(task.id); }}
-              title={t("actions.snooze")}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-            >
-              <Clock className="h-3 w-3" />
-            </button>
-          )}
-          {/* A blocked task can't sit on the desk (the partition keeps it in
-              waiting regardless of pin), so don't offer a no-op arrow. */}
-          {onMove && zone === "waiting" && !isBlocked && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onMove(task.id, true); }}
-              title={t("row.moveToDesk")}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-            >
-              <ArrowUp className="h-3 w-3" />
-            </button>
-          )}
-          {onMove && zone === "desk" && !autoPromoted && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onMove(task.id, false); }}
-              title={t("row.moveToWaiting")}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-            >
-              <ArrowDown className="h-3 w-3" />
-            </button>
-          )}
-        </span>
+          <div className="flex-1" />
+
+          {/* Snooze / move — always visible but faint; full strength on hover. */}
+          <span className="flex shrink-0 items-center gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {onSnooze && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onSnooze(task.id); }}
+                title={t("actions.snooze")}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                <Clock className="h-3 w-3" />
+              </button>
+            )}
+            {/* A blocked task can't sit on the desk (the partition keeps it in
+                waiting regardless of pin), so don't offer a no-op arrow. */}
+            {onMove && zone === "waiting" && !isBlocked && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onMove(task.id, true); }}
+                title={t("row.moveToDesk")}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                <ArrowUp className="h-3 w-3" />
+              </button>
+            )}
+            {onMove && zone === "desk" && !autoPromoted && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onMove(task.id, false); }}
+                title={t("row.moveToWaiting")}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                <ArrowDown className="h-3 w-3" />
+              </button>
+            )}
+          </span>
+        </div>
       )}
     </div>
   );
