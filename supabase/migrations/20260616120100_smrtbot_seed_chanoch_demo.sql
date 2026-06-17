@@ -40,6 +40,11 @@ BEGIN
       '📥 דווח לי על לימוד או תפילה ואעקוב עבורך.' || chr(10) || chr(10) || 'מה תרצה לעשות?',
       '[{"id":"study_start","title":"▶️ התחלתי ללמוד"},{"id":"study_end","title":"⏹️ סיימתי"},{"id":"prayer_report","title":"🙏 דיווח שחרית"},{"id":"study_status","title":"📊 הסטטוס שלי"}]'::jsonb,
       NULL, 'live', 'system', 0, true),
+    -- tracking actions (handled in tracking.ts); nodes exist so the menu links them
+    (v_org, v_bot, 'study_start', 'action', 'התחלתי ללמוד', '▶️ התחלתי ללמוד', NULL, '[]'::jsonb, 'main', 'live', 'system', 1, true),
+    (v_org, v_bot, 'study_end', 'action', 'סיימתי', '⏹️ סיימתי', NULL, '[]'::jsonb, 'main', 'live', 'system', 2, true),
+    (v_org, v_bot, 'prayer_report', 'action', 'דיווח שחרית', '🙏 דיווח שחרית', NULL, '[]'::jsonb, 'main', 'live', 'system', 3, true),
+    (v_org, v_bot, 'study_status', 'action', 'הסטטוס שלי', '📊 הסטטוס שלי', NULL, '[]'::jsonb, 'main', 'live', 'system', 4, true),
     -- ── CHANOCH flow: AI project manager (routed by number/tag) ──
     (v_org, v_bot, 'chanoch_main', 'menu', 'תפריט חנוך', 'שלום חנוך 👋',
       '📥 שלח לי הודעה קולית, טקסט או לינק ואסווג אותו אוטומטית לפרויקט.' || chr(10) || chr(10) || 'מה תרצה לעשות?',
