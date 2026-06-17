@@ -50,6 +50,9 @@ BEGIN
       '📥 שלח לי הודעה קולית, טקסט או לינק ואסווג אותו אוטומטית לפרויקט.' || chr(10) || chr(10) || 'מה תרצה לעשות?',
       '[{"id":"pm_projects","title":"📂 הפרויקטים שלי"},{"id":"pm_recent","title":"🕒 פריטים אחרונים"},{"id":"chanoch_help","title":"❓ עזרה"}]'::jsonb,
       NULL, 'live', 'system', 10, true),
+    -- PM actions (handled in projects.ts); nodes exist so the menu links them
+    (v_org, v_bot, 'pm_projects', 'action', 'הפרויקטים שלי', '📂 הפרויקטים שלי', NULL, '[]'::jsonb, 'chanoch_main', 'live', 'system', 11, true),
+    (v_org, v_bot, 'pm_recent', 'action', 'פריטים אחרונים', '🕒 פריטים אחרונים', NULL, '[]'::jsonb, 'chanoch_main', 'live', 'system', 12, true),
     (v_org, v_bot, 'chanoch_help', 'menu', 'עזרה חנוך', 'איך אני עובד? 📖',
       'שלח מידע (קול/טקסט/לינק) ואסווג אותו לפרויקט. לפני כל שמירה תאשר, תתקן או תדחה. אפשר גם לנהל פרויקטים, תת-פרויקטים ומשימות בשפה חופשית.',
       '[{"id":"nav_home","title":"⬅️ תפריט"}]'::jsonb, 'chanoch_main', 'live', 'system', 13, true)

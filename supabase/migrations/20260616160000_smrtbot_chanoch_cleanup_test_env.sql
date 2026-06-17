@@ -24,26 +24,29 @@ BEGIN
     RETURN;
   END IF;
 
-  -- (1) action nodes for the tracking buttons (live)
+  -- (1) action nodes for the tracking + PM buttons (live), so they link
   INSERT INTO smrtbot_menu_nodes
     (org_id, bot_id, node_key, type, label, title_he, action, parent_key, sort_order, active, category, env)
-  SELECT b.org_id, v_bot, x.node_key, 'action', x.label, x.title_he, x.node_key, 'main', x.sort_order, true, 'system', 'live'
+  SELECT b.org_id, v_bot, x.node_key, 'action', x.label, x.title_he, x.node_key, x.parent_key, x.sort_order, true, 'system', 'live'
   FROM smrtbot_bots b,
     (VALUES
-      ('study_start',  'התחלתי ללמוד', '▶️ התחלתי ללמוד', 1),
-      ('study_end',    'סיימתי',       '⏹️ סיימתי',       2),
-      ('prayer_report','דיווח שחרית',  '🙏 דיווח שחרית',  3),
-      ('study_status', 'הסטטוס שלי',    '📊 הסטטוס שלי',   4)
-    ) AS x(node_key, label, title_he, sort_order)
+      ('study_start',  'התחלתי ללמוד', '▶️ התחלתי ללמוד', 'main',         1),
+      ('study_end',    'סיימתי',       '⏹️ סיימתי',       'main',         2),
+      ('prayer_report','דיווח שחרית',  '🙏 דיווח שחרית',  'main',         3),
+      ('study_status', 'הסטטוס שלי',    '📊 הסטטוס שלי',   'main',         4),
+      ('pm_projects',  'הפרויקטים שלי', '📂 הפרויקטים שלי','chanoch_main', 5),
+      ('pm_recent',    'פריטים אחרונים','🕒 פריטים אחרונים','chanoch_main', 6)
+    ) AS x(node_key, label, title_he, parent_key, sort_order)
   WHERE b.id = v_bot
   ON CONFLICT (bot_id, node_key, env) DO UPDATE SET
-    type = 'action', action = EXCLUDED.action, parent_key = 'main',
+    type = 'action', action = EXCLUDED.action, parent_key = EXCLUDED.parent_key,
     label = EXCLUDED.label, title_he = EXCLUDED.title_he,
     sort_order = EXCLUDED.sort_order, active = true;
 
-  -- (2) drop the deactivated leftovers
+  -- (2) drop the deactivated leftovers from earlier seeds
   DELETE FROM smrtbot_menu_nodes
-  WHERE bot_id = v_bot AND node_key IN ('period_report', 'my_status', 'report_prayer');
+  WHERE bot_id = v_bot
+    AND node_key IN ('period_report', 'my_status', 'report_prayer', 'chanoch_projects', 'chanoch_recent');
 
   -- (3) mirror live → test (test was empty; replace it with a clean copy)
   DELETE FROM smrtbot_menu_nodes WHERE bot_id = v_bot AND env = 'test';
