@@ -178,9 +178,22 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         refetchTimerRef.current = setTimeout(fetchTasks, 400);
       })
       .subscribe();
+    // Periodic safety-net refresh: Realtime can silently drop while a tab sits
+    // in the background, so a desktop tab left open all day might miss updates
+    // made from mobile. Poll every 10 minutes (only when the tab is visible),
+    // and also refetch immediately when the tab regains focus.
+    const handleVisibility = () => {
+      if (!document.hidden) fetchTasks();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    const pollId = setInterval(() => {
+      if (!document.hidden) fetchTasks();
+    }, 10 * 60 * 1000);
     return () => {
       supabase.removeChannel(channel);
       if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(pollId);
     };
   }, [fetchTasks, supabase]);
 
