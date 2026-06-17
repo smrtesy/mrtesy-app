@@ -167,6 +167,12 @@ function findRootNode(nodes: MenuNode[]): MenuNode | null {
   );
 }
 
+// Words that always (re)open the main menu, mirroring the legacy bot's
+// reserved words. Kept out of tracking's START_WORDS ("התחלתי"/"start").
+const MENU_WORDS = new Set([
+  "תפריט", "תפריט ראשי", "היי", "הי", "שלום", "מה", "menu", "hi", "hello",
+]);
+
 /** Effective root for this conversation. A phone-route may override the entry
  *  node for a specific number (rootKey); otherwise fall back to findRootNode. */
 function rootFor(nodes: MenuNode[], rootKey?: string | null): MenuNode | null {
@@ -527,6 +533,17 @@ export async function handleInbound(
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
         await routeNode(channel, orgId, bot, env, phone, action, nodes, state, effectiveRootKey);
+        return;
+      }
+    }
+
+    // 3b. Menu keywords always (re)open the menu — even for returning users
+    //     (who would otherwise fall through to FAQ) and in ai_pm mode. Mirrors
+    //     the legacy bot's reserved words (היי/שלום/תפריט/…).
+    if (text && MENU_WORDS.has(text.toLowerCase())) {
+      const root = rootFor(nodes, effectiveRootKey);
+      if (root) {
+        await sendMenuNode(channel, orgId, bot.id, env, phone, root);
         return;
       }
     }
