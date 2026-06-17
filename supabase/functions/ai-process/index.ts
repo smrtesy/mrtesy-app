@@ -1164,6 +1164,7 @@ async function routeWhatsAppMatter(
   const stateLabel = (s: string) =>
     s === "pending_completion" || s === "completed" ? "DONE/closed"
       : s === "snoozed" ? "SNOOZED"
+      : s === "dismissed" || s === "archived" ? "DISMISSED"
       : "open";
   const list = candidates
     .map((c, i) => `${i + 1}. id=${c.id} [${stateLabel(String(c.status))}] | ${(c.title_he || c.title || "(ללא כותרת)").slice(0, 80)} — ${(c.description || "").replace(/\s+/g, " ").slice(0, 140)}`)
@@ -1174,8 +1175,9 @@ Each listed matter carries a state in [brackets]:
   • [open]        — actively tracked; the default home for a genuine continuation.
   • [DONE/closed] — the user already resolved it. Pick it ONLY if the latest message UNMISTAKABLY resumes that exact same matter (same specific action/topic). If it is a different action or a new ask, return NEW — never bury a new matter inside one the user already finished.
   • [SNOOZED]     — the user deliberately hid it for later. Same high bar as [DONE/closed]: pick it only on an unmistakable continuation of that exact matter; otherwise NEW.
+  • [DISMISSED]   — the user explicitly REJECTED this matter. Highest bar: pick it ONLY if the latest message clearly REVIVES that exact matter with genuinely new content (e.g. the awaited reply finally arrived, or the user re-raises that specific action). If the message is about anything else, return NEW — a dismissed matter must never be re-bundled into, or silently resurrected by, an unrelated message.
 Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that matter, or {"task_id": "NEW"} if it opens a distinct matter (different action/topic) not covered by any listed task.
-Judge by the LAST message in the transcript. When unsure between NEW and an [open] matter, prefer that open matter; when unsure and the only fit is a [DONE/closed] or [SNOOZED] matter, prefer NEW.`;
+Judge by the LAST message in the transcript. When unsure between NEW and an [open] matter, prefer that open matter; when unsure and the only fit is a [DONE/closed], [SNOOZED], or [DISMISSED] matter, prefer NEW.`;
   const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
   const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
@@ -2619,14 +2621,32 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         : (chatId ? await whatsappChatSiblingIds(msg.user_id, chatId) : []);
       let candidates: WhatsAppCandidate[] = [];
       if (sibIds.length > 0) {
-        const { data: cands } = await supabase
+        // Active matters (any age) — the normal continuation targets.
+        const { data: active } = await supabase
           .from("tasks")
           .select("id, title_he, title, description, status")
           .eq("user_id", msg.user_id)
           .in("source_message_id", sibIds)
           .in("status", ["inbox", "in_progress", "snoozed", "pending_completion", "completed"])
           .order("created_at", { ascending: false });
-        candidates = (cands ?? []) as WhatsAppCandidate[];
+        // Recently dismissed/archived matters, included as HIGH-BAR ([DISMISSED])
+        // candidates so a message that unmistakably REVIVES one reopens it as its
+        // own task — instead of the router treating the re-appearing matter as
+        // NEW and the builder re-extracting it into a fresh combined suggestion
+        // (the reported bug). Bounded (last 7 days, capped) so a chat with many
+        // old dismissals doesn't flood the router; a dismissed matter the user is
+        // done with stays gone unless a new message specifically continues it.
+        const dismissedSince = new Date(Date.now() - 7 * 86_400_000).toISOString();
+        const { data: dismissedCands } = await supabase
+          .from("tasks")
+          .select("id, title_he, title, description, status")
+          .eq("user_id", msg.user_id)
+          .in("source_message_id", sibIds)
+          .in("status", ["dismissed", "archived"])
+          .gte("created_at", dismissedSince)
+          .order("created_at", { ascending: false })
+          .limit(8);
+        candidates = [...((active ?? []) as WhatsAppCandidate[]), ...((dismissedCands ?? []) as WhatsAppCandidate[])];
       }
 
       if (candidates.length > 0) {
@@ -2636,9 +2656,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           // for THIS message. Never let the router bury it as a follow-up on
           // another matter — spin off its own suggestion.
           targetId = "NEW";
-        } else if (candidates.length === 1 && classification === "informational") {
-          // Cheap path retained ONLY for a lone informational follow-up: route it
-          // onto the single open matter as an update (no extra model call).
+        } else if (candidates.length === 1 && classification === "informational" && !["dismissed", "archived"].includes(String(candidates[0].status))) {
+          // Cheap path retained ONLY for a lone informational follow-up on an
+          // ACTIVE matter: route it on as an update (no extra model call). A lone
+          // dismissed/archived candidate must go through the router's high bar
+          // instead, so an informational ping never silently resurrects it.
           targetId = candidates[0].id;
         } else {
           // 2+ candidates, OR an ACTIONABLE message with a single candidate: ask
@@ -2667,7 +2689,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           // through as plain informational (no task created, none updated).
         } else {
           const target = candidates.find((c) => c.id === targetId)!;
-          const closed = ["pending_completion", "completed"].includes(String(target.status));
+          // pending_completion/completed AND dismissed/archived are all "closed":
+          // an actionable message the router matched to one is an unmistakable
+          // revival, so reopen it (re-surfaces as its own task), never bundle.
+          const closed = ["pending_completion", "completed", "dismissed", "archived"].includes(String(target.status));
           // appendUpdateToTask may redirect to a different occurrence of a
           // recurring series — record the id the update actually landed on.
           let resolvedId: string;
