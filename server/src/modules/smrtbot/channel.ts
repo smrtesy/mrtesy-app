@@ -15,6 +15,7 @@
  * Inbound is normalised to the same InboundMessage the WhatsApp webhook
  * produces, so the engine entry point does not care which channel it is on.
  */
+import { randomUUID } from "node:crypto";
 import { db } from "../../db";
 import {
   sendText,
@@ -108,9 +109,17 @@ export class WebChannel implements BotChannel {
   constructor(private readonly ctx: WebChannelCtx) {}
 
   private async emit(kind: WebMessageKind, body: string, payload: Record<string, unknown>): Promise<void> {
-    const { data, error } = await db
-      .from("smrtbot_web_messages")
-      .insert({
+    // Pre-generate id + created_at so the history insert and the live broadcast
+    // can run concurrently (instead of insert→await→broadcast) while carrying
+    // identical values. The widget dedups by id across both the broadcast and
+    // the catch-up history fetch, so the two must agree — and it also uses id as
+    // a React key. The broadcast is the last hop before the reply renders, so
+    // taking it off the insert's critical path is what makes a submenu feel snappy.
+    const id = randomUUID();
+    const created_at = new Date().toISOString();
+    const [{ error }] = await Promise.all([
+      db.from("smrtbot_web_messages").insert({
+        id,
         org_id: this.ctx.orgId,
         bot_id: this.ctx.botId,
         session_id: this.ctx.sessionId,
@@ -118,21 +127,18 @@ export class WebChannel implements BotChannel {
         kind,
         body,
         payload,
-      })
-      .select("id, created_at")
-      .single();
-    if (error) {
-      console.error("[smrtbot/channel] web emit insert", error.message);
-      return;
-    }
-    await broadcast(webTopic(this.ctx.sessionToken), {
-      id: data.id,
-      direction: "out",
-      kind,
-      body,
-      payload,
-      created_at: data.created_at,
-    });
+        created_at,
+      }),
+      broadcast(webTopic(this.ctx.sessionToken), {
+        id,
+        direction: "out",
+        kind,
+        body,
+        payload,
+        created_at,
+      }),
+    ]);
+    if (error) console.error("[smrtbot/channel] web emit insert", error.message);
   }
 
   async text(body: string): Promise<void> {

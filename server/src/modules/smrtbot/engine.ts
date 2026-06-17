@@ -67,9 +67,12 @@ async function getState(botId: string, phone: string): Promise<State> {
   return (data?.state_json as State) ?? {};
 }
 
-async function setState(botId: string, phone: string, patch: State): Promise<void> {
-  const current = await getState(botId, phone);
-  const updated = { ...current, ...patch, lastInteractionMs: Date.now() };
+// `current` lets a caller that already holds the freshly-loaded state (e.g.
+// handleInbound → routeNode) skip the redundant read before this read-modify-
+// write. Only pass it when no state write has happened since it was loaded.
+async function setState(botId: string, phone: string, patch: State, current?: State): Promise<void> {
+  const base = current ?? (await getState(botId, phone));
+  const updated = { ...base, ...patch, lastInteractionMs: Date.now() };
   const { error } = await db
     .from("smrtbot_wa_users")
     .update({ state_json: updated, last_interaction_at: new Date().toISOString() })
@@ -289,6 +292,7 @@ async function routeNode(
   phone: string,
   nodeKey: string,
   nodes: MenuNode[],
+  state: State,
   rootKey?: string | null,
 ): Promise<boolean> {
   const node = nodes.find((n) => n.node_key === nodeKey);
@@ -303,8 +307,7 @@ async function routeNode(
       return true;
     }
     if (act === "nav_back") {
-      const s = await getState(bot.id, phone);
-      const back = nodes.find((n) => n.node_key === String(s.lastMenu || "main")) ?? rootFor(nodes, rootKey);
+      const back = nodes.find((n) => n.node_key === String(state.lastMenu || "main")) ?? rootFor(nodes, rootKey);
       if (back) await sendMenuNode(channel, orgId, bot.id, env, phone, back);
       return true;
     }
@@ -318,7 +321,7 @@ async function routeNode(
     return true;
   }
   // menu (default)
-  await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey });
+  await setState(bot.id, phone, { lastMenu: node.parent_key || "main", currentNodeKey: nodeKey }, state);
   await sendMenuNode(channel, orgId, bot.id, env, phone, node);
   return true;
 }
@@ -433,19 +436,30 @@ export async function handleInbound(
 
   try {
     // First-contact detection (for referral credit + new-user welcome).
-    const { data: existingUser } = await db
-      .from("smrtbot_wa_users")
-      .select("id, tags")
-      .eq("bot_id", bot.id)
-      .eq("phone", phone)
-      .maybeSingle();
+    //
+    // These have no ordering dependency on each other, so they run together
+    // instead of in series. On the web channel (no Meta round-trip) these DB
+    // round-trips dominate a submenu's time-to-render, so collapsing three
+    // sequential calls into one parallel batch is the main latency win.
+    // touchUser stays awaited: a later setState issues an UPDATE that needs the
+    // row to already exist for first-time users (touchUser's upsert creates it
+    // but never writes state_json, so racing it with getState is safe). The
+    // inbound log is fire-and-forget — nothing downstream reads it.
+    const [{ data: existingUser }, state] = await Promise.all([
+      db
+        .from("smrtbot_wa_users")
+        .select("id, tags")
+        .eq("bot_id", bot.id)
+        .eq("phone", phone)
+        .maybeSingle(),
+      getState(bot.id, phone),
+      touchUser(orgId, bot, phone, message.name ?? null),
+    ]);
+    void logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "")
+      .catch((e) => console.error("[smrtbot/engine] logMsg(IN)", errInfo(e)));
+
     const existed = !!existingUser;
     const tags = splitValues((existingUser?.tags as string | null) ?? null);
-
-    await touchUser(orgId, bot, phone, message.name ?? null);
-    await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
-
-    const state = await getState(bot.id, phone);
     const text = (message.text ?? "").trim();
 
     // Per-number routing override. A rule may give this phone a fixed canned
@@ -512,7 +526,7 @@ export async function handleInbound(
     if (action) {
       const node = nodes.find((n) => n.node_key === action);
       if (node) {
-        await routeNode(channel, orgId, bot, env, phone, action, nodes, effectiveRootKey);
+        await routeNode(channel, orgId, bot, env, phone, action, nodes, state, effectiveRootKey);
         return;
       }
     }
