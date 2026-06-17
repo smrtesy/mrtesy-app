@@ -432,19 +432,30 @@ export async function handleInbound(
 
   try {
     // First-contact detection (for referral credit + new-user welcome).
-    const { data: existingUser } = await db
-      .from("smrtbot_wa_users")
-      .select("id, tags")
-      .eq("bot_id", bot.id)
-      .eq("phone", phone)
-      .maybeSingle();
+    //
+    // These have no ordering dependency on each other, so they run together
+    // instead of in series. On the web channel (no Meta round-trip) these DB
+    // round-trips dominate a submenu's time-to-render, so collapsing three
+    // sequential calls into one parallel batch is the main latency win.
+    // touchUser stays awaited: a later setState issues an UPDATE that needs the
+    // row to already exist for first-time users (touchUser's upsert creates it
+    // but never writes state_json, so racing it with getState is safe). The
+    // inbound log is fire-and-forget — nothing downstream reads it.
+    const [{ data: existingUser }, state] = await Promise.all([
+      db
+        .from("smrtbot_wa_users")
+        .select("id, tags")
+        .eq("bot_id", bot.id)
+        .eq("phone", phone)
+        .maybeSingle(),
+      getState(bot.id, phone),
+      touchUser(orgId, bot, phone, message.name ?? null),
+    ]);
+    void logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "")
+      .catch((e) => console.error("[smrtbot/engine] logMsg(IN)", errInfo(e)));
+
     const existed = !!existingUser;
     const tags = splitValues((existingUser?.tags as string | null) ?? null);
-
-    await touchUser(orgId, bot, phone, message.name ?? null);
-    await logMsg(orgId, bot.id, phone, "IN", env, message.type ?? "text", message.text ?? message.buttonId ?? "");
-
-    const state = await getState(bot.id, phone);
     const text = (message.text ?? "").trim();
 
     // Per-number routing override. A rule may give this phone a fixed canned
