@@ -80,6 +80,10 @@ interface Props {
   thread: Thread | undefined;
   locale: string;
   onBack: () => void;
+  /** Force the "back to chat list" button to always show (not just on mobile).
+   *  Used by the docked side-panel, which is single-pane at every width and
+   *  otherwise has no way to return to the thread list on desktop. */
+  alwaysShowBack?: boolean;
   /** Called after a successful send so the parent can refetch immediately. */
   onMessageSent?: () => void;
   /** One-shot draft to prefill the composer (e.g. from a smrtTask "reply in
@@ -125,7 +129,7 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, onMessageSent, onContactRenamed, initialDraft, focusWamid }: Props) {
+export function ThreadView({ messages, tasks, loading, chatId, thread, locale, onBack, alwaysShowBack, onMessageSent, onContactRenamed, initialDraft, focusWamid }: Props) {
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -585,7 +589,12 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
       )}
       {/* Header */}
       <div className="flex items-center gap-2 border-b bg-muted/40 p-2">
-        <IconButton label={t("back")} color="neutral" className="md:hidden" onClick={onBack}>
+        <IconButton
+          label={t("backToChats")}
+          color="neutral"
+          className={alwaysShowBack ? "" : "md:hidden"}
+          onClick={onBack}
+        >
           <ArrowLeft />
         </IconButton>
         <div className="min-w-0 flex-1">
