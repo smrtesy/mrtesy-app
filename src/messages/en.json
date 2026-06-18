@@ -249,6 +249,7 @@
     "dateToday": "Today",
     "dateYesterday": "Yesterday",
     "back": "Back",
+    "backToChats": "Back to chats",
     "openDocument": "Open document",
     "send": "Send",
     "composePlaceholder": "Type a message…",

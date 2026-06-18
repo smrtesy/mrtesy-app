@@ -631,12 +631,13 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
     { onConflict: "user_id,wamid" },
   );
 
-  // Refresh the source_messages thread row so Part 3 / dashboards see the
-  // new message right away. Best-effort — the row is already in
-  // whatsapp_messages and the webhook echo will refresh later.
-  await refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
-
-  return res.json({ ok: true, wamid });
+  // Respond immediately — the client renders the message optimistically and
+  // only needs the wamid. The source_messages thread refresh (several DB
+  // queries, for Part 3 / dashboards) runs fire-and-forget so it never adds
+  // latency to the send round-trip. It's self-contained + best-effort.
+  res.json({ ok: true, wamid });
+  void refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
+  return;
 });
 
 // ── Send an image via Meta Cloud API ─────────────────────────────────────
@@ -823,9 +824,11 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     { onConflict: "user_id,wamid" },
   );
 
-  await refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
-
-  return res.json({ ok: true, wamid });
+  // Respond immediately; refresh the thread row in the background (see the
+  // text-send route for the same rationale).
+  res.json({ ok: true, wamid });
+  void refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
+  return;
 });
 
 // ── Send a reaction (emoji) on an existing message ──────────────────────
