@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "rea
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,6 +47,9 @@ export interface Message {
   sent_at?: string | null;
   delivered_at?: string | null;
   read_at?: string | null;
+  /** Client-only: an optimistic bubble rendered immediately on send, before
+   *  Meta confirms. Shows a clock ⏱️ until the real message arrives. */
+  pending?: boolean;
 }
 
 export interface ChatTask {
@@ -126,6 +129,110 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   const t = useTranslations("whatsappPage");
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // ── Optimistic send (WhatsApp-Web feel) ───────────────────────────────────
+  // Outgoing text bubbles and reactions are rendered the instant the user
+  // acts, before Meta confirms — so the conversation never feels like it's
+  // waiting on the network. They're reconciled against the real rows the next
+  // poll/refetch brings in.
+  //
+  // `pendingMessages`: optimistic outgoing text bubbles. Each starts with a
+  // temp wamid; on send success we swap in the real wamid so it dedupes
+  // against the server row (which shares it) and the optimistic copy drops.
+  const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
+  // `optimisticReactions`: target_wamid → emoji ("" = removed). Overlaid on the
+  // reactions derived from messages so a tapped emoji shows immediately.
+  const [optimisticReactions, setOptimisticReactions] = useState<Record<string, string>>({});
+
+  const realWamids = useMemo(() => new Set(messages.map((m) => m.wamid)), [messages]);
+  // Visible stream = server messages + any optimistic bubble whose real row
+  // hasn't landed yet (appended last → newest, at the bottom).
+  const mergedMessages = useMemo(() => {
+    const extra = pendingMessages.filter((m) => !realWamids.has(m.wamid));
+    return extra.length ? [...messages, ...extra] : messages;
+  }, [messages, pendingMessages, realWamids]);
+
+  // Drop optimistic bubbles once their real row arrives (state cleanup; the
+  // merge above already hides them visually).
+  useEffect(() => {
+    setPendingMessages((curr) => {
+      if (curr.length === 0) return curr;
+      const next = curr.filter((m) => !realWamids.has(m.wamid));
+      return next.length === curr.length ? curr : next;
+    });
+  }, [realWamids]);
+
+  // Drop optimistic reaction overrides once the real outgoing reaction agrees.
+  useEffect(() => {
+    setOptimisticReactions((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0) return prev;
+      const next = { ...prev };
+      let changed = false;
+      for (const target of keys) {
+        let real = "";
+        for (const mm of messages) {
+          if (mm.is_reaction && mm.reply_to_wamid === target && mm.direction === "outgoing") {
+            real = mm.reaction_emoji ?? "";
+          }
+        }
+        if (real === prev[target]) {
+          delete next[target];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [messages]);
+
+  // Clear all optimistic state when switching conversations.
+  useEffect(() => {
+    setPendingMessages([]);
+    setOptimisticReactions({});
+  }, [chatId]);
+
+  // Add an optimistic outgoing text bubble; returns its temp id so the caller
+  // can resolve (real wamid) or remove (failure) it.
+  const addPendingText = useCallback(
+    (body: string, replyToWamid: string | null) => {
+      const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const msg: Message = {
+        id,
+        wamid: id,
+        chat_id: chatId,
+        direction: "outgoing",
+        from_phone: "",
+        from_name: null,
+        to_phone: chatId,
+        message_type: "text",
+        body_text: body,
+        media_id: null,
+        media_mime: null,
+        media_url: null,
+        media_filename: null,
+        media_size: null,
+        reply_to_wamid: replyToWamid,
+        reaction_emoji: null,
+        is_reaction: false,
+        is_history: false,
+        history_phase: null,
+        received_at: new Date().toISOString(),
+        status: null,
+        pending: true,
+      };
+      setPendingMessages((c) => [...c, msg]);
+      return id;
+    },
+    [chatId],
+  );
+  const resolvePendingText = useCallback((id: string, wamid: string) => {
+    setPendingMessages((c) =>
+      c.map((m) => (m.id === id ? { ...m, wamid, pending: false, status: "sent" } : m)),
+    );
+  }, []);
+  const removePendingText = useCallback((id: string) => {
+    setPendingMessages((c) => c.filter((m) => m.id !== id));
+  }, []);
+
   // Jump to a specific source message (from a task's WhatsApp source badge).
   // The wamid we're asked to focus, and whether we've already handled it for
   // this value — one-shot per focus target so a background re-poll doesn't
@@ -144,7 +251,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   useEffect(() => {
     // Nothing to position against yet — don't mark positioned on the empty
     // pre-load render, or the first real batch would skip the bottom-snap.
-    if (messages.length === 0) return;
+    if (mergedMessages.length === 0) return;
     // While a focus jump is still pending, let the focus effect own the scroll.
     if (focusWamid && handledFocusRef.current !== focusWamid) return;
     const el = scrollRef.current;
@@ -154,7 +261,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
       el.scrollTop = el.scrollHeight;
     }
     positionedRef.current = true;
-  }, [messages.length, focusWamid]);
+  }, [mergedMessages.length, focusWamid]);
 
   // Reset per-chat scroll/focus bookkeeping when the conversation (or the
   // focus target) changes.
@@ -308,18 +415,27 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   // Build a lookup for reactions: target_wamid → reaction emojis.
   // We keep at most one reaction per direction (matches WhatsApp UX:
   // each side can leave one emoji per message; later reactions replace).
-  const reactionsByTarget = new Map<string, Array<{ emoji: string; direction: string }>>();
-  for (const m of messages) {
-    if (m.is_reaction && m.reply_to_wamid && m.reaction_emoji) {
-      const list = reactionsByTarget.get(m.reply_to_wamid) ?? [];
-      // Replace earlier reactions from the same direction; keeps the latest.
-      const filtered = list.filter((r) => r.direction !== m.direction);
-      filtered.push({ emoji: m.reaction_emoji, direction: m.direction });
-      reactionsByTarget.set(m.reply_to_wamid, filtered);
+  // Optimistic overrides are layered on top so a freshly-tapped emoji shows
+  // instantly (and a removal hides instantly).
+  const reactionsByTarget = useMemo(() => {
+    const map = new Map<string, Array<{ emoji: string; direction: string }>>();
+    for (const m of messages) {
+      if (m.is_reaction && m.reply_to_wamid && m.reaction_emoji) {
+        const list = map.get(m.reply_to_wamid) ?? [];
+        const filtered = list.filter((r) => r.direction !== m.direction);
+        filtered.push({ emoji: m.reaction_emoji, direction: m.direction });
+        map.set(m.reply_to_wamid, filtered);
+      }
     }
-  }
+    for (const [target, emoji] of Object.entries(optimisticReactions)) {
+      const list = (map.get(target) ?? []).filter((r) => r.direction !== "outgoing");
+      if (emoji) list.push({ emoji, direction: "outgoing" });
+      map.set(target, list);
+    }
+    return map;
+  }, [messages, optimisticReactions]);
 
-  const visibleMessages = messages.filter((m) => !m.is_reaction);
+  const visibleMessages = mergedMessages.filter((m) => !m.is_reaction);
 
   const displayName =
     thread?.custom_name?.trim() ||
@@ -360,9 +476,9 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
   // we want to surface the original message's preview above the bubble.
   const messagesByWamid = useMemo(() => {
     const map = new Map<string, Message>();
-    for (const m of messages) map.set(m.wamid, m);
+    for (const m of mergedMessages) map.set(m.wamid, m);
     return map;
-  }, [messages]);
+  }, [mergedMessages]);
 
   // Map each whatsapp_message → tasks created from it. Two strategies:
   //   1. EXACT match by wamid — when the task came from a per-message
@@ -573,6 +689,9 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
                 canReact={withinWindow}
                 onReply={() => setReplyTo(m)}
                 onReact={async (emoji) => {
+                  // Optimistic: paint the emoji (or its removal) immediately,
+                  // then confirm with Meta and revert only if the call fails.
+                  setOptimisticReactions((prev) => ({ ...prev, [m.wamid]: emoji }));
                   try {
                     await api("/api/whatsapp/messages/react", {
                       method: "POST",
@@ -580,6 +699,11 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
                     });
                     onMessageSent?.();
                   } catch (e) {
+                    setOptimisticReactions((prev) => {
+                      const next = { ...prev };
+                      delete next[m.wamid];
+                      return next;
+                    });
                     toast.error(e instanceof Error ? e.message : String(e));
                   }
                 }}
@@ -600,6 +724,9 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         onClearReply={() => setReplyTo(null)}
         initialDraft={initialDraft}
         onSent={onMessageSent}
+        onPendingAdd={addPendingText}
+        onPendingResolve={resolvePendingText}
+        onPendingRemove={removePendingText}
         pendingImages={pendingImages}
         onAddImages={addImages}
         onRemoveImage={removeImage}
@@ -625,6 +752,9 @@ function ComposeBox({
   onClearReply,
   initialDraft,
   onSent,
+  onPendingAdd,
+  onPendingResolve,
+  onPendingRemove,
   pendingImages,
   onAddImages,
   onRemoveImage,
@@ -641,6 +771,12 @@ function ComposeBox({
   /** One-shot prefill (from the side-panel; the full page uses ?draft=). */
   initialDraft?: string | null;
   onSent?: () => void;
+  /** Optimistic-send plumbing (owned by ThreadView, which holds the bubble
+   *  list): add a pending bubble (returns its temp id), resolve it with the
+   *  real wamid on success, or remove it on failure. */
+  onPendingAdd: (body: string, replyToWamid: string | null) => string;
+  onPendingResolve: (id: string, wamid: string) => void;
+  onPendingRemove: (id: string) => void;
   /** Images staged for sending (paste / drag-drop / attach). Owned by the
    *  parent ThreadView so the drag-drop target can be the whole chat surface. */
   pendingImages: PendingImage[];
@@ -868,8 +1004,11 @@ function ComposeBox({
     lastCheckedRef.current = "";
     onClearReply();
     setSending(true);
+    // Paint the bubble instantly (WhatsApp-Web feel) with a clock, then
+    // confirm with Meta. The real row arrives on the next refetch and dedupes.
+    const pendingId = onPendingAdd(trimmed, replyToWamid);
     try {
-      await api("/api/whatsapp/messages/send", {
+      const { wamid } = await api<{ ok: boolean; wamid: string }>("/api/whatsapp/messages/send", {
         method: "POST",
         body: {
           to_phone: chatId,
@@ -877,11 +1016,13 @@ function ComposeBox({
           ...(replyToWamid ? { reply_to_wamid: replyToWamid } : {}),
         },
       });
+      onPendingResolve(pendingId, wamid);
       onSent?.();
     } catch (e) {
-      // Only the textarea-driven send restores the draft; accepting a
-      // suggestion already wiped the original, restoring it would feel
-      // surprising.
+      // Roll back the optimistic bubble; only the textarea-driven send
+      // restores the draft (accepting a polish suggestion already wiped the
+      // original, so restoring it would feel surprising).
+      onPendingRemove(pendingId);
       if (opts.restoreOnFail) {
         setText((curr) => (curr.trim() ? curr : trimmed));
       }
@@ -1510,7 +1651,7 @@ function MessageBubble({
               So today every outgoing message stays at "sent ✓" forever
               regardless of whether the recipient actually delivered/read
               it. The tooltip explains why so it's not surprising. */}
-          {isOutgoing && <DeliveryReceipt status={message.status ?? null} t={t} />}
+          {isOutgoing && <DeliveryReceipt status={message.status ?? null} pending={message.pending} t={t} />}
         </div>
         </div>
         {/* React button on the LTR side — same component, just rendered
@@ -1614,11 +1755,17 @@ function ExtractedBlock({
  */
 function DeliveryReceipt({
   status,
+  pending,
   t,
 }: {
   status: Message["status"];
+  /** Optimistic bubble not yet confirmed by Meta — show a clock. */
+  pending?: boolean;
   t: (key: string) => string;
 }) {
+  if (pending) {
+    return <Clock className="h-3.5 w-3.5 text-muted-foreground/70" aria-label="sending" />;
+  }
   if (status === "failed") {
     return <AlertCircle className="h-3.5 w-3.5 text-status-late" aria-label="failed" />;
   }
