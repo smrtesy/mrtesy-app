@@ -138,8 +138,38 @@ body[data-chat-fullscreen="true"] main[data-sidebar-main] > div {
    panel opening also collapses the sidebar (margin-inline-start drops to 0 via
    the data-sidebar-collapsed rule above), so content fills the remaining half. */
 @media (min-width: 768px) {
+  /* Panel width is user-resizable (the drag handle in WhatsAppPanel writes
+     --wa-panel-width on <body>). The panel itself and the main-content push
+     read the same var so they always agree. Falls back to 50vw before any
+     drag / on a fresh session. */
   body[data-wa-panel="true"] main[data-sidebar-main] {
-    margin-inline-end: 50vw;
+    margin-inline-end: var(--wa-panel-width, 50vw);
+  }
+  body[data-wa-panel="true"] .wa-panel {
+    width: var(--wa-panel-width, 50vw);
+  }
+
+  /* Keep centered modals inside the main-content half (the side NOT covered
+     by the docked panel) and above it, so the panel never hides them. The
+     scrim is confined to the main region and the content re-centered within
+     it. Explicit physical left/right per direction: the panel sits on the
+     physical left in RTL, the physical right in LTR. */
+  body[data-wa-panel="true"] .app-dialog-content {
+    z-index: 70;
+  }
+  html[dir="rtl"] body[data-wa-panel="true"] .app-dialog-overlay {
+    left: var(--wa-panel-width, 50vw);
+    right: 0;
+  }
+  html[dir="rtl"] body[data-wa-panel="true"] .app-dialog-content {
+    left: calc((100vw + var(--wa-panel-width, 50vw)) / 2);
+  }
+  html[dir="ltr"] body[data-wa-panel="true"] .app-dialog-overlay {
+    right: var(--wa-panel-width, 50vw);
+    left: 0;
+  }
+  html[dir="ltr"] body[data-wa-panel="true"] .app-dialog-content {
+    left: calc((100vw - var(--wa-panel-width, 50vw)) / 2);
   }
 }
 
@@ -159,4 +189,29 @@ body[data-content-wide="true"] main[data-sidebar-main] > div {
 }
 .animate-confetti-fall {
   animation: confetti-fall 2s linear forwards;
+}
+
+/* ── PWA / standalone native feel ──────────────────────────────────────────
+   These rules give the installed app a more native touch experience without
+   affecting the site when viewed in a normal browser tab. */
+
+/* Kill the grey tap flash and keep text sizing stable for app-like taps. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* When launched from the home screen (no browser chrome), behave like an app:
+   no rubber-band overscroll on the page, and pad the safe areas (notch / home
+   indicator) so content never hides under the system UI. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }

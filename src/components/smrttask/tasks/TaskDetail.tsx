@@ -320,12 +320,14 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleDialogClose()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="app-dialog-overlay fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           dir={dir}
           className={cn(
-            // Centered modal, desktop
-            "fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
+            // Centered modal, desktop. `app-dialog-content` lets globals.css
+            // re-center it into the main-content half when the WhatsApp panel
+            // is docked, so the panel never covers it.
+            "app-dialog-content fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
             "w-full sm:max-w-2xl max-h-[92vh]",
             "flex flex-col bg-background border shadow-xl rounded-lg overflow-hidden",
             // Full screen on small screens
