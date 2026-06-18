@@ -19,7 +19,7 @@
  * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
  * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v4";
+const VERSION = "v5";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];
@@ -84,7 +84,9 @@ self.addEventListener("push", (event) => {
   const options = {
     body: data.body || "",
     icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192-maskable.png",
+    // Android status-bar icon: must be a monochrome transparent silhouette
+    // (the OS keeps only the alpha channel and recolors it white).
+    badge: "/icons/badge-96.png",
     // Same tag collapses repeat alerts for one entity into a single banner.
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),

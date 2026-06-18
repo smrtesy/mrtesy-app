@@ -37,8 +37,19 @@ const BULB = `
   </g>
 `;
 
-function svgDataUri(viewBox: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${BULB}</svg>`;
+// Solid white silhouette of the same bulb (no circuit) for the Android
+// notification status-bar icon (the "badge"). Android keeps only the alpha
+// channel and recolors it white, so this must be a single-color shape on a
+// fully transparent background — otherwise the whole tile reads as a blank box.
+const BULB_SILHOUETTE = `
+  <path d="M 32 8 C 21 8, 14 16, 14 26 C 14 32, 17 37, 21 41 L 21 46 L 43 46 L 43 41 C 47 37, 50 32, 50 26 C 50 16, 43 8, 32 8 Z" fill="#FFFFFF"/>
+  <rect x="23" y="47" width="18" height="3" rx="0.8" fill="#FFFFFF"/>
+  <rect x="24" y="51" width="16" height="3" rx="0.8" fill="#FFFFFF"/>
+  <path d="M 27 55 L 37 55 L 35 58 L 29 58 Z" fill="#FFFFFF"/>
+`;
+
+function svgDataUri(viewBox: string, mark: string = BULB): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${mark}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
@@ -49,10 +60,13 @@ export function GET(req: NextRequest) {
   const requested = parseInt(searchParams.get("size") || "512", 10);
   const size = Math.min(1024, Math.max(48, Number.isFinite(requested) ? requested : 512));
   const maskable = searchParams.get("purpose") === "maskable";
+  // Monochrome, transparent silhouette for the Android notification badge.
+  const mono = searchParams.get("purpose") === "badge" || searchParams.get("mono") === "1";
 
-  // Maskable icons must keep the mark inside the central ~80% safe zone, so
-  // the bulb is drawn smaller and the navy tile bleeds to every edge.
-  const pad = maskable ? size * 0.18 : size * 0.1;
+  // Maskable icons keep the mark inside the central ~80% safe zone; the badge
+  // fills most of its frame; standard icons use a modest margin.
+  const padFactor = mono ? 0.08 : maskable ? 0.18 : 0.1;
+  const pad = size * padFactor;
   const inner = size - pad * 2;
 
   return new ImageResponse(
@@ -64,7 +78,7 @@ export function GET(req: NextRequest) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#0F1F3D",
+          background: mono ? "transparent" : "#0F1F3D",
         }}
       >
         {/* The bulb viewBox is 14..50 wide, so widen it slightly for centering.
@@ -74,7 +88,7 @@ export function GET(req: NextRequest) {
         <img
           width={inner}
           height={inner}
-          src={svgDataUri("8 4 48 58")}
+          src={svgDataUri("8 4 48 58", mono ? BULB_SILHOUETTE : BULB)}
           alt="smrtesy"
         />
       </div>
