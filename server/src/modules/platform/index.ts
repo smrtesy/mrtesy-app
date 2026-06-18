@@ -12,6 +12,7 @@ import membersRouter from "./members/routes";
 import appsRouter from "./apps/routes";
 import meRouter from "./me/routes";
 import messagingRouter from "./messaging/routes";
+import pushRouter from "./push/routes";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use(membersRouter);
 router.use(appsRouter);
 router.use(meRouter);
 router.use(messagingRouter);
+router.use(pushRouter);
 
 export default router;

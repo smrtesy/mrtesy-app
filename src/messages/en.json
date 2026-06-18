@@ -2794,5 +2794,20 @@
     "dismiss": "Dismiss",
     "iosBody": "To install: tap <share></share> in the browser bar, then choose <add></add> “Add to Home Screen”.",
     "iosToast": "To install: tap the Share button in your browser bar, then choose “Add to Home Screen”."
+  },
+  "pushSettings": {
+    "title": "Notifications",
+    "description": "Get notified on your device about tasks, messages and updates — even when the app is closed.",
+    "turnOn": "Enable notifications",
+    "turnOff": "Turn off",
+    "test": "Send test",
+    "on": "Notifications on",
+    "enabled": "Notifications enabled",
+    "disabled": "Notifications turned off",
+    "testSent": "Test notification sent",
+    "blocked": "Notifications are blocked in your browser — allow them in site settings.",
+    "installFirst": "To get notifications, install the app to your home screen first.",
+    "unavailable": "Push service isn't configured on the server yet.",
+    "error": "Something went wrong — please try again."
   }
 }

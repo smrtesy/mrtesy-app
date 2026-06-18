@@ -14,7 +14,7 @@
  *   - Everything else (API calls, auth, POSTs, cross-origin): straight to the
  *     network, untouched.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
 
@@ -44,6 +44,60 @@ self.addEventListener("activate", (event) => {
 // Let the page tell a freshly-installed worker to take over immediately.
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+});
+
+// ── Web Push ────────────────────────────────────────────────────────────────
+// The server (web-push, VAPID) sends a JSON payload; we surface it as an OS
+// notification. Payload shape comes from server/src/lib/platform/push.ts.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: "smrtesy", body: event.data ? event.data.text() : "" };
+  }
+
+  const title = data.title || "smrtesy";
+  const options = {
+    body: data.body || "",
+    icon: "/api/icon?size=192",
+    badge: "/api/icon?size=192&purpose=maskable",
+    // Same tag collapses repeat alerts for one entity into a single banner.
+    tag: data.tag || undefined,
+    renotify: Boolean(data.tag),
+    data: { url: data.link || "/" },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Focus an existing window (and navigate it) or open a new one on tap.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+
+  event.waitUntil(
+    (async () => {
+      const clientList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      for (const client of clientList) {
+        if ("focus" in client) {
+          await client.focus();
+          if ("navigate" in client) {
+            try {
+              await client.navigate(url);
+            } catch {
+              /* cross-origin or unsupported — leave the focused tab as-is */
+            }
+          }
+          return;
+        }
+      }
+      if (self.clients.openWindow) await self.clients.openWindow(url);
+    })(),
+  );
 });
 
 function isStaticAsset(url) {

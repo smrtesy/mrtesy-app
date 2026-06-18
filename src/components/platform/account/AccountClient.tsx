@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
+import { NotificationSettings } from "@/components/pwa/NotificationSettings";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
   CheckCircle2, XCircle, RefreshCw,
@@ -198,6 +199,9 @@ export function AccountClient() {
           })}
         </CardContent>
       </Card>
+
+      {/* Notifications */}
+      <NotificationSettings />
 
       {/* Language */}
       <Card>
