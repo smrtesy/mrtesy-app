@@ -5,11 +5,12 @@ import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import {
   DndContext,
-  closestCenter,
+  closestCorners,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
+  useDroppable,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -78,6 +79,24 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
       </button>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
+  );
+}
+
+/** Identifiers for the four drop zones. A cross-list drop maps to the target
+ *  list's (pinned, size) signature; see handleDragEnd. */
+const LIST_QUICK = "list:desk-quick";
+const LIST_REGULAR = "list:desk-regular";
+const LIST_IMPORTANT = "list:important";
+const LIST_WAITING = "list:waiting";
+
+/** A list that is both a sortable context (reorder within) and a droppable
+ *  target (so a row can be dragged in from another list, even when empty). */
+function DroppableList({ id, items, children }: { id: string; items: string[]; children: React.ReactNode }) {
+  const { setNodeRef } = useDroppable({ id });
+  return (
+    <SortableContext id={id} items={items} strategy={verticalListSortingStrategy}>
+      <div ref={setNodeRef} className="min-h-[2.5rem] space-y-1.5">{children}</div>
+    </SortableContext>
   );
 }
 
@@ -253,6 +272,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
+  /** Which of the four lists a task belongs to — the single source of truth for
+   *  both the partition below and the drag-drop "will this drop stick?" check.
+   *  Priority order: blocked → ממתינות; pinning wins; then the deadline radar;
+   *  then unpinned regular tasks without a deadline; everything else waits. */
+  const bucketOf = useCallback((task: Task): string => {
+    if (unsatisfiedOf(task).length > 0) return LIST_WAITING;
+    if (task.today_position != null) return task.size === "quick" ? LIST_QUICK : LIST_REGULAR;
+    const deadline = effectiveDeadline(task);
+    if (deadline && dueUrgency(deadline, blocked) !== "far") return LIST_IMPORTANT;
+    if (task.size === "regular" && !deadline) return LIST_IMPORTANT;
+    return LIST_WAITING;
+  }, [unsatisfiedOf, blocked]);
+
   const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
@@ -260,26 +292,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return true;
     });
 
-    const desk: Task[] = [];
+    const quickList: Task[] = [];
+    const regularList: Task[] = [];
     const importantList: Task[] = [];
     const waitingList: Task[] = [];
     for (const task of visible) {
-      const isBlocked = unsatisfiedOf(task).length > 0;
-      const deadline = effectiveDeadline(task);
-      const nearDeadline = !!deadline && dueUrgency(deadline, blocked) !== "far";
-      const pinned = task.today_position != null;
-      // Priority order: blocked → waiting; pinning wins over everything else;
-      // then the deadline radar; then unpinned regular tasks without a far-off
-      // deadline (created-regular lands here); everything else waits.
-      if (isBlocked) waitingList.push(task);
-      else if (pinned) desk.push(task);
-      else if (nearDeadline) importantList.push(task);
-      else if (task.size === "regular" && !deadline) importantList.push(task);
-      else waitingList.push(task);
+      switch (bucketOf(task)) {
+        case LIST_QUICK: quickList.push(task); break;
+        case LIST_REGULAR: regularList.push(task); break;
+        case LIST_IMPORTANT: importantList.push(task); break;
+        default: waitingList.push(task);
+      }
     }
 
-    // Desk order: manual position ascending (all desk rows are pinned now).
-    const deskSorted = [...desk].sort((a, b) => (a.today_position ?? 0) - (b.today_position ?? 0));
+    // Desk order: manual position ascending (all desk rows are pinned).
+    const byPosition = (a: Task, b: Task) => (a.today_position ?? 0) - (b.today_position ?? 0);
 
     // ממתינות order: deadline asc (undated last), then priority, then newest.
     const byUrgency = (a: Task, b: Task) => {
@@ -312,13 +339,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
-      deskQuick: deskSorted.filter((task) => task.size === "quick"),
-      deskRegular: deskSorted.filter((task) => task.size !== "quick"),
+      deskQuick: [...quickList].sort(byPosition),
+      deskRegular: [...regularList].sort(byPosition),
       important: importantSorted,
       waiting: waitingSorted,
       reviewCandidates: review,
     };
-  }, [tasks, contextFilter, blocked, unsatisfiedOf]);
+  }, [tasks, contextFilter, blocked, bucketOf]);
 
   // Open focused task detail after load (deep links: ?focus=<id>)
   useEffect(() => {
@@ -528,64 +555,119 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     );
   }
 
-  function renderRows(list: Task[], zone: RowZone) {
-    return list.map((task) => renderRow(task, zone));
-  }
-
-  /** Drag-reorder within ONE desk column. Persists the new order by writing
-   *  today_position (0..n) to every row of that column — auto-promoted rows
-   *  get pinned by this, which is exactly what a manual reorder means. */
-  function handleColumnDragEnd(column: Task[]) {
-    return async (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const oldIndex = column.findIndex((row) => row.id === active.id);
-      const newIndex = column.findIndex((row) => row.id === over.id);
-      if (oldIndex < 0 || newIndex < 0) return;
-      const reordered = arrayMove(column, oldIndex, newIndex);
-      const posById = new Map(reordered.map((row, i) => [row.id, i]));
-      setTasks((prev) =>
-        prev.map((row) => (posById.has(row.id) ? { ...row, today_position: posById.get(row.id)! } : row)),
-      );
-      // Hold each row's new position so a racing refetch can't undo the reorder.
-      const now = Date.now();
-      for (const [id, pos] of posById) {
-        pendingEditsRef.current.set(id, { patch: { today_position: pos }, confirmedAt: null, at: now });
-      }
-      try {
-        const results = await Promise.all(
-          reordered.map((row, i) =>
-            api<{ task: Task }>(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
-          ),
-        );
-        for (const { task } of results) {
-          const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
-          if (pend && task?.updated_at) {
-            pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
-          }
-        }
-      } catch (e) {
-        for (const id of posById.keys()) pendingEditsRef.current.delete(id);
-        toast.error(e instanceof Error ? e.message : "Error");
-        fetchTasks();
-      }
+  /** Persist a desk column's order: write today_position 0..n to `ids` in order,
+   *  and (when a row is crossing in from another list) set its size. Optimistic
+   *  + pending-reconciled so a racing refetch can't undo it. */
+  async function applyDeskOrder(ids: string[], crossingId: string | null, crossingSize: "quick" | "regular" | null) {
+    const posById = new Map(ids.map((id, i) => [id, i]));
+    const bodyFor = (id: string): Record<string, unknown> => {
+      const body: Record<string, unknown> = { today_position: posById.get(id)! };
+      if (id === crossingId && crossingSize) body.size = crossingSize;
+      return body;
     };
+    setTasks((prev) =>
+      prev.map((row) => (posById.has(row.id) ? { ...row, ...(bodyFor(row.id) as Partial<Task>) } : row)),
+    );
+    const now = Date.now();
+    for (const id of ids) pendingEditsRef.current.set(id, { patch: bodyFor(id), confirmedAt: null, at: now });
+    try {
+      const results = await Promise.all(
+        ids.map((id) => api<{ task: Task }>(`/api/tasks/${id}`, { method: "PATCH", body: bodyFor(id) })),
+      );
+      for (const { task } of results) {
+        const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
+        if (pend && task?.updated_at) {
+          pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
+        }
+      }
+    } catch (e) {
+      for (const id of ids) pendingEditsRef.current.delete(id);
+      toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
+    }
   }
 
-  /** A desk column with drag-to-reorder (grip handle per row). */
-  function renderDeskColumn(column: Task[]) {
+  /** Drag end — reorder within a desk column, or move a row to another list.
+   *  Each list is defined by a (pinned, size) signature, so a cross-list drop is
+   *  just a patch of today_position + size; the deadline radar still overrides
+   *  (a near-deadline row always lands in חשוב when unpinned). */
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over) return;
+    const lists: Record<string, Task[]> = {
+      [LIST_QUICK]: deskQuick,
+      [LIST_REGULAR]: deskRegular,
+      [LIST_IMPORTANT]: important,
+      [LIST_WAITING]: waiting,
+    };
+    const containerOf = (id: string | number): string | null => {
+      const s = String(id);
+      if (s.startsWith("list:")) return s;
+      return Object.keys(lists).find((k) => lists[k].some((task) => task.id === s)) ?? null;
+    };
+    const from = containerOf(active.id);
+    const to = containerOf(over.id);
+    if (!from || !to) return;
+    const isDesk = (k: string) => k === LIST_QUICK || k === LIST_REGULAR;
+    const activeId = String(active.id);
+
+    if (from === to) {
+      // חשוב / ממתינות have no persistent manual order — only desk columns reorder.
+      if (!isDesk(to) || active.id === over.id) return;
+      const column = lists[to];
+      const oldIndex = column.findIndex((row) => row.id === activeId);
+      const newIndex = column.findIndex((row) => row.id === String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
+      return;
+    }
+
+    // Cross-list move. A blocked task is forced to ממתינות by the partition, so
+    // moving it elsewhere would just snap back — ignore the drop.
+    const task = tasks.find((row) => row.id === activeId);
+    if (!task || unsatisfiedOf(task).length > 0) return;
+
+    if (isDesk(to)) {
+      // Pinning wins over the deadline radar, so a desk drop always sticks.
+      const size = to === LIST_QUICK ? "quick" : "regular";
+      const column = lists[to];
+      const overIdx = column.findIndex((row) => row.id === String(over.id));
+      const insertAt = overIdx >= 0 ? overIdx : column.length;
+      const ids = column.map((row) => row.id);
+      ids.splice(insertAt, 0, activeId);
+      await applyDeskOrder(ids, activeId, size);
+      return;
+    }
+
+    // חשוב = unpinned regular (so the unpinned-regular rule holds it);
+    // ממתינות = unpinned quick. But the deadline radar overrides both: a
+    // near-deadline task always lands in חשוב, and a far-dated regular task
+    // always lands in ממתינות. If this drop wouldn't stick, say so instead of
+    // silently letting it bounce.
+    const patch = to === LIST_IMPORTANT
+      ? { today_position: null, size: "regular" as const }
+      : { today_position: null, size: "quick" as const };
+    if (bucketOf({ ...task, ...patch }) !== to) {
+      toast.error(t("dndDeadlineLocked"));
+      return;
+    }
+    patchTask(activeId, patch, (row) => ({ ...row, ...patch }));
+  }
+
+  /** One drop zone: sortable + droppable, with a grip per row. */
+  function renderList(listId: string, list: Task[], zone: RowZone, emptyMsg: string) {
     return (
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleColumnDragEnd(column)}>
-        <SortableContext items={column.map((row) => row.id)} strategy={verticalListSortingStrategy}>
-          <div className="space-y-1.5">
-            {column.map((task) => (
-              <SortableDeskRow key={task.id} id={task.id}>
-                {renderRow(task, "desk")}
-              </SortableDeskRow>
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+      <DroppableList id={listId} items={list.map((task) => task.id)}>
+        {list.length === 0 ? (
+          <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">{emptyMsg}</p>
+        ) : (
+          list.map((task) => (
+            <SortableDeskRow key={task.id} id={task.id}>
+              {renderRow(task, zone)}
+            </SortableDeskRow>
+          ))
+        )}
+      </DroppableList>
     );
   }
 
@@ -631,6 +713,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             onSnooze={(id) => setSnoozeTaskId(id)}
           />
 
+          <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
           {/* ── ON THE DESK — quick stacked above regular (full width each,
                  so rows never get cramped) ──────────────────────────────── */}
           <section className="space-y-4">
@@ -654,13 +737,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   </Button>
                 )}
               </div>
-              {deskQuick.length === 0 ? (
-                <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
-                  {t("desk.emptyQuick")}
-                </p>
-              ) : (
-                renderDeskColumn(deskQuick)
-              )}
+              {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"))}
             </div>
 
             {/* Regular — same run feature as the quick column */}
@@ -682,13 +759,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   </Button>
                 )}
               </div>
-              {deskRegular.length === 0 ? (
-                <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
-                  {t("desk.emptyRegular")}
-                </p>
-              ) : (
-                renderDeskColumn(deskRegular)
-              )}
+              {renderList(LIST_REGULAR, deskRegular, "desk", t("desk.emptyRegular"))}
             </div>
           </section>
 
@@ -698,13 +769,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {t("desk.important")}
               <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
             </h2>
-            {important.length === 0 ? (
-              <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
-                {t("desk.emptyImportant")}
-              </p>
-            ) : (
-              <div className="space-y-2">{renderRows(important, "important")}</div>
-            )}
+            {renderList(LIST_IMPORTANT, important, "important", t("desk.emptyImportant"))}
           </section>
 
           {/* ── WAITING ──────────────────────────────────────────────── */}
@@ -713,12 +778,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {t("desk.waiting")}
               <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{waiting.length}</span>
             </h2>
-            {waiting.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">{t("noTasksInView")}</p>
-            ) : (
-              <div className="space-y-2">{renderRows(waiting, "waiting")}</div>
-            )}
+            {renderList(LIST_WAITING, waiting, "waiting", t("noTasksInView"))}
           </section>
+          </DndContext>
 
           {/* ── COMPLETED (collapsible) ──────────────────────────────── */}
           <section>

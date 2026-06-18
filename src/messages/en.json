@@ -358,6 +358,7 @@
       "loading": "Loading timeline…"
     },
     "noTasksInView": "No tasks in this view",
+    "dndDeadlineLocked": "Not moved — this task's due date controls which list it's in",
     "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
       "urgent": "Urgent",
