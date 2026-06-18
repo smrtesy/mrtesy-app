@@ -3,6 +3,7 @@ import { getMessages } from "next-intl/server";
 import { RTLProvider } from "@/components/RTLProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MergeJobShell } from "@/components/MergeJobShell";
+import { PWAInstallPrompt } from "@/components/pwa/PWAInstallPrompt";
 import { Toaster } from "sonner";
 
 export default async function LocaleLayout({
@@ -26,6 +27,7 @@ export default async function LocaleLayout({
           <MergeJobShell locale={locale}>
             {children}
           </MergeJobShell>
+          <PWAInstallPrompt />
           <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
         </TooltipProvider>
       </RTLProvider>

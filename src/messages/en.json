@@ -2786,5 +2786,12 @@
     "decline": "Decline",
     "accepted": "Assignment accepted — the task joined your lists",
     "declined": "Assignment declined — the plan manager was notified"
+  },
+  "pwa": {
+    "installTitle": "Install smrtesy",
+    "installBody": "Add the app to your home screen for a fast, full-screen experience — no address bar.",
+    "installButton": "Install app",
+    "dismiss": "Dismiss",
+    "iosBody": "To install: tap <share></share> in the browser bar, then choose <add></add> “Add to Home Screen”."
   }
 }

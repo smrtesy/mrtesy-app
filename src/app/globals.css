@@ -160,3 +160,28 @@ body[data-content-wide="true"] main[data-sidebar-main] > div {
 .animate-confetti-fall {
   animation: confetti-fall 2s linear forwards;
 }
+
+/* ── PWA / standalone native feel ──────────────────────────────────────────
+   These rules give the installed app a more native touch experience without
+   affecting the site when viewed in a normal browser tab. */
+
+/* Kill the grey tap flash and keep text sizing stable for app-like taps. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* When launched from the home screen (no browser chrome), behave like an app:
+   no rubber-band overscroll on the page, and pad the safe areas (notch / home
+   indicator) so content never hides under the system UI. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
