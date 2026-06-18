@@ -269,12 +269,14 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
           created_by: "user" as const,
         }));
       if (checklist.length) body.checklist = checklist;
-      // A manual task goes straight onto the desk (pinned) — UNLESS it got a
-      // far-off deadline, in which case it belongs in the waiting list and
-      // the 3-day rule will promote it when the time comes. Position =
-      // seconds since a fixed recent epoch: monotonic and safely inside int4.
+      // A new ⚡quick task goes straight onto the desk (pinned → "מהיר – עכשיו").
+      // A regular task is deliberately NOT pinned: it lands in "חשוב" (the
+      // unpinned-regular rule), matching "switch to regular → goes to חשוב".
+      // Either way, a far-off deadline keeps it off the desk (auto-snoozed to
+      // resurface near the deadline). Position = seconds since a fixed recent
+      // epoch: monotonic and safely inside int4.
       const goesToWaiting = !!dueDate && dueUrgency(dueDate, blocked) === "far";
-      if (!goesToWaiting) {
+      if (!goesToWaiting && size === "quick") {
         body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
       }
 

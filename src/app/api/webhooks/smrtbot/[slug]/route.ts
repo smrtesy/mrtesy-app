@@ -54,6 +54,8 @@ interface BotRow {
   org_id: string;
   transport: string;
   app_secret: string | null;
+  live_app_secret_id: string | null;
+  test_app_secret_id: string | null;
   verify_token: string | null;
   test_verify_token: string | null;
   live_verify_token: string | null;
@@ -63,7 +65,7 @@ interface BotRow {
 }
 
 const BOT_FIELDS =
-  "id, org_id, transport, app_secret, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
+  "id, org_id, transport, app_secret, live_app_secret_id, test_app_secret_id, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
 
 /** Resolve a bot from the callback path segment.
  *
@@ -205,12 +207,30 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     // numbers may belong to different Meta apps with different secrets — so
     // verification can only ever match one env. Leaving it empty (unverified)
     // is the simplest way to support both; per-env secrets are a future option.
-    const appSecret = bot.app_secret?.trim() ? bot.app_secret : (process.env.META_APP_SECRET ?? null);
+    // Gather candidate App Secrets: the per-env Vault secrets (live + test, since
+    // a bot's two phone numbers can be different Meta apps), the legacy plaintext
+    // column, and the platform env. A signature is valid if it matches ANY — so
+    // both environments are verified without needing to know the env yet.
+    const candidates: string[] = [];
+    const sdb = createAdminSupabaseClient();
+    if (sdb) {
+      for (const sid of [bot.live_app_secret_id, bot.test_app_secret_id]) {
+        if (!sid) continue;
+        const { data, error } = await sdb.rpc("vault_read_secret", { secret_id: sid });
+        if (error) await logHit(bot.org_id, bot.id, slug, "vault_read_error", `${sid}: ${error.message}`);
+        else if (typeof data === "string" && data.trim()) candidates.push(data);
+      }
+    }
+    if (bot.app_secret?.trim()) candidates.push(bot.app_secret);
+    if (process.env.META_APP_SECRET) candidates.push(process.env.META_APP_SECRET);
+
     const sig = request.headers.get("x-hub-signature-256") ?? "";
     await logHit(bot.org_id, bot.id, slug, "received", sig ? "signed" : "unsigned");
-    if (appSecret) {
-      const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex");
-      if (!sig || !timingSafeEqualStr(sig, expected)) {
+    if (candidates.length > 0) {
+      const valid =
+        !!sig &&
+        candidates.some((s) => timingSafeEqualStr(sig, "sha256=" + crypto.createHmac("sha256", s).update(raw).digest("hex")));
+      if (!valid) {
         console.warn(`[smrtbot-webhook] invalid signature for ${slug} — rejecting`);
         await logHit(bot.org_id, bot.id, slug, "bad_signature", sig ? "sig_present" : "sig_absent");
         // Ack 200 (so Meta/forged callers get no retry signal) but do not process.

@@ -224,6 +224,10 @@ export function WhatsAppReader({
               tasks={tasks}
               loading={loadingMessages}
               onBack={() => setSelectedChatId(null)}
+              // The docked panel is single-pane at every width, so the
+              // back-to-list button must always show (on the full page's
+              // split layout the list is already visible beside the chat).
+              alwaysShowBack={layout === "stacked"}
               chatId={selectedChatId}
               thread={threads.find((th) => th.chat_id === selectedChatId)}
               locale={locale as string}

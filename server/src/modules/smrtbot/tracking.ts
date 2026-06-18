@@ -109,6 +109,52 @@ function encouragement(min: number): string {
   return `וואו! ${fmtDuration(min)} ברצף — עבודה מצוינת! 🚀`;
 }
 
+/** Date + time in `tz` (for "reported at"). */
+function fmtDateTime(d: Date, tz: string): string {
+  return new Intl.DateTimeFormat("he-IL", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
+}
+
+/** Parse a manual study report: "למדתי מ-8 עד 10:30" / "למדתי משעה 8 עד שעה 10".
+ *  Returns the two times, "invalid" if it looks like a report but times don't
+ *  parse, or null if it's not a manual-study message at all. */
+function parseManualStudy(text: string, tz: string): { start: Date; end: Date } | "invalid" | null {
+  if (!/למדתי/.test(text)) return null;
+  const m = text.match(
+    /מ(?:שעה)?\s*[-־]?\s*(\d{1,2}(?:[:.]\d{1,2})?)\s*(?:עד|[-־])\s*(?:שעה)?\s*[-־]?\s*(\d{1,2}(?:[:.]\d{1,2})?)/,
+  );
+  if (!m) return "invalid";
+  const start = parseTime(m[1], tz);
+  const end = parseTime(m[2], tz);
+  if (!start || !end || end <= start) return "invalid";
+  return { start, end };
+}
+
+/** Save a confirmed manual study session, recording when it was reported. */
+async function saveManualSession(bot: TrackBot, phone: string, start: Date, end: Date, reportedAt: Date, channel: BotChannel): Promise<void> {
+  const tz = tzOf(bot);
+  const minutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+  const { error } = await db.from("smrtbot_study_sessions").insert({
+    org_id: bot.org_id,
+    bot_id: bot.id,
+    phone,
+    started_at: start.toISOString(),
+    ended_at: end.toISOString(),
+    minutes,
+    status: "completed",
+    source: "manual",
+    reported_at: reportedAt.toISOString(),
+  });
+  await setTrackState(bot, phone, { pendingStudy: null });
+  if (error) {
+    await channel.text("⚠️ לא הצלחתי לשמור, נסה שוב.");
+    return;
+  }
+  const today = await sumStudyMinutes(bot, phone, startOfDayUtc(tz));
+  await channel.text(
+    `✅ אושר ונשמר!\n📚 למדתי מ-${fmtTime(start, tz)} עד ${fmtTime(end, tz)} (${fmtDuration(minutes)})\n🕒 דווח ב-${fmtDateTime(reportedAt, tz)}\n📚 היום סה״כ: ${fmtDuration(today)}`,
+  );
+}
+
 // ── study sessions ───────────────────────────────────────────
 async function startStudy(bot: TrackBot, phone: string, channel: BotChannel): Promise<void> {
   const tz = tzOf(bot);
@@ -280,6 +326,47 @@ export async function handleTrackingAction(
     await savePrayer(bot, phone, new Date(startIso), new Date(endIso), action === "prayer_minyan_yes", channel);
     return true;
   }
+
+  // Manual study report confirmation buttons.
+  if (action === "study_manual_confirm") {
+    const state = await getTrackState(bot, phone);
+    const p = state.pendingStudy as { start?: string; end?: string; reportedAt?: string } | undefined;
+    if (!p?.start || !p?.end) {
+      await channel.text('ℹ️ אין דיווח ממתין. כתוב למשל: "למדתי מ-8:00 עד 10:30".');
+      return true;
+    }
+    await saveManualSession(bot, phone, new Date(p.start), new Date(p.end), p.reportedAt ? new Date(p.reportedAt) : new Date(), channel);
+    return true;
+  }
+  if (action === "study_manual_reject") {
+    await setTrackState(bot, phone, { pendingStudy: null });
+    await channel.text('בסדר 👍 כתוב מחדש את הזמנים, למשל: "למדתי מ-8:00 עד 10:30".');
+    return true;
+  }
+
+  // Free-text manual study report ("למדתי מ-X עד Y") → confirm before saving.
+  const manual = parseManualStudy(action, tzOf(bot));
+  if (manual === "invalid") {
+    await channel.text('לא הבנתי את הזמנים. כתוב למשל: "למדתי מ-8:00 עד 10:30".');
+    return true;
+  }
+  if (manual) {
+    const tz = tzOf(bot);
+    await setTrackState(bot, phone, {
+      pendingStudy: { start: manual.start.toISOString(), end: manual.end.toISOString(), reportedAt: new Date().toISOString() },
+    });
+    const dur = Math.round((manual.end.getTime() - manual.start.getTime()) / 60000);
+    const buttons: ReplyButton[] = [
+      { id: "study_manual_confirm", title: "✅ כן" },
+      { id: "study_manual_reject", title: "❌ לא" },
+    ];
+    await channel.buttons(
+      `📚 למדתי מ-${fmtTime(manual.start, tz)} עד ${fmtTime(manual.end, tz)} (${fmtDuration(dur)}).\n\nאני מאשר שלמדתי בפועל את כל הזמן שאתה מציין כאן במלואו?`,
+      buttons,
+    );
+    return true;
+  }
+
   return false;
 }
 

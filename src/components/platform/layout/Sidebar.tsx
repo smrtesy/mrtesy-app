@@ -473,11 +473,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
       {/* More sheet — organized by app, with AppSectionHeader on top of each group. */}
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
-        <SheetContent side="bottom" className="max-h-[70vh] rounded-t-xl pb-[env(safe-area-inset-bottom)]">
-          <SheetHeader>
+        <SheetContent side="bottom" className="flex max-h-[85vh] flex-col rounded-t-xl pb-[env(safe-area-inset-bottom)]">
+          <SheetHeader className="shrink-0">
             <SheetTitle className="text-start">{t("more")}</SheetTitle>
           </SheetHeader>
-          <div className="mt-4 space-y-1 overflow-y-auto pb-2">
+          <div className="mt-4 min-h-0 flex-1 space-y-1 overflow-y-auto pb-2">
             {moreSections.map((section, i) => (
               <section
                 key={section.app?.slug ?? section.titleKey}

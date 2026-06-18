@@ -249,6 +249,7 @@
     "dateToday": "Today",
     "dateYesterday": "Yesterday",
     "back": "Back",
+    "backToChats": "Back to chats",
     "openDocument": "Open document",
     "send": "Send",
     "composePlaceholder": "Type a message…",
@@ -300,6 +301,7 @@
     "renameContactPlaceholder": "Enter a display name",
     "renameContactSave": "Save",
     "renameContactCancel": "Cancel",
+    "resizePanel": "Resize panel (drag; double-click to reset)",
     "attachImage": "Attach image",
     "dropImageHere": "Drop here to attach an image",
     "imageCaptionPlaceholder": "Add a caption (optional)…",
@@ -357,6 +359,7 @@
       "loading": "Loading timeline…"
     },
     "noTasksInView": "No tasks in this view",
+    "dndDeadlineLocked": "Not moved — this task's due date controls which list it's in",
     "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
       "urgent": "Urgent",
@@ -524,13 +527,15 @@
       "moveToWaiting": "Move to waiting"
     },
     "desk": {
-      "quick": "Quick",
-      "regular": "Regular",
+      "quick": "Quick – now",
+      "regular": "Regular – now",
+      "important": "Important",
       "waiting": "Waiting",
       "completed": "Completed",
       "startRun": "Start run",
       "emptyQuick": "No quick tasks on the desk — pull from waiting or create one",
-      "emptyRegular": "No regular tasks on the desk"
+      "emptyRegular": "No regular tasks on the desk",
+      "emptyImportant": "Nothing important — tasks due soon or unpinned regular tasks show up here"
     },
     "contextFilter": {
       "all": "All",
@@ -1885,6 +1890,12 @@
     "f_test_verify_token": "Verify token",
     "f_test_phone_display": "Display phone",
     "appSecretTitle": "Meta app",
+    "appSecretVaultHint": "The App Secret is stored encrypted in Vault — enter it once and it's saved for good; never shown again. Live and test can be different apps with different secrets.",
+    "appSecretLive": "App Secret (live)",
+    "appSecretTest": "App Secret (test)",
+    "appSecretSet": "set ✓",
+    "appSecretUnset": "not set",
+    "appSecretReplace": "enter to replace",
     "f_app_secret": "App Secret",
     "appSecretHint": "From the Meta developer dashboard — Settings → Basic. Used to verify the webhook signature; without it inbound messages are not processed.",
     "directLink": "Direct link",
@@ -2780,5 +2791,28 @@
     "decline": "Decline",
     "accepted": "Assignment accepted — the task joined your lists",
     "declined": "Assignment declined — the plan manager was notified"
+  },
+  "pwa": {
+    "installTitle": "Install smrtesy",
+    "installBody": "Add the app to your home screen for a fast, full-screen experience — no address bar.",
+    "installButton": "Install app",
+    "dismiss": "Dismiss",
+    "iosBody": "To install: tap <share></share> in the browser bar, then choose <add></add> “Add to Home Screen”.",
+    "iosToast": "To install: tap the Share button in your browser bar, then choose “Add to Home Screen”."
+  },
+  "pushSettings": {
+    "title": "Notifications",
+    "description": "Get notified on your device about tasks, messages and updates — even when the app is closed.",
+    "turnOn": "Enable notifications",
+    "turnOff": "Turn off",
+    "test": "Send test",
+    "on": "Notifications on",
+    "enabled": "Notifications enabled",
+    "disabled": "Notifications turned off",
+    "testSent": "Test notification sent",
+    "blocked": "Notifications are blocked in your browser — allow them in site settings.",
+    "installFirst": "To get notifications, install the app to your home screen first.",
+    "unavailable": "Push service isn't configured on the server yet.",
+    "error": "Something went wrong — please try again."
   }
 }
