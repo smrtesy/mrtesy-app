@@ -117,6 +117,49 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hasLoadedRef = useRef(false);
 
+  // ── optimistic-write reconciliation ─────────────────────────────────────────
+  // A realtime change to ANY task triggers a full-list refetch ~400ms later
+  // (see the subscription below). That refetch can race a write the user just
+  // made — it reads the row *before* the PATCH commits — and `setTasks` then
+  // clobbers the optimistic UI, so the task visibly "snaps back" for a moment.
+  // We hold every optimistic edit/removal here and re-apply it on each refetch
+  // until the server's own `updated_at` proves it has caught up (or a TTL
+  // expires, so a dropped confirmation can never freeze the list).
+  const pendingEditsRef = useRef<Map<string, { patch: Record<string, unknown>; confirmedAt: string | null; at: number }>>(new Map());
+  const removedRef = useRef<Map<string, number>>(new Map());
+  const PENDING_TTL_MS = 10_000;
+
+  /** Overlay still-unconfirmed optimistic edits/removals onto a fresh server
+   *  list so a refetch that raced a local write can't bounce it. */
+  const reconcilePending = useCallback((rows: Task[]): Task[] => {
+    const now = Date.now();
+    for (const [id, pend] of pendingEditsRef.current) {
+      if (now - pend.at > PENDING_TTL_MS) { pendingEditsRef.current.delete(id); continue; }
+      const idx = rows.findIndex((r) => r.id === id);
+      if (idx < 0) continue; // not in this list (e.g. completed) — removals handle it
+      if (pend.confirmedAt && Date.parse(rows[idx].updated_at) >= Date.parse(pend.confirmedAt)) {
+        pendingEditsRef.current.delete(id); // server reflects our write — let it through
+      } else {
+        rows[idx] = { ...rows[idx], ...(pend.patch as Partial<Task>) }; // keep our version
+      }
+    }
+    if (removedRef.current.size) {
+      for (const [id, at] of removedRef.current) {
+        if (now - at > PENDING_TTL_MS) removedRef.current.delete(id);
+      }
+      rows = rows.filter((r) => !removedRef.current.has(r.id));
+    }
+    return rows;
+  }, []);
+
+  /** Optimistically drop a row (complete / snooze / auto-snooze) and remember it
+   *  so a racing refetch can't resurrect it before the write commits. */
+  const optimisticRemove = useCallback((taskId: string) => {
+    pendingEditsRef.current.delete(taskId); // the row is leaving — no edit to re-apply
+    removedRef.current.set(taskId, Date.now());
+    setTasks((prev) => prev.filter((row) => row.id !== taskId));
+  }, []);
+
   // QuickAction / DriveSearch state (opened from TaskDetail)
   const [qaOpen, setQaOpen] = useState(false);
   const [qaTaskId, setQaTaskId] = useState("");
@@ -148,7 +191,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         meta.set(pt.id, { needs: pt.needs ?? [] });
         if (!present.has(pt.id) && OPEN.has(pt.status)) merged.push(pt as Task);
       }
-      setTasks(merged);
+      setTasks(reconcilePending(merged));
       setPlanMeta(meta);
       hasLoadedRef.current = true;
       if (typeof window !== "undefined") {
@@ -159,7 +202,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [reconcilePending]);
 
   const fetchCompleted = useCallback(async () => {
     try {
@@ -293,14 +336,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   async function handleToggleDone(task: Task, done: boolean) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
-    if (done) setTasks((prev) => prev.filter((row) => row.id !== task.id));
+    if (done) optimisticRemove(task.id);
     try {
       if (done) {
         await completeTask(task);
         undoToast({
           message: t("actions.complete"),
           undoLabel: t("row.undo"),
-          onUndo: () => { reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message)); },
+          onUndo: () => {
+            removedRef.current.delete(task.id);
+            reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message));
+          },
         });
       } else {
         await reopenTask(task);
@@ -309,18 +355,24 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       fetchTasks();
       if (showCompleted) fetchCompleted();
     } catch (e) {
+      removedRef.current.delete(task.id);
       toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
     }
   }
 
   async function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
+    const id = snoozeTaskId;
+    optimisticRemove(id);
     try {
-      await api(`/api/tasks/${snoozeTaskId}/snooze`, { method: "POST", body: { until: untilIso } });
+      await api(`/api/tasks/${id}/snooze`, { method: "POST", body: { until: untilIso } });
       toast.success(t("actions.snooze"));
       fetchTasks();
     } catch (e) {
+      removedRef.current.delete(id);
       toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
     }
   }
 
@@ -329,10 +381,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       setTasks((prev) => prev.map((task) => (task.id === taskId ? optimistic(task) : task)));
       setSelectedTask((prev) => (prev && prev.id === taskId ? optimistic(prev) : prev));
     }
+    // Hold the edit so a refetch racing this write can't bounce it back.
+    pendingEditsRef.current.set(taskId, { patch: body, confirmedAt: null, at: Date.now() });
     try {
-      await api(`/api/tasks/${taskId}`, { method: "PATCH", body });
+      const { task } = await api<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body });
+      const pend = pendingEditsRef.current.get(taskId);
+      if (pend && task?.updated_at) {
+        pendingEditsRef.current.set(taskId, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
+      }
       return true;
     } catch (e) {
+      pendingEditsRef.current.delete(taskId);
       toast.error(e instanceof Error ? e.message : "Error");
       fetchTasks();
       return false;
@@ -345,6 +404,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */
   const unsnooze = useCallback((taskId: string) => {
+    removedRef.current.delete(taskId); // bringing it back — let the refetch show it
     api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox", snoozed_until: null } })
       .then(fetchTasks)
       .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
@@ -361,10 +421,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     if (!ok || !date) return;
     const moment = autoSnoozeMoment(date, blocked);
     if (!moment) return;
-    setTasks((prev) => prev.filter((row) => row.id !== taskId)); // optimistic hide
+    optimisticRemove(taskId); // optimistic hide until it resurfaces near the deadline
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
       .then(fetchTasks)
-      .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
+      .catch((e) => { removedRef.current.delete(taskId); toast.error((e as Error).message); fetchTasks(); });
     undoToast({
       message: t("undo.autoSnoozed", { date: dueLabel(moment.dateISO) }),
       undoLabel: t("row.undo"),
@@ -467,13 +527,25 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       setTasks((prev) =>
         prev.map((row) => (posById.has(row.id) ? { ...row, today_position: posById.get(row.id)! } : row)),
       );
+      // Hold each row's new position so a racing refetch can't undo the reorder.
+      const now = Date.now();
+      for (const [id, pos] of posById) {
+        pendingEditsRef.current.set(id, { patch: { today_position: pos }, confirmedAt: null, at: now });
+      }
       try {
-        await Promise.all(
+        const results = await Promise.all(
           reordered.map((row, i) =>
-            api(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
+            api<{ task: Task }>(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
           ),
         );
+        for (const { task } of results) {
+          const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
+          if (pend && task?.updated_at) {
+            pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
+          }
+        }
       } catch (e) {
+        for (const id of posById.keys()) pendingEditsRef.current.delete(id);
         toast.error(e instanceof Error ? e.message : "Error");
         fetchTasks();
       }
