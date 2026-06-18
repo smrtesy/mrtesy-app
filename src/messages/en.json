@@ -2792,6 +2792,7 @@
     "installBody": "Add the app to your home screen for a fast, full-screen experience — no address bar.",
     "installButton": "Install app",
     "dismiss": "Dismiss",
-    "iosBody": "To install: tap <share></share> in the browser bar, then choose <add></add> “Add to Home Screen”."
+    "iosBody": "To install: tap <share></share> in the browser bar, then choose <add></add> “Add to Home Screen”.",
+    "iosToast": "To install: tap the Share button in your browser bar, then choose “Add to Home Screen”."
   }
 }

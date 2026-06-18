@@ -3,29 +3,10 @@
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Download, Share, X, Plus } from "lucide-react";
+import { usePwaInstall } from "@/lib/pwa/install";
 
 const DISMISS_KEY = "smrt_pwa_install_dismissed";
 const DISMISS_DAYS = 14;
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
-
-function isStandalone(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    // iOS Safari exposes this non-standard flag when launched from the home screen.
-    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
-  );
-}
-
-function isIos(): boolean {
-  if (typeof window === "undefined") return false;
-  const ua = window.navigator.userAgent;
-  return /iphone|ipad|ipod/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
-}
 
 function recentlyDismissed(): boolean {
   try {
@@ -41,37 +22,19 @@ function recentlyDismissed(): boolean {
  * A small, dismissible banner that guides the user to install the app to their
  * home screen for the chrome-less standalone experience.
  *
- * Two paths: Android/desktop Chrome fire `beforeinstallprompt`, which we
- * capture and replay behind our own button; iOS Safari has no such event, so
- * we show the manual "Share → Add to Home Screen" instructions instead.
+ * Install availability comes from the shared `usePwaInstall` store (kept in
+ * sync with the header InstallAppButton): Android/desktop Chrome expose a
+ * native prompt we replay; iOS Safari has none, so we show the manual
+ * "Share → Add to Home Screen" instructions instead.
  */
 export function PWAInstallPrompt() {
   const t = useTranslations("pwa");
-  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
-  const [showIosHint, setShowIosHint] = useState(false);
+  const { canPrompt, ios, standalone, promptInstall } = usePwaInstall();
+  const [dismissed, setDismissed] = useState(true);
 
+  // Read the dismissal flag on the client only (avoids SSR/localStorage mismatch).
   useEffect(() => {
-    if (isStandalone() || recentlyDismissed()) return;
-
-    const onBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setDeferred(e as BeforeInstallPromptEvent);
-    };
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-
-    // iOS never fires the event, so offer the manual hint there.
-    if (isIos()) setShowIosHint(true);
-
-    const onInstalled = () => {
-      setDeferred(null);
-      setShowIosHint(false);
-    };
-    window.addEventListener("appinstalled", onInstalled);
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
+    setDismissed(recentlyDismissed());
   }, []);
 
   const dismiss = () => {
@@ -80,18 +43,13 @@ export function PWAInstallPrompt() {
     } catch {
       /* ignore storage failures (private mode) */
     }
-    setDeferred(null);
-    setShowIosHint(false);
+    setDismissed(true);
   };
 
-  const install = async () => {
-    if (!deferred) return;
-    await deferred.prompt();
-    await deferred.userChoice;
-    setDeferred(null);
-  };
+  // Hide when installed, recently dismissed, or there's nothing to offer yet.
+  if (standalone || dismissed || (!canPrompt && !ios)) return null;
 
-  if (!deferred && !showIosHint) return null;
+  const showIosHint = !canPrompt && ios;
 
   return (
     <div
@@ -123,7 +81,7 @@ export function PWAInstallPrompt() {
           {!showIosHint && (
             <button
               type="button"
-              onClick={install}
+              onClick={() => promptInstall()}
               className="mt-3 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground active:scale-[0.98]"
             >
               <Download className="h-4 w-4" />
