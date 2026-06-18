@@ -19,7 +19,7 @@
  * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
  * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v4";
+const VERSION = "v6";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];
@@ -84,7 +84,9 @@ self.addEventListener("push", (event) => {
   const options = {
     body: data.body || "",
     icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192-maskable.png",
+    // Android status-bar icon: must be a monochrome transparent silhouette
+    // (the OS keeps only the alpha channel and recolors it white).
+    badge: "/icons/badge-96.png",
     // Same tag collapses repeat alerts for one entity into a single banner.
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),
@@ -171,28 +173,23 @@ async function cacheFirst(request) {
   return response;
 }
 
-// API reads: serve cache immediately if present, refresh in the background;
-// otherwise wait for the network. Returns last-known data when offline.
-function staleWhileRevalidate(event, request) {
-  return (async () => {
-    const cache = await caches.open(RUNTIME_CACHE);
-    const cached = await cache.match(request);
-    const networkPromise = fetch(request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          cache.put(request, response.clone());
-        }
-        return response;
-      })
-      .catch(() => undefined);
-
-    if (cached) {
-      // Keep the background refresh alive past respondWith.
-      event.waitUntil(networkPromise);
-      return cached;
+// API reads: network-first, falling back to the last cached response only when
+// offline. We deliberately do NOT stale-while-revalidate here — counts, lists
+// and other live data must be fresh whenever there's a connection, otherwise
+// the UI shows stale values (e.g. an inbox badge that no longer matches the
+// list). The cache is purely an offline read-only snapshot.
+async function networkFirstApi(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.status === 200) {
+      cache.put(request, fresh.clone());
     }
-    return (await networkPromise) || Response.error();
-  })();
+    return fresh;
+  } catch {
+    const cached = await cache.match(request);
+    return cached || Response.error();
+  }
 }
 
 self.addEventListener("fetch", (event) => {
@@ -218,7 +215,7 @@ self.addEventListener("fetch", (event) => {
 
   // Backend API reads (matched by origin via isCacheableApi).
   if (isCacheableApi(url)) {
-    event.respondWith(staleWhileRevalidate(event, request));
+    event.respondWith(networkFirstApi(request));
     return;
   }
 
