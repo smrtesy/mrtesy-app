@@ -11,7 +11,7 @@ import {
 } from "@/lib/workdays";
 import type { Task, TaskNeed } from "@/types/task";
 
-export type RowZone = "desk" | "waiting" | "done";
+export type RowZone = "desk" | "important" | "waiting" | "done";
 
 /**
  * The unified compact task row — one component for the desk columns, the
@@ -193,7 +193,7 @@ export function TaskRow({
             )}
             {/* A blocked task can't sit on the desk (the partition keeps it in
                 waiting regardless of pin), so don't offer a no-op arrow. */}
-            {onMove && zone === "waiting" && !isBlocked && (
+            {onMove && (zone === "waiting" || zone === "important") && !isBlocked && (
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onMove(task.id, true); }}

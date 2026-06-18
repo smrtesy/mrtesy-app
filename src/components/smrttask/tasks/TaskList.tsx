@@ -22,7 +22,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
-import { TaskRow } from "./TaskRow";
+import { TaskRow, type RowZone } from "./TaskRow";
 import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
 import { ReviewBanner } from "./ReviewBanner";
@@ -82,11 +82,16 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
 }
 
 /**
- * The desk page:
- *   על השולחן — two columns (⚡ quick | regular): manually pinned tasks
- *               (today_position) + auto-promoted ones (effective deadline
- *               within 3 working days and not blocked).
- *   ממתינות   — everything else, sorted by deadline urgency (undated last).
+ * The desk page — four lists, assigned in priority order (active = not blocked,
+ * not snoozed; snoozed rows aren't fetched):
+ *   מהיר – עכשיו / רגיל – עכשיו — manually pinned (today_position) tasks, split
+ *               by size. Pinning wins: a task you put on the desk lives here
+ *               even if its deadline is near.
+ *   חשוב       — the radar: anything with an effective deadline within 3 working
+ *               days, plus any regular task you haven't pinned and didn't give a
+ *               far-off deadline (e.g. a regular task you just created).
+ *   ממתינות   — the rest: unpinned quick tasks with no near deadline, regular
+ *               tasks parked behind a far deadline, and blocked tasks.
  *   הושלמו    — collapsed, with reopen.
  */
 export function TaskList({ locale, title }: { locale: string; title?: string }) {
@@ -116,6 +121,49 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const focusedRef = useRef<string | null>(null);
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hasLoadedRef = useRef(false);
+
+  // ── optimistic-write reconciliation ─────────────────────────────────────────
+  // A realtime change to ANY task triggers a full-list refetch ~400ms later
+  // (see the subscription below). That refetch can race a write the user just
+  // made — it reads the row *before* the PATCH commits — and `setTasks` then
+  // clobbers the optimistic UI, so the task visibly "snaps back" for a moment.
+  // We hold every optimistic edit/removal here and re-apply it on each refetch
+  // until the server's own `updated_at` proves it has caught up (or a TTL
+  // expires, so a dropped confirmation can never freeze the list).
+  const pendingEditsRef = useRef<Map<string, { patch: Record<string, unknown>; confirmedAt: string | null; at: number }>>(new Map());
+  const removedRef = useRef<Map<string, number>>(new Map());
+  const PENDING_TTL_MS = 10_000;
+
+  /** Overlay still-unconfirmed optimistic edits/removals onto a fresh server
+   *  list so a refetch that raced a local write can't bounce it. */
+  const reconcilePending = useCallback((rows: Task[]): Task[] => {
+    const now = Date.now();
+    for (const [id, pend] of pendingEditsRef.current) {
+      if (now - pend.at > PENDING_TTL_MS) { pendingEditsRef.current.delete(id); continue; }
+      const idx = rows.findIndex((r) => r.id === id);
+      if (idx < 0) continue; // not in this list (e.g. completed) — removals handle it
+      if (pend.confirmedAt && Date.parse(rows[idx].updated_at) >= Date.parse(pend.confirmedAt)) {
+        pendingEditsRef.current.delete(id); // server reflects our write — let it through
+      } else {
+        rows[idx] = { ...rows[idx], ...(pend.patch as Partial<Task>) }; // keep our version
+      }
+    }
+    if (removedRef.current.size) {
+      for (const [id, at] of removedRef.current) {
+        if (now - at > PENDING_TTL_MS) removedRef.current.delete(id);
+      }
+      rows = rows.filter((r) => !removedRef.current.has(r.id));
+    }
+    return rows;
+  }, []);
+
+  /** Optimistically drop a row (complete / snooze / auto-snooze) and remember it
+   *  so a racing refetch can't resurrect it before the write commits. */
+  const optimisticRemove = useCallback((taskId: string) => {
+    pendingEditsRef.current.delete(taskId); // the row is leaving — no edit to re-apply
+    removedRef.current.set(taskId, Date.now());
+    setTasks((prev) => prev.filter((row) => row.id !== taskId));
+  }, []);
 
   // QuickAction / DriveSearch state (opened from TaskDetail)
   const [qaOpen, setQaOpen] = useState(false);
@@ -148,7 +196,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         meta.set(pt.id, { needs: pt.needs ?? [] });
         if (!present.has(pt.id) && OPEN.has(pt.status)) merged.push(pt as Task);
       }
-      setTasks(merged);
+      setTasks(reconcilePending(merged));
       setPlanMeta(meta);
       hasLoadedRef.current = true;
       if (typeof window !== "undefined") {
@@ -159,7 +207,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [reconcilePending]);
 
   const fetchCompleted = useCallback(async () => {
     try {
@@ -205,7 +253,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
-  const { deskQuick, deskRegular, waiting, reviewCandidates } = useMemo(() => {
+  const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
       if (contextFilter === "work") return task.context !== "home";
@@ -213,30 +261,28 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
 
     const desk: Task[] = [];
+    const importantList: Task[] = [];
     const waitingList: Task[] = [];
     for (const task of visible) {
       const isBlocked = unsatisfiedOf(task).length > 0;
       const deadline = effectiveDeadline(task);
       const nearDeadline = !!deadline && dueUrgency(deadline, blocked) !== "far";
       const pinned = task.today_position != null;
-      if (!isBlocked && (pinned || nearDeadline)) desk.push(task);
+      // Priority order: blocked → waiting; pinning wins over everything else;
+      // then the deadline radar; then unpinned regular tasks without a far-off
+      // deadline (created-regular lands here); everything else waits.
+      if (isBlocked) waitingList.push(task);
+      else if (pinned) desk.push(task);
+      else if (nearDeadline) importantList.push(task);
+      else if (task.size === "regular" && !deadline) importantList.push(task);
       else waitingList.push(task);
     }
 
-    // Desk order: pinned first by manual position, then auto-promoted by deadline.
-    const deskSorted = [...desk].sort((a, b) => {
-      const ap = a.today_position;
-      const bp = b.today_position;
-      if (ap != null && bp != null) return ap - bp;
-      if (ap != null) return -1;
-      if (bp != null) return 1;
-      const da = effectiveDeadline(a) ?? "9999";
-      const db = effectiveDeadline(b) ?? "9999";
-      return da.localeCompare(db);
-    });
+    // Desk order: manual position ascending (all desk rows are pinned now).
+    const deskSorted = [...desk].sort((a, b) => (a.today_position ?? 0) - (b.today_position ?? 0));
 
-    // Waiting order: deadline asc (undated last), then priority, then newest.
-    const waitingSorted = [...waitingList].sort((a, b) => {
+    // ממתינות order: deadline asc (undated last), then priority, then newest.
+    const byUrgency = (a: Task, b: Task) => {
       const da = effectiveDeadline(a);
       const db = effectiveDeadline(b);
       if (da && db && da !== db) return da.localeCompare(db);
@@ -245,13 +291,30 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
       if (rank !== 0) return rank;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-    });
+    };
+    // חשוב order: the unpinned regular pile (undated) on top, newest first — so a
+    // freshly added regular task lands at the very head of חשוב — then the dated
+    // near-deadline items below, soonest first.
+    const byImportant = (a: Task, b: Task) => {
+      const da = effectiveDeadline(a);
+      const db = effectiveDeadline(b);
+      if (!da && !db) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      if (!da) return -1; // undated floats above dated
+      if (!db) return 1;
+      if (da !== db) return da.localeCompare(db);
+      const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
+      if (rank !== 0) return rank;
+      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+    };
+    const importantSorted = [...importantList].sort(byImportant);
+    const waitingSorted = [...waitingList].sort(byUrgency);
 
     const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
       deskQuick: deskSorted.filter((task) => task.size === "quick"),
       deskRegular: deskSorted.filter((task) => task.size !== "quick"),
+      important: importantSorted,
       waiting: waitingSorted,
       reviewCandidates: review,
     };
@@ -293,14 +356,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   async function handleToggleDone(task: Task, done: boolean) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
-    if (done) setTasks((prev) => prev.filter((row) => row.id !== task.id));
+    if (done) optimisticRemove(task.id);
     try {
       if (done) {
         await completeTask(task);
         undoToast({
           message: t("actions.complete"),
           undoLabel: t("row.undo"),
-          onUndo: () => { reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message)); },
+          onUndo: () => {
+            removedRef.current.delete(task.id);
+            reopenTask(task).then(fetchTasks).catch((e) => toast.error((e as Error).message));
+          },
         });
       } else {
         await reopenTask(task);
@@ -309,18 +375,24 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       fetchTasks();
       if (showCompleted) fetchCompleted();
     } catch (e) {
+      removedRef.current.delete(task.id);
       toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
     }
   }
 
   async function handleSnoozeConfirm(untilIso: string) {
     if (!snoozeTaskId) return;
+    const id = snoozeTaskId;
+    optimisticRemove(id);
     try {
-      await api(`/api/tasks/${snoozeTaskId}/snooze`, { method: "POST", body: { until: untilIso } });
+      await api(`/api/tasks/${id}/snooze`, { method: "POST", body: { until: untilIso } });
       toast.success(t("actions.snooze"));
       fetchTasks();
     } catch (e) {
+      removedRef.current.delete(id);
       toast.error(e instanceof Error ? e.message : "Error");
+      fetchTasks();
     }
   }
 
@@ -329,10 +401,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       setTasks((prev) => prev.map((task) => (task.id === taskId ? optimistic(task) : task)));
       setSelectedTask((prev) => (prev && prev.id === taskId ? optimistic(prev) : prev));
     }
+    // Hold the edit so a refetch racing this write can't bounce it back.
+    pendingEditsRef.current.set(taskId, { patch: body, confirmedAt: null, at: Date.now() });
     try {
-      await api(`/api/tasks/${taskId}`, { method: "PATCH", body });
+      const { task } = await api<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body });
+      const pend = pendingEditsRef.current.get(taskId);
+      if (pend && task?.updated_at) {
+        pendingEditsRef.current.set(taskId, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
+      }
       return true;
     } catch (e) {
+      pendingEditsRef.current.delete(taskId);
       toast.error(e instanceof Error ? e.message : "Error");
       fetchTasks();
       return false;
@@ -345,6 +424,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */
   const unsnooze = useCallback((taskId: string) => {
+    removedRef.current.delete(taskId); // bringing it back — let the refetch show it
     api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "inbox", snoozed_until: null } })
       .then(fetchTasks)
       .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
@@ -361,10 +441,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     if (!ok || !date) return;
     const moment = autoSnoozeMoment(date, blocked);
     if (!moment) return;
-    setTasks((prev) => prev.filter((row) => row.id !== taskId)); // optimistic hide
+    optimisticRemove(taskId); // optimistic hide until it resurfaces near the deadline
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
       .then(fetchTasks)
-      .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
+      .catch((e) => { removedRef.current.delete(taskId); toast.error((e as Error).message); fetchTasks(); });
     undoToast({
       message: t("undo.autoSnoozed", { date: dueLabel(moment.dateISO) }),
       undoLabel: t("row.undo"),
@@ -428,7 +508,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     { key: "work", label: t("contextFilter.work"), icon: Briefcase },
   ];
 
-  function renderRow(task: Task, zone: "desk" | "waiting") {
+  function renderRow(task: Task, zone: RowZone) {
     return (
       <TaskRow
         key={task.id}
@@ -448,7 +528,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     );
   }
 
-  function renderRows(list: Task[], zone: "desk" | "waiting") {
+  function renderRows(list: Task[], zone: RowZone) {
     return list.map((task) => renderRow(task, zone));
   }
 
@@ -467,13 +547,25 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       setTasks((prev) =>
         prev.map((row) => (posById.has(row.id) ? { ...row, today_position: posById.get(row.id)! } : row)),
       );
+      // Hold each row's new position so a racing refetch can't undo the reorder.
+      const now = Date.now();
+      for (const [id, pos] of posById) {
+        pendingEditsRef.current.set(id, { patch: { today_position: pos }, confirmedAt: null, at: now });
+      }
       try {
-        await Promise.all(
+        const results = await Promise.all(
           reordered.map((row, i) =>
-            api(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
+            api<{ task: Task }>(`/api/tasks/${row.id}`, { method: "PATCH", body: { today_position: i } }),
           ),
         );
+        for (const { task } of results) {
+          const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
+          if (pend && task?.updated_at) {
+            pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
+          }
+        }
       } catch (e) {
+        for (const id of posById.keys()) pendingEditsRef.current.delete(id);
         toast.error(e instanceof Error ? e.message : "Error");
         fetchTasks();
       }
@@ -598,6 +690,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                 renderDeskColumn(deskRegular)
               )}
             </div>
+          </section>
+
+          {/* ── IMPORTANT (חשוב) — deadline radar + the unpinned regular pile ── */}
+          <section>
+            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t("desk.important")}
+              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
+            </h2>
+            {important.length === 0 ? (
+              <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
+                {t("desk.emptyImportant")}
+              </p>
+            ) : (
+              <div className="space-y-2">{renderRows(important, "important")}</div>
+            )}
           </section>
 
           {/* ── WAITING ──────────────────────────────────────────────── */}
