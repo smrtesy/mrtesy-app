@@ -21,6 +21,27 @@ function generateWebKey(): string {
   return `wk_${randomBytes(12).toString("hex")}`;
 }
 
+/** Write-or-rotate a Vault secret; returns the (possibly new) secret id. */
+async function upsertVaultSecret(
+  newValue: string,
+  existingId: string | null,
+  name: string,
+  description: string,
+): Promise<{ id: string | null; error: string | null }> {
+  if (existingId) {
+    const { error } = await db.rpc("vault_update_secret", { secret_id: existingId, new_secret: newValue });
+    if (error) return { id: null, error: error.message };
+    return { id: existingId, error: null };
+  }
+  const { data, error } = await db.rpc("vault_create_secret", {
+    new_secret: newValue,
+    new_name: name,
+    new_description: description,
+  });
+  if (error) return { id: null, error: error.message };
+  return { id: (data as string | null) ?? null, error: null };
+}
+
 // Fields a client may set when creating/updating a bot.
 const BOT_UPDATABLE = new Set([
   "name",
@@ -133,7 +154,54 @@ router.get("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: Res
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Bot not found" });
-  res.json({ bot: data });
+  // Org slug lets the client build the preferred (globally-unique) webhook
+  // callback URL "<org_slug>_<bot_slug>".
+  const { data: org } = await db
+    .from("organizations")
+    .select("slug")
+    .eq("id", req.org!.id)
+    .maybeSingle();
+  // Never ship the legacy plaintext App Secret to the client — it's write-only
+  // now (per-env values live in Vault, exposed only as *_app_secret_id pointers).
+  const { app_secret: _omitAppSecret, ...safe } = data as Record<string, unknown>;
+  res.json({ bot: { ...safe, org_slug: (org?.slug as string | null) ?? null } });
+});
+
+/** PUT /bot/bots/:botId/app-secret { env: 'live'|'test', value } — store a
+ *  per-env Meta App Secret in Vault (encrypted) and keep only its pointer on
+ *  the bot. Write-only: the plaintext is never returned. */
+router.put("/bot/bots/:botId/app-secret", requireBotAccess(), async (req: Request, res: Response) => {
+  const env = req.body?.env === "test" ? "test" : req.body?.env === "live" ? "live" : null;
+  const value = req.body?.value;
+  if (!env) return res.status(400).json({ error: "env must be 'live' or 'test'" });
+  if (typeof value !== "string" || !value.trim()) return res.status(400).json({ error: "value is required" });
+
+  const col = env === "live" ? "live_app_secret_id" : "test_app_secret_id";
+  const { data: bot, error: botErr } = await db
+    .from("smrtbot_bots")
+    .select("id, live_app_secret_id, test_app_secret_id")
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.botId)
+    .maybeSingle();
+  if (botErr) return res.status(500).json({ error: botErr.message });
+  if (!bot) return res.status(404).json({ error: "Bot not found" });
+
+  const existingId = (bot[col] as string | null) ?? null;
+  const { id, error } = await upsertVaultSecret(
+    value.trim(),
+    existingId,
+    `smrtbot_${req.params.botId}_${env}_app_secret`,
+    `smrtBot ${env} App Secret`,
+  );
+  if (error || !id) return res.status(500).json({ error: error ?? "vault error" });
+
+  const { error: updErr } = await db
+    .from("smrtbot_bots")
+    .update({ [col]: id })
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.botId);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  res.json({ ok: true });
 });
 
 // ── Update bot basic details + credentials ───────────────────

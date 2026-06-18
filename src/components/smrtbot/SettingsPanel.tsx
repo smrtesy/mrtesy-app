@@ -55,9 +55,29 @@ export function SettingsPanel({ botId }: { botId: string }) {
 
   return (
     <div className="space-y-4">
+      {/* Dedicated, labeled control for the menu trigger words. */}
+      <Card>
+        <CardContent className="space-y-2 pt-6">
+          <label className="text-sm font-medium">{t("menuWordsTitle")}</label>
+          <div className="flex items-end gap-2">
+            <Input
+              dir="auto"
+              className="flex-1"
+              placeholder="תפריט, שלום, היי, הי, מה, menu, hi, hello"
+              value={draft["menu_words"] ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, menu_words: e.target.value }))}
+            />
+            <Button variant="outline" size="sm" onClick={async () => { await put("menu_words", draft["menu_words"] ?? ""); await load(); }}>
+              {t("save")}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("menuWordsHint")}</p>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent className="space-y-3 pt-6">
-          {settings.map((s) => (
+          {settings.filter((s) => s.key !== "menu_words").map((s) => (
             <div key={s.id} className="flex items-end gap-2">
               <div className="flex-1 space-y-1">
                 <label className="font-mono text-xs text-muted-foreground" dir="ltr">{s.key}</label>

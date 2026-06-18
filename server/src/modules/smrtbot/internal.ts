@@ -48,7 +48,7 @@ router.post("/api/bot/internal/inbound", async (req: Request, res: Response) => 
   const { data: bot, error } = await db
     .from("smrtbot_bots")
     .select(
-      "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token",
+      "id, org_id, slug, timezone, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token",
     )
     .eq("id", bot_id)
     .maybeSingle();

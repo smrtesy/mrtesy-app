@@ -59,6 +59,7 @@ const SECTIONS: Section[] = [
     items: [
       { seg: "stats", labelKey: "statsTitle" },
       { seg: "logs", labelKey: "logsTitle" },
+      { seg: "webhook-debug" },
       { seg: "contacts" },
       { seg: "study-sessions" },
       { seg: "prayers" },

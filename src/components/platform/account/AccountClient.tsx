@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
+import { NotificationSettings } from "@/components/pwa/NotificationSettings";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
   CheckCircle2, XCircle, RefreshCw,
@@ -92,6 +93,15 @@ export function AccountClient() {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
+    // Wipe offline-cached pages/data so the next user on this device can't read
+    // them. Use the ready registration's active worker — `controller` is null on
+    // first load / hard reload, which would silently skip the wipe.
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      reg?.active?.postMessage("CLEAR_CACHE");
+    } catch {
+      /* no SW (dev or unsupported) — nothing cached to clear */
+    }
     router.push(`/${locale}/login`);
   }
 
@@ -198,6 +208,9 @@ export function AccountClient() {
           })}
         </CardContent>
       </Card>
+
+      {/* Notifications */}
+      <NotificationSettings />
 
       {/* Language */}
       <Card>

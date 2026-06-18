@@ -1,4 +1,5 @@
 import { db } from "../../db";
+import { sendPush } from "./push";
 import type { NotifyParams, NotifyErrorParams } from "./types";
 
 export async function notify(
@@ -18,7 +19,24 @@ export async function notify(
     entity_id:    params.entity_id ?? null,
     from_user_id: params.from_user_id ?? null,
   });
-  if (error) console.error("[platform.notify]", error.message);
+  if (error) {
+    console.error("[platform.notify]", error.message);
+    return;
+  }
+
+  // Fan the same notification out as a Web Push to the user's installed
+  // devices. Fire-and-forget: pushing to slow/remote push services must not
+  // add latency to the caller (this is a long-running server, not serverless,
+  // so the task completes after the response). sendPush never throws, but
+  // guard anyway so an unexpected rejection can't surface as unhandled.
+  void sendPush(userId, {
+    title:    params.title,
+    body:     params.body,
+    link:     params.link,
+    type:     params.type,
+    app_slug: params.app_slug,
+    tag:      params.entity_id ?? undefined,
+  }).catch((e) => console.error("[platform.notify] push:", e));
 }
 
 /**

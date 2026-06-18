@@ -31,11 +31,31 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 type Params = { params: Promise<{ slug: string }> };
 
+/** Best-effort diagnostic log of each webhook hit + outcome (smrtbot_webhook_debug).
+ *  Visible from the bot's "Webhook log" tab so connection issues are debuggable.
+ *  Never throws — diagnostics must not affect the 200 ack. */
+async function logHit(
+  orgId: string | null,
+  botId: string | null,
+  slug: string,
+  outcome: string,
+  detail?: string,
+): Promise<void> {
+  try {
+    const db = createAdminSupabaseClient();
+    if (db) await db.from("smrtbot_webhook_debug").insert({ org_id: orgId, bot_id: botId, slug, outcome, detail: detail ?? null });
+  } catch {
+    /* diagnostic only */
+  }
+}
+
 interface BotRow {
   id: string;
   org_id: string;
   transport: string;
   app_secret: string | null;
+  live_app_secret_id: string | null;
+  test_app_secret_id: string | null;
   verify_token: string | null;
   test_verify_token: string | null;
   live_verify_token: string | null;
@@ -45,7 +65,7 @@ interface BotRow {
 }
 
 const BOT_FIELDS =
-  "id, org_id, transport, app_secret, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
+  "id, org_id, transport, app_secret, live_app_secret_id, test_app_secret_id, verify_token, test_verify_token, live_verify_token, test_wa_phone_number_id, live_wa_phone_number_id, wa_phone_number_id";
 
 /** Resolve a bot from the callback path segment.
  *
@@ -90,26 +110,26 @@ interface InboundForward {
 }
 
 /** Forward an inbound message to the engine on the Railway server. Resilient:
- *  never throws — the webhook must still ack 200 to Meta. */
+ *  never throws — the webhook must still ack 200 to Meta. Returns the outcome so
+ *  the diagnostic log can show exactly why a forward didn't reach the engine. */
 async function forwardToEngine(
   botId: string,
   env: "test" | "live",
   message: InboundForward,
-): Promise<void> {
+): Promise<{ ok: boolean; detail: string }> {
   const backend = process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL;
   const secret = process.env.SMRTBOT_INTERNAL_SECRET ?? process.env.CRON_SECRET;
-  if (!backend || !secret) {
-    console.error("[smrtbot-webhook] missing BACKEND_URL / internal secret — cannot forward");
-    return;
-  }
+  if (!backend) return { ok: false, detail: "no BACKEND_URL env" };
+  if (!secret) return { ok: false, detail: "no SMRTBOT_INTERNAL_SECRET env" };
   try {
-    await fetch(`${backend}/api/bot/internal/inbound`, {
+    const res = await fetch(`${backend}/api/bot/internal/inbound`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-smrtbot-secret": secret },
       body: JSON.stringify({ bot_id: botId, env, message }),
     });
+    return { ok: res.ok, detail: `HTTP ${res.status}` };
   } catch (e) {
-    console.error("[smrtbot-webhook] forward failed", e instanceof Error ? e.message : String(e));
+    return { ok: false, detail: `fetch error: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -158,7 +178,10 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
   // Always ack 200 — Meta retries for days otherwise. Errors are logged.
   try {
     const bot = await loadBot(slug);
-    if (!bot) return new Response("ok", { status: 200 });
+    if (!bot) {
+      await logHit(null, null, slug, "bot_not_found");
+      return new Response("ok", { status: 200 });
+    }
 
     // This is the Meta Cloud API callback. Only official ('meta'-transport)
     // bots use it; unofficial ('baileys') bots receive messages over their own
@@ -167,32 +190,54 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
     // so a forged caller gets no signal), which also closes the forged-payload
     // injection vector for unofficial bots.
     if (bot.transport !== "meta") {
+      await logHit(bot.org_id, bot.id, slug, "not_meta", bot.transport);
       return new Response("ok", { status: 200 });
     }
 
     // Read the RAW body once — HMAC must run over the exact bytes Meta signed.
     const raw = await request.text();
 
-    // Authenticate the official bot: Meta signs every POST with
-    // X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret). Each bot is its
-    // own Meta app, so resolve the bot's own app_secret first, then the platform
-    // META_APP_SECRET env. An official bot CANNOT function without its secret, so
-    // require a valid signature: a missing secret (misconfigured / not yet live)
-    // or a bad/absent signature ⇒ drop. This is safe — no working official bot
-    // operates without its secret — and it actually closes the injection hole
-    // rather than relying on the secret being set.
-    // NOTE: app_secret is stored plaintext to match this table's existing
-    // wa_access_token/verify_token columns; moving smrtbot secrets to Vault
-    // (as whatsapp_connections does) is a worthwhile future hardening.
-    const appSecret = bot.app_secret ?? process.env.META_APP_SECRET ?? null;
+    // Optional Meta HMAC verification. Meta signs each POST with
+    // X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret). We verify ONLY
+    // when an App Secret is configured for the bot — if none is set the message
+    // is processed unverified (like the legacy Apps-Script bot, which did no
+    // signature check). Less secure: anyone who knows the callback URL could
+    // POST forged events; set an App Secret to enforce.
+    // NOTE: the table has a single app_secret, while a bot's live/test phone
+    // numbers may belong to different Meta apps with different secrets — so
+    // verification can only ever match one env. Leaving it empty (unverified)
+    // is the simplest way to support both; per-env secrets are a future option.
+    // Gather candidate App Secrets: the per-env Vault secrets (live + test, since
+    // a bot's two phone numbers can be different Meta apps), the legacy plaintext
+    // column, and the platform env. A signature is valid if it matches ANY — so
+    // both environments are verified without needing to know the env yet.
+    const candidates: string[] = [];
+    const sdb = createAdminSupabaseClient();
+    if (sdb) {
+      for (const sid of [bot.live_app_secret_id, bot.test_app_secret_id]) {
+        if (!sid) continue;
+        const { data, error } = await sdb.rpc("vault_read_secret", { secret_id: sid });
+        if (error) await logHit(bot.org_id, bot.id, slug, "vault_read_error", `${sid}: ${error.message}`);
+        else if (typeof data === "string" && data.trim()) candidates.push(data);
+      }
+    }
+    if (bot.app_secret?.trim()) candidates.push(bot.app_secret);
+    if (process.env.META_APP_SECRET) candidates.push(process.env.META_APP_SECRET);
+
     const sig = request.headers.get("x-hub-signature-256") ?? "";
-    const expected = appSecret
-      ? "sha256=" + crypto.createHmac("sha256", appSecret).update(raw).digest("hex")
-      : null;
-    if (!expected || !sig || !timingSafeEqualStr(sig, expected)) {
-      console.warn(`[smrtbot-webhook] missing/invalid signature for ${slug} — rejecting`);
-      // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
-      return new Response("ok", { status: 200 });
+    await logHit(bot.org_id, bot.id, slug, "received", sig ? "signed" : "unsigned");
+    if (candidates.length > 0) {
+      const valid =
+        !!sig &&
+        candidates.some((s) => timingSafeEqualStr(sig, "sha256=" + crypto.createHmac("sha256", s).update(raw).digest("hex")));
+      if (!valid) {
+        console.warn(`[smrtbot-webhook] invalid signature for ${slug} — rejecting`);
+        await logHit(bot.org_id, bot.id, slug, "bad_signature", sig ? "sig_present" : "sig_absent");
+        // Ack 200 (so Meta/forged callers get no retry signal) but do not process.
+        return new Response("ok", { status: 200 });
+      }
+    } else {
+      await logHit(bot.org_id, bot.id, slug, "unverified", "no app secret — signature not checked");
     }
 
     const payload = (() => {
@@ -221,13 +266,15 @@ export async function POST(request: NextRequest, { params }: Params): Promise<Re
             m.interactive?.button_reply?.id ?? m.interactive?.list_reply?.id ?? undefined;
           const text = m.text?.body ?? undefined;
           // Forward to the engine on the Railway server (it persists the
-          // inbound log + runs the conversation flow + sends the reply).
-          await forwardToEngine(bot.id, env, {
+          // inbound log + runs the conversation flow + sends the reply), and
+          // record the forward OUTCOME so a stuck hop is visible in the log.
+          const r = await forwardToEngine(bot.id, env, {
             from: m.from,
             type: m.type ?? "text",
             text,
             buttonId,
           });
+          await logHit(bot.org_id, bot.id, slug, r.ok ? "forwarded_ok" : "forward_failed", `${m.from}|env=${env}|${r.detail}`);
         }
       }
     }

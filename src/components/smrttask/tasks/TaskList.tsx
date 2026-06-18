@@ -32,6 +32,7 @@ import { DriveSearch } from "./DriveSearch";
 import { SnoozeDialog } from "./SnoozeDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import {
   effectiveDeadline,
@@ -502,6 +503,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         renders right under this). */}
     <div className="mb-3 flex items-center gap-3">
       {title && <h1 className="text-2xl font-bold">{title}</h1>}
+      <InstallAppButton />
       <div className="ms-auto flex rounded-lg border p-0.5">
         {contextChips.map((chip) => (
           <button

@@ -152,6 +152,14 @@ const CRUD: CrudOpts[] = [
     updatable: ["summary", "status"],
   },
   {
+    // Webhook diagnostic log (written by the Meta callback). Read-only in the
+    // UI; DELETE is allowed so the user can clear it.
+    resource: "webhook-debug",
+    table: "smrtbot_webhook_debug",
+    orderBy: "created_at",
+    updatable: [],
+  },
+  {
     resource: "questions",
     table: "smrtbot_questions",
     orderBy: "created_at",
