@@ -1,22 +1,41 @@
 /*
  * smrtesy service worker.
  *
- * A service worker with a fetch handler is one of the hard requirements for
- * Chrome/Android to treat the site as installable (alongside the manifest and
- * icons), and it's what lets the installed app show something other than a
- * dead browser-error page when the device is offline.
+ * Makes the PWA installable and gives it read-only offline support: the app
+ * shell and the data that was last loaded while online stay available when the
+ * device drops off the network (you can view your day on a train; you just
+ * can't edit until you're back online).
  *
- * Strategy, deliberately conservative so we never serve one user's
- * authenticated HTML to another tab:
+ * Caching strategy:
  *   - Static build assets (/_next/static, fonts, generated icons): cache-first.
- *   - Page navigations: network-first, falling back to /offline.html only when
- *     the network is unreachable. We never cache the HTML itself.
- *   - Everything else (API calls, auth, POSTs, cross-origin): straight to the
- *     network, untouched.
+ *   - Page navigations: network-first, falling back to the last cached version
+ *     of that page (the app shell), then to /offline.html as a last resort.
+ *   - Backend API reads (GET to a cross-origin /api/* — the Express backend):
+ *     stale-while-revalidate, so the last successful response is replayed
+ *     offline and refreshed in the background when online.
+ *   - Auth, writes (non-GET), and everything else: straight to the network.
+ *
+ * Cross-user safety: cached navigations are app shells (data is fetched
+ * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
+ * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v2";
+const VERSION = "v3";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
+const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
+const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];
 const OFFLINE_URL = "/offline.html";
+
+// The Express backend's origin, passed in by the registrar as ?backend=<url>
+// (from NEXT_PUBLIC_BACKEND_URL). We only cache API reads from this exact
+// origin, so a future third-party with an /api/ path can never be cached.
+const BACKEND_ORIGIN = (() => {
+  try {
+    const raw = new URL(self.location.href).searchParams.get("backend");
+    return raw ? new URL(raw).origin : null;
+  } catch {
+    return null;
+  }
+})();
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -29,11 +48,11 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // Drop caches from previous versions.
+      // Drop caches from previous versions, keeping the current ones.
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter((key) => key.startsWith("smrtesy-") && key !== STATIC_CACHE)
+          .filter((key) => key.startsWith("smrtesy-") && !CURRENT_CACHES.includes(key))
           .map((key) => caches.delete(key)),
       );
       await self.clients.claim();
@@ -41,9 +60,13 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// Let the page tell a freshly-installed worker to take over immediately.
 self.addEventListener("message", (event) => {
+  // Let the page tell a freshly-installed worker to take over immediately.
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+  // Wipe cached pages/data on sign-out so the next user can't read them.
+  if (event.data === "CLEAR_CACHE") {
+    event.waitUntil(caches.delete(RUNTIME_CACHE));
+  }
 });
 
 // ── Web Push ────────────────────────────────────────────────────────────────
@@ -109,44 +132,96 @@ function isStaticAsset(url) {
   );
 }
 
+// Backend reads we're willing to replay offline. Restrict to the known backend
+// origin when we have it (fall back to a path heuristic otherwise), and never
+// cache auth endpoints.
+function isCacheableApi(url) {
+  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith("/api/auth")) {
+    return false;
+  }
+  return BACKEND_ORIGIN ? url.origin === BACKEND_ORIGIN : true;
+}
+
+// Navigations: network-first, then the cached shell for that page, then offline.
+async function handleNavigation(request) {
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.status === 200 && fresh.type === "basic") {
+      const copy = fresh.clone();
+      caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, copy));
+    }
+    return fresh;
+  } catch {
+    const cached = await caches.match(request, { ignoreSearch: true });
+    if (cached) return cached;
+    const offline = await caches.match(OFFLINE_URL, { ignoreSearch: true });
+    return offline || Response.error();
+  }
+}
+
+// Static assets: cache-first, populate on miss.
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response && response.status === 200) {
+    const copy = response.clone();
+    caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+  }
+  return response;
+}
+
+// API reads: serve cache immediately if present, refresh in the background;
+// otherwise wait for the network. Returns last-known data when offline.
+function staleWhileRevalidate(event, request) {
+  return (async () => {
+    const cache = await caches.open(RUNTIME_CACHE);
+    const cached = await cache.match(request);
+    const networkPromise = fetch(request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          cache.put(request, response.clone());
+        }
+        return response;
+      })
+      .catch(() => undefined);
+
+    if (cached) {
+      // Keep the background refresh alive past respondWith.
+      event.waitUntil(networkPromise);
+      return cached;
+    }
+    return (await networkPromise) || Response.error();
+  })();
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
-  // Only GETs are cacheable; let writes and same-origin checks go through.
+  // Only GETs are cacheable; writes go straight to the network.
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
+  const sameOrigin = url.origin === self.location.origin;
 
-  // Never touch cross-origin requests or API data (except the icon endpoint).
-  if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/") && url.pathname !== "/api/icon") return;
-
-  // App-shell navigations: try the network, fall back to the offline page.
+  // App-shell navigations.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request).catch(() =>
-        caches.match(OFFLINE_URL, { ignoreSearch: true }).then(
-          (cached) => cached || Response.error(),
-        ),
-      ),
-    );
+    event.respondWith(handleNavigation(request));
     return;
   }
 
-  // Static assets: serve from cache first, populate the cache on miss.
-  if (isStaticAsset(url)) {
-    event.respondWith(
-      caches.match(request).then((cached) => {
-        if (cached) return cached;
-        return fetch(request).then((response) => {
-          // Only cache successful, basic/cors responses.
-          if (response && response.status === 200) {
-            const copy = response.clone();
-            caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        });
-      }),
-    );
+  // Same-origin static build assets.
+  if (sameOrigin && isStaticAsset(url)) {
+    event.respondWith(cacheFirst(request));
+    return;
   }
+
+  // Backend API reads (matched by origin via isCacheableApi).
+  if (isCacheableApi(url)) {
+    event.respondWith(staleWhileRevalidate(event, request));
+    return;
+  }
+
+  // Other same-origin (non-static) and cross-origin requests are left untouched
+  // and go straight to the network.
 });

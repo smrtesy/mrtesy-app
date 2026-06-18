@@ -19,8 +19,14 @@ export function ServiceWorkerRegistrar() {
     }
 
     const register = () => {
+      // Pass the backend origin so the SW only offline-caches API reads from
+      // our own backend (never some future third-party with an /api/ path).
+      // The query is part of the registered script URL, so it survives SW
+      // restarts. Scope stays "/" regardless of the query string.
+      const backend = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
+      const swUrl = `/sw.js?backend=${encodeURIComponent(backend)}`;
       navigator.serviceWorker
-        .register("/sw.js", { scope: "/" })
+        .register(swUrl, { scope: "/" })
         .then((registration) => {
           // When an updated worker installs, activate it right away.
           registration.addEventListener("updatefound", () => {

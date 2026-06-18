@@ -93,6 +93,15 @@ export function AccountClient() {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
+    // Wipe offline-cached pages/data so the next user on this device can't read
+    // them. Use the ready registration's active worker — `controller` is null on
+    // first load / hard reload, which would silently skip the wipe.
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      reg?.active?.postMessage("CLEAR_CACHE");
+    } catch {
+      /* no SW (dev or unsupported) — nothing cached to clear */
+    }
     router.push(`/${locale}/login`);
   }
 
