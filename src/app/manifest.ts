@@ -37,26 +37,29 @@ export default function manifest(): MetadataRoute.Manifest {
     dir: "rtl",
     categories: ["productivity", "business", "utilities"],
     icons: [
+      // Static PNG files (not the dynamic /api/icon route): Android's WebAPK
+      // minting server and iOS fetch these at install time and can choke on a
+      // cold-starting dynamic route, which shows up as a blank white icon.
       {
-        src: "/api/icon?size=192",
+        src: "/icons/icon-192.png",
         sizes: "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/api/icon?size=512",
+        src: "/icons/icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/api/icon?size=192&purpose=maskable",
+        src: "/icons/icon-192-maskable.png",
         sizes: "192x192",
         type: "image/png",
         purpose: "maskable",
       },
       {
-        src: "/api/icon?size=512&purpose=maskable",
+        src: "/icons/icon-512-maskable.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",

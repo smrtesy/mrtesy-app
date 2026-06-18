@@ -19,7 +19,7 @@
  * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
  * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v3";
+const VERSION = "v4";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];
@@ -83,8 +83,8 @@ self.addEventListener("push", (event) => {
   const title = data.title || "smrtesy";
   const options = {
     body: data.body || "",
-    icon: "/api/icon?size=192",
-    badge: "/api/icon?size=192&purpose=maskable",
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192-maskable.png",
     // Same tag collapses repeat alerts for one entity into a single banner.
     tag: data.tag || undefined,
     renotify: Boolean(data.tag),
