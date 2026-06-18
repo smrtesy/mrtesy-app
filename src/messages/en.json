@@ -300,6 +300,7 @@
     "renameContactPlaceholder": "Enter a display name",
     "renameContactSave": "Save",
     "renameContactCancel": "Cancel",
+    "resizePanel": "Resize panel (drag; double-click to reset)",
     "attachImage": "Attach image",
     "dropImageHere": "Drop here to attach an image",
     "imageCaptionPlaceholder": "Add a caption (optional)…",
