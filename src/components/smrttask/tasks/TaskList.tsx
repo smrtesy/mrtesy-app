@@ -281,7 +281,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     // Desk order: manual position ascending (all desk rows are pinned now).
     const deskSorted = [...desk].sort((a, b) => (a.today_position ?? 0) - (b.today_position ?? 0));
 
-    // Shared order for חשוב + ממתינות: deadline asc (undated last), priority, newest.
+    // ממתינות order: deadline asc (undated last), then priority, then newest.
     const byUrgency = (a: Task, b: Task) => {
       const da = effectiveDeadline(a);
       const db = effectiveDeadline(b);
@@ -292,7 +292,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       if (rank !== 0) return rank;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     };
-    const importantSorted = [...importantList].sort(byUrgency);
+    // חשוב order: the unpinned regular pile (undated) on top, newest first — so a
+    // freshly added regular task lands at the very head of חשוב — then the dated
+    // near-deadline items below, soonest first.
+    const byImportant = (a: Task, b: Task) => {
+      const da = effectiveDeadline(a);
+      const db = effectiveDeadline(b);
+      if (!da && !db) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      if (!da) return -1; // undated floats above dated
+      if (!db) return 1;
+      if (da !== db) return da.localeCompare(db);
+      const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
+      if (rank !== 0) return rank;
+      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+    };
+    const importantSorted = [...importantList].sort(byImportant);
     const waitingSorted = [...waitingList].sort(byUrgency);
 
     const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
