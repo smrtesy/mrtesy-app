@@ -22,7 +22,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
-import { TaskRow } from "./TaskRow";
+import { TaskRow, type RowZone } from "./TaskRow";
 import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
 import { ReviewBanner } from "./ReviewBanner";
@@ -82,11 +82,16 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
 }
 
 /**
- * The desk page:
- *   על השולחן — two columns (⚡ quick | regular): manually pinned tasks
- *               (today_position) + auto-promoted ones (effective deadline
- *               within 3 working days and not blocked).
- *   ממתינות   — everything else, sorted by deadline urgency (undated last).
+ * The desk page — four lists, assigned in priority order (active = not blocked,
+ * not snoozed; snoozed rows aren't fetched):
+ *   מהיר – עכשיו / רגיל – עכשיו — manually pinned (today_position) tasks, split
+ *               by size. Pinning wins: a task you put on the desk lives here
+ *               even if its deadline is near.
+ *   חשוב       — the radar: anything with an effective deadline within 3 working
+ *               days, plus any regular task you haven't pinned and didn't give a
+ *               far-off deadline (e.g. a regular task you just created).
+ *   ממתינות   — the rest: unpinned quick tasks with no near deadline, regular
+ *               tasks parked behind a far deadline, and blocked tasks.
  *   הושלמו    — collapsed, with reopen.
  */
 export function TaskList({ locale, title }: { locale: string; title?: string }) {
@@ -248,7 +253,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
-  const { deskQuick, deskRegular, waiting, reviewCandidates } = useMemo(() => {
+  const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
       if (contextFilter === "work") return task.context !== "home";
@@ -256,30 +261,28 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
 
     const desk: Task[] = [];
+    const importantList: Task[] = [];
     const waitingList: Task[] = [];
     for (const task of visible) {
       const isBlocked = unsatisfiedOf(task).length > 0;
       const deadline = effectiveDeadline(task);
       const nearDeadline = !!deadline && dueUrgency(deadline, blocked) !== "far";
       const pinned = task.today_position != null;
-      if (!isBlocked && (pinned || nearDeadline)) desk.push(task);
+      // Priority order: blocked → waiting; pinning wins over everything else;
+      // then the deadline radar; then unpinned regular tasks without a far-off
+      // deadline (created-regular lands here); everything else waits.
+      if (isBlocked) waitingList.push(task);
+      else if (pinned) desk.push(task);
+      else if (nearDeadline) importantList.push(task);
+      else if (task.size === "regular" && !deadline) importantList.push(task);
       else waitingList.push(task);
     }
 
-    // Desk order: pinned first by manual position, then auto-promoted by deadline.
-    const deskSorted = [...desk].sort((a, b) => {
-      const ap = a.today_position;
-      const bp = b.today_position;
-      if (ap != null && bp != null) return ap - bp;
-      if (ap != null) return -1;
-      if (bp != null) return 1;
-      const da = effectiveDeadline(a) ?? "9999";
-      const db = effectiveDeadline(b) ?? "9999";
-      return da.localeCompare(db);
-    });
+    // Desk order: manual position ascending (all desk rows are pinned now).
+    const deskSorted = [...desk].sort((a, b) => (a.today_position ?? 0) - (b.today_position ?? 0));
 
-    // Waiting order: deadline asc (undated last), then priority, then newest.
-    const waitingSorted = [...waitingList].sort((a, b) => {
+    // Shared order for חשוב + ממתינות: deadline asc (undated last), priority, newest.
+    const byUrgency = (a: Task, b: Task) => {
       const da = effectiveDeadline(a);
       const db = effectiveDeadline(b);
       if (da && db && da !== db) return da.localeCompare(db);
@@ -288,13 +291,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
       if (rank !== 0) return rank;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-    });
+    };
+    const importantSorted = [...importantList].sort(byUrgency);
+    const waitingSorted = [...waitingList].sort(byUrgency);
 
     const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
       deskQuick: deskSorted.filter((task) => task.size === "quick"),
       deskRegular: deskSorted.filter((task) => task.size !== "quick"),
+      important: importantSorted,
       waiting: waitingSorted,
       reviewCandidates: review,
     };
@@ -488,7 +494,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     { key: "work", label: t("contextFilter.work"), icon: Briefcase },
   ];
 
-  function renderRow(task: Task, zone: "desk" | "waiting") {
+  function renderRow(task: Task, zone: RowZone) {
     return (
       <TaskRow
         key={task.id}
@@ -508,7 +514,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     );
   }
 
-  function renderRows(list: Task[], zone: "desk" | "waiting") {
+  function renderRows(list: Task[], zone: RowZone) {
     return list.map((task) => renderRow(task, zone));
   }
 
@@ -670,6 +676,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                 renderDeskColumn(deskRegular)
               )}
             </div>
+          </section>
+
+          {/* ── IMPORTANT (חשוב) — deadline radar + the unpinned regular pile ── */}
+          <section>
+            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {t("desk.important")}
+              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
+            </h2>
+            {important.length === 0 ? (
+              <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">
+                {t("desk.emptyImportant")}
+              </p>
+            ) : (
+              <div className="space-y-2">{renderRows(important, "important")}</div>
+            )}
           </section>
 
           {/* ── WAITING ──────────────────────────────────────────────── */}
