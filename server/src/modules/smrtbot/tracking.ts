@@ -70,7 +70,7 @@ function fmtTime(d: Date, tz: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 }
 
-function fmtDuration(min: number): string {
+export function fmtDuration(min: number): string {
   if (min < 60) return `${min} דק׳`;
   const h = Math.floor(min / 60);
   const m = min % 60;
@@ -78,12 +78,18 @@ function fmtDuration(min: number): string {
 }
 
 /** "YYYY-MM-DD" for the given instant in `tz` (defaults to now). */
-function todayDateStr(tz: string, base: Date = new Date()): string {
+export function todayDateStr(tz: string, base: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(base);
 }
 
+/** Hour (0-23) in `tz` right now. */
+export function localHour(tz: string, base: Date = new Date()): number {
+  const h = Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz }).format(base));
+  return h === 24 ? 0 : h;
+}
+
 /** UTC instant of local midnight (start of day) in `tz` for the given base day. */
-function startOfDayUtc(tz: string, base: Date = new Date()): Date {
+export function startOfDayUtc(tz: string, base: Date = new Date()): Date {
   const [y, m, d] = todayDateStr(tz, base).split("-").map(Number);
   const asUTC = Date.UTC(y, m - 1, d, 0, 0, 0);
   return new Date(asUTC - tzOffsetMin(tz, new Date(asUTC)) * 60000);
