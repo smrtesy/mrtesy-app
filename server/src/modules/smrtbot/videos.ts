@@ -136,21 +136,63 @@ export async function sendVideoList(c: Ctx, node: { node_key: string; label: str
   await sendVideoPage(c, node.node_key, node.label, 0, items);
 }
 
+interface HolidayRow {
+  holiday_name: string; hebrew_date: string | null; display_emoji: string | null;
+  start_date: string | null; end_date: string | null;
+}
+
+/**
+ * Holidays as an INTERACTIVE selection (not a text dump):
+ *   - upcoming → up to 3 reply buttons (WhatsApp's button limit)
+ *   - all      → a list message (WhatsApp caps interactive lists at 10 rows)
+ * Each entry's id is `holiday:<name>`, so tapping it drills into that holiday's
+ * videos (handled in handleVideoAction). Ordered upcoming-first by start_date.
+ */
 async function sendHolidays(c: Ctx, upcomingOnly: boolean): Promise<void> {
-  let q = db.from("smrtbot_holidays").select("holiday_name, hebrew_date, display_emoji, start_date")
-    .eq("org_id", c.bot.org_id).eq("bot_id", c.bot.id).eq("env", c.env).eq("active", true).order("sort_order");
-  if (upcomingOnly) q = q.gte("end_date", new Date().toISOString().slice(0, 10));
-  const { data } = await q;
-  const rows = (data as { holiday_name: string; hebrew_date: string | null; display_emoji: string | null }[]) ?? [];
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await db.from("smrtbot_holidays")
+    .select("holiday_name, hebrew_date, display_emoji, start_date, end_date")
+    .eq("org_id", c.bot.org_id).eq("bot_id", c.bot.id).eq("env", c.env).eq("active", true);
+  if (error) console.error("[smrtbot/videos] sendHolidays", error.message);
+  let rows = (data as HolidayRow[]) ?? [];
+
+  // Sort upcoming-first: holidays not yet ended (by nearest start) come before
+  // the rest. A "YYYY-MM-DD" prefix keeps the comparison a plain string sort.
+  const ended = (h: HolidayRow) => (h.end_date ?? h.start_date ?? "") < today;
+  const sortKey = (h: HolidayRow) => (ended(h) ? "1" : "0") + (h.start_date ?? "9999-12-31");
+  rows.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+  // De-dupe by name (defensive against duplicate rows across envs/imports).
+  const seen = new Set<string>();
+  rows = rows.filter((h) => {
+    const n = (h.holiday_name ?? "").trim();
+    if (!n || seen.has(n)) return false;
+    seen.add(n);
+    return true;
+  });
+  if (upcomingOnly) rows = rows.filter((h) => !ended(h));
+
   if (!rows.length) {
     await c.channel.text(await msg(c.bot, c.env, "no_holidays", "אין חגים להצגה כרגע."));
     await navButtons(c, false);
     return;
   }
-  const lines = [`*${await msg(c.bot, c.env, upcomingOnly ? "holidays_upcoming_title" : "holidays_all_title", upcomingOnly ? "🗓️ חגים קרובים" : "🗓️ כל החגים")}*`, ""];
-  for (const h of rows) lines.push(`${h.display_emoji || "📅"} *${h.holiday_name}*${h.hebrew_date ? ` — ${h.hebrew_date}` : ""}`);
-  await c.channel.text(lines.join("\n"));
-  await navButtons(c, false);
+
+  const label = (h: HolidayRow) => `${h.display_emoji || "📅"} ${h.holiday_name}`;
+  if (upcomingOnly) {
+    const top = rows.slice(0, 3); // WhatsApp: max 3 reply buttons
+    const header = await msg(c.bot, c.env, "holidays_upcoming_title", "🗓️ החגים הקרובים — בחרו חג:");
+    await c.channel.buttons(header, top.map((h) => ({ id: `holiday:${h.holiday_name}`, title: label(h) })));
+  } else {
+    const top = rows.slice(0, 10); // WhatsApp: max 10 list rows — show the nearest
+    const header = `${await msg(c.bot, c.env, "holidays_all_title", "🗓️ כל החגים — בחרו חג:")} (${rows.length})`;
+    await c.channel.list(
+      header,
+      await msg(c.bot, c.env, "holidays_list_button", "בחר חג"),
+      top.map((h) => ({ id: `holiday:${h.holiday_name}`, title: label(h) })),
+      await msg(c.bot, c.env, "holidays_section_title", "חגים"),
+    );
+  }
 }
 
 async function runSearch(c: Ctx, query: string): Promise<void> {
@@ -205,6 +247,12 @@ export async function handleVideoNode(bot: BotRow, env: BotEnv, phone: string,
 /** Handle nav / holiday / search actions (button ids). Returns true if handled. */
 export async function handleVideoAction(bot: BotRow, env: BotEnv, phone: string, action: string, channel: BotChannel): Promise<boolean> {
   const c: Ctx = { bot, env, channel, phone };
+  // holiday:<name> — drill into a single holiday's videos (from the selection list)
+  if (action.startsWith("holiday:")) {
+    const name = action.slice("holiday:".length);
+    await sendVideoPage(c, action, `📅 ${name}`, 0);
+    return true;
+  }
   switch (action) {
     case "nav_more": {
       const s = await getState(bot.id, phone);

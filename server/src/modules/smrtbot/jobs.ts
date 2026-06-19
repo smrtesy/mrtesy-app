@@ -22,6 +22,7 @@ import { resolveCreds, sendText, sendImage, type BotEnv, type BotCreds } from ".
 import { reportError, errInfo } from "./report-error";
 import { sendScheduledReminders, executeRaffle, type GameBot } from "./game";
 import { sendBaileysText, sendBaileysImage, toJid } from "./baileys";
+import { startOfDayUtc, todayDateStr, localHour, fmtDuration } from "./tracking";
 
 const router = Router();
 const LOG_RETENTION_DAYS = 90;
@@ -312,6 +313,86 @@ router.post("/api/bot/jobs/broadcasts", async (_req: Request, res: Response) => 
   }
 
   res.json({ ok: true, sent, failed });
+});
+
+// ── daily study summary (hourly at :45) ─────────────────────────────────────
+// For each bot with daily_summary_enabled=true, when it's the configured hour
+// in the bot's timezone (default 23 → 23:45 local) and we haven't sent today,
+// message every phone that has a completed study session today with its total.
+const DAILY_SUMMARY_MAX = 200;
+
+async function getBotSetting(botId: string, key: string): Promise<string | null> {
+  const { data } = await db
+    .from("smrtbot_settings")
+    .select("value")
+    .eq("bot_id", botId)
+    .eq("key", key)
+    .maybeSingle();
+  return (data?.value as string | null) ?? null;
+}
+
+router.post("/api/bot/jobs/daily-summary", async (_req: Request, res: Response) => {
+  const { data: bots, error } = await db
+    .from("smrtbot_bots")
+    .select(`${BOT_SELECT}, transport, timezone`)
+    .eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+
+  let sent = 0;
+  const ran: string[] = [];
+  for (const bot of (bots as (GameBot & { slug: string; transport?: string; timezone?: string | null })[]) ?? []) {
+    try {
+      const enabled = (await getBotSetting(bot.id, "daily_summary_enabled"))?.trim().toLowerCase();
+      if (enabled !== "true" && enabled !== "1" && enabled !== "on") continue;
+
+      const tz = bot.timezone || "Asia/Jerusalem";
+      const targetHour = Number(await getBotSetting(bot.id, "daily_summary_hour")) || 23;
+      if (localHour(tz) !== targetHour) continue;
+      const today = todayDateStr(tz);
+      if ((await getBotSetting(bot.id, "daily_summary_last")) === today) continue; // already sent today
+
+      const since = startOfDayUtc(tz).toISOString();
+      const { data: rows } = await db
+        .from("smrtbot_study_sessions")
+        .select("phone, minutes")
+        .eq("bot_id", bot.id)
+        .eq("status", "completed")
+        .gte("started_at", since);
+      const totals = new Map<string, number>();
+      for (const r of (rows as { phone: string; minutes: number | null }[]) ?? []) {
+        totals.set(r.phone, (totals.get(r.phone) ?? 0) + (r.minutes ?? 0));
+      }
+
+      if (totals.size > 0) {
+        const isBaileys = bot.transport === "baileys";
+        const creds = isBaileys ? null : resolveCreds(bot as BotCreds, "live") ?? resolveCreds(bot as BotCreds, "test");
+        for (const [phone, mins] of totals) {
+          if (sent >= DAILY_SUMMARY_MAX) break;
+          const body = `📊 *סיכום יום*\nלמדת היום סה״כ ${fmtDuration(mins)}. כל הכבוד! 💪`;
+          try {
+            if (isBaileys) await sendBaileysText(bot.id, toJid(phone), body);
+            else if (creds) await sendText(creds, phone, body);
+            else continue;
+            sent++;
+          } catch (e) {
+            const { message, stack } = errInfo(e);
+            await reportError(bot.org_id, { area: "cron", title: "Daily summary send failed", message, botId: bot.id, stack, details: { phone } });
+          }
+        }
+      }
+
+      // Mark today as done (even with 0 recipients) so it won't re-run this hour.
+      const { error: upErr } = await db
+        .from("smrtbot_settings")
+        .upsert({ org_id: bot.org_id, bot_id: bot.id, key: "daily_summary_last", value: today }, { onConflict: "bot_id,key" });
+      if (upErr) console.error("[smrtbot/jobs] daily_summary_last", upErr.message);
+      ran.push(bot.slug);
+    } catch (e) {
+      const { message, stack } = errInfo(e);
+      await reportError(bot.org_id, { area: "cron", title: "Daily summary failed", message, botId: bot.id, stack });
+    }
+  }
+  res.json({ ok: true, sent, bots: ran });
 });
 
 export default router;

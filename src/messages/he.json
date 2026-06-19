@@ -249,6 +249,7 @@
     "dateToday": "היום",
     "dateYesterday": "אתמול",
     "back": "חזרה",
+    "backToChats": "חזרה לרשימת הצ'אטים",
     "openDocument": "פתח מסמך",
     "send": "שלח",
     "composePlaceholder": "כתוב הודעה...",
@@ -358,6 +359,7 @@
       "loading": "טוען לוח זמנים…"
     },
     "noTasksInView": "אין משימות בתצוגה זו",
+    "dndDeadlineLocked": "לא הזזתי — תאריך היעד של המשימה קובע באיזו רשימה היא נמצאת",
     "noTasksYet": "עדיין אין משימות. הן יופיעו כאן אחרי שה-AI יעבד את ההודעות שלך.",
     "priority": {
       "urgent": "דחוף",
@@ -525,13 +527,15 @@
       "moveToWaiting": "הורד לממתינות"
     },
     "desk": {
-      "quick": "מהיר",
-      "regular": "רגיל",
+      "quick": "מהיר – עכשיו",
+      "regular": "רגיל – עכשיו",
+      "important": "חשוב",
       "waiting": "ממתינות",
       "completed": "הושלמו",
       "startRun": "התחל ריצה",
       "emptyQuick": "אין משימות מהירות על השולחן — גרור מממתינות או צור חדשה",
-      "emptyRegular": "אין משימות רגילות על השולחן"
+      "emptyRegular": "אין משימות רגילות על השולחן",
+      "emptyImportant": "אין משימות חשובות — דדליין קרוב או משימה רגילה שלא נעצת יופיעו כאן"
     },
     "contextFilter": {
       "all": "הכל",

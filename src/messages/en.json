@@ -249,6 +249,7 @@
     "dateToday": "Today",
     "dateYesterday": "Yesterday",
     "back": "Back",
+    "backToChats": "Back to chats",
     "openDocument": "Open document",
     "send": "Send",
     "composePlaceholder": "Type a message…",
@@ -358,6 +359,7 @@
       "loading": "Loading timeline…"
     },
     "noTasksInView": "No tasks in this view",
+    "dndDeadlineLocked": "Not moved — this task's due date controls which list it's in",
     "noTasksYet": "No tasks yet. They will appear here after AI processes your messages.",
     "priority": {
       "urgent": "Urgent",
@@ -525,13 +527,15 @@
       "moveToWaiting": "Move to waiting"
     },
     "desk": {
-      "quick": "Quick",
-      "regular": "Regular",
+      "quick": "Quick – now",
+      "regular": "Regular – now",
+      "important": "Important",
       "waiting": "Waiting",
       "completed": "Completed",
       "startRun": "Start run",
       "emptyQuick": "No quick tasks on the desk — pull from waiting or create one",
-      "emptyRegular": "No regular tasks on the desk"
+      "emptyRegular": "No regular tasks on the desk",
+      "emptyImportant": "Nothing important — tasks due soon or unpinned regular tasks show up here"
     },
     "contextFilter": {
       "all": "All",
