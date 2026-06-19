@@ -3392,6 +3392,68 @@ async function runShadowEval(reqUrl: URL): Promise<Response> {
   return new Response(JSON.stringify({ run_id: runId, evaluated: rows.length, insertError }), { headers: { "Content-Type": "application/json" } });
 }
 
+/**
+ * After a user's batch is processed, surface ONE "new items in your inbox"
+ * notification so the `notifications` AFTER INSERT push trigger pings their
+ * phone. Without this, ai-process created inbox suggestions silently — they
+ * bumped the badge count but never pushed (the "12 messages, no notification"
+ * report). Deduped to at most one unread digest per 30 min (mirrors
+ * gmail-sync's notifySyncError) so a backlog catch-up spanning several cron
+ * ticks can't spam. The title reports the CURRENT pending-suggestion total, so
+ * it stays accurate no matter how the work was batched.
+ */
+async function notifyNewInboxItems(userId: string, sinceISO: string) {
+  // Did this run actually add anything live to the inbox? Snoozed follow-ups
+  // and dismissed items don't count — only suggestions awaiting review.
+  const { count: newCount } = await supabase
+    .from("tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("status", "inbox")
+    .eq("manually_verified", false)
+    .not("source_message_id", "is", null)
+    .gte("created_at", sinceISO);
+  if (!newCount || newCount <= 0) return;
+
+  const { data: membership } = await supabase
+    .from("org_members").select("org_id").eq("user_id", userId).limit(1).maybeSingle();
+  if (!membership?.org_id) return;
+
+  // Dedup: skip if an unread inbox digest was raised in the last 30 minutes.
+  const { data: existing } = await supabase
+    .from("notifications")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("entity_type", "inbox_digest")
+    .eq("is_read", false)
+    .gt("created_at", new Date(Date.now() - 30 * 60 * 1000).toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (existing) return;
+
+  // Current pending-suggestion total — accurate even across batched runs.
+  const { count: pending } = await supabase
+    .from("tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("status", "inbox")
+    .eq("manually_verified", false)
+    .not("source_message_id", "is", null);
+  const total = pending ?? newCount;
+
+  const title = total === 1 ? "פריט חדש בנכנס" : `${total} פריטים חדשים בנכנס`;
+  await supabase.from("notifications").insert({
+    user_id: userId,
+    org_id: membership.org_id,
+    app_slug: "smrttask",
+    type: "info",
+    title,
+    body: "הגיעו הצעות חדשות מהמיילים שלך — לחץ כדי לעבור עליהן.",
+    link: "/inbox",
+    entity_type: "inbox_digest",
+  }).then(() => {}, () => {});
+}
+
 Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization")?.replace("Bearer ", "");
@@ -3579,6 +3641,9 @@ Deno.serve(async (req) => {
         if (msgs && msgs.length > 0) allMessages = allMessages.concat(msgs);
       }
 
+      // High-water mark for this user's run — anything added to the inbox after
+      // this is "new" and worth a heads-up push (see notifyNewInboxItems).
+      const digestSince = new Date().toISOString();
       for (const msg of allMessages) {
         const { data: claimed } = await supabase.from("source_messages").update({ processing_lock_at: new Date().toISOString() }).eq("id", msg.id).eq("processing_status", "pending").is("processing_lock_at", null).select("id").single();
         if (!claimed) continue;
@@ -3594,6 +3659,11 @@ Deno.serve(async (req) => {
           await supabase.from("log_entries").insert({ user_id: userId, level: outerRetry >= 3 ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
         }
       }
+
+      // One "X items in your inbox" notification per run that added suggestions.
+      // The notifications AFTER INSERT trigger turns it into a Web Push — the
+      // only thing that ever pings the phone when new mail lands in the inbox.
+      await notifyNewInboxItems(userId, digestSince);
     }
     return new Response(JSON.stringify({ processed: totalProcessed, deferred: totalDeferred, batchSize: sys.batch_size }), { headers: { "Content-Type": "application/json" } });
   } catch (e) {

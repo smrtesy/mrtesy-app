@@ -84,4 +84,42 @@ router.post("/me/push/test", requireAuth, testPushLimit, async (req: Request, re
   res.json({ ok: true });
 });
 
+/**
+ * POST /internal/push/notify — the single Web Push fan-out path.
+ *
+ * Fired by the `notifications` AFTER INSERT trigger (via pg_net) for EVERY
+ * notification row, no matter who created it — Express `notify()` OR a Supabase
+ * edge function (gmail-sync, ai-process, …). Before this, sendPush only ran
+ * inside Express notify(), so the edge-function notifications that make up
+ * almost all real alerts (Gmail disconnect, sync errors, new-inbox digests)
+ * never reached the user's phone. Centralizing here means every notification
+ * pushes uniformly.
+ *
+ * Not user-facing: secret-gated by x-cron-secret like the other pg_net targets
+ * (see modules/smrtreach/public-handlers.ts). No requireAuth — the DB is the
+ * caller, not a logged-in user.
+ */
+router.post("/internal/push/notify", async (req: Request, res: Response) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.headers["x-cron-secret"] !== secret) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const b = req.body ?? {};
+  if (typeof b.user_id !== "string" || typeof b.title !== "string") {
+    return res.status(400).json({ error: "user_id and title required" });
+  }
+
+  await sendPush(b.user_id, {
+    title:    b.title,
+    body:     typeof b.body === "string" ? b.body : null,
+    link:     typeof b.link === "string" ? b.link : null,
+    type:     typeof b.type === "string" ? b.type : undefined,
+    app_slug: typeof b.app_slug === "string" ? b.app_slug : undefined,
+    // entity_id (uuid, or null) doubles as the push tag to collapse repeats.
+    tag:      typeof b.tag === "string" ? b.tag : undefined,
+  });
+  res.json({ ok: true });
+});
+
 export default router;

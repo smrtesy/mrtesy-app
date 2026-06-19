@@ -1,5 +1,4 @@
 import { db } from "../../db";
-import { sendPush } from "./push";
 import type { NotifyParams, NotifyErrorParams } from "./types";
 
 export async function notify(
@@ -24,19 +23,12 @@ export async function notify(
     return;
   }
 
-  // Fan the same notification out as a Web Push to the user's installed
-  // devices. Fire-and-forget: pushing to slow/remote push services must not
-  // add latency to the caller (this is a long-running server, not serverless,
-  // so the task completes after the response). sendPush never throws, but
-  // guard anyway so an unexpected rejection can't surface as unhandled.
-  void sendPush(userId, {
-    title:    params.title,
-    body:     params.body,
-    link:     params.link,
-    type:     params.type,
-    app_slug: params.app_slug,
-    tag:      params.entity_id ?? undefined,
-  }).catch((e) => console.error("[platform.notify] push:", e));
+  // Web Push fan-out is NOT done here. A single `notifications` AFTER INSERT
+  // trigger (migration 20260619_push_on_notification) calls the Express
+  // /internal/push/notify endpoint for every inserted row — whether it came
+  // from this helper or straight from an edge function (gmail-sync, ai-process,
+  // …). That makes push uniform across all notification sources; pushing here
+  // too would double-fire for Express-originated notifications.
 }
 
 /**
