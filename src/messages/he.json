@@ -146,7 +146,8 @@
   },
   "tabsWorkspace": {
     "close": "סגור טאב",
-    "focusPane": "מקד טאב זה"
+    "focusPane": "מקד טאב זה",
+    "resizePane": "שנה רוחב"
   },
   "nav": {
     "tasks": "משימות",

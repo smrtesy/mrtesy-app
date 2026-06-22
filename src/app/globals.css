@@ -107,6 +107,7 @@
 html[data-embed="1"] aside[data-sidebar],
 html[data-embed="1"] [data-sidebar-open-handle],
 html[data-embed="1"] [data-wa-fab],
+html[data-embed="1"] [data-task-fab],
 html[data-embed="1"] .wa-panel {
   display: none !important;
 }

@@ -13,9 +13,10 @@ import {
  *
  * Clicking a page in the desktop sidebar opens it as a pane inside the content
  * area instead of navigating the whole window. Several panes sit side by side:
- * the active pane takes half the available width and the rest share what's
- * left (see TabsWorkspace). Open tabs persist across reloads in localStorage so
- * the operator keeps their working set.
+ * by default the active pane takes half the available width and the rest share
+ * what's left, but the boundaries between panes are draggable so the operator
+ * can size each pane (see TabsWorkspace). Open tabs and their widths persist
+ * across reloads in localStorage so the operator keeps their working set.
  *
  * A tab's `id` is its full href (locale-prefixed, e.g. "/he/tasks"), so opening
  * the same page twice just focuses the existing pane instead of duplicating it.
@@ -28,13 +29,23 @@ export type WorkspaceTab = {
   label: string;
 };
 
+/** Per-tab pane width as a fraction (0..1) of the workspace. Empty means
+ *  "use the automatic default" (active pane 50%, the rest share the other
+ *  half). Once the user drags a divider, every pane gets an explicit fraction. */
+export type PaneWidths = Record<string, number>;
+
 type TabsWorkspaceValue = {
   tabs: WorkspaceTab[];
   activeId: string | null;
+  widths: PaneWidths;
   /** Open (or focus, if already open) a page as a pane and make it active. */
   openTab: (href: string, label: string) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
+  /** Replace the explicit pane-width fractions (used by the drag handles). */
+  setWidths: (next: PaneWidths) => void;
+  /** Drop all explicit widths and fall back to the automatic layout. */
+  resetWidths: () => void;
 };
 
 const STORAGE_KEY = "smrtesy.tabs.v1";
@@ -44,6 +55,7 @@ const TabsWorkspaceContext = createContext<TabsWorkspaceValue | null>(null);
 export function TabsWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [widths, setWidthsState] = useState<PaneWidths>({});
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate from localStorage once, after mount, to avoid an SSR/client
@@ -52,7 +64,11 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as { tabs?: WorkspaceTab[]; activeId?: string | null };
+        const parsed = JSON.parse(raw) as {
+          tabs?: WorkspaceTab[];
+          activeId?: string | null;
+          widths?: PaneWidths;
+        };
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs.filter(
             (t) => t && typeof t.id === "string" && typeof t.href === "string",
@@ -60,6 +76,15 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           setTabs(valid);
           const stillOpen = valid.some((t) => t.id === parsed.activeId);
           setActiveId(stillOpen ? parsed.activeId! : valid[valid.length - 1]?.id ?? null);
+          if (parsed.widths && typeof parsed.widths === "object") {
+            // Keep only widths for tabs that are still open.
+            const openIds = new Set(valid.map((t) => t.id));
+            const pruned: PaneWidths = {};
+            for (const [id, v] of Object.entries(parsed.widths)) {
+              if (openIds.has(id) && typeof v === "number" && v > 0) pruned[id] = v;
+            }
+            setWidthsState(pruned);
+          }
         }
       }
     } catch {
@@ -71,17 +96,20 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (!hydrated) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs, activeId }));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs, activeId, widths }));
     } catch {
       /* storage full / unavailable — non-fatal */
     }
-  }, [tabs, activeId, hydrated]);
+  }, [tabs, activeId, widths, hydrated]);
 
   const openTab = useCallback((href: string, label: string) => {
     setTabs((prev) =>
       prev.some((t) => t.id === href) ? prev : [...prev, { id: href, href, label }],
     );
     setActiveId(href);
+    // A new pane changes the layout — drop manual widths so the set re-lays out
+    // with the automatic default; the user can re-drag from there.
+    setWidthsState({});
   }, []);
 
   const closeTab = useCallback((id: string) => {
@@ -96,12 +124,22 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       });
       return next;
     });
+    setWidthsState((prev) => {
+      if (!(id in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[id];
+      return rest;
+    });
   }, []);
 
   const setActive = useCallback((id: string) => setActiveId(id), []);
+  const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);
+  const resetWidths = useCallback(() => setWidthsState({}), []);
 
   return (
-    <TabsWorkspaceContext.Provider value={{ tabs, activeId, openTab, closeTab, setActive }}>
+    <TabsWorkspaceContext.Provider
+      value={{ tabs, activeId, widths, openTab, closeTab, setActive, setWidths, resetWidths }}
+    >
       {children}
     </TabsWorkspaceContext.Provider>
   );
