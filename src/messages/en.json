@@ -144,6 +144,10 @@
       "pick": "Pick a date"
     }
   },
+  "tabsWorkspace": {
+    "close": "Close tab",
+    "focusPane": "Focus this tab"
+  },
   "nav": {
     "tasks": "Tasks",
     "suggestions": "Suggestions",

@@ -100,6 +100,26 @@
   }
 }
 
+/* Embedded pane mode — set on <html> by the inline script in (app)/layout.tsx
+   when a page is loaded inside a tabs-workspace iframe (?embed=1). Strips the
+   app chrome (sidebar, collapse handle, floating WhatsApp FAB/panel) and zeroes
+   the content offsets so only the page itself fills the pane. */
+html[data-embed="1"] aside[data-sidebar],
+html[data-embed="1"] [data-sidebar-open-handle],
+html[data-embed="1"] [data-wa-fab],
+html[data-embed="1"] .wa-panel {
+  display: none !important;
+}
+html[data-embed="1"] main[data-sidebar-main],
+html[data-embed="1"] body[data-wa-panel="true"] main[data-sidebar-main] {
+  margin-inline-start: 0 !important;
+  margin-inline-end: 0 !important;
+  padding-bottom: 0 !important;
+}
+html[data-embed="1"] main[data-sidebar-main] > div {
+  max-width: none !important;
+}
+
 /* Collapsible desktop sidebar — toggled by Sidebar.tsx via `data-sidebar-collapsed`
    on <body>. The aside hides, main loses its inline-start margin, and a small
    floating "open" handle appears. Mobile (<md) is unaffected because the

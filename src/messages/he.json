@@ -144,6 +144,10 @@
       "pick": "בחר תאריך"
     }
   },
+  "tabsWorkspace": {
+    "close": "סגור טאב",
+    "focusPane": "מקד טאב זה"
+  },
   "nav": {
     "tasks": "משימות",
     "suggestions": "הצעות",

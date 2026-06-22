@@ -6,6 +6,8 @@ import { getEnabledAppsForUserInOrg } from "@/lib/apps/server";
 import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
+import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
+import { TabsArea } from "@/components/platform/layout/TabsArea";
 
 export default async function AppLayout({
   children,
@@ -76,27 +78,37 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
-      {/* Desktop Sidebar */}
-      <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
-      {/* WhatsApp side-panel: lets the operator keep a conversation open
-          alongside the task lists. Provider wraps the content so entry points
-          (SourceLink / QuickAction / log) can open it; the docked panel + FAB
-          render only for smrtTask users. */}
-      <WhatsAppPanelProvider>
-        {/* Main content — data-sidebar-main lets globals.css drop the inline-start
-            margin when the user collapses the sidebar from Sidebar.tsx. */}
-        <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
-          <div className="w-full max-w-4xl mx-auto p-4 md:p-6">
-            {children}
-          </div>
-        </main>
-        {hasSmrtTask && (
-          <>
-            <WhatsAppPanel />
-            <WhatsAppPanelFab />
-          </>
-        )}
-      </WhatsAppPanelProvider>
+      {/* When this page is loaded inside a tabs-workspace pane (?embed=1), flag
+          it before paint so globals.css strips the chrome (sidebar, floating
+          panels) and only the page content fills the pane. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "try{if(new URLSearchParams(window.location.search).get('embed')==='1'){document.documentElement.setAttribute('data-embed','1')}}catch(e){}",
+        }}
+      />
+      <TabsWorkspaceProvider>
+        {/* Desktop Sidebar */}
+        <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
+        {/* WhatsApp side-panel: lets the operator keep a conversation open
+            alongside the task lists. Provider wraps the content so entry points
+            (SourceLink / QuickAction / log) can open it; the docked panel + FAB
+            render only for smrtTask users. */}
+        <WhatsAppPanelProvider>
+          {/* Main content — data-sidebar-main lets globals.css drop the inline-start
+              margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
+              swaps the centered page for side-by-side panes when tabs are open. */}
+          <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
+            <TabsArea>{children}</TabsArea>
+          </main>
+          {hasSmrtTask && (
+            <>
+              <WhatsAppPanel />
+              <WhatsAppPanelFab />
+            </>
+          )}
+        </WhatsAppPanelProvider>
+      </TabsWorkspaceProvider>
     </div>
   );
 }
