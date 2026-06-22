@@ -146,7 +146,8 @@
   },
   "tabsWorkspace": {
     "close": "Close tab",
-    "focusPane": "Focus this tab"
+    "focusPane": "Focus this tab",
+    "resizePane": "Resize"
   },
   "nav": {
     "tasks": "Tasks",

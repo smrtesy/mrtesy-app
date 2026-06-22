@@ -468,6 +468,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           <Button
             size="icon"
             variant="secondary"
+            data-task-fab
             aria-label={t("newTask")}
             className="fixed bottom-40 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
             onClick={() => setManualTaskOpen(true)}
@@ -476,6 +477,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           </Button>
           <Button
             size="icon"
+            data-task-fab
             aria-label={t("update")}
             className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
             onClick={() => setTaskInputOpen(true)}
