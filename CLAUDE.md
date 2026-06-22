@@ -203,6 +203,26 @@ All product names follow the pattern **`smrt` + English word**:
   "preserve URLs verbatim" clause. When you review an existing one
   that doesn't have it, add it.
 
+- **Compact, minimal UI — every new feature defaults to collapsed/quiet**.
+  The user's instruction (June 2026, prompted by the WhatsApp search bar):
+  keep the interface compact and minimal — don't add permanent chrome that
+  sits on screen taking space when it isn't in use. When you add any
+  feature with a surface (search, filters, sort controls, bulk actions,
+  advanced options, etc.):
+  - **Default to collapsed.** Show a small icon button (next to the title
+    / in the header), and reveal the full control only when the user
+    clicks it. The WhatsApp chat search is the reference implementation:
+    a `Search` icon by the list, click → the input row expands; close
+    (X / Escape) → it collapses and resets. See
+    `src/components/smrttask/whatsapp/WhatsAppReader.tsx`.
+  - Prefer icon buttons + tooltips over always-on labelled inputs.
+  - Don't stack rows of controls above content. One quiet entry point
+    that expands on demand beats a permanent toolbar.
+  - Reuse existing density/spacing of the surrounding screen — match the
+    neighbours, don't introduce a bulkier pattern.
+  When in doubt, the smaller, hidden-until-needed version is the right
+  call. This applies to every app/screen, not just WhatsApp.
+
 ## Project conventions worth remembering
 
 - **Edge function imports — NEVER use `https://esm.sh/...`**. The

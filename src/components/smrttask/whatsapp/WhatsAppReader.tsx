@@ -57,7 +57,15 @@ export function WhatsAppReader({
   // search returns chat_id → newest matching snippet, which we surface as the
   // preview line so the user sees *why* a chat matched.
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [contentMatches, setContentMatches] = useState<Map<string, string>>(new Map());
+
+  // Collapse the search bar and reset the query so the full thread list comes
+  // back. Used by the close button and the Escape key.
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
 
   // Surface the active conversation to the host (used for the panel's
   // "expand to full page" link). Fires on mount and every selection change.
@@ -264,27 +272,44 @@ export function WhatsAppReader({
 
       <div className={`flex-1 min-h-0 ${gridClass}`}>
         <div className={`flex flex-col min-h-0 min-w-0 gap-2 ${listVisibility}`}>
-          <div className="relative shrink-0">
-            <Search className="pointer-events-none absolute top-1/2 -translate-y-1/2 start-2.5 h-4 w-4 text-muted-foreground" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("searchPlaceholder")}
-              aria-label={t("searchPlaceholder")}
-              className="w-full rounded-lg border bg-card py-2 ps-9 pe-8 text-sm outline-none focus:ring-2 focus:ring-primary/40"
-            />
-            {query && (
+          {searchOpen ? (
+            <div className="relative shrink-0">
+              <Search className="pointer-events-none absolute top-1/2 -translate-y-1/2 start-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                type="search"
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeSearch();
+                }}
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchPlaceholder")}
+                className="w-full rounded-lg border bg-card py-2 ps-9 pe-8 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+              />
               <button
                 type="button"
-                onClick={() => setQuery("")}
-                aria-label={t("searchClear")}
+                onClick={closeSearch}
+                aria-label={t("searchClose")}
+                title={t("searchClose")}
                 className="absolute top-1/2 -translate-y-1/2 end-2 rounded p-0.5 text-muted-foreground hover:bg-muted"
               >
                 <X className="h-4 w-4" />
               </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex shrink-0 justify-end">
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                aria-label={t("searchOpen")}
+                title={t("searchOpen")}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           <div className="min-h-0 flex-1">
             <ThreadList
               threads={displayThreads}
