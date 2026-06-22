@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { getTranslations } from "next-intl/server";
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
+import { ExternalLink } from "lucide-react";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
@@ -60,6 +61,19 @@ export default async function InboxPage({
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold">{t("title")}</h1>
+        {/* Quick jump to the source log (opens on the platform domain in a
+            new tab). Shown next to the title for both the Suggestions and
+            Notifications views, which share this header. */}
+        <a
+          href="https://app.smrtesy.com/he/log"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t("openLog")}
+          title={t("openLog")}
+          className="text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </a>
         {/* Same corrections export as the log page, pinned to the trailing
             (left in RTL) edge of the title row. */}
         {hasSmrtTask && (

@@ -1509,6 +1509,7 @@
   },
   "inbox": {
     "title": "נכנס",
+    "openLog": "פתח לוג מקורות",
     "tabSuggestions": "הצעות",
     "tabNotifications": "התראות",
     "noNotifications": "אין התראות חדשות",
