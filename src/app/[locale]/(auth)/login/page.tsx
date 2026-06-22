@@ -16,8 +16,25 @@ export default function LoginPage() {
   const supabase = createClient();
 
   useEffect(() => {
-    if (searchParams.get("error") === "no_invite") {
+    // Query-param errors come from our own /api/auth/callback redirects.
+    const queryError = searchParams.get("error");
+    if (queryError === "no_invite") {
       toast.error(t("noInviteError"));
+    } else if (queryError === "system_error") {
+      toast.error(t("systemError"));
+    }
+
+    // Supabase's own OAuth callback fails *before* reaching our route (e.g. an
+    // invalid Google client secret → "Unable to exchange external code"). It
+    // bounces back here with the error in the URL hash fragment, which never
+    // reaches the server. Surface a clear message and clean the hash so a
+    // refresh doesn't re-show it.
+    if (!queryError && typeof window !== "undefined" && window.location.hash.includes("error")) {
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      if (hashParams.get("error")) {
+        toast.error(t("oauthError"));
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
     }
   }, [searchParams, t]);
 

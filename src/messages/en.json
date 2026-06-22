@@ -318,7 +318,9 @@
     "magicLinkSent": "Sent! Check your email",
     "signOut": "Sign out",
     "noInviteError": "Access by invitation only. Contact your administrator.",
-    "rateLimitError": "Too many emails sent. Try again in a few minutes, or sign in with Google."
+    "rateLimitError": "Too many emails sent. Try again in a few minutes, or sign in with Google.",
+    "oauthError": "Google sign-in failed. Please try again, and if it keeps happening contact your administrator.",
+    "systemError": "A temporary error occurred. Please try again in a moment."
   },
   "invite": {
     "title": "You've been invited",
