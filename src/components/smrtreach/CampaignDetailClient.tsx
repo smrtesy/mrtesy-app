@@ -540,13 +540,26 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
       {emailEnabled && (
         <div className="space-y-4 rounded-lg border p-5">
           <h2 className="text-lg font-semibold">{t("emailContent")}</h2>
-          <label className="grid gap-1 text-sm sm:max-w-xs">
-            <span className="text-muted-foreground">{t("language")}</span>
-            <Select value={email.language ?? "he"} onValueChange={(v) => setEmail((e) => ({ ...e, language: v }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="he">{t("langHe")}</SelectItem><SelectItem value="en">{t("langEn")}</SelectItem></SelectContent>
-            </Select>
-          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm">
+              <span className="text-muted-foreground">{t("provider")}</span>
+              <Select value={email.provider ?? "ses"} onValueChange={(v) => setEmail((e) => ({ ...e, provider: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ses">{t("providerSes")}</SelectItem>
+                  <SelectItem value="gmail">{t("providerGmail")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">{t("providerHint")}</span>
+            </label>
+            <label className="grid gap-1 text-sm">
+              <span className="text-muted-foreground">{t("language")}</span>
+              <Select value={email.language ?? "he"} onValueChange={(v) => setEmail((e) => ({ ...e, language: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="he">{t("langHe")}</SelectItem><SelectItem value="en">{t("langEn")}</SelectItem></SelectContent>
+              </Select>
+            </label>
+          </div>
 
           {/* Sender allocation: pick which addresses to send from and how many
               from each (from the master list managed in settings). */}

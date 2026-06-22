@@ -396,6 +396,54 @@ router.get("/me/drive/folders/by-id", requireAuth, async (req: Request, res: Res
   }
 });
 
+/**
+ * GET /me/drive/files
+ *
+ * Lists Google Sheets in the caller's Drive for the in-app file picker
+ * (used by the smrtCRM contact import dialog to pick a spreadsheet without
+ * pasting a URL). Mirrors /me/drive/folders.
+ *
+ * Query params:
+ *   q      optional substring search on file name (Drive `name contains`)
+ *   limit  default 50, max 100
+ *
+ * Returns: { files: Array<{ id, name, webViewLink?, modifiedTime? }> }
+ */
+router.get("/me/drive/files", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const auth = await getOAuthClient(req.user!.id, "google_drive");
+    const drive = google.drive({ version: "v3", auth });
+
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+
+    // Same escaping order Drive's query language requires (see folders route).
+    const escapeDriveValue = (v: string) => v.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const clauses: string[] = [
+      "mimeType = 'application/vnd.google-apps.spreadsheet'",
+      "trashed = false",
+    ];
+    if (q) clauses.push(`name contains '${escapeDriveValue(q)}'`);
+
+    const result = await drive.files.list({
+      q: clauses.join(" and "),
+      pageSize: limit,
+      fields: "files(id, name, webViewLink, modifiedTime)",
+      orderBy: "modifiedTime desc,name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    res.json({ files: result.data.files ?? [] });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No credentials found/i.test(msg) || /invalid_grant/i.test(msg) || /invalid_client/i.test(msg)) {
+      return res.status(409).json({ error: "drive_not_connected", message: msg });
+    }
+    return res.status(500).json({ error: msg });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WhatsApp selective auto-reply (per-user; opt-in, allowlist-only)
 // ─────────────────────────────────────────────────────────────────────────────
