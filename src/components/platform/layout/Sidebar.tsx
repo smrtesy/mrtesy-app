@@ -373,6 +373,8 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           {isAdmin && (
             <Link
               href={`${basePath}/admin`}
+              target="_blank"
+              rel="noopener noreferrer"
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 pathname.startsWith(`${basePath}/admin`)
@@ -537,6 +539,8 @@ function NavItem({
   return (
     <Link
       href={`${basePath}${href}`}
+      target="_blank"
+      rel="noopener noreferrer"
       className={cn(
         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
         isActive(href)
