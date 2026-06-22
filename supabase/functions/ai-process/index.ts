@@ -3419,13 +3419,16 @@ async function notifyNewInboxItems(userId: string, sinceISO: string) {
     .from("org_members").select("org_id").eq("user_id", userId).limit(1).maybeSingle();
   if (!membership?.org_id) return;
 
-  // Dedup: skip if an unread inbox digest was raised in the last 30 minutes.
+  // Dedup → throttle to at most one digest per 30 minutes. This is push-only
+  // (filtered out of the in-app list), so the rows are never marked read; the
+  // throttle is therefore purely time-based — checking is_read here would tie it
+  // to a state that never changes. The collapse tag (push_on_notification falls
+  // back to entity_type) makes consecutive digests merge into one phone banner.
   const { data: existing } = await supabase
     .from("notifications")
     .select("id")
     .eq("user_id", userId)
     .eq("entity_type", "inbox_digest")
-    .eq("is_read", false)
     .gt("created_at", new Date(Date.now() - 30 * 60 * 1000).toISOString())
     .limit(1)
     .maybeSingle();
@@ -3448,7 +3451,7 @@ async function notifyNewInboxItems(userId: string, sinceISO: string) {
     app_slug: "smrttask",
     type: "info",
     title,
-    body: "הגיעו הצעות חדשות מהמיילים שלך — לחץ כדי לעבור עליהן.",
+    body: "הגיעו הצעות חדשות — לחץ כדי לעבור עליהן.",
     link: "/inbox",
     entity_type: "inbox_digest",
   }).then(() => {}, () => {});
@@ -3660,9 +3663,11 @@ Deno.serve(async (req) => {
         }
       }
 
-      // One "X items in your inbox" notification per run that added suggestions.
-      // The notifications AFTER INSERT trigger turns it into a Web Push — the
-      // only thing that ever pings the phone when new mail lands in the inbox.
+      // One "X items in your inbox" notification per run that added suggestions
+      // (from any source — email AND WhatsApp; see notifyNewInboxItems). The
+      // notifications AFTER INSERT trigger turns it into a push-only Web Push —
+      // the only thing that ever pings the phone when new items land in the
+      // inbox. It is filtered out of the in-app list (NotificationsList).
       await notifyNewInboxItems(userId, digestSince);
     }
     return new Response(JSON.stringify({ processed: totalProcessed, deferred: totalDeferred, batchSize: sys.batch_size }), { headers: { "Content-Type": "application/json" } });

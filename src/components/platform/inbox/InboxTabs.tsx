@@ -51,7 +51,9 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "dismissed"),
       supabase.from("notifications").select("*", { count: "exact", head: true })
-        .eq("user_id", user.id).eq("is_read", false),
+        .eq("user_id", user.id).eq("is_read", false)
+        // inbox_digest is push-only — keep it out of the tab badge. Keep NULLs.
+        .or("entity_type.is.null,entity_type.neq.inbox_digest"),
     ]);
 
     setCounts({

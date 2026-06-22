@@ -32,7 +32,10 @@ router.get("/count", requireAuth, requireOrg, async (req: Request, res: Response
       .select("*", { count: "exact", head: true })
       .eq("user_id", userId)
       .eq("org_id", orgId)
-      .eq("is_read", false),
+      .eq("is_read", false)
+      // inbox_digest is push-only (see NotificationsList) — exclude it from the
+      // unread badge so it never inflates the count. Keep NULL entity_types.
+      .or("entity_type.is.null,entity_type.neq.inbox_digest"),
     db
       .from("tasks")
       .select("*", { count: "exact", head: true })

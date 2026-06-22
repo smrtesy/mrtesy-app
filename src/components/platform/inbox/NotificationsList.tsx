@@ -46,6 +46,10 @@ export function NotificationsList() {
       .select("*")
       .eq("user_id", user.id)
       .eq("org_id", orgId)
+      // inbox_digest is a push-only heads-up ("X new suggestions") — it pings
+      // the phone but must NOT clutter the in-app list. Keep rows with no
+      // entity_type (neq alone would drop NULLs).
+      .or("entity_type.is.null,entity_type.neq.inbox_digest")
       .order("created_at", { ascending: false })
       .limit(50);
     setNotifications(data ?? []);
