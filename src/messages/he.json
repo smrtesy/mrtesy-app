@@ -1775,6 +1775,7 @@
     "saveCap": "שמירה",
     "capSaved": "התקרה נשמרה",
     "connectGmail": "חיבור חשבון Gmail",
+    "gmailConnectNote": "אם מופיע מסך שגיאה 403 של גוגל (\"you do not have access\") — חשבון השליחה צריך להיות מורשה במסך ההסכמה של גוגל. הוסף את כתובת ה-Gmail כ-Test user ב-Google Cloud Console (OAuth consent screen) ונסה שוב.",
     "gmailConnectSuccess": "חשבון ה-Gmail חובר בהצלחה",
     "gmailConnectError": "חיבור חשבון ה-Gmail נכשל",
     "gmailInboxDisabled": "מנותק",

@@ -1775,6 +1775,7 @@
     "saveCap": "Save",
     "capSaved": "Cap saved",
     "connectGmail": "Connect Gmail account",
+    "gmailConnectNote": "If Google shows a 403 error screen (\"you do not have access\"), the sending account must be authorized on Google's consent screen. Add the Gmail address as a Test user in Google Cloud Console (OAuth consent screen) and try again.",
     "gmailConnectSuccess": "Gmail account connected",
     "gmailConnectError": "Failed to connect the Gmail account",
     "gmailInboxDisabled": "Disconnected",
