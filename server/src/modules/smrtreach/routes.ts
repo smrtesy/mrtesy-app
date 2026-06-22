@@ -241,6 +241,37 @@ router.get("/reach/campaigns/:id/recipients", async (req: Request, res: Response
   }
 });
 
+// GET /reach/merge-fields — the list of variables the user can drop into the
+// email body. Standard contact fields are always available; custom fields are
+// discovered from the keys actually present in the org's contacts so the editor
+// dropdown only offers tokens that will resolve. Tokens match the {{var}} /
+// {{custom.field}} format the send-time render() understands.
+const STANDARD_MERGE_FIELDS = ["first_name", "last_name", "full_name", "email", "phone"] as const;
+
+router.get("/reach/merge-fields", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { data, error } = await db
+    .from("smrtcrm_contacts")
+    .select("custom_fields")
+    .eq("org_id", orgId)
+    .not("custom_fields", "is", null)
+    .limit(1000);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const customKeys = new Set<string>();
+  for (const row of data ?? []) {
+    const cf = (row as { custom_fields?: unknown }).custom_fields;
+    if (cf && typeof cf === "object" && !Array.isArray(cf)) {
+      for (const k of Object.keys(cf as Record<string, unknown>)) customKeys.add(k);
+    }
+  }
+
+  res.json({
+    standard: STANDARD_MERGE_FIELDS,
+    custom: [...customKeys].sort((a, b) => a.localeCompare(b)),
+  });
+});
+
 // ============================================================
 // PER-CAMPAIGN SENDER ALLOCATION
 // ============================================================

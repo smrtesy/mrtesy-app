@@ -1633,7 +1633,27 @@
     "previewText": "Preview text",
     "replyTo": "Reply-to address",
     "htmlBody": "HTML content",
-    "htmlBodyHint": "You can use '{{first_name}}', '{{last_name}}', '{{email}}'",
+    "htmlBodyHint": "Write your email here. You can format the text and insert fields from the list.",
+    "toolbar": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline",
+      "bulletList": "Bulleted list",
+      "numberList": "Numbered list",
+      "link": "Link",
+      "clearFormat": "Clear formatting",
+      "linkPrompt": "Enter a URL"
+    },
+    "insertField": "Insert field",
+    "fieldsStandard": "Standard fields",
+    "fieldsCustom": "Custom fields",
+    "field": {
+      "first_name": "First name",
+      "last_name": "Last name",
+      "full_name": "Full name",
+      "email": "Email",
+      "phone": "Phone"
+    },
     "saveContent": "Save content",
     "contentSaved": "Content saved",
     "previewRecipients": "Preview recipients",

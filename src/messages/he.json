@@ -1633,7 +1633,27 @@
     "previewText": "טקסט תצוגה מקדימה",
     "replyTo": "כתובת לתשובה",
     "htmlBody": "תוכן HTML",
-    "htmlBodyHint": "אפשר להשתמש ב-'{{first_name}}', '{{last_name}}', '{{email}}'",
+    "htmlBodyHint": "כתבו כאן את תוכן המייל. אפשר לעצב את הטקסט ולהוסיף שדות מתוך הרשימה.",
+    "toolbar": {
+      "bold": "מודגש",
+      "italic": "נטוי",
+      "underline": "קו תחתון",
+      "bulletList": "רשימת תבליטים",
+      "numberList": "רשימה ממוספרת",
+      "link": "קישור",
+      "clearFormat": "ניקוי עיצוב",
+      "linkPrompt": "הזינו כתובת קישור"
+    },
+    "insertField": "הוספת שדה",
+    "fieldsStandard": "שדות בסיסיים",
+    "fieldsCustom": "שדות מותאמים אישית",
+    "field": {
+      "first_name": "שם פרטי",
+      "last_name": "שם משפחה",
+      "full_name": "שם מלא",
+      "email": "אימייל",
+      "phone": "טלפון"
+    },
     "saveContent": "שמירת תוכן",
     "contentSaved": "התוכן נשמר",
     "previewRecipients": "תצוגת נמענים",

@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { RichEmailEditor, type MergeFields } from "@/components/smrtreach/RichEmailEditor";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -117,6 +118,8 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
   const [testTo, setTestTo] = useState({ email: "", phone: "" });
   const [logRows, setLogRows] = useState<LogRow[] | null>(null);
+  // Merge variables offered by the email editor's field-insertion dropdown.
+  const [mergeFields, setMergeFields] = useState<MergeFields>({ standard: [], custom: [] });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -167,6 +170,13 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   }, [campaignId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Merge fields for the email editor — fetched once; independent of the campaign.
+  useEffect(() => {
+    api<MergeFields>("/api/reach/merge-fields")
+      .then(setMergeFields)
+      .catch(() => setMergeFields({ standard: ["first_name", "last_name", "full_name", "email", "phone"], custom: [] }));
+  }, []);
 
   // Bots are only needed for the WhatsApp editor; fetch lazily once we know the channel.
   useEffect(() => {
@@ -600,10 +610,15 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
             <span className="text-muted-foreground">{t("replyTo")}</span>
             <Input value={email.reply_to ?? ""} onChange={(e) => setEmail((s) => ({ ...s, reply_to: e.target.value }))} />
           </label>
-          <label className="grid gap-1 text-sm">
+          <div className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("htmlBody")}</span>
-            <Textarea value={email.html_body ?? ""} onChange={(e) => setEmail((s) => ({ ...s, html_body: e.target.value }))} rows={10} dir="auto" placeholder={t("htmlBodyHint")} />
-          </label>
+            <RichEmailEditor
+              value={email.html_body ?? ""}
+              onChange={(html) => setEmail((s) => ({ ...s, html_body: html }))}
+              fields={mergeFields}
+              t={t}
+            />
+          </div>
 
           {/* Send controls */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 border-t pt-4">
