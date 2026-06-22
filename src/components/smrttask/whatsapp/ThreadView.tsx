@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "rea
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock, Search, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -441,6 +441,87 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
 
   const visibleMessages = mergedMessages.filter((m) => !m.is_reaction);
 
+  // ── In-chat search ────────────────────────────────────────────────────────
+  // Collapsed behind an icon in the header (compact-UI principle). When open,
+  // matches the query against each message's text/transcript/OCR over the
+  // loaded window, highlights the hits, and lets the user step between them
+  // (oldest → newest) with the up/down controls, scrolling each into view.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchIndex, setSearchIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Wamids of matching messages, in chronological (oldest → newest) order.
+  const matchWamids = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length < 1) return [] as string[];
+    const hits: string[] = [];
+    for (const m of visibleMessages) {
+      const hay = `${m.body_text ?? ""}\n${m.audio_transcript ?? ""}\n${m.media_ocr_text ?? ""}`.toLowerCase();
+      if (hay.includes(q)) hits.push(m.wamid);
+    }
+    return hits;
+  }, [visibleMessages, searchQuery]);
+
+  const matchSet = useMemo(() => new Set(matchWamids), [matchWamids]);
+  const currentMatchWamid = matchWamids[searchIndex] ?? null;
+
+  // Newest match comes first under the cursor whenever the query changes (the
+  // chat is bottom-anchored, so the most recent hit is the natural landing
+  // spot). Read the latest matches via a ref so this only re-runs on a query
+  // edit, not on every background re-poll that nudges the message count.
+  // The ref is synced in its own commit-time effect (declared first so it
+  // runs before the reset effect on a query-change render) rather than during
+  // render, which would be a side-effect in the render body.
+  const matchWamidsRef = useRef<string[]>([]);
+  useEffect(() => {
+    matchWamidsRef.current = matchWamids;
+  });
+  useEffect(() => {
+    if (!searchOpen) return;
+    const n = matchWamidsRef.current.length;
+    setSearchIndex(n > 0 ? n - 1 : 0);
+  }, [searchQuery, searchOpen]);
+
+  // Scroll the active match into view (and keep the index in bounds as the
+  // match set shrinks/grows).
+  useEffect(() => {
+    if (!searchOpen) return;
+    if (matchWamids.length === 0) return;
+    const idx = Math.min(searchIndex, matchWamids.length - 1);
+    const wamid = matchWamids[idx];
+    if (!wamid) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-wamid="${CSS.escape(wamid)}"]`,
+    );
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [searchIndex, searchOpen, matchWamids]);
+
+  const closeChatSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchIndex(0);
+  }, []);
+
+  const gotoPrevMatch = useCallback(() => {
+    setSearchIndex((i) => (i <= 0 ? Math.max(0, matchWamids.length - 1) : i - 1));
+  }, [matchWamids.length]);
+  const gotoNextMatch = useCallback(() => {
+    setSearchIndex((i) => (i >= matchWamids.length - 1 ? 0 : i + 1));
+  }, [matchWamids.length]);
+
+  // Reset search when switching conversations.
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchIndex(0);
+  }, [chatId]);
+
+  // Focus the input when the search bar opens.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
   const displayName =
     thread?.custom_name?.trim() ||
     thread?.from_name?.trim() ||
@@ -662,7 +743,85 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
           )}
         </div>
         {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {!searchOpen && (
+          <IconButton
+            label={t("chatSearchOpen")}
+            color="neutral"
+            className="shrink-0"
+            onClick={() => setSearchOpen(true)}
+          >
+            <Search />
+          </IconButton>
+        )}
       </div>
+
+      {/* In-chat search bar — collapsed behind the header icon; when open it
+          shows the query input, a match counter, prev/next steppers (oldest →
+          newest, like WhatsApp), and a close button. */}
+      {searchOpen && (
+        <div className="flex items-center gap-1.5 border-b bg-muted/40 px-2 py-1.5">
+          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                closeChatSearch();
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (matchWamids.length > 0) {
+                  // Enter steps to the previous (older) match; Shift+Enter to
+                  // the next (newer) one — mirrors find-in-page conventions.
+                  if (e.shiftKey) gotoNextMatch();
+                  else gotoPrevMatch();
+                }
+              }
+            }}
+            placeholder={t("chatSearchPlaceholder")}
+            aria-label={t("chatSearchPlaceholder")}
+            className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+          />
+          <span className="shrink-0 px-1 text-xs tabular-nums text-muted-foreground">
+            {searchQuery.trim()
+              ? matchWamids.length > 0
+                ? t("chatSearchCount", {
+                    current: Math.min(searchIndex, matchWamids.length - 1) + 1,
+                    total: matchWamids.length,
+                  })
+                : t("chatSearchNoMatch")
+              : ""}
+          </span>
+          <IconButton
+            label={t("chatSearchPrev")}
+            color="neutral"
+            className="h-7 w-7 md:h-7 md:w-7 shrink-0"
+            onClick={gotoPrevMatch}
+            disabled={matchWamids.length === 0}
+          >
+            <ChevronUp />
+          </IconButton>
+          <IconButton
+            label={t("chatSearchNext")}
+            color="neutral"
+            className="h-7 w-7 md:h-7 md:w-7 shrink-0"
+            onClick={gotoNextMatch}
+            disabled={matchWamids.length === 0}
+          >
+            <ChevronDown />
+          </IconButton>
+          <IconButton
+            label={t("searchClose")}
+            color="neutral"
+            className="h-7 w-7 md:h-7 md:w-7 shrink-0"
+            onClick={closeChatSearch}
+          >
+            <X />
+          </IconButton>
+        </div>
+      )}
 
       {/* Messages — force LTR on the container so the per-message
           alignment logic below stays consistent regardless of the app's
@@ -690,7 +849,8 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
               )}
               <MessageBubble
                 message={m}
-                highlighted={highlightWamid === m.wamid}
+                highlighted={highlightWamid === m.wamid || currentMatchWamid === m.wamid}
+                searchHit={searchOpen && matchSet.has(m.wamid) && currentMatchWamid !== m.wamid}
                 reactions={reactionsByTarget.get(m.wamid) ?? []}
                 quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
                 relatedTasks={tasksByMessageId.get(m.id) ?? []}
@@ -1358,6 +1518,7 @@ const QUICK_EMOJIS = ["❤️", "👍", "😂", "😮", "😢", "🙏"] as const
 function MessageBubble({
   message,
   highlighted,
+  searchHit,
   reactions,
   quotedMessage,
   relatedTasks,
@@ -1367,8 +1528,12 @@ function MessageBubble({
   onReply,
 }: {
   message: Message;
-  /** Transiently ringed when the user jumped here from a task source badge. */
+  /** Transiently ringed when the user jumped here from a task source badge,
+   *  and used for the *active* in-chat search match. */
   highlighted: boolean;
+  /** A non-active in-chat search match — given a subtler highlight than the
+   *  current match so all hits are visible while one is focused. */
+  searchHit?: boolean;
   reactions: Array<{ emoji: string; direction: string }>;
   /** The original message this one replies to, if it's in the loaded thread. */
   quotedMessage?: Message;
@@ -1486,7 +1651,13 @@ function MessageBubble({
             isOutgoing
               ? "bg-status-ok-bg text-foreground"
               : "bg-card text-foreground"
-          } ${highlighted ? "ring-2 ring-primary ring-offset-2 ring-offset-muted" : ""}`}
+          } ${
+            highlighted
+              ? "ring-2 ring-primary ring-offset-2 ring-offset-muted"
+              : searchHit
+                ? "ring-1 ring-status-warn"
+                : ""
+          }`}
         >
         {message.from_name && !isOutgoing && (
           <p className="text-[11px] font-medium text-status-ok">{message.from_name}</p>

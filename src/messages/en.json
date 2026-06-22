@@ -312,7 +312,13 @@
     "searchPlaceholder": "Search names and messages…",
     "searchOpen": "Search",
     "searchClose": "Close search",
-    "searchNoResults": "No matching chats or messages"
+    "searchNoResults": "No matching chats or messages",
+    "chatSearchOpen": "Search in chat",
+    "chatSearchPlaceholder": "Search this chat…",
+    "chatSearchPrev": "Previous match",
+    "chatSearchNext": "Next match",
+    "chatSearchCount": "{current} of {total}",
+    "chatSearchNoMatch": "No matches"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
