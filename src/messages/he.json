@@ -308,7 +308,10 @@
     "sendImage": "שלח תמונה",
     "removeImage": "הסר תמונה",
     "unsupportedImageType": "אפשר לשלוח רק תמונות JPEG או PNG",
-    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)"
+    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)",
+    "searchPlaceholder": "חיפוש בשמות והודעות…",
+    "searchClear": "נקה חיפוש",
+    "searchNoResults": "לא נמצאו שיחות או הודעות תואמות"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
