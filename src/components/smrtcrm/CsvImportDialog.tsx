@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, Upload } from "lucide-react";
+import { Loader2, Upload, FileSpreadsheet } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -22,6 +22,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+
+/** Maps backend error codes from the Sheets endpoint to translation keys. */
+const SHEET_ERROR_KEYS: Record<string, string> = {
+  invalid_sheet_url: "sheetErrorUrl",
+  sheet_no_data: "sheetErrorNoData",
+  google_not_connected: "sheetErrorNotConnected",
+  sheet_access_denied: "sheetErrorAccess",
+  sheet_not_found: "sheetErrorNotFound",
+};
 
 type Field = "first_name" | "last_name" | "phone" | "email";
 const FIELDS: Field[] = ["first_name", "last_name", "phone", "email"];
@@ -91,10 +101,48 @@ export function CsvImportDialog({
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
 
+  const [source, setSource] = useState<"csv" | "sheet">("csv");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetRange, setSheetRange] = useState("");
+  const [loadingSheet, setLoadingSheet] = useState(false);
+
   function reset() {
     setHeaders([]); setDataRows([]); setResult(null);
     setMapping({ first_name: null, last_name: null, phone: null, email: null });
     setTagId(NONE); setNewTag("");
+    setSource("csv"); setSheetUrl(""); setSheetRange("");
+  }
+
+  /** Apply a freshly loaded grid (from CSV or Sheets) to the mapping state. */
+  function applyGrid(hdr: string[], rows: string[][]) {
+    setHeaders(hdr);
+    setDataRows(rows);
+    setResult(null);
+    const next: Record<Field, number | null> = { first_name: null, last_name: null, phone: null, email: null };
+    hdr.forEach((h, idx) => {
+      const f = autoMap(h);
+      if (f && next[f] === null) next[f] = idx;
+    });
+    setMapping(next);
+  }
+
+  async function loadSheet() {
+    if (!sheetUrl.trim()) { toast.error(t("sheetErrorUrl")); return; }
+    setLoadingSheet(true);
+    try {
+      const { headers: hdr, rows } = await api<{ headers: string[]; rows: string[][] }>(
+        "/api/crm/import/sheet",
+        { method: "POST", body: { url: sheetUrl.trim(), range: sheetRange.trim() || undefined } },
+      );
+      applyGrid(hdr, rows);
+      toast.success(t("rowsDetected", { count: rows.length }));
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      const key = SHEET_ERROR_KEYS[code];
+      toast.error(key ? t(key as Parameters<typeof t>[0]) : code);
+    } finally {
+      setLoadingSheet(false);
+    }
   }
 
   async function onFile(file: File) {
@@ -102,16 +150,7 @@ export function CsvImportDialog({
       const text = await file.text();
       const parsed = parseCsv(text);
       if (parsed.length < 2) { toast.error(t("parseError")); return; }
-      const hdr = parsed[0];
-      setHeaders(hdr);
-      setDataRows(parsed.slice(1));
-      setResult(null);
-      const next: Record<Field, number | null> = { first_name: null, last_name: null, phone: null, email: null };
-      hdr.forEach((h, idx) => {
-        const f = autoMap(h);
-        if (f && next[f] === null) next[f] = idx;
-      });
-      setMapping(next);
+      applyGrid(parsed[0], parsed.slice(1));
     } catch {
       toast.error(t("parseError"));
     }
@@ -163,11 +202,42 @@ export function CsvImportDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          <Input
-            type="file"
-            accept=".csv,text/csv"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }}
-          />
+          <Tabs
+            value={source}
+            onValueChange={(v) => { setSource(v as "csv" | "sheet"); setHeaders([]); setDataRows([]); setResult(null); }}
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="csv" className="gap-2"><Upload className="h-4 w-4" />{t("sourceCsv")}</TabsTrigger>
+              <TabsTrigger value="sheet" className="gap-2"><FileSpreadsheet className="h-4 w-4" />{t("sourceSheet")}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="csv">
+              <Input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }}
+              />
+            </TabsContent>
+            <TabsContent value="sheet" className="space-y-2">
+              <Input
+                type="url"
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+                placeholder={t("sheetUrlPlaceholder")}
+              />
+              <Input
+                value={sheetRange}
+                onChange={(e) => setSheetRange(e.target.value)}
+                placeholder={t("sheetRangePlaceholder")}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">{t("sheetHint")}</p>
+                <Button onClick={loadSheet} disabled={loadingSheet} variant="secondary" size="sm" className="gap-2">
+                  {loadingSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                  {t("sheetLoad")}
+                </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
 
           {headers.length > 0 && (
             <>

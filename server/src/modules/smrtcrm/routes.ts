@@ -26,6 +26,7 @@ import {
   normalizePhone,
 } from "./contacts-service";
 import type { ContactInput, ImportRow } from "./types";
+import { parseSpreadsheetId, fetchSheetGrid } from "../../services/sheets";
 
 const router = Router();
 
@@ -455,6 +456,41 @@ router.post("/crm/import", async (req: Request, res: Response) => {
 
   await emitEvent(orgId, "smrtcrm", "import.completed", "import", orgId, { created, merged, skipped });
   res.json({ created, merged, skipped, errors });
+});
+
+// Google Sheets import — fetch the grid and return headers + rows so the
+// client can reuse the exact same column-mapping UI as the CSV flow and post
+// the mapped rows to POST /crm/import. We deliberately only read the sheet
+// here; all dedup/tagging stays in the shared import path.
+router.post("/crm/import/sheet", async (req: Request, res: Response) => {
+  const { url, range } = (req.body ?? {}) as { url?: string; range?: string };
+  const spreadsheetId = parseSpreadsheetId(url ?? "");
+  if (!spreadsheetId) {
+    return res.status(400).json({ error: "invalid_sheet_url" });
+  }
+
+  try {
+    const grid = await fetchSheetGrid(req.user!.id, spreadsheetId, range);
+    const nonEmpty = grid.filter((r) => r.some((c) => c.trim() !== ""));
+    if (nonEmpty.length < 2) {
+      return res.status(400).json({ error: "sheet_no_data" });
+    }
+    const headers = nonEmpty[0];
+    const rows = nonEmpty.slice(1, 10001); // cap to the import limit
+    res.json({ headers, rows });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No credentials found/i.test(msg)) {
+      return res.status(400).json({ error: "google_not_connected" });
+    }
+    if (/insufficient|insufficientPermissions|forbidden|\b403\b|PERMISSION_DENIED|invalid authentication|invalid_grant/i.test(msg)) {
+      return res.status(400).json({ error: "sheet_access_denied" });
+    }
+    if (/not found|\b404\b/i.test(msg)) {
+      return res.status(400).json({ error: "sheet_not_found" });
+    }
+    return res.status(500).json({ error: msg });
+  }
 });
 
 // ============================================================
