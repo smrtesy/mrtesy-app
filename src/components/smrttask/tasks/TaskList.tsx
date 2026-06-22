@@ -132,7 +132,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [contextFilter, setContextFilter] = useState<ContextFilter>("all");
+  const [contextFilter, setContextFilter] = useState<ContextFilter>("work");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
