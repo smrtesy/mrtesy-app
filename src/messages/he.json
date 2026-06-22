@@ -312,7 +312,17 @@
     "sendImage": "שלח תמונה",
     "removeImage": "הסר תמונה",
     "unsupportedImageType": "אפשר לשלוח רק תמונות JPEG או PNG",
-    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)"
+    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)",
+    "searchPlaceholder": "חיפוש בשמות והודעות…",
+    "searchOpen": "חיפוש",
+    "searchClose": "סגור חיפוש",
+    "searchNoResults": "לא נמצאו שיחות או הודעות תואמות",
+    "chatSearchOpen": "חיפוש בשיחה",
+    "chatSearchPlaceholder": "חיפוש בשיחה…",
+    "chatSearchPrev": "תוצאה קודמת",
+    "chatSearchNext": "תוצאה הבאה",
+    "chatSearchCount": "{current} מתוך {total}",
+    "chatSearchNoMatch": "אין תוצאות"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
@@ -1585,6 +1595,9 @@
     "noCampaigns": "עדיין אין קמפיינים",
     "nameRequired": "צריך שם לקמפיין",
     "campaignCreated": "הקמפיין נוצר",
+    "deleteCampaign": "מחיקת קמפיין",
+    "deleteCampaignConfirm": "למחוק את הקמפיין? הפעולה מוחקת לצמיתות את הקמפיין ואת כל הנמענים, התור, המעקב והיומנים שלו. לא ניתן לבטל.",
+    "campaignDeleted": "הקמפיין נמחק",
     "campaignName": "שם הקמפיין",
     "channel": "ערוץ",
     "channelEmail": "מייל",

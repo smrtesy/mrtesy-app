@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import Link from "next/link";
-import { Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3, Settings } from "lucide-react";
+import { Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3, Settings, Trash2 } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -65,6 +65,7 @@ export function CampaignsClient() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   // audienceKey is "<kind>:<id?>" — kind ∈ all|tag|segment.
   const [form, setForm] = useState<{ name: string; channel: Channel; audienceKey: string }>({
     name: "",
@@ -130,6 +131,21 @@ export function CampaignsClient() {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDelete(c: Campaign) {
+    if (!window.confirm(t("deleteCampaignConfirm"))) return;
+    setDeletingId(c.id);
+    try {
+      await api(`/api/reach/campaigns/${c.id}`, { method: "DELETE" });
+      toast.success(t("campaignDeleted"));
+      setCampaigns((prev) => prev.filter((x) => x.id !== c.id));
+      if (deliverability) setDeliverability((prev) => prev?.filter((x) => x.id !== c.id) ?? null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -234,6 +250,20 @@ export function CampaignsClient() {
                     <BarChart3 className="h-4 w-4" />
                     <span className="hidden sm:inline">{t("statistics")}</span>
                   </Link>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => handleDelete(c)}
+                  disabled={deletingId === c.id}
+                  aria-label={t("deleteCampaign")}
+                  title={t("deleteCampaign")}
+                >
+                  {deletingId === c.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 text-status-late" />
+                  )}
                 </Button>
                 <ChevronLeft className="h-4 w-4 text-muted-foreground rtl:rotate-0 ltr:rotate-180" />
               </div>

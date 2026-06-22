@@ -312,7 +312,17 @@
     "sendImage": "Send image",
     "removeImage": "Remove image",
     "unsupportedImageType": "Only JPEG or PNG images can be sent",
-    "imageTooLarge": "Image is too large (max 5MB)"
+    "imageTooLarge": "Image is too large (max 5MB)",
+    "searchPlaceholder": "Search names and messages…",
+    "searchOpen": "Search",
+    "searchClose": "Close search",
+    "searchNoResults": "No matching chats or messages",
+    "chatSearchOpen": "Search in chat",
+    "chatSearchPlaceholder": "Search this chat…",
+    "chatSearchPrev": "Previous match",
+    "chatSearchNext": "Next match",
+    "chatSearchCount": "{current} of {total}",
+    "chatSearchNoMatch": "No matches"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
@@ -1585,6 +1595,9 @@
     "noCampaigns": "No campaigns yet",
     "nameRequired": "A campaign name is required",
     "campaignCreated": "Campaign created",
+    "deleteCampaign": "Delete campaign",
+    "deleteCampaignConfirm": "Delete this campaign? This permanently removes the campaign and all its recipients, queue, tracking and logs. This cannot be undone.",
+    "campaignDeleted": "Campaign deleted",
     "campaignName": "Campaign name",
     "channel": "Channel",
     "channelEmail": "Email",

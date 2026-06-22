@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
-import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox, RefreshCw } from "lucide-react";
+import { useTranslations, useLocale } from "next-intl";
+import { useRouter } from "next/navigation";
+import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox, RefreshCw, Trash2 } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -74,8 +75,11 @@ const NONE = "__none__";
 
 export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const t = useTranslations("smrtReach");
+  const locale = useLocale();
+  const router = useRouter();
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [senders, setSenders] = useState<Sender[]>([]);
   const [bots, setBots] = useState<Bot[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -392,6 +396,19 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     }
   }
 
+  async function handleDelete() {
+    if (!window.confirm(t("deleteCampaignConfirm"))) return;
+    setDeleting(true);
+    try {
+      await api(`/api/reach/campaigns/${campaignId}`, { method: "DELETE" });
+      toast.success(t("campaignDeleted"));
+      router.push(`/${locale}/reach`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      setDeleting(false);
+    }
+  }
+
   async function toggleLog() {
     if (logRows) { setLogRows(null); return; }
     try {
@@ -432,6 +449,10 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
               <Play className="h-4 w-4" />{t("resume")}
             </Button>
           )}
+          <Button onClick={handleDelete} disabled={deleting} variant="outline" size="sm" className="gap-1 text-status-late hover:text-status-late">
+            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {t("deleteCampaign")}
+          </Button>
         </div>
       </div>
 
