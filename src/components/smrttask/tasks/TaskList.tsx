@@ -45,7 +45,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -677,6 +677,18 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         renders right under this). */}
     <div className="mb-3 flex items-center gap-3">
       {title && <h1 className="text-2xl font-bold">{title}</h1>}
+      {/* Quick jump to the source log (opens on the platform domain in a
+          new tab), mirroring the shortcut on the inbox header. */}
+      <a
+        href="https://app.smrtesy.com/he/log"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={t("openLog")}
+        title={t("openLog")}
+        className="text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ExternalLink className="h-4 w-4" />
+      </a>
       <InstallAppButton />
       <div className="ms-auto flex rounded-lg border p-0.5">
         {contextChips.map((chip) => (

@@ -338,6 +338,7 @@
   },
   "tasks": {
     "title": "Tasks",
+    "openLog": "Open source log",
     "new": "New Task",
     "inbox": "Pending",
     "pendingCompletion": "Awaiting your approval to close",
