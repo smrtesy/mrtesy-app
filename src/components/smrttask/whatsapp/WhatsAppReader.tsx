@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { Search, X } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { ThreadList, type Thread } from "./ThreadList";
 import { ThreadView, type Message, type ChatTask } from "./ThreadView";
@@ -50,6 +51,21 @@ export function WhatsAppReader({
   const [tasks, setTasks] = useState<ChatTask[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Search across contact names (client-side over the loaded thread list) and
+  // message content (server-side over the full message history). The content
+  // search returns chat_id → newest matching snippet, which we surface as the
+  // preview line so the user sees *why* a chat matched.
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [contentMatches, setContentMatches] = useState<Map<string, string>>(new Map());
+
+  // Collapse the search bar and reset the query so the full thread list comes
+  // back. Used by the close button and the Escape key.
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
 
   // Surface the active conversation to the host (used for the panel's
   // "expand to full page" link). Fires on mount and every selection change.
@@ -176,6 +192,54 @@ export function WhatsAppReader({
     };
   }, [selectedChatId, loadMessages, markChatRead]);
 
+  // Debounced server-side search over message content. Names are filtered
+  // locally (below) so they respond instantly; only the content query needs a
+  // round-trip. A query under 2 chars clears results without hitting the API.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setContentMatches(new Map());
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      try {
+        const { results } = await api<{ results: { chat_id: string; snippet: string }[] }>(
+          `/api/whatsapp/search?q=${encodeURIComponent(q)}`,
+        );
+        if (cancelled) return;
+        setContentMatches(new Map(results.map((r) => [r.chat_id, r.snippet])));
+      } catch {
+        if (!cancelled) setContentMatches(new Map());
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [query]);
+
+  // Threads to render in the list. With no active query this is the full list;
+  // with a query it's the union of name matches (instant, local) and content
+  // matches (from the server), with the matched message shown as the preview.
+  const displayThreads = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return threads;
+    return threads
+      .filter((th) => {
+        const name = (th.custom_name?.trim() || th.from_name?.trim() || th.from_phone || th.chat_id)
+          .toLowerCase();
+        const nameMatch = name.includes(q) || (th.from_phone ?? "").toLowerCase().includes(q);
+        return nameMatch || contentMatches.has(th.chat_id);
+      })
+      .map((th) => {
+        // For a content-only match, swap in the matched snippet so the row
+        // explains itself (mirrors WhatsApp's in-chat search behaviour).
+        const snippet = contentMatches.get(th.chat_id);
+        return snippet ? { ...th, last_body_text: snippet } : th;
+      });
+  }, [threads, query, contentMatches]);
+
   // Visibility classes per layout. "split" keeps the mobile-stacked behaviour
   // but shows both panes side-by-side on md+. "stacked" toggles list ↔ chat at
   // every width (the narrow panel can't fit two panes).
@@ -207,14 +271,54 @@ export function WhatsAppReader({
       )}
 
       <div className={`flex-1 min-h-0 ${gridClass}`}>
-        <div className={`min-h-0 min-w-0 ${listVisibility}`}>
-          <ThreadList
-            threads={threads}
-            loading={loadingThreads}
-            selectedChatId={selectedChatId}
-            onSelect={setSelectedChatId}
-            emptyLabel={t("noThreads")}
-          />
+        <div className={`flex flex-col min-h-0 min-w-0 gap-2 ${listVisibility}`}>
+          {searchOpen ? (
+            <div className="relative shrink-0">
+              <Search className="pointer-events-none absolute top-1/2 -translate-y-1/2 start-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                type="search"
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeSearch();
+                }}
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchPlaceholder")}
+                className="w-full rounded-lg border bg-card py-2 ps-9 pe-8 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+              />
+              <button
+                type="button"
+                onClick={closeSearch}
+                aria-label={t("searchClose")}
+                title={t("searchClose")}
+                className="absolute top-1/2 -translate-y-1/2 end-2 rounded p-0.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex shrink-0 justify-end">
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                aria-label={t("searchOpen")}
+                title={t("searchOpen")}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          <div className="min-h-0 flex-1">
+            <ThreadList
+              threads={displayThreads}
+              loading={loadingThreads}
+              selectedChatId={selectedChatId}
+              onSelect={setSelectedChatId}
+              emptyLabel={query.trim() ? t("searchNoResults") : t("noThreads")}
+            />
+          </div>
         </div>
 
         <div className={`min-h-0 min-w-0 ${chatVisibility}`}>

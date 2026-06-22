@@ -144,6 +144,10 @@
       "pick": "בחר תאריך"
     }
   },
+  "tabsWorkspace": {
+    "close": "סגור טאב",
+    "focusPane": "מקד טאב זה"
+  },
   "nav": {
     "tasks": "משימות",
     "suggestions": "הצעות",
@@ -308,7 +312,17 @@
     "sendImage": "שלח תמונה",
     "removeImage": "הסר תמונה",
     "unsupportedImageType": "אפשר לשלוח רק תמונות JPEG או PNG",
-    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)"
+    "imageTooLarge": "התמונה גדולה מדי (עד 5MB)",
+    "searchPlaceholder": "חיפוש בשמות והודעות…",
+    "searchOpen": "חיפוש",
+    "searchClose": "סגור חיפוש",
+    "searchNoResults": "לא נמצאו שיחות או הודעות תואמות",
+    "chatSearchOpen": "חיפוש בשיחה",
+    "chatSearchPlaceholder": "חיפוש בשיחה…",
+    "chatSearchPrev": "תוצאה קודמת",
+    "chatSearchNext": "תוצאה הבאה",
+    "chatSearchCount": "{current} מתוך {total}",
+    "chatSearchNoMatch": "אין תוצאות"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

@@ -361,6 +361,60 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
   return res.json({ messages: [...(data ?? [])].reverse(), tasks });
 });
 
+// ── Full-text-ish search across a chat's message content ──────────────────
+// GET /whatsapp/search?q=<term>&limit=
+// Returns the set of chat_ids whose message content (body_text, audio
+// transcript, or image OCR) matches the term, each with the newest matching
+// snippet. Names are matched client-side over the already-loaded thread list
+// (which carries custom_name / from_name / phone); this endpoint covers the
+// "search inside messages" half. Scoped to the caller via user_id.
+router.get("/whatsapp/search", ...gate, async (req: Request, res: Response) => {
+  const raw = String(req.query.q ?? "").trim();
+  if (raw.length < 2) return res.json({ results: [] });
+
+  const limit = Math.min(parseInt(String(req.query.limit ?? "200"), 10) || 200, 1000);
+
+  // Sanitize for PostgREST's or()/ilike syntax (same approach as smrtcrm's
+  // contact search): ',' '(' ')' delimit or-branches, '*' is a wildcard, and
+  // '%'/'_' are SQL LIKE metacharacters. Strip them all so user input can't
+  // break the filter, inject branches, or smuggle in wildcards. '%' wraps the
+  // term as the substring wildcard.
+  const term = raw.replace(/[%_*(),\\]/g, " ").trim();
+  if (!term) return res.json({ results: [] });
+  const pattern = `%${term}%`;
+
+  const { data, error } = await db
+    .from("whatsapp_messages")
+    .select("chat_id, body_text, audio_transcript, media_ocr_text, received_at")
+    .eq("user_id", req.user!.id)
+    .or(
+      [
+        `body_text.ilike.${pattern}`,
+        `audio_transcript.ilike.${pattern}`,
+        `media_ocr_text.ilike.${pattern}`,
+      ].join(","),
+    )
+    .order("received_at", { ascending: false })
+    .limit(limit);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Newest matching snippet per chat (data is already DESC by received_at).
+  const byChat = new Map<string, { chat_id: string; snippet: string; received_at: string }>();
+  for (const row of data ?? []) {
+    if (!row.chat_id || byChat.has(row.chat_id)) continue;
+    const snippet =
+      (row.body_text || row.audio_transcript || row.media_ocr_text || "").slice(0, 160);
+    byChat.set(row.chat_id, {
+      chat_id: row.chat_id,
+      snippet,
+      received_at: row.received_at as string,
+    });
+  }
+
+  return res.json({ results: [...byChat.values()] });
+});
+
 // ── Signed URL for a stored document ──────────────────────────────────────
 // The frontend never gets the storage path directly — it asks this endpoint
 // for a fresh signed URL each time. Cheap (one Storage API call) and keeps

@@ -35,6 +35,7 @@ import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader
 import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
+import { useTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
 
 // Per-app items shown below each app section header. Guides moved out —
 // they're reached by clicking the app NAME in AppSectionHeader. Settings
@@ -93,6 +94,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const [pendingCount, setPendingCount] = useState(0);
   const [openTasksCount, setOpenTasksCount] = useState(0);
   const supabase = createClient();
+  const { openTab } = useTabsWorkspace();
+  // True when this sidebar is rendered inside a tabs-workspace pane (?embed=1).
+  // The chrome is hidden via CSS, so skip the per-pane realtime/polling work.
+  const [isEmbedded] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embed") === "1",
+  );
 
   // Mobile bottom-tab primary items.
   // Spec: keep תיבה (inbox), משימות (tasks), פרויקטי קול (voice projects) /
@@ -144,6 +153,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   }
 
   useEffect(() => {
+    if (isEmbedded) return;
     let mounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -213,7 +223,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       window.removeEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [supabase]);
+  }, [supabase, isEmbedded]);
 
   const basePath = `/${locale}`;
 
@@ -373,6 +383,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           {isAdmin && (
             <Link
               href={`${basePath}/admin`}
+              onClick={(e) => {
+                e.preventDefault();
+                openTab(`${basePath}/admin`, t("platformAdmin"));
+              }}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 pathname.startsWith(`${basePath}/admin`)
@@ -534,9 +548,15 @@ function NavItem({
   badgeFor: (key: string) => { count: number; tone: "red" | "blue" } | null;
 }) {
   const badge = badgeFor(itemKey);
+  const { openTab } = useTabsWorkspace();
+  const label = t(itemKey as Parameters<typeof t>[0]);
   return (
     <Link
       href={`${basePath}${href}`}
+      onClick={(e) => {
+        e.preventDefault();
+        openTab(`${basePath}${href}`, label);
+      }}
       className={cn(
         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
         isActive(href)
@@ -557,7 +577,7 @@ function NavItem({
           </span>
         )}
       </div>
-      {t(itemKey as Parameters<typeof t>[0])}
+      {label}
     </Link>
   );
 }

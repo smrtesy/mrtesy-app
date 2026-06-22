@@ -22,6 +22,7 @@ export function WhatsAppPanelFab() {
   return (
     <button
       type="button"
+      data-wa-fab
       onClick={open}
       aria-label={t("openPanel")}
       title={t("openPanel")}
