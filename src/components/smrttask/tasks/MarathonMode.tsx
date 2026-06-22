@@ -267,7 +267,7 @@ export function MarathonMode({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
+    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
       {/* Header: run timer + per-task timer + progress + new-item + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span className="flex items-center gap-1.5 font-mono text-lg font-bold tabular-nums" dir="ltr">
@@ -483,7 +483,7 @@ function FinishScreen({
   }, [newRecord]);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden">
+    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden">
       {confetti.map((c) => (
         <span
           key={c.id}

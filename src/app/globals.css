@@ -149,6 +149,15 @@ body[data-chat-fullscreen="true"] main[data-sidebar-main] > div {
     width: var(--wa-panel-width, 50vw);
   }
 
+  /* Full-screen overlays that are NOT inside main[data-sidebar-main] (they're
+     position:fixed across the whole viewport, e.g. the marathon "run" screen)
+     don't get the margin-push above, so the docked panel would cover part of
+     them. Pull their inline-end edge in by the panel width so the run window
+     and the panel share the screen instead of overlapping. */
+  body[data-wa-panel="true"] .wa-panel-pushed {
+    inset-inline-end: var(--wa-panel-width, 50vw);
+  }
+
   /* Keep centered modals inside the main-content half (the side NOT covered
      by the docked panel) and above it, so the panel never hides them. The
      scrim is confined to the main region and the content re-centered within
