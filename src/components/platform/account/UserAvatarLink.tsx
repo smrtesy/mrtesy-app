@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { User } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { useOptionalTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
 
 interface Props {
   className?: string;
@@ -15,10 +17,13 @@ interface Props {
 /**
  * Round avatar derived from the user's Google profile. Falls back through
  *  picture URL → first letter of name/email → generic user icon.
- * Click target is /account.
+ * Click target is /account — opened as a workspace tab on desktop, or a normal
+ * navigation on mobile / outside the workspace.
  */
 export function UserAvatarLink({ className, size = "md" }: Props) {
   const { locale } = useParams() as { locale: string };
+  const t = useTranslations("account");
+  const workspace = useOptionalTabsWorkspace();
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [initial, setInitial] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
@@ -54,7 +59,20 @@ export function UserAvatarLink({ className, size = "md" }: Props) {
   return (
     <Link
       href={`/${locale}/account`}
-      aria-label="Account settings"
+      aria-label={t("title")}
+      onClick={(e) => {
+        // On desktop, open account settings as a workspace pane instead of a
+        // full-window navigation the panes would hide. Skip on narrow widths
+        // (mobile / embedded panes) so it navigates normally there.
+        if (
+          workspace &&
+          typeof window !== "undefined" &&
+          window.matchMedia("(min-width: 768px)").matches
+        ) {
+          e.preventDefault();
+          workspace.openTab(`/${locale}/account`, t("title"));
+        }
+      }}
       className={cn(
         "inline-flex items-center justify-center rounded-full overflow-hidden border bg-primary/10 text-primary font-semibold shrink-0 hover:ring-2 hover:ring-primary/30 transition",
         dim,

@@ -152,3 +152,10 @@ export function useTabsWorkspace() {
   }
   return ctx;
 }
+
+/** Like useTabsWorkspace but returns null instead of throwing when there is no
+ *  provider — for chrome that may render outside the workspace (e.g. on mobile
+ *  or login screens). */
+export function useOptionalTabsWorkspace() {
+  return useContext(TabsWorkspaceContext);
+}

@@ -96,12 +96,18 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const supabase = createClient();
   const { openTab } = useTabsWorkspace();
   // True when this sidebar is rendered inside a tabs-workspace pane (?embed=1).
-  // The chrome is hidden via CSS, so skip the per-pane realtime/polling work.
-  const [isEmbedded] = useState(
-    () =>
+  // Set after mount (not a lazy initializer) so the first client render matches
+  // the server HTML — then we drop the whole sidebar, so none of its chrome
+  // (mobile avatar, FABs, bottom nav) leaks into the pane.
+  const [isEmbedded, setIsEmbedded] = useState(false);
+  useEffect(() => {
+    if (
       typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1",
-  );
+      new URLSearchParams(window.location.search).get("embed") === "1"
+    ) {
+      setIsEmbedded(true);
+    }
+  }, []);
 
   // Mobile bottom-tab primary items.
   // Spec: keep תיבה (inbox), משימות (tasks), פרויקטי קול (voice projects) /
@@ -153,7 +159,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   }
 
   useEffect(() => {
-    if (isEmbedded) return;
+    // Skip the realtime/polling work entirely inside an embedded pane.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embed") === "1"
+    ) {
+      return;
+    }
     let mounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -223,7 +235,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       window.removeEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [supabase, isEmbedded]);
+  }, [supabase]);
 
   const basePath = `/${locale}`;
 
@@ -267,6 +279,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   ];
   if (managementMoreItems.length > 0) moreSections.push({ titleKey: "sectionManagement", items: managementMoreItems });
 
+  // Inside an embedded pane the page has no use for the app chrome — render
+  // nothing so the avatar, FABs and bottom nav never appear in a split pane.
+  if (isEmbedded) return null;
+
   return (
     <>
       <button
@@ -282,14 +298,21 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       {/* Floating account avatar on mobile — sits in the top-end corner of
           the viewport and overlays the page area without consuming a
           dedicated header row. */}
-      <div className="md:hidden fixed top-2 end-2 z-40">
+      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40">
         <UserAvatarLink size="sm" />
       </div>
 
       {/* Desktop Sidebar */}
       <aside data-sidebar className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
         <div className="relative flex h-16 items-center justify-between border-b px-4">
-          <Link href={basePath} className="text-xl font-bold text-primary">
+          <Link
+            href={basePath}
+            onClick={(e) => {
+              e.preventDefault();
+              openTab(basePath, "smrtesy");
+            }}
+            className="text-xl font-bold text-primary"
+          >
             smrtesy
           </Link>
           <div className="flex items-center gap-1">
