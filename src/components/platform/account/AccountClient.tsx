@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
+import { navigateTop } from "@/lib/navigate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -190,9 +191,9 @@ export function AccountClient() {
                             };
                             const svc = serviceMap[conn.key];
                             if (conn.key === "whatsapp") {
-                              window.location.href = `/${locale}/onboarding/whatsapp?redirect=account`;
+                              navigateTop(`/${locale}/onboarding/whatsapp?redirect=account`);
                             } else if (svc) {
-                              window.location.href = `/api/auth/google?service=${svc}&redirect=account`;
+                              navigateTop(`/api/auth/google?service=${svc}&redirect=account`);
                             }
                           }}
                         >
