@@ -8,6 +8,7 @@ import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
+import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 
 export default async function AppLayout({
   children,
@@ -87,6 +88,9 @@ export default async function AppLayout({
             "try{if(new URLSearchParams(window.location.search).get('embed')==='1'){document.documentElement.setAttribute('data-embed','1')}}catch(e){}",
         }}
       />
+      {/* Reliable fallback for the inline script above (which doesn't always
+          execute in the App Router). */}
+      <EmbedFlag />
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />

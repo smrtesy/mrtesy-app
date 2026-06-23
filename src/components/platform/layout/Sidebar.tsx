@@ -96,12 +96,18 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const supabase = createClient();
   const { openTab } = useTabsWorkspace();
   // True when this sidebar is rendered inside a tabs-workspace pane (?embed=1).
-  // The chrome is hidden via CSS, so skip the per-pane realtime/polling work.
-  const [isEmbedded] = useState(
-    () =>
+  // Set after mount (not a lazy initializer) so the first client render matches
+  // the server HTML — then we drop the whole sidebar, so none of its chrome
+  // (mobile avatar, FABs, bottom nav) leaks into the pane.
+  const [isEmbedded, setIsEmbedded] = useState(false);
+  useEffect(() => {
+    if (
       typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1",
-  );
+      new URLSearchParams(window.location.search).get("embed") === "1"
+    ) {
+      setIsEmbedded(true);
+    }
+  }, []);
 
   // Mobile bottom-tab primary items.
   // Spec: keep תיבה (inbox), משימות (tasks), פרויקטי קול (voice projects) /
@@ -153,7 +159,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   }
 
   useEffect(() => {
-    if (isEmbedded) return;
+    // Skip the realtime/polling work entirely inside an embedded pane.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embed") === "1"
+    ) {
+      return;
+    }
     let mounted = true;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -223,7 +235,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       window.removeEventListener("smrtesy:badge-refresh", handleBadgeRefresh);
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [supabase, isEmbedded]);
+  }, [supabase]);
 
   const basePath = `/${locale}`;
 
@@ -266,6 +278,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
     ...(isAdmin ? [{ key: "platformAdmin", href: "/admin", icon: Shield }] : []),
   ];
   if (managementMoreItems.length > 0) moreSections.push({ titleKey: "sectionManagement", items: managementMoreItems });
+
+  // Inside an embedded pane the page has no use for the app chrome — render
+  // nothing so the avatar, FABs and bottom nav never appear in a split pane.
+  if (isEmbedded) return null;
 
   return (
     <>
