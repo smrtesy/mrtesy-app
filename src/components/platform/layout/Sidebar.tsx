@@ -282,14 +282,21 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       {/* Floating account avatar on mobile — sits in the top-end corner of
           the viewport and overlays the page area without consuming a
           dedicated header row. */}
-      <div className="md:hidden fixed top-2 end-2 z-40">
+      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40">
         <UserAvatarLink size="sm" />
       </div>
 
       {/* Desktop Sidebar */}
       <aside data-sidebar className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
         <div className="relative flex h-16 items-center justify-between border-b px-4">
-          <Link href={basePath} className="text-xl font-bold text-primary">
+          <Link
+            href={basePath}
+            onClick={(e) => {
+              e.preventDefault();
+              openTab(basePath, "smrtesy");
+            }}
+            className="text-xl font-bold text-primary"
+          >
             smrtesy
           </Link>
           <div className="flex items-center gap-1">
