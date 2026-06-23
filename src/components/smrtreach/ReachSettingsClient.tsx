@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Plus, Trash2, Loader2, Save, ArrowRight, Mail, AtSign } from "lucide-react";
+import { Plus, Trash2, Loader2, Save, ArrowRight, Mail, AtSign, AlertCircle } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -248,6 +248,11 @@ export function ReachSettingsClient() {
                 <Plus className="h-4 w-4" />
                 {t("connectGmail")}
               </Button>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-md border border-status-warn/30 bg-status-warn-bg p-3 text-xs text-status-warn">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("gmailConnectNote")}</span>
             </div>
 
             {gmailSenders.length === 0 ? (
