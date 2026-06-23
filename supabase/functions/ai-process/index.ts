@@ -2521,7 +2521,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       const isTransient =
         /\b(429|500|502|503|504|529)\b/.test(errMsg) ||
         /rate.?limit|overloaded|over capacity|timeout|timed out|network|fetch failed|ECONNRESET|connection (?:reset|error|closed)|socket hang/i.test(errMsg) ||
-        /credit balance|billing|insufficient|quota|payment|account is not active|spending limit/i.test(errMsg);
+        /credit balance|billing|insufficient|quota|payment|account is not active|spending limit|usage limit|regain access/i.test(errMsg);
       if (isTransient) {
         // Keep it pending so it auto-processes when the provider recovers, with
         // retry_count untouched — but bound the wait: a message that somehow
