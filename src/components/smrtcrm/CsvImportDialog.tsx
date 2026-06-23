@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { DriveSheetPicker, type DriveSheet } from "./DriveSheetPicker";
 
 /** Maps backend error codes from the Sheets endpoint to translation keys. */
 const SHEET_ERROR_KEYS: Record<string, string> = {
@@ -105,12 +106,13 @@ export function CsvImportDialog({
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetRange, setSheetRange] = useState("");
   const [loadingSheet, setLoadingSheet] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   function reset() {
     setHeaders([]); setDataRows([]); setResult(null);
     setMapping({ first_name: null, last_name: null, phone: null, email: null });
     setTagId(NONE); setNewTag("");
-    setSource("csv"); setSheetUrl(""); setSheetRange("");
+    setSource("csv"); setSheetUrl(""); setSheetRange(""); setPickerOpen(false);
   }
 
   /** Apply a freshly loaded grid (from CSV or Sheets) to the mapping state. */
@@ -126,13 +128,14 @@ export function CsvImportDialog({
     setMapping(next);
   }
 
-  async function loadSheet() {
-    if (!sheetUrl.trim()) { toast.error(t("sheetErrorUrl")); return; }
+  async function loadSheet(urlOverride?: string) {
+    const url = (urlOverride ?? sheetUrl).trim();
+    if (!url) { toast.error(t("sheetErrorUrl")); return; }
     setLoadingSheet(true);
     try {
       const { headers: hdr, rows } = await api<{ headers: string[]; rows: string[][] }>(
         "/api/crm/import/sheet",
-        { method: "POST", body: { url: sheetUrl.trim(), range: sheetRange.trim() || undefined } },
+        { method: "POST", body: { url, range: sheetRange.trim() || undefined } },
       );
       applyGrid(hdr, rows);
       toast.success(t("rowsDetected", { count: rows.length }));
@@ -143,6 +146,13 @@ export function CsvImportDialog({
     } finally {
       setLoadingSheet(false);
     }
+  }
+
+  function onPickFromDrive(sheet: DriveSheet) {
+    setPickerOpen(false);
+    const url = sheet.webViewLink || `https://docs.google.com/spreadsheets/d/${sheet.id}/edit`;
+    setSheetUrl(url);
+    void loadSheet(url);
   }
 
   async function onFile(file: File) {
@@ -195,6 +205,8 @@ export function CsvImportDialog({
   }
 
   return (
+    <>
+    <DriveSheetPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onPick={onPickFromDrive} />
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
@@ -218,6 +230,15 @@ export function CsvImportDialog({
               />
             </TabsContent>
             <TabsContent value="sheet" className="space-y-2">
+              <Button onClick={() => setPickerOpen(true)} variant="outline" className="w-full gap-2">
+                <FileSpreadsheet className="h-4 w-4" />
+                {t("drivePickButton")}
+              </Button>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                {t("orPasteLink")}
+                <span className="h-px flex-1 bg-border" />
+              </div>
               <Input
                 type="url"
                 value={sheetUrl}
@@ -231,7 +252,7 @@ export function CsvImportDialog({
               />
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">{t("sheetHint")}</p>
-                <Button onClick={loadSheet} disabled={loadingSheet} variant="secondary" size="sm" className="gap-2">
+                <Button onClick={() => loadSheet()} disabled={loadingSheet} variant="secondary" size="sm" className="gap-2">
                   {loadingSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
                   {t("sheetLoad")}
                 </Button>
@@ -299,5 +320,6 @@ export function CsvImportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
