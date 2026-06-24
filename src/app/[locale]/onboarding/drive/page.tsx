@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FolderOpen } from "lucide-react";
+import { navigateTop } from "@/lib/navigate";
 
 export default function OnboardingStep2() {
   const t = useTranslations("onboarding");
@@ -12,7 +13,7 @@ export default function OnboardingStep2() {
   const router = useRouter();
 
   function handleConnect() {
-    window.location.href = "/api/auth/google?service=drive";
+    navigateTop("/api/auth/google?service=drive");
   }
 
   function handleSkip() {

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Mail, Calendar } from "lucide-react";
 import { api, setActiveOrgId, ApiError } from "@/lib/api/client";
+import { navigateTop } from "@/lib/navigate";
 
 export default function OnboardingStep1() {
   const t = useTranslations("onboarding");
@@ -39,7 +40,7 @@ export default function OnboardingStep1() {
   }, [router, locale]);
 
   function handleConnect() {
-    window.location.href = "/api/auth/google?service=gmail_calendar";
+    navigateTop("/api/auth/google?service=gmail_calendar");
   }
 
   function handleSkip() {

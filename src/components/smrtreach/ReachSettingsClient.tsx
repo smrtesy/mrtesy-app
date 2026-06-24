@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Plus, Trash2, Loader2, Save, ArrowRight, Mail, AtSign, AlertCircle } from "lucide-react";
 
 import { api } from "@/lib/api/client";
+import { navigateTop } from "@/lib/navigate";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,7 +133,9 @@ export function ReachSettingsClient() {
   function connectGmail() {
     // Same-origin Next route handler (NOT the api() backend): starts the
     // org-owned Gmail OAuth and returns to this page with ?connected / ?error.
-    window.location.href = "/api/auth/google?service=reach_gmail";
+    // navigateTop breaks out of the tabs-workspace iframe — Google's sign-in
+    // sends X-Frame-Options: DENY and 403s inside a pane.
+    navigateTop("/api/auth/google?service=reach_gmail");
   }
 
   const sesSenders = senders.filter((s) => s.provider !== "gmail");
