@@ -89,6 +89,16 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (hydratedRef.current) return;
     hydratedRef.current = true;
+    // Don't restore the panel inside an embedded workspace pane. Its state is
+    // origin-global, so an open panel in the main window would otherwise leak
+    // into every split pane — setting `data-wa-panel`, which repositions
+    // dialogs and bumps their z-index over popovers (hiding date pickers).
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embed") === "1"
+    ) {
+      return;
+    }
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) return;

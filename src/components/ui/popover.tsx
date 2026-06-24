@@ -26,7 +26,7 @@ const PopoverContent = React.forwardRef<
         // on <body>, and a non-modal popover's portaled content inherits it —
         // killing every click (day cells, month arrows, the ע/E toggle).
         // Re-enabling it on the content node restores interactivity.
-        "pointer-events-auto z-[60] rounded-lg border bg-popover text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+        "pointer-events-auto z-[80] rounded-lg border bg-popover text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         className
       )}
       {...props}
