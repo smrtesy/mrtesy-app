@@ -15,6 +15,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
+/**
+ * Email body font stack — must stay in sync with EMAIL_FONT_STACK in
+ * server/src/modules/smrtreach/send-service.ts. Applying the same face/size/
+ * line-height here as the send pipeline makes this editor a faithful preview
+ * of the delivered email (matching font and line spacing).
+ */
+export const EMAIL_FONT_STACK =
+  "'Google Sans','Product Sans',Roboto,'Helvetica Neue',Arial,sans-serif";
+export const DEFAULT_EMAIL_FONT_SIZE = 14;
+
 export interface MergeFields {
   standard: string[];
   custom: string[];
@@ -27,6 +37,8 @@ interface RichEmailEditorProps {
   onChange: (html: string) => void;
   /** Available merge variables for the field-insertion dropdown. */
   fields: MergeFields;
+  /** Body font size in px — mirrors what the sent email uses. */
+  fontSize?: number;
   t: ReturnType<typeof useTranslations>;
 }
 
@@ -39,7 +51,7 @@ interface RichEmailEditorProps {
  * dropdown inserts merge tokens in the exact {{var}} / {{custom.field}} format
  * the send-time render() understands, so what the user picks is what resolves.
  */
-export function RichEmailEditor({ value, onChange, fields, t }: RichEmailEditorProps) {
+export function RichEmailEditor({ value, onChange, fields, fontSize, t }: RichEmailEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   // The selection inside the editor, saved whenever it changes. The fields
   // dropdown (Radix) steals focus when opened, collapsing the live selection,
@@ -199,8 +211,16 @@ export function RichEmailEditor({ value, onChange, fields, t }: RichEmailEditorP
         onBlur={() => { saveSelection(); emitChange(); }}
         onKeyUp={saveSelection}
         onMouseUp={saveSelection}
+        // Match the sent email's typography (see EMAIL_FONT_STACK) so what the
+        // author sees here is what the recipient gets — same font, size and
+        // line spacing. line-height 1.6 mirrors wrapEmailBody on the server.
+        style={{
+          fontFamily: EMAIL_FONT_STACK,
+          fontSize: `${fontSize ?? DEFAULT_EMAIL_FONT_SIZE}px`,
+          lineHeight: 1.6,
+        }}
         className={cn(
-          "min-h-[12rem] w-full px-3 py-2 text-sm outline-none",
+          "min-h-[12rem] w-full px-3 py-2 outline-none",
           "[&_a]:text-blue-600 [&_a]:underline",
           "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:ps-6 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:ps-6",
           "empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]",

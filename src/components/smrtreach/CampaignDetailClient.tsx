@@ -1,16 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter } from "next/navigation";
-import { Loader2, Save, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, Check, Send, Users, Eye, FlaskConical, Pause, Play, CalendarClock, Inbox, RefreshCw, Trash2, ExternalLink } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { RichEmailEditor, type MergeFields } from "@/components/smrtreach/RichEmailEditor";
+import { RichEmailEditor, DEFAULT_EMAIL_FONT_SIZE, type MergeFields } from "@/components/smrtreach/RichEmailEditor";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -42,6 +42,7 @@ interface EmailDetail {
   exclude_shabbat: boolean | null;
   rate_limit: number | null;
   sto_enabled: boolean | null;
+  font_size: number | null;
 }
 interface WhatsappDetail {
   bot_ref: string | null;
@@ -74,6 +75,45 @@ interface LogRow { contact_id: string | null; channel: string; status: string; e
 
 const NONE = "__none__";
 
+/**
+ * Debounced autosave. Persists a section ~`delay`ms after the user stops
+ * editing, so the explicit "Save" buttons can go away. Captures a baseline on
+ * the first render after `ready` (the initial load) so loading data never
+ * triggers a spurious save; only genuine user edits do. `save` is kept in a
+ * ref so its changing identity each render doesn't reset the debounce timer.
+ */
+function useAutosave(value: unknown, ready: boolean, save: () => void | Promise<void>, delay = 800) {
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  const baseline = useRef<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    const serialized = JSON.stringify(value);
+    if (baseline.current === null) { baseline.current = serialized; return; }
+    if (serialized === baseline.current) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      baseline.current = serialized;
+      void saveRef.current();
+    }, delay);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [value, ready, delay]);
+}
+
+/** Quiet "saving… / saved" indicator that replaces the old per-section Save button. */
+function SaveStatus({ saving, t }: { saving: boolean; t: ReturnType<typeof useTranslations> }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      {saving ? (
+        <><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("autosaving")}</>
+      ) : (
+        <><Check className="h-3.5 w-3.5" />{t("autosaved")}</>
+      )}
+    </span>
+  );
+}
+
 export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const t = useTranslations("smrtReach");
   const locale = useLocale();
@@ -85,6 +125,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const [bots, setBots] = useState<Bot[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [recipientCount, setRecipientCount] = useState<number | null>(null);
+  const [gmassResult, setGmassResult] = useState<{ url: string; sent: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingEmail, setSavingEmail] = useState(false);
   const [savingWa, setSavingWa] = useState(false);
@@ -104,6 +145,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   const [email, setEmail] = useState<EmailDetail>({
     subject: "", preview: "", sender: null, reply_to: "", html_body: "", language: "he", provider: "ses",
     priority: "normal", send_hours: {}, exclude_shabbat: true, rate_limit: null, sto_enabled: false,
+    font_size: DEFAULT_EMAIL_FONT_SIZE,
   });
   const [wa, setWa] = useState<WhatsappDetail>({
     bot_ref: null, template: "", template_lang: "he", template_params: [], body_text: "",
@@ -111,6 +153,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
   });
   const [waMode, setWaMode] = useState<"template" | "text">("template");
   const [paramsText, setParamsText] = useState("");
+  const [waParamsInvalid, setWaParamsInvalid] = useState(false);
   const [waTemplates, setWaTemplates] = useState<WaTemplate[]>([]);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -149,6 +192,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           priority: detail.email.priority ?? "normal", send_hours: detail.email.send_hours ?? {},
           exclude_shabbat: detail.email.exclude_shabbat ?? true, rate_limit: detail.email.rate_limit ?? null,
           sto_enabled: detail.email.sto_enabled ?? false,
+          font_size: detail.email.font_size ?? DEFAULT_EMAIL_FONT_SIZE,
         });
       }
       if (detail.whatsapp) {
@@ -211,6 +255,9 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
     return {};
   }
 
+  // Section saves are silent: autosave persists on every settle, so a success
+  // toast per keystroke would be noise. Errors still surface (a failed save the
+  // user can't see is worse than a toast).
   async function saveSchedule() {
     setSavingSchedule(true);
     try {
@@ -222,7 +269,6 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           test_batch_size: schedule.test_batch_size ? Number(schedule.test_batch_size) : null,
         },
       });
-      toast.success(t("scheduleSaved"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -242,9 +288,9 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           priority: email.priority, send_hours: sendHoursPayload(email.send_hours),
           exclude_shabbat: email.exclude_shabbat, rate_limit: email.rate_limit || null,
           sto_enabled: email.sto_enabled,
+          font_size: email.font_size ?? DEFAULT_EMAIL_FONT_SIZE,
         },
       });
-      toast.success(t("contentSaved"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -268,14 +314,12 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
   async function saveAllocation() {
     const allocations = buildAllocations();
-    if (included.size > 0 && allocations.length === 0) {
-      toast.error(t("allocationNeedCount"));
-      return;
-    }
+    // Mid-entry (a sender checked but its count not yet typed): skip so we don't
+    // clobber a previously-saved allocation with an empty one.
+    if (included.size > 0 && allocations.length === 0) return;
     setSavingAlloc(true);
     try {
       await api(`/api/reach/campaigns/${campaignId}/senders`, { method: "PUT", body: { allocations } });
-      toast.success(t("allocationSaved"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -291,10 +335,12 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
         if (!Array.isArray(parsed)) throw new Error();
         params = parsed;
       } catch {
-        toast.error(t("templateParamsInvalid"));
+        // Invalid JSON while autosaving: flag inline, don't save or toast.
+        setWaParamsInvalid(true);
         return;
       }
     }
+    setWaParamsInvalid(false);
     setSavingWa(true);
     try {
       await api(`/api/reach/campaigns/${campaignId}/whatsapp`, {
@@ -311,7 +357,6 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           tz_hour: wa.tz_hour,
         },
       });
-      toast.success(t("contentSaved"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -353,7 +398,10 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
         `/api/reach/campaigns/${campaignId}/inbox-test`, { method: "POST" },
       );
       toast.success(t("gmassSent", { sent: r.sent }));
-      window.open(r.resultsUrl, "_blank", "noopener");
+      // Don't auto-open: window.open() after an await loses the user-gesture and
+      // is blocked, and does nothing in an installed PWA / inside the tabs
+      // iframe. Surface a real link the user clicks instead (reliable everywhere).
+      setGmassResult({ url: r.resultsUrl, sent: r.sent });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -428,6 +476,13 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // Autosave every section — replaces the explicit Save buttons. `!loading`
+  // gates the baseline so the initial load never triggers a save.
+  useAutosave(email, !loading, saveEmail);
+  useAutosave(schedule, !loading, saveSchedule);
+  useAutosave({ wa, waMode, paramsText }, !loading, saveWhatsapp);
+  useAutosave({ inc: [...included].sort(), counts }, !loading, saveAllocation);
 
   if (loading) {
     return <div className="flex items-center justify-center py-16 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>;
@@ -519,7 +574,10 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
 
       {/* Schedule + audience controls */}
       <div className="space-y-4 rounded-lg border p-5">
-        <h2 className="text-lg font-semibold">{t("scheduleSection")}</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">{t("scheduleSection")}</h2>
+          <SaveStatus saving={savingSchedule} t={t} />
+        </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("scheduleAt")}</span>
@@ -541,15 +599,15 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
             <Input type="number" min={0} value={schedule.test_batch_size} placeholder={t("testBatchHint")} onChange={(e) => setSchedule((s) => ({ ...s, test_batch_size: e.target.value }))} />
           </label>
         </div>
-        <Button onClick={saveSchedule} disabled={savingSchedule} variant="outline" size="sm" className="gap-2">
-          {savingSchedule ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("saveSchedule")}
-        </Button>
       </div>
 
       {/* Email editor */}
       {emailEnabled && (
         <div className="space-y-4 rounded-lg border p-5">
-          <h2 className="text-lg font-semibold">{t("emailContent")}</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">{t("emailContent")}</h2>
+            <SaveStatus saving={savingEmail} t={t} />
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-sm">
               <span className="text-muted-foreground">{t("provider")}</span>
@@ -579,9 +637,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
                 <div className="text-sm font-medium">{t("allocationTitle")}</div>
                 <p className="text-xs text-muted-foreground">{t("allocationSubtitle")}</p>
               </div>
-              <Button onClick={saveAllocation} disabled={savingAlloc} variant="outline" size="sm" className="gap-1">
-                {savingAlloc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("saveAllocation")}
-              </Button>
+              <SaveStatus saving={savingAlloc} t={t} />
             </div>
             {senders.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t("allocationNoSenders")}</p>
@@ -613,22 +669,39 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
           </div>
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("subject")}</span>
-            <Input value={email.subject ?? ""} onChange={(e) => setEmail((s) => ({ ...s, subject: e.target.value }))} />
+            <Input dir="auto" value={email.subject ?? ""} onChange={(e) => setEmail((s) => ({ ...s, subject: e.target.value }))} />
           </label>
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("previewText")}</span>
-            <Input value={email.preview ?? ""} onChange={(e) => setEmail((s) => ({ ...s, preview: e.target.value }))} />
+            <Input dir="auto" value={email.preview ?? ""} onChange={(e) => setEmail((s) => ({ ...s, preview: e.target.value }))} />
           </label>
           <label className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t("replyTo")}</span>
-            <Input value={email.reply_to ?? ""} onChange={(e) => setEmail((s) => ({ ...s, reply_to: e.target.value }))} />
+            <Input dir="auto" value={email.reply_to ?? ""} onChange={(e) => setEmail((s) => ({ ...s, reply_to: e.target.value }))} />
           </label>
           <div className="grid gap-1 text-sm">
-            <span className="text-muted-foreground">{t("htmlBody")}</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">{t("htmlBody")}</span>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                {t("fontSize")}
+                <Select
+                  value={String(email.font_size ?? DEFAULT_EMAIL_FONT_SIZE)}
+                  onValueChange={(v) => setEmail((s) => ({ ...s, font_size: Number(v) }))}
+                >
+                  <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[12, 13, 14, 15, 16, 18, 20, 24].map((px) => (
+                      <SelectItem key={px} value={String(px)}>{px}px</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            </div>
             <RichEmailEditor
               value={email.html_body ?? ""}
               onChange={(html) => setEmail((s) => ({ ...s, html_body: html }))}
               fields={mergeFields}
+              fontSize={email.font_size ?? DEFAULT_EMAIL_FONT_SIZE}
               t={t}
             />
           </div>
@@ -654,17 +727,16 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
               <Toggle label={t("sto")} checked={!!email.sto_enabled} onChange={(v) => setEmail((e) => ({ ...e, sto_enabled: v }))} />
             </div>
           </div>
-
-          <Button onClick={saveEmail} disabled={savingEmail} variant="outline" className="gap-2">
-            {savingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("saveContent")}
-          </Button>
         </div>
       )}
 
       {/* WhatsApp editor */}
       {waEnabled && (
         <div className="space-y-4 rounded-lg border p-5">
-          <h2 className="text-lg font-semibold">{t("whatsappContent")}</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">{t("whatsappContent")}</h2>
+            <SaveStatus saving={savingWa} t={t} />
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-sm">
               <span className="text-muted-foreground">{t("bot")}</span>
@@ -741,6 +813,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
                   <label className="grid gap-1 text-sm">
                     <span className="text-muted-foreground">{t("templateParams")}</span>
                     <Textarea value={paramsText} onChange={(e) => setParamsText(e.target.value)} rows={4} dir="ltr" placeholder={t("templateParamsHint")} />
+                    {waParamsInvalid && <span className="text-xs text-destructive">{t("templateParamsInvalid")}</span>}
                   </label>
                 </>
               )}
@@ -789,9 +862,6 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
             </div>
           </div>
 
-          <Button onClick={saveWhatsapp} disabled={savingWa} variant="outline" className="gap-2">
-            {savingWa ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("saveContent")}
-          </Button>
         </div>
       )}
 
@@ -799,7 +869,7 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
       <div className="space-y-4 rounded-lg border p-5">
         <h2 className="text-lg font-semibold">{t("testSendTitle")}</h2>
         <div className="grid gap-3 sm:grid-cols-2">
-          {emailEnabled && <Input value={testTo.email} placeholder={t("testEmailPlaceholder")} onChange={(e) => setTestTo((s) => ({ ...s, email: e.target.value }))} />}
+          {emailEnabled && <Input dir="auto" value={testTo.email} placeholder={t("testEmailPlaceholder")} onChange={(e) => setTestTo((s) => ({ ...s, email: e.target.value }))} />}
           {waEnabled && <Input value={testTo.phone} placeholder={t("testPhonePlaceholder")} dir="ltr" onChange={(e) => setTestTo((s) => ({ ...s, phone: e.target.value }))} />}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -820,6 +890,16 @@ export function CampaignDetailClient({ campaignId }: { campaignId: string }) {
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{t("sendNow")}
           </Button>
         </div>
+        {gmassResult && (
+          <a
+            href={gmassResult.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 underline"
+          >
+            <ExternalLink className="h-4 w-4" />{t("gmassOpenResults")}
+          </a>
+        )}
         <p className="text-xs text-muted-foreground">{t("sendNowNote")}</p>
       </div>
     </div>
