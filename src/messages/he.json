@@ -1270,7 +1270,8 @@
     "logs": "לוגים",
     "usage": "עלויות AI",
     "docs": "מסמכים",
-    "domainTracker": "מעקב דומיינים"
+    "domainTracker": "מעקב דומיינים",
+    "priceTracker": "השוואת מחירים"
   },
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
@@ -1939,7 +1940,7 @@
     "tabLive": "לייב (וואטסאפ)",
     "tabTest": "טסט (וואטסאפ)",
     "f_name": "שם",
-    "f_slug": "מזהה (slug)",
+    "f_slug": "Slug",
     "f_initials": "ראשי תיבות",
     "f_timezone": "אזור זמן",
     "f_admin_phones": "טלפוני מנהלים",
@@ -2044,7 +2045,6 @@
     "f_outcome": "תוצאה",
     "f_detail": "פרטים",
     "f_created_at": "זמן",
-    "f_slug": "Slug",
     "f_summary": "סיכום",
     "f_entry_count": "פריטים",
     "f_started_at": "התחלה",
@@ -2877,5 +2877,41 @@
     "installFirst": "כדי לקבל התראות, התקן תחילה את האפליקציה למסך הבית.",
     "unavailable": "שירות ההתראות אינו מוגדר בשרת כרגע.",
     "error": "משהו השתבש — נסה שוב."
+  },
+  "priceTracker": {
+    "title": "השוואת מחירים",
+    "subtitle": "הדבק לינק למוצר — הכלי שומר אותו עם תמונה, מותג, גודל וכשרות, ומשווה מחיר ל-OZ בין החנויות בזמן אמת.",
+    "bulkUpload": "העלאת רשימה",
+    "urlPlaceholder": "הדבק כאן לינק למוצר (Amazon / Walmart / Costco)…",
+    "add": "הוסף",
+    "adding": "מוסיף…",
+    "added": "המוצר נוסף",
+    "bulkHint": "לינק אחד בכל שורה (עד 50). כל מוצר יישמר עם הפרטים שלו.",
+    "cancel": "ביטול",
+    "uploadList": "העלה רשימה",
+    "uploading": "מעלה…",
+    "bulkResult": "{ok} מתוך {total} נוספו",
+    "selectAll": "בחר הכל",
+    "clearSelection": "נקה בחירה",
+    "runComparison": "הרץ השוואה ({n})",
+    "checking": "בודק…",
+    "checkingMessage": "קורא מחירים מהחנויות בזמן אמת — זה עשוי לקחת מספר שניות…",
+    "loading": "טוען…",
+    "empty": "עוד אין מוצרים. הדבק לינק למוצר כדי להתחיל.",
+    "store": "חנות",
+    "price": "מחיר",
+    "perOz": "מחיר ל-OZ",
+    "stock": "מלאי",
+    "cheapest": "הזול ביותר",
+    "inStock": "במלאי",
+    "outOfStock": "אזל",
+    "kosher": "כשר",
+    "notKosher": "לא כשר",
+    "kosherUnclear": "כשרות לא ברורה",
+    "linkAdded": "הקישור נוסף",
+    "addStoreLink": "הוסף קישור חנות",
+    "linkPlaceholder": "לינק למוצר בחנות זו…",
+    "save": "שמור",
+    "delete": "מחק"
   }
 }

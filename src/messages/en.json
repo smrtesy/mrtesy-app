@@ -1270,7 +1270,8 @@
     "logs": "Logs",
     "usage": "AI Usage",
     "docs": "Docs",
-    "domainTracker": "Domain Tracker"
+    "domainTracker": "Domain Tracker",
+    "priceTracker": "Price Compare"
   },
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
@@ -2045,7 +2046,6 @@
     "f_outcome": "Outcome",
     "f_detail": "Detail",
     "f_created_at": "Time",
-    "f_slug": "Slug",
     "f_summary": "Summary",
     "f_entry_count": "Items",
     "f_started_at": "Start",
@@ -2878,5 +2878,41 @@
     "installFirst": "To get notifications, install the app to your home screen first.",
     "unavailable": "Push service isn't configured on the server yet.",
     "error": "Something went wrong — please try again."
+  },
+  "priceTracker": {
+    "title": "Price Compare",
+    "subtitle": "Paste a product link — it is saved with image, brand, size and kosher status, then compared per-OZ across stores in real time.",
+    "bulkUpload": "Upload list",
+    "urlPlaceholder": "Paste a product link (Amazon / Walmart / Costco)…",
+    "add": "Add",
+    "adding": "Adding…",
+    "added": "Product added",
+    "bulkHint": "One link per line (up to 50). Each product is saved with its details.",
+    "cancel": "Cancel",
+    "uploadList": "Upload list",
+    "uploading": "Uploading…",
+    "bulkResult": "{ok} of {total} added",
+    "selectAll": "Select all",
+    "clearSelection": "Clear selection",
+    "runComparison": "Run comparison ({n})",
+    "checking": "Checking…",
+    "checkingMessage": "Reading live prices from the stores — this may take a few seconds…",
+    "loading": "Loading…",
+    "empty": "No products yet. Paste a product link to start.",
+    "store": "Store",
+    "price": "Price",
+    "perOz": "Price/OZ",
+    "stock": "Stock",
+    "cheapest": "Cheapest",
+    "inStock": "In stock",
+    "outOfStock": "Out of stock",
+    "kosher": "Kosher",
+    "notKosher": "Not kosher",
+    "kosherUnclear": "Kosher unclear",
+    "linkAdded": "Link added",
+    "addStoreLink": "Add store link",
+    "linkPlaceholder": "Product link in this store…",
+    "save": "Save",
+    "delete": "Delete"
   }
 }
