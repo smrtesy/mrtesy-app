@@ -20,6 +20,8 @@ import {
   detectStore,
   readPrice,
   classifyKosher,
+  findInStore,
+  searchAvailable,
   STORE_LABELS,
   type Store,
   type ParsedSize,
@@ -51,6 +53,8 @@ interface LinkRow {
   product_id: string;
   store: string;
   url: string;
+  auto_matched?: boolean;
+  matched_title?: string | null;
 }
 
 /** Load every product (with its store links) for the requesting operator. */
@@ -241,6 +245,21 @@ router.delete("/admin/price-tracker/products/:id/links/:store", requireAuth, req
 
 // ── run a live comparison ────────────────────────────────────────────────────
 
+interface CompRow {
+  store: Store;
+  storeLabel: string;
+  found: boolean;        // did we have/discover a link for this store?
+  url: string | null;
+  matchedTitle: string | null; // the product's title on this store (size may differ)
+  ok: boolean;
+  price: number | null;
+  currency: string;
+  pricePerOz: number | null;
+  sizeLabel: string | null;
+  inStock: boolean | null;
+  error: string | null;
+}
+
 interface Comparison {
   productId: string;
   name: string;
@@ -249,19 +268,108 @@ interface Comparison {
   sizeLabel: string | null;
   kosherStatus: string;
   kosherNote: string | null;
-  rows: Array<{
-    store: Store;
-    storeLabel: string;
-    url: string;
-    ok: boolean;
-    price: number | null;
-    currency: string;
-    pricePerOz: number | null;
-    sizeLabel: string | null;
-    inStock: boolean | null;
-    error: string | null;
-  }>;
+  rows: CompRow[];
   cheapestStore: Store | null;
+  searchEnabled: boolean;
+}
+
+/**
+ * Compare a single product across every store. The card is the PRODUCT — for
+ * each store we use a cached link if we have one, otherwise auto-discover the
+ * same product via search (allowing size/pack differences) and cache the hit.
+ * Each store's own page size drives its per-oz, so different pack sizes still
+ * compare fairly.
+ */
+async function compareProduct(
+  product: Awaited<ReturnType<typeof loadCatalogue>>[number],
+  userId: string,
+): Promise<Comparison> {
+  const canonical = {
+    name: product.name,
+    brand: product.brand,
+    sizeLabel: product.size_label,
+  };
+  const cachedByStore = new Map<Store, LinkRow>();
+  for (const l of product.links) cachedByStore.set(l.store as Store, l as LinkRow);
+
+  const rows = await Promise.all(
+    STORES.map(async (store): Promise<CompRow> => {
+      const base: CompRow = {
+        store, storeLabel: STORE_LABELS[store], found: false, url: null,
+        matchedTitle: null, ok: false, price: null, currency: "USD",
+        pricePerOz: null, sizeLabel: null, inStock: null, error: null,
+      };
+
+      try {
+      // 1. resolve a URL for this store — cached link, else auto-discover
+      let url = cachedByStore.get(store)?.url ?? null;
+      let matchedTitle = cachedByStore.get(store)?.matched_title ?? null;
+      if (!url) {
+        if (!searchAvailable()) {
+          return { ...base, error: "Auto-search needs JINA_API_KEY" };
+        }
+        const match = await findInStore(canonical, store, userId);
+        if (!match) return { ...base, error: "Product not found in this store" };
+        url = match.url;
+        matchedTitle = match.title || null;
+        // cache the discovered match for next time
+        const { error: upErr } = await db
+          .from("price_product_links")
+          .upsert(
+            { product_id: product.id, store, url, auto_matched: true, matched_title: matchedTitle },
+            { onConflict: "product_id,store" },
+          );
+        if (upErr) console.error("[price-tracker] match cache failed:", upErr.message);
+      }
+
+      // 2. read the live price from that URL (each store's own size → fair per-oz)
+      const read = await readPrice(url, store);
+      const { error: logErr } = await db.from("price_checks").insert({
+        product_id: product.id, store, url,
+        ok: read.ok, price: read.price, currency: read.currency,
+        size_value: read.size?.value ?? null, size_unit: read.size?.unit ?? null,
+        size_label: read.size?.label ?? null, price_per_oz: read.pricePerOz,
+        in_stock: read.inStock, raw_title: read.title, error: read.error,
+      });
+      if (logErr) console.error("[price-tracker] check log failed:", logErr.message);
+
+      return {
+        ...base,
+        found: true,
+        url,
+        matchedTitle: matchedTitle ?? read.title,
+        ok: read.ok,
+        price: read.price,
+        currency: read.currency,
+        pricePerOz: read.pricePerOz,
+        sizeLabel: read.size?.label ?? null,
+        inStock: read.inStock,
+        error: read.error,
+      };
+      } catch (err) {
+        // Degrade one store to an error row — never fail the whole batch.
+        return { ...base, error: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+
+  // Crown a cheapest only on a true per-oz basis; never across mismatched sizes.
+  const ranked = rows
+    .filter((r) => r.ok && r.pricePerOz != null)
+    .sort((a, b) => a.pricePerOz! - b.pricePerOz!);
+
+  return {
+    productId: product.id,
+    name: product.name,
+    brand: product.brand,
+    imageUrl: product.image_url,
+    sizeLabel: product.size_label,
+    kosherStatus: product.kosher_status,
+    kosherNote: product.kosher_note,
+    rows,
+    cheapestStore: ranked[0]?.store ?? null,
+    searchEnabled: searchAvailable(),
+  };
 }
 
 router.post("/admin/price-tracker/check", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
@@ -273,74 +381,12 @@ router.post("/admin/price-tracker/check", requireAuth, requireSuperAdmin, async 
   try {
     const catalogue = await loadCatalogue(req.user!.id);
     const selected = catalogue.filter((p) => ids.includes(p.id));
-
+    // One product at a time: each fans out to up to 5 stores (search + read),
+    // so per-product parallelism is plenty without hammering Jina's rate limit.
     const comparisons: Comparison[] = [];
-
     for (const product of selected) {
-      const savedSize: ParsedSize | null =
-        product.size_value != null && product.size_unit
-          ? { value: Number(product.size_value), unit: product.size_unit as "oz" | "count", label: product.size_label ?? "" }
-          : null;
-
-      // Read each store link live, in parallel per product.
-      const reads = await Promise.all(
-        product.links.map(async (link) => {
-          const read = await readPrice(link.url, link.store as Store, savedSize);
-          // persist the check — awaited so the history isn't lost if the dyno
-          // is recycled right after the response; best-effort on error.
-          const { error: logErr } = await db.from("price_checks").insert({
-            product_id: product.id,
-            store: link.store,
-            url: link.url,
-            ok: read.ok,
-            price: read.price,
-            currency: read.currency,
-            size_value: read.size?.value ?? null,
-            size_unit: read.size?.unit ?? null,
-            size_label: read.size?.label ?? null,
-            price_per_oz: read.pricePerOz,
-            in_stock: read.inStock,
-            raw_title: read.title,
-            error: read.error,
-          });
-          if (logErr) console.error("[price-tracker] check log failed:", logErr.message);
-          return { link, read };
-        }),
-      );
-
-      const rows = reads.map(({ link, read }) => ({
-        store: link.store as Store,
-        storeLabel: STORE_LABELS[link.store as Store],
-        url: link.url,
-        ok: read.ok,
-        price: read.price,
-        currency: read.currency,
-        pricePerOz: read.pricePerOz,
-        sizeLabel: read.size?.label ?? product.size_label ?? null,
-        inStock: read.inStock,
-        error: read.error,
-      }));
-
-      // Crown a "cheapest" only on a true per-oz basis. Comparing absolute
-      // prices across different pack sizes would be misleading, so when no
-      // store yielded a per-oz figure we leave cheapestStore null.
-      const ranked = rows
-        .filter((r) => r.ok && r.pricePerOz != null)
-        .sort((a, b) => (a.pricePerOz! - b.pricePerOz!));
-
-      comparisons.push({
-        productId: product.id,
-        name: product.name,
-        brand: product.brand,
-        imageUrl: product.image_url,
-        sizeLabel: product.size_label,
-        kosherStatus: product.kosher_status,
-        kosherNote: product.kosher_note,
-        rows,
-        cheapestStore: ranked[0]?.store ?? null,
-      });
+      comparisons.push(await compareProduct(product, req.user!.id));
     }
-
     return res.json({ comparisons });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

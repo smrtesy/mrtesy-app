@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2, ShoppingCart, Plus, Trash2, Play, ExternalLink,
-  Upload, X, ListChecks, BadgeCheck, BadgeX, HelpCircle, Link2,
+  Upload, ListChecks, BadgeCheck, BadgeX, HelpCircle, Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -24,7 +24,6 @@ const STORE_LABELS: Record<Store, string> = {
   costco: "Costco",
   costco_sameday: "Costco Same-Day",
 };
-const ALL_STORES: Store[] = ["amazon", "amazon_fresh", "walmart", "costco", "costco_sameday"];
 
 interface ProductLink { id: string; store: Store; url: string }
 interface Product {
@@ -45,7 +44,9 @@ interface Product {
 interface CompRow {
   store: Store;
   storeLabel: string;
-  url: string;
+  found: boolean;
+  url: string | null;
+  matchedTitle: string | null;
   ok: boolean;
   price: number | null;
   currency: string;
@@ -64,6 +65,7 @@ interface Comparison {
   kosherNote: string | null;
   rows: CompRow[];
   cheapestStore: Store | null;
+  searchEnabled: boolean;
 }
 
 // ── small presentational helpers ────────────────────────────────────────────
@@ -110,9 +112,6 @@ export default function PriceTrackerPage() {
   const [checking, setChecking] = useState(false);
   const [comparisons, setComparisons] = useState<Comparison[]>([]);
 
-  const [linkEditor, setLinkEditor] = useState<string | null>(null);
-  const [linkStore, setLinkStore] = useState<Store>("walmart");
-  const [linkUrl, setLinkUrl] = useState("");
 
   const loadProducts = useCallback(async () => {
     setLoadingList(true);
@@ -180,20 +179,6 @@ export default function PriceTrackerPage() {
     }
   }
 
-  async function handleAddLink(productId: string) {
-    if (!linkUrl.trim()) return;
-    try {
-      const { product } = await api<{ product: Product }>(`/api/admin/price-tracker/products/${productId}/links`, {
-        method: "POST", noOrg: true, body: { store: linkStore, url: linkUrl.trim() },
-      });
-      setProducts((prev) => prev.map((p) => (p.id === productId ? product : p)));
-      setLinkUrl("");
-      setLinkEditor(null);
-      toast.success(t("linkAdded"));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
-    }
-  }
 
   function toggle(id: string) {
     setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -341,13 +326,21 @@ export default function PriceTrackerPage() {
                     <div
                       key={r.store}
                       className={`grid grid-cols-[1fr_5rem_6rem_5rem_2rem] gap-x-2 items-center px-3 py-2 border-b last:border-0 text-sm ${
-                        isCheapest ? "bg-green-50/70 dark:bg-green-950/20" : ""
+                        isCheapest ? "bg-green-50/70 dark:bg-green-950/20" : !r.found ? "opacity-60" : ""
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="truncate">{r.storeLabel}</span>
-                        {isCheapest && (
-                          <Badge className="bg-green-600 text-white text-[10px] px-1.5 py-0 shrink-0">{t("cheapest")}</Badge>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate font-medium">{r.storeLabel}</span>
+                          {isCheapest && (
+                            <Badge className="bg-green-600 text-white text-[10px] px-1.5 py-0 shrink-0">{t("cheapest")}</Badge>
+                          )}
+                        </div>
+                        {/* the matched product on this store — pack/size may differ */}
+                        {r.found && r.matchedTitle && (
+                          <div className="text-[11px] text-muted-foreground truncate" dir="ltr" title={r.matchedTitle}>
+                            {r.matchedTitle}{r.sizeLabel ? ` · ${r.sizeLabel}` : ""}
+                          </div>
                         )}
                       </div>
                       <span className="text-end font-medium">{r.ok ? fmtMoney(r.price, r.currency) : "—"}</span>
@@ -357,15 +350,24 @@ export default function PriceTrackerPage() {
                       <span className="text-end text-xs text-muted-foreground">
                         {r.ok ? (r.inStock === false ? t("outOfStock") : t("inStock")) : ""}
                       </span>
-                      <a href={r.url} target="_blank" rel="noopener noreferrer" className="justify-self-end text-muted-foreground hover:text-foreground" title={r.error ?? r.url}>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
+                      {r.url ? (
+                        <a href={r.url} target="_blank" rel="noopener noreferrer" className="justify-self-end text-muted-foreground hover:text-foreground" title={r.error ?? r.url}>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      ) : (
+                        <span />
+                      )}
                       {!r.ok && r.error && (
                         <span className="col-span-5 text-[11px] text-amber-600 dark:text-amber-400 -mt-1">{r.error}</span>
                       )}
                     </div>
                   );
                 })}
+              {!c.searchEnabled && (
+                <div className="px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 border-t bg-amber-50/40 dark:bg-amber-950/10">
+                  {t("searchDisabled")}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -403,36 +405,13 @@ export default function PriceTrackerPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                     <KosherBadge status={p.kosher_status} note={p.kosher_note} />
+                    {/* stores already matched/cached for this product */}
                     {p.links.map((l) => (
                       <Badge key={l.id} variant="outline" className="text-[10px] gap-1">
                         <Link2 className="h-2.5 w-2.5" />{STORE_LABELS[l.store]}
                       </Badge>
                     ))}
                   </div>
-
-                  {/* add-store-link — collapsed by default */}
-                  {linkEditor === p.id ? (
-                    <div className="mt-2 space-y-1.5">
-                      <select
-                        value={linkStore}
-                        onChange={(e) => setLinkStore(e.target.value as Store)}
-                        className="w-full text-xs rounded border bg-background px-2 py-1"
-                      >
-                        {ALL_STORES.map((s) => <option key={s} value={s}>{STORE_LABELS[s]}</option>)}
-                      </select>
-                      <Input value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder={t("linkPlaceholder")} className="text-xs h-8" dir="ltr" />
-                      <div className="flex gap-1.5 justify-end">
-                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setLinkEditor(null); setLinkUrl(""); }}>
-                          <X className="h-3 w-3" />
-                        </Button>
-                        <Button size="sm" className="h-7 text-xs" onClick={() => handleAddLink(p.id)} disabled={!linkUrl.trim()}>{t("save")}</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button onClick={() => { setLinkEditor(p.id); setLinkStore("walmart"); }} className="mt-2 text-xs text-primary hover:underline inline-flex items-center gap-1">
-                      <Plus className="h-3 w-3" />{t("addStoreLink")}
-                    </button>
-                  )}
                 </div>
 
                 <button onClick={() => handleDelete(p.id)} className="text-muted-foreground hover:text-destructive shrink-0 self-start" title={t("delete")}>

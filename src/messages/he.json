@@ -2912,6 +2912,7 @@
     "addStoreLink": "הוסף קישור חנות",
     "linkPlaceholder": "לינק למוצר בחנות זו…",
     "save": "שמור",
-    "delete": "מחק"
+    "delete": "מחק",
+    "searchDisabled": "חיפוש אוטומטי בין חנויות כבוי — הוסף JINA_API_KEY ב-Railway כדי שאחפש את המוצר בכל החנויות."
   }
 }
