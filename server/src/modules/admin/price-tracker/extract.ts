@@ -306,8 +306,13 @@ export function parseSize(text: string | null | undefined): ParsedSize | null {
     }
   }
 
-  // "N-pack" / "N pack" combined with a single size elsewhere in the string
-  const packMatch = /(\d+)\s*-?\s*(?:pack|pk|count|ct)\b/i.exec(t);
+  // A pack count combined with a single size elsewhere in the string.
+  // Two phrasings: number-first ("12 Pack", "4-pk") and number-last
+  // ("Pack of 4", "Case of 6") — the latter is what Walmart uses and was
+  // previously missed, producing a wrong per-oz.
+  const packBefore = /(\d+)\s*-?\s*(?:pack|pk|count|ct)\b/i.exec(t);
+  const packAfter = /\b(?:pack|pk|case|set|box|count)\s*of\s*(\d+)/i.exec(t);
+  const packMatch = packBefore ?? packAfter;
   const single = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${UNIT_TOKEN}\\b`, "i").exec(t);
   if (single) {
     const each = parseFloat(single[1]);
@@ -342,6 +347,50 @@ function decodeEntities(s: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/&#x27;/gi, "'")
     .trim();
+}
+
+// Strip a trailing store-name suffix so the card shows the PRODUCT, not the
+// store: "… - Walmart.com", ": Amazon.com", "… | Costco", and Amazon's
+// "Amazon.com: <title> : <category>" wrapper.
+function stripStoreSuffix(t: string): string {
+  let s = t;
+  s = s.replace(/^\s*amazon\.com\s*:\s*/i, "");                 // Amazon prefix
+  s = s.replace(/\s*[-|:]\s*(walmart\.com|amazon\.com|costco\.com|costco|instacart)\b.*$/i, "");
+  s = s.replace(/\s*:\s*(grocery|health\s*&\s*household|grocery\s*&\s*gourmet[^:]*)\s*$/i, ""); // Amazon category tail
+  return s.trim();
+}
+
+// A title is "bad" when it is plainly not a product name — an internal
+// placeholder, a bare date/time, or too short. The guard is deliberately
+// conservative (only obvious junk) and always has a fallback, so a real title
+// is never dropped.
+function looksLikeBadTitle(t: string | null | undefined): boolean {
+  if (!t) return true;
+  const s = t.trim();
+  if (s.length < 5) return true;
+  if (!/[a-z֐-׿]{3,}/i.test(s)) return true;                 // no real word
+  if (/placeholder|\bgrid\b|undefined|productingredients|^product\s*title$/i.test(s)) return true;
+  if (/\b\d{1,2}:\d{2}\s*(am|pm)\b/i.test(s)) return true;             // a clock time
+  if (/\b(sun|mon|tue|wed|thu|fri|sat)\b[\s\S]*\b20\d{2}\b/i.test(s)) return true; // a date
+  return false;
+}
+
+/** Pick the first clean, store-suffix-stripped title from ordered candidates. */
+function pickTitle(...candidates: Array<string | null | undefined>): string | null {
+  for (const c of candidates) {
+    if (!c) continue;
+    const cleaned = stripStoreSuffix(decodeEntities(c));
+    if (!looksLikeBadTitle(cleaned)) return cleaned;
+  }
+  // nothing clean — return the least-bad non-empty cleaned candidate (still
+  // better than null), so the caller can flag "name uncertain".
+  for (const c of candidates) {
+    if (c) {
+      const cleaned = stripStoreSuffix(decodeEntities(c));
+      if (cleaned) return cleaned;
+    }
+  }
+  return null;
 }
 
 function metaContent(html: string, prop: string): string | null {
@@ -426,22 +475,42 @@ function parseJsonLd(html: string): JsonLdProduct | null {
 // ── store-specific parsers ─────────────────────────────────────────────────────
 
 function parseAmazon(html: string): ParsedProduct {
-  const title =
-    (/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i.exec(html)?.[1] &&
-      decodeEntities(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i.exec(html)![1].replace(/<[^>]+>/g, " "))) ||
-    metaContent(html, "title") ||
-    (/<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] ? decodeEntities(/<title>([\s\S]*?)<\/title>/i.exec(html)![1]) : null);
+  const productTitleRaw = /<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i.exec(html)?.[1];
+  const docTitle = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  // #productTitle is Amazon's canonical, most complete title → preferred.
+  const title = pickTitle(
+    productTitleRaw ? productTitleRaw.replace(/<[^>]+>/g, " ") : null,
+    metaContent(html, "og:title"),
+    docTitle,
+  );
 
-  // Buybox price: the first a-offscreen $ value inside the core price block,
-  // or the a-price-whole + fraction pair.
+  // Buybox price — anchored, in priority order, so we never grab a unit-price
+  // ("$0.14 / Count"), a coupon, or a Subscribe&Save delta by accident:
+  //   1. the .priceToPay span (the actual buy-box price)
+  //   2. the corePrice feature block's a-offscreen
+  //   3. Amazon's embedded "priceAmount" JSON
+  //   4. apex/whole+fraction pair
+  //   5. last resort: first a-offscreen on the page
   let price: number | null = null;
-  const offscreen = /id=["']corePriceDisplay[\s\S]{0,400}?<span class=["']a-offscreen["']>\$([0-9,]+\.[0-9]{2})/i.exec(html)
-    ?? /<span class=["']a-offscreen["']>\$([0-9,]+\.[0-9]{2})/i.exec(html);
-  if (offscreen) price = parseFloat(offscreen[1].replace(/,/g, ""));
+  const patterns: RegExp[] = [
+    /class=["'][^"']*priceToPay[^"']*["'][\s\S]{0,200}?<span class=["']a-offscreen["']>\$([0-9,]+\.[0-9]{2})/i,
+    /id=["']corePrice[^"']*["'][\s\S]{0,400}?<span class=["']a-offscreen["']>\$([0-9,]+\.[0-9]{2})/i,
+    /"priceAmount"\s*:\s*([0-9]+(?:\.[0-9]{1,2})?)/i,
+    /id=["']priceblock_(?:our|deal|sale)price["'][^>]*>\s*\$?([0-9,]+\.[0-9]{2})/i,
+  ];
+  for (const re of patterns) {
+    const m = re.exec(html);
+    if (m) { price = parseFloat(m[1].replace(/,/g, "")); break; }
+  }
   if (price == null) {
-    const whole = /<span class=["']a-price-whole["']>([0-9,]+)/i.exec(html);
-    const frac = /<span class=["']a-price-fraction["']>([0-9]{2})/i.exec(html);
-    if (whole) price = parseFloat(`${whole[1].replace(/,/g, "")}.${frac ? frac[1] : "00"}`);
+    // apex whole+fraction, scoped to the buy-box feature when possible
+    const apex = /id=["']apex_desktop["'][\s\S]{0,600}?a-price-whole["']>([0-9,]+)[\s\S]{0,40}?a-price-fraction["']>([0-9]{2})/i.exec(html);
+    const whole = apex ?? /<span class=["']a-price-whole["']>([0-9,]+)[\s\S]{0,40}?a-price-fraction["']>([0-9]{2})/i.exec(html);
+    if (whole) price = parseFloat(`${whole[1].replace(/,/g, "")}.${whole[2]}`);
+  }
+  if (price == null) {
+    const off = /<span class=["']a-offscreen["']>\$([0-9,]+\.[0-9]{2})/i.exec(html);
+    if (off) price = parseFloat(off[1].replace(/,/g, ""));
   }
 
   const brand =
@@ -451,10 +520,15 @@ function parseAmazon(html: string): ParsedProduct {
           .replace(/\s*store$/i, "")
       : null);
 
+  // data-a-dynamic-image holds a JSON map of {url: [w,h]} — grab the first URL.
+  const dynImg = /data-a-dynamic-image=["']\{&quot;(https:[^&]+?)&quot;/i.exec(html)?.[1]
+    ?? /data-a-dynamic-image=["']\{"(https:[^"]+?)"/i.exec(html)?.[1];
   const imageUrl =
     /id=["']landingImage["'][^>]*data-old-hires=["']([^"']+)["']/i.exec(html)?.[1] ||
     /id=["']landingImage["'][^>]*src=["']([^"']+)["']/i.exec(html)?.[1] ||
-    metaContent(html, "og:image");
+    dynImg ||
+    metaContent(html, "og:image") ||
+    /<img[^>]+id=["']landingImage["'][^>]*\bsrc=["']([^"']+)["']/i.exec(html)?.[1];
 
   const inStock = /id=["']availability["'][\s\S]{0,200}?(in stock)/i.test(html)
     ? true
@@ -513,13 +587,10 @@ function parseWalmart(html: string): ParsedProduct {
     }
   }
 
-  // Clean product title: JSON-LD already tried; fall back to og:title, then the
-  // <title> tag with Walmart's " - Walmart.com" suffix stripped.
-  if (!title) title = metaContent(html, "og:title");
-  if (!title) {
-    const t = /<title>([\s\S]*?)<\/title>/i.exec(html);
-    if (t) title = decodeEntities(t[1]).replace(/\s*[-|]\s*Walmart\.com\s*$/i, "").trim();
-  }
+  // Clean product title, guarded against Walmart's junk __NEXT_DATA__ "name"
+  // fields. Prefer JSON-LD, then og:title, then <title>; store suffix stripped.
+  const docTitle = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  title = pickTitle(title, metaContent(html, "og:title"), docTitle);
   imageUrl = imageUrl ?? metaContent(html, "og:image");
 
   return {
@@ -542,10 +613,26 @@ function parseGeneric(html: string): ParsedProduct {
     if (meta && !isNaN(Number(meta))) price = Number(meta);
   }
   if (price == null) {
+    // Common embedded-JSON price keys (Costco, Instacart/Same-Day, generic):
+    //   "price":"$4.99" · "priceString":"$4.99" · "formattedPrice":"$4.99"
+    //   "price":{"value":4.99} · "amount":4.99 · "salePrice":4.99
+    const jsonPatterns: RegExp[] = [
+      /"(?:price_?string|formatted_?price|display_?price|priceText)"\s*:\s*"\$?([0-9,]+\.[0-9]{2})"/i,
+      /"(?:sale_?price|current_?price|final_?price|your_?price)"\s*:\s*"?\$?([0-9,]+\.[0-9]{2})"?/i,
+      /"price"\s*:\s*\{[^}]*?"(?:value|amount)"\s*:\s*"?\$?([0-9,]+\.[0-9]{2})"?/i,
+      /"price"\s*:\s*"?\$?([0-9,]+\.[0-9]{2})"?/i,
+    ];
+    for (const re of jsonPatterns) {
+      const m = re.exec(html);
+      if (m) { price = parseFloat(m[1].replace(/,/g, "")); break; }
+    }
+  }
+  if (price == null) {
     const dollar = /(?:price|automation-id="productPriceOutput")[^$]{0,80}\$([0-9,]+\.[0-9]{2})/i.exec(html);
     if (dollar) price = parseFloat(dollar[1].replace(/,/g, ""));
   }
-  const title = ld?.name ?? metaContent(html, "og:title") ?? (/<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] ? decodeEntities(/<title>([\s\S]*?)<\/title>/i.exec(html)![1]) : null);
+  const docTitle = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  const title = pickTitle(ld?.name, metaContent(html, "og:title"), docTitle);
   const imageUrl = ld?.image ?? metaContent(html, "og:image");
   return {
     title: title ?? null,
@@ -739,21 +826,25 @@ export interface SearchHit {
   description: string;
 }
 
-const STORE_DOMAIN: Record<Store, string> = {
-  amazon: "amazon.com",
-  amazon_fresh: "amazon.com",
-  walmart: "walmart.com",
-  costco: "costco.com",
-  costco_sameday: "costco.com",
-};
-
 // Which URLs on each store are actual product pages (not category/search).
 const PRODUCT_URL_RE: Record<Store, RegExp> = {
   amazon: /amazon\.com\/(?:[^?#]*\/)?(?:dp|gp\/product)\/[A-Z0-9]{10}/i,
   amazon_fresh: /amazon\.com\/(?:[^?#]*\/)?(?:dp|gp\/product)\/[A-Z0-9]{10}/i,
   walmart: /walmart\.com\/ip\//i,
   costco: /costco\.com\/[^?#]*\.(?:product\.\d+\.)?html/i,
-  costco_sameday: /(?:sameday\.costco\.com|instacart\.com)\/[^?#]+/i,
+  // Costco Same-Day is Instacart-powered but should point at Costco's own
+  // branded storefront (sameday.costco.com), not the generic instacart.com.
+  // Only real product pages — not "/store/s?k=…" search or "…-near-me" SEO
+  // pages, which 403 and carry no price.
+  costco_sameday: /sameday\.costco\.com\/(?:store\/)?(?:[^/]+\/)?products\/\d+/i,
+};
+
+const STORE_SEARCH_DOMAIN: Record<Store, string> = {
+  amazon: "amazon.com",
+  amazon_fresh: "amazon.com",
+  walmart: "walmart.com",
+  costco: "costco.com",
+  costco_sameday: "sameday.costco.com",
 };
 
 /**
@@ -786,22 +877,26 @@ export async function jinaSearch(query: string): Promise<SearchHit[]> {
 }
 
 const MATCH_SYSTEM = `You match a reference grocery/household product to the SAME product on another store.
-The size/pack may differ (e.g. 12oz vs 16oz, single vs 4-pack) — that is fine, it is still the same product.
-A DIFFERENT flavor, brand, or fundamentally different item is NOT a match.
-You are given the reference product and a numbered list of candidate results from one store.
-Pick the index of the best true match, or -1 if none is the same product.
-Return ONLY JSON: {"index": <number>, "reason": "<short>"}`;
+DIFFERENT sizes/packs of the same product ARE matches and you WANT them all
+(e.g. 12oz, 18oz, and a 2-pack are three valid matches) — the goal is to find
+the cheapest per-ounce across sizes. A DIFFERENT flavor, brand, or a
+fundamentally different item is NOT a match.
+You are given the reference product and a numbered candidate list from one store.
+Return the indices of ALL candidates that are the same product in ANY size.
+Return ONLY JSON: {"indices": [<numbers>], "reason": "<short>"}`;
 
 /**
- * Find the same product on a given store. Searches the web (scoped to the
- * store domain), filters to real product URLs, and asks Claude to pick the
- * true match (allowing size/pack differences). Returns the chosen URL or null.
+ * Find the same product on a given store, across ALL sizes/packs, so the
+ * caller can read each and keep the cheapest per-ounce. Searches the web
+ * (scoped to the store), filters to real product URLs, and asks Claude which
+ * candidates are the same product in any size. Returns up to `limit` matches.
  */
 export async function findInStore(
   canonical: { name: string; brand: string | null; sizeLabel: string | null },
   store: Store,
   userId: string,
-): Promise<{ url: string; title: string } | null> {
+  limit = 3,
+): Promise<Array<{ url: string; title: string }>> {
   // Build a clean keyword query: brand + name, without repeating the brand if
   // the name already starts with it. Drop trailing pack/size noise — search
   // engines match the core product better without "(Pack of 4)".
@@ -813,14 +908,19 @@ export async function findInStore(
 
   // Two passes: scoped `site:` first, then a domain keyword fallback. Jina's
   // SERP sometimes drops site:-scoped results, so the fallback filters by URL.
+  // Dedupe by URL so the same product page isn't read twice.
   let candidates: SearchHit[] = [];
-  for (const q of [`${core} site:${STORE_DOMAIN[store]}`, `${core} ${STORE_LABELS[store]}`]) {
+  for (const q of [`${core} site:${STORE_SEARCH_DOMAIN[store]}`, `${core} ${STORE_LABELS[store]}`]) {
     const hits = await jinaSearch(q);
-    candidates = hits.filter((h) => PRODUCT_URL_RE[store].test(h.url)).slice(0, 6);
+    candidates = hits.filter((h) => PRODUCT_URL_RE[store].test(h.url));
     if (candidates.length) break;
   }
-  if (!candidates.length) return null;
-  if (candidates.length === 1) return { url: candidates[0].url, title: candidates[0].title };
+  const seen = new Set<string>();
+  candidates = candidates.filter((c) => !seen.has(c.url) && seen.add(c.url)).slice(0, 8);
+
+  const clean = (s: string) => stripStoreSuffix(decodeEntities(s));
+  if (!candidates.length) return [];
+  if (candidates.length === 1) return [{ url: candidates[0].url, title: clean(candidates[0].title) }];
 
   try {
     const list = candidates.map((c, i) => `${i}. ${c.title} — ${c.url}`).join("\n");
@@ -831,15 +931,17 @@ export async function findInStore(
       256,
       { component: "server.price-tracker.match", userId },
     );
-    const parsed = parseJsonResponse<{ index: number }>(content);
-    const idx = parsed?.index;
-    if (typeof idx === "number" && idx >= 0 && idx < candidates.length) {
-      return { url: candidates[idx].url, title: candidates[idx].title };
-    }
+    const parsed = parseJsonResponse<{ indices: number[] }>(content);
+    const idxs = Array.isArray(parsed?.indices) ? parsed!.indices : [];
+    const picked = idxs
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length)
+      .slice(0, limit)
+      .map((i) => ({ url: candidates[i].url, title: clean(candidates[i].title) }));
+    return picked;
   } catch {
     /* fall through */
   }
-  return null;
+  return [];
 }
 
 /** Is cross-store auto-discovery available (i.e. is the search key set)? */

@@ -53,6 +53,8 @@ interface CompRow {
   pricePerOz: number | null;
   sizeLabel: string | null;
   inStock: boolean | null;
+  isCheapest: boolean;
+  differentSize: boolean;
   error: string | null;
 }
 interface Comparison {
@@ -133,9 +135,13 @@ export default function PriceTrackerPage() {
     setIngesting(true);
     setError(null);
     try {
-      const { product, comparison } = await api<{ product: Product; comparison: Comparison }>("/api/admin/price-tracker/ingest", {
-        method: "POST", noOrg: true, body: { url: url.trim() },
-      });
+      // Accept either a product URL or a free-text product name.
+      const input = url.trim();
+      const isUrl = /^https?:\/\//i.test(input);
+      const { product, comparison } = await api<{ product: Product; comparison: Comparison }>(
+        isUrl ? "/api/admin/price-tracker/ingest" : "/api/admin/price-tracker/ingest-by-name",
+        { method: "POST", noOrg: true, body: isUrl ? { url: input } : { name: input } },
+      );
       setProducts((prev) => [product, ...prev.filter((p) => p.id !== product.id)]);
       // The ingest already ran the cross-store comparison — show it at once.
       if (comparison) setComparisons((prev) => [comparison, ...prev.filter((c) => c.productId !== comparison.productId)]);
@@ -245,14 +251,13 @@ export default function PriceTrackerPage() {
       {/* add single product */}
       <form onSubmit={handleIngest} className="flex gap-2">
         <Input
-          type="url"
+          type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder={t("urlPlaceholder")}
-          className="font-mono text-sm"
+          placeholder={t("urlOrNamePlaceholder")}
+          className="text-sm"
           required
           disabled={ingesting}
-          dir="ltr"
         />
         <Button type="submit" disabled={ingesting || !url.trim()} className="shrink-0">
           {ingesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -339,7 +344,7 @@ export default function PriceTrackerPage() {
                   return (a.price ?? Infinity) - (b.price ?? Infinity);
                 })
                 .map((r) => {
-                  const isCheapest = c.cheapestStore === r.store && r.ok;
+                  const isCheapest = r.isCheapest;
                   return (
                     <div
                       key={r.store}
@@ -348,10 +353,13 @@ export default function PriceTrackerPage() {
                       }`}
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                           <span className="truncate font-medium">{r.storeLabel}</span>
                           {isCheapest && (
                             <Badge className="bg-green-600 text-white text-[10px] px-1.5 py-0 shrink-0">{t("cheapest")}</Badge>
+                          )}
+                          {r.differentSize && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0 border-amber-400 text-amber-600 dark:text-amber-400">{t("differentSize")}</Badge>
                           )}
                         </div>
                         {/* the matched product on this store — pack/size may differ */}

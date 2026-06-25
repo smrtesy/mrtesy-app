@@ -2916,6 +2916,8 @@
     "delete": "Delete",
     "searchDisabled": "Cross-store auto-search is off — set JINA_API_KEY in Railway so the product is found in every store.",
     "refresh": "Refresh from source",
-    "refreshed": "Product updated"
+    "refreshed": "Product updated",
+    "urlOrNamePlaceholder": "Paste a product link, or type a product name to search…",
+    "differentSize": "different size"
   }
 }

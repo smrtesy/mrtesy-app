@@ -2915,6 +2915,8 @@
     "delete": "מחק",
     "searchDisabled": "חיפוש אוטומטי בין חנויות כבוי — הוסף JINA_API_KEY ב-Railway כדי שאחפש את המוצר בכל החנויות.",
     "refresh": "רענן מהמקור",
-    "refreshed": "המוצר עודכן"
+    "refreshed": "המוצר עודכן",
+    "urlOrNamePlaceholder": "הדבק לינק למוצר, או הקלד שם מוצר לחיפוש…",
+    "differentSize": "גודל שונה"
   }
 }

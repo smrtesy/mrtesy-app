@@ -157,6 +157,39 @@ router.post("/admin/price-tracker/ingest", requireAuth, requireSuperAdmin, async
   }
 });
 
+// Add a product by typing its NAME (no URL). We search for it — preferring
+// Amazon (cleanest titles), then Walmart, then Costco — ingest the first real
+// match as the canonical product, then auto-run the cross-store comparison.
+router.post("/admin/price-tracker/ingest-by-name", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  if (!searchAvailable()) {
+    return res.status(422).json({ error: "Search by name needs JINA_API_KEY (set it in Railway)." });
+  }
+
+  try {
+    const canonical = { name, brand: null, sizeLabel: null };
+    let sourceUrl: string | null = null;
+    for (const store of ["amazon", "walmart", "costco"] as Store[]) {
+      const matches = await findInStore(canonical, store, req.user!.id, 1);
+      if (matches.length) { sourceUrl = matches[0].url; break; }
+    }
+    if (!sourceUrl) return res.status(422).json({ error: `No product found for "${name}"` });
+
+    const result = await ingestUrl(req.user!.id, sourceUrl);
+    if (!result.ok) return res.status(422).json({ error: result.error });
+    const catalogue = await loadCatalogue(req.user!.id);
+    const product = catalogue.find((p) => p.id === result.productId);
+    if (!product) return res.status(500).json({ error: "product vanished after insert" });
+    const comparison = await compareProduct(product, req.user!.id);
+    return res.json({ product, comparison });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[price-tracker] ingest-by-name failed:", err);
+    return res.status(500).json({ error: msg });
+  }
+});
+
 router.post("/admin/price-tracker/bulk-ingest", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
   const urls = Array.isArray(req.body?.urls) ? (req.body.urls as unknown[]) : [];
   const clean = urls.filter((u): u is string => typeof u === "string" && u.trim().length > 0).map((u) => u.trim());
@@ -299,6 +332,8 @@ interface CompRow {
   pricePerOz: number | null;
   sizeLabel: string | null;
   inStock: boolean | null;
+  isCheapest: boolean;   // tie-aware: every store at the lowest per-oz is true
+  differentSize: boolean; // the matched size differs from the canonical product
   error: string | null;
 }
 
@@ -334,58 +369,89 @@ async function compareProduct(
   const cachedByStore = new Map<Store, LinkRow>();
   for (const l of product.links) cachedByStore.set(l.store as Store, l as LinkRow);
 
+  // Collect any product image seen across stores so a product missing its own
+  // image can be backfilled (every store usually carries one).
+  const foundImages: string[] = [];
+
   const rows = await Promise.all(
     STORES.map(async (store): Promise<CompRow> => {
       const base: CompRow = {
         store, storeLabel: STORE_LABELS[store], found: false, url: null,
         matchedTitle: null, ok: false, price: null, currency: "USD",
-        pricePerOz: null, sizeLabel: null, inStock: null, error: null,
+        pricePerOz: null, sizeLabel: null, inStock: null, isCheapest: false,
+        differentSize: false, error: null,
       };
 
       try {
-      // 1. resolve a URL for this store — cached link, else auto-discover
-      let url = cachedByStore.get(store)?.url ?? null;
-      let matchedTitle = cachedByStore.get(store)?.matched_title ?? null;
-      if (!url) {
-        if (!searchAvailable()) {
-          return { ...base, error: "Auto-search needs JINA_API_KEY" };
-        }
-        const match = await findInStore(canonical, store, userId);
-        if (!match) return { ...base, error: "Product not found in this store" };
-        url = match.url;
-        matchedTitle = match.title || null;
-        // cache the discovered match for next time
+      // 1. gather candidate URLs for this store. A cached link reads just that
+      //    one (fast re-checks); a fresh product discovers the SAME product in
+      //    ALL sizes so we can keep whichever is cheapest per ounce.
+      const cached = cachedByStore.get(store);
+      let candidates: Array<{ url: string; title: string | null }>;
+      if (cached) {
+        candidates = [{ url: cached.url, title: cached.matched_title ?? null }];
+      } else if (searchAvailable()) {
+        candidates = await findInStore(canonical, store, userId);
+      } else {
+        return { ...base, error: "Auto-search needs JINA_API_KEY" };
+      }
+      if (!candidates.length) return { ...base, error: "Product not found in this store" };
+
+      // 2. read every candidate's live price, log each, then keep the cheapest
+      //    per-oz (each size compared on its own ounces — a fair comparison).
+      const reads = await Promise.all(
+        candidates.map(async (c) => {
+          const r = await readPrice(c.url, store);
+          const { error: logErr } = await db.from("price_checks").insert({
+            product_id: product.id, store, url: c.url,
+            ok: r.ok, price: r.price, currency: r.currency,
+            size_value: r.size?.value ?? null, size_unit: r.size?.unit ?? null,
+            size_label: r.size?.label ?? null, price_per_oz: r.pricePerOz,
+            in_stock: r.inStock, raw_title: r.title, error: r.error,
+          });
+          if (logErr) console.error("[price-tracker] check log failed:", logErr.message);
+          return { c, r };
+        }),
+      );
+
+      const ranked = reads
+        .filter((x) => x.r.ok && x.r.pricePerOz != null)
+        .sort((a, b) => a.r.pricePerOz! - b.r.pricePerOz!);
+      const chosen = ranked[0] ?? reads.find((x) => x.r.ok) ?? reads[0];
+      const { c, r: read } = chosen;
+      const matchedTitle = c.title ?? read.title;
+      if (read.imageUrl) foundImages.push(read.imageUrl);
+
+      // Flag when the cheapest match is a different size/pack than the product
+      // the operator saved — so a "different size" badge can explain the deal.
+      const canonOz = product.size_value != null ? Number(product.size_value) : null;
+      const differentSize =
+        canonOz != null && read.size != null &&
+        (read.size.unit !== product.size_unit || Math.abs(read.size.value - canonOz) > canonOz * 0.02);
+
+      // cache the chosen (cheapest) match so re-checks are fast
+      if (!cached || cached.url !== c.url) {
         const { error: upErr } = await db
           .from("price_product_links")
           .upsert(
-            { product_id: product.id, store, url, auto_matched: true, matched_title: matchedTitle },
+            { product_id: product.id, store, url: c.url, auto_matched: !cached, matched_title: matchedTitle },
             { onConflict: "product_id,store" },
           );
         if (upErr) console.error("[price-tracker] match cache failed:", upErr.message);
       }
 
-      // 2. read the live price from that URL (each store's own size → fair per-oz)
-      const read = await readPrice(url, store);
-      const { error: logErr } = await db.from("price_checks").insert({
-        product_id: product.id, store, url,
-        ok: read.ok, price: read.price, currency: read.currency,
-        size_value: read.size?.value ?? null, size_unit: read.size?.unit ?? null,
-        size_label: read.size?.label ?? null, price_per_oz: read.pricePerOz,
-        in_stock: read.inStock, raw_title: read.title, error: read.error,
-      });
-      if (logErr) console.error("[price-tracker] check log failed:", logErr.message);
-
       return {
         ...base,
         found: true,
-        url,
-        matchedTitle: matchedTitle ?? read.title,
+        url: c.url,
+        matchedTitle,
         ok: read.ok,
         price: read.price,
         currency: read.currency,
         pricePerOz: read.pricePerOz,
         sizeLabel: read.size?.label ?? null,
         inStock: read.inStock,
+        differentSize,
         error: read.error,
       };
       } catch (err) {
@@ -395,21 +461,35 @@ async function compareProduct(
     }),
   );
 
-  // Crown a cheapest only on a true per-oz basis; never across mismatched sizes.
-  const ranked = rows
-    .filter((r) => r.ok && r.pricePerOz != null)
-    .sort((a, b) => a.pricePerOz! - b.pricePerOz!);
+  // Crown cheapest only on a true per-oz basis; never across mismatched sizes.
+  // Tie-aware: every store at (or within a cent-fraction of) the lowest per-oz
+  // is flagged, so two stores at the same price are both marked cheapest.
+  const perOz = rows.filter((r) => r.ok && r.pricePerOz != null).map((r) => r.pricePerOz!);
+  const minOz = perOz.length ? Math.min(...perOz) : null;
+  if (minOz != null) {
+    for (const r of rows) {
+      if (r.ok && r.pricePerOz != null && Math.abs(r.pricePerOz - minOz) < 0.0005) r.isCheapest = true;
+    }
+  }
+
+  // Backfill the product image from any store that had one.
+  let imageUrl = product.image_url;
+  if (!imageUrl && foundImages.length) {
+    imageUrl = foundImages[0];
+    const { error } = await db.from("price_products").update({ image_url: imageUrl }).eq("id", product.id);
+    if (error) console.error("[price-tracker] image backfill failed:", error.message);
+  }
 
   return {
     productId: product.id,
     name: product.name,
     brand: product.brand,
-    imageUrl: product.image_url,
+    imageUrl,
     sizeLabel: product.size_label,
     kosherStatus: product.kosher_status,
     kosherNote: product.kosher_note,
     rows,
-    cheapestStore: ranked[0]?.store ?? null,
+    cheapestStore: rows.find((r) => r.isCheapest)?.store ?? null,
     searchEnabled: searchAvailable(),
   };
 }
