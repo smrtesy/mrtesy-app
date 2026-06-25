@@ -133,10 +133,12 @@ export default function PriceTrackerPage() {
     setIngesting(true);
     setError(null);
     try {
-      const { product } = await api<{ product: Product }>("/api/admin/price-tracker/ingest", {
+      const { product, comparison } = await api<{ product: Product; comparison: Comparison }>("/api/admin/price-tracker/ingest", {
         method: "POST", noOrg: true, body: { url: url.trim() },
       });
       setProducts((prev) => [product, ...prev.filter((p) => p.id !== product.id)]);
+      // The ingest already ran the cross-store comparison — show it at once.
+      if (comparison) setComparisons((prev) => [comparison, ...prev.filter((c) => c.productId !== comparison.productId)]);
       setUrl("");
       toast.success(t("added"));
     } catch (err) {

@@ -145,7 +145,11 @@ router.post("/admin/price-tracker/ingest", requireAuth, requireSuperAdmin, async
     if (!result.ok) return res.status(422).json({ error: result.error });
     const catalogue = await loadCatalogue(req.user!.id);
     const product = catalogue.find((p) => p.id === result.productId);
-    return res.json({ product });
+    if (!product) return res.status(500).json({ error: "product vanished after insert" });
+    // Auto-run the comparison so adding a product immediately shows prices
+    // across every store — no separate "Run comparison" click needed.
+    const comparison = await compareProduct(product, req.user!.id);
+    return res.json({ product, comparison });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[price-tracker] ingest failed:", err);
