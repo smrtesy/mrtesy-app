@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2, ShoppingCart, Plus, Trash2, Play, ExternalLink,
-  Upload, ListChecks, BadgeCheck, BadgeX, HelpCircle, Link2,
+  Upload, ListChecks, BadgeCheck, BadgeX, HelpCircle, Link2, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -165,6 +165,22 @@ export default function PriceTrackerPage() {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setBulkRunning(false);
+    }
+  }
+
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  async function handleRefresh(id: string) {
+    setRefreshing(id);
+    try {
+      const { product } = await api<{ product: Product }>(`/api/admin/price-tracker/products/${id}/refresh`, {
+        method: "POST", noOrg: true,
+      });
+      setProducts((prev) => prev.map((p) => (p.id === id ? product : p)));
+      toast.success(t("refreshed"));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(null);
     }
   }
 
@@ -414,9 +430,14 @@ export default function PriceTrackerPage() {
                   </div>
                 </div>
 
-                <button onClick={() => handleDelete(p.id)} className="text-muted-foreground hover:text-destructive shrink-0 self-start" title={t("delete")}>
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex flex-col gap-2 shrink-0 self-start">
+                  <button onClick={() => handleRefresh(p.id)} disabled={refreshing === p.id} className="text-muted-foreground hover:text-foreground" title={t("refresh")}>
+                    <RefreshCw className={`h-4 w-4 ${refreshing === p.id ? "animate-spin" : ""}`} />
+                  </button>
+                  <button onClick={() => handleDelete(p.id)} className="text-muted-foreground hover:text-destructive" title={t("delete")}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             );
           })}

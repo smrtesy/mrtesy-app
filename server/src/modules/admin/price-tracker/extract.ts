@@ -492,10 +492,10 @@ function parseWalmart(html: string): ParsedProduct {
           ?? /"price"\s*:\s*([0-9.]+)\s*,\s*"priceString"/.exec(str);
         if (p) price = parseFloat(p[1]);
       }
-      if (!title) {
-        const n = /"name"\s*:\s*"([^"]{4,200})"/.exec(str);
-        if (n) title = decodeEntities(n[1]);
-      }
+      // NOTE: do NOT pull the title from a bare "name" field in __NEXT_DATA__ —
+      // Walmart's JSON has dozens of "name" keys (layout modules, placeholders)
+      // and the first match is garbage like "3Grid"/"ProductIngredientsPlaceholder".
+      // The clean product title comes from og:title / <title> below.
       if (!brand) {
         const b = /"brand"\s*:\s*"([^"]{1,80})"/.exec(str);
         if (b) brand = decodeEntities(b[1]);
@@ -513,7 +513,13 @@ function parseWalmart(html: string): ParsedProduct {
     }
   }
 
-  title = title ?? metaContent(html, "og:title");
+  // Clean product title: JSON-LD already tried; fall back to og:title, then the
+  // <title> tag with Walmart's " - Walmart.com" suffix stripped.
+  if (!title) title = metaContent(html, "og:title");
+  if (!title) {
+    const t = /<title>([\s\S]*?)<\/title>/i.exec(html);
+    if (t) title = decodeEntities(t[1]).replace(/\s*[-|]\s*Walmart\.com\s*$/i, "").trim();
+  }
   imageUrl = imageUrl ?? metaContent(html, "og:image");
 
   return {
@@ -796,9 +802,23 @@ export async function findInStore(
   store: Store,
   userId: string,
 ): Promise<{ url: string; title: string } | null> {
-  const query = `${canonical.brand ?? ""} ${canonical.name} site:${STORE_DOMAIN[store]}`.trim();
-  const hits = await jinaSearch(query);
-  const candidates = hits.filter((h) => PRODUCT_URL_RE[store].test(h.url)).slice(0, 6);
+  // Build a clean keyword query: brand + name, without repeating the brand if
+  // the name already starts with it. Drop trailing pack/size noise — search
+  // engines match the core product better without "(Pack of 4)".
+  const name = canonical.name.replace(/\s*\(pack of[^)]*\)/i, "").trim();
+  const brand = canonical.brand?.trim() ?? "";
+  const core = brand && !name.toLowerCase().startsWith(brand.toLowerCase())
+    ? `${brand} ${name}`
+    : name;
+
+  // Two passes: scoped `site:` first, then a domain keyword fallback. Jina's
+  // SERP sometimes drops site:-scoped results, so the fallback filters by URL.
+  let candidates: SearchHit[] = [];
+  for (const q of [`${core} site:${STORE_DOMAIN[store]}`, `${core} ${STORE_LABELS[store]}`]) {
+    const hits = await jinaSearch(q);
+    candidates = hits.filter((h) => PRODUCT_URL_RE[store].test(h.url)).slice(0, 6);
+    if (candidates.length) break;
+  }
   if (!candidates.length) return null;
   if (candidates.length === 1) return { url: candidates[0].url, title: candidates[0].title };
 

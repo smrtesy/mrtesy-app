@@ -2914,6 +2914,8 @@
     "linkPlaceholder": "Product link in this store…",
     "save": "Save",
     "delete": "Delete",
-    "searchDisabled": "Cross-store auto-search is off — set JINA_API_KEY in Railway so the product is found in every store."
+    "searchDisabled": "Cross-store auto-search is off — set JINA_API_KEY in Railway so the product is found in every store.",
+    "refresh": "Refresh from source",
+    "refreshed": "Product updated"
   }
 }

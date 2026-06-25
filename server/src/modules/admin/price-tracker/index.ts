@@ -198,6 +198,44 @@ router.delete("/admin/price-tracker/products/:id", requireAuth, requireSuperAdmi
   return res.json({ ok: true });
 });
 
+// re-read the product's source URL and update name/brand/image/size/kosher in
+// place — handy after a parser fix, without forcing delete + re-add.
+router.post("/admin/price-tracker/products/:id/refresh", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+  const { data: row } = await db
+    .from("price_products")
+    .select("id, source_url, source_store")
+    .eq("id", req.params.id)
+    .eq("user_id", req.user!.id)
+    .maybeSingle();
+  if (!row) return res.status(404).json({ error: "product not found" });
+  const product = row as Pick<ProductRow, "id" | "source_url" | "source_store">;
+  if (!product.source_url) return res.status(422).json({ error: "no source URL to refresh from" });
+
+  try {
+    const read = await readPrice(product.source_url, (product.source_store as Store) ?? undefined);
+    const kosher = await classifyKosher(read.title, read.brand, read.title ?? "", req.user!.id);
+    const { error } = await db
+      .from("price_products")
+      .update({
+        name: read.title ?? product.source_url,
+        brand: read.brand,
+        image_url: read.imageUrl,
+        size_value: read.size?.value ?? null,
+        size_unit: read.size?.unit ?? null,
+        size_label: read.size?.label ?? null,
+        kosher_status: kosher.status,
+        kosher_note: kosher.note,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", product.id);
+    if (error) return res.status(500).json({ error: error.message });
+    const catalogue = await loadCatalogue(req.user!.id);
+    return res.json({ product: catalogue.find((p) => p.id === product.id) });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // add / replace a store link for a product
 router.post("/admin/price-tracker/products/:id/links", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
   const store = req.body?.store as Store;

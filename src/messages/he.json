@@ -2913,6 +2913,8 @@
     "linkPlaceholder": "לינק למוצר בחנות זו…",
     "save": "שמור",
     "delete": "מחק",
-    "searchDisabled": "חיפוש אוטומטי בין חנויות כבוי — הוסף JINA_API_KEY ב-Railway כדי שאחפש את המוצר בכל החנויות."
+    "searchDisabled": "חיפוש אוטומטי בין חנויות כבוי — הוסף JINA_API_KEY ב-Railway כדי שאחפש את המוצר בכל החנויות.",
+    "refresh": "רענן מהמקור",
+    "refreshed": "המוצר עודכן"
   }
 }
