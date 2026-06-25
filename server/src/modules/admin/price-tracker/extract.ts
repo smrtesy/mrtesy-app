@@ -604,9 +604,18 @@ function parseWalmart(html: string): ParsedProduct {
       const json = JSON.parse(next[1]);
       const str = JSON.stringify(json);
       if (price == null) {
-        const p = /"currentPrice"\s*:\s*\{[^}]*?"price"\s*:\s*([0-9.]+)/.exec(str)
-          ?? /"price"\s*:\s*([0-9.]+)\s*,\s*"priceString"/.exec(str);
+        // The MAIN product price lives under "priceInfo":{"currentPrice":…}.
+        // A bare first "currentPrice" can be a variant/bundle/related item
+        // (we saw $19.96 before the real $12.69), so anchor on priceInfo first.
+        const p =
+          /"priceInfo"\s*:\s*\{\s*"currentPrice"\s*:\s*\{[^}]*?"price"\s*:\s*([0-9.]+)/.exec(str)
+          ?? /"currentPrice"\s*:\s*\{[^}]*?"price"\s*:\s*([0-9.]+)\s*,\s*"priceString"/.exec(str);
         if (p) price = parseFloat(p[1]);
+      }
+      if (price == null) {
+        // visible "Add to cart $X.XX" aria-label is the buy-box price
+        const atc = /add to cart\s*\$([0-9,]+\.[0-9]{2})/i.exec(html);
+        if (atc) price = parseFloat(atc[1].replace(/,/g, ""));
       }
       // NOTE: do NOT pull the title from a bare "name" field in __NEXT_DATA__ —
       // Walmart's JSON has dozens of "name" keys (layout modules, placeholders)
