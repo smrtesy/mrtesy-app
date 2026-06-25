@@ -66,11 +66,19 @@ interface Comparison {
   kosherStatus: "kosher" | "not_kosher" | "unclear";
   kosherNote: string | null;
   rows: CompRow[];
+  alternatives: AltRow[];
   cheapestStore: Store | null;
   searchEnabled: boolean;
   aiCost: number;
 }
+interface AltRow {
+  store: Store; storeLabel: string; url: string; title: string;
+  tier: "close" | "loose"; kosher: "kosher" | "not_kosher" | "unclear";
+  price: number | null; currency: string; pricePerOz: number | null;
+  sizeLabel: string | null; inStock: boolean | null; isCheapest: boolean; error: string | null;
+}
 interface AiCost { today: number; week: number; month: number; allTime: number; calls: number }
+interface Prefs { kosher_only: boolean; substitution_level: "off" | "exact" | "close" | "loose" }
 
 // ── small presentational helpers ────────────────────────────────────────────
 
@@ -124,6 +132,19 @@ export default function PriceTrackerPage() {
     } catch { /* meter is non-critical */ }
   }, []);
 
+  const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const loadPrefs = useCallback(async () => {
+    try { setPrefs((await api<{ prefs: Prefs }>("/api/admin/price-tracker/prefs", { noOrg: true })).prefs); }
+    catch { /* non-critical */ }
+  }, []);
+  async function toggleKosher() {
+    if (!prefs) return;
+    const next = !prefs.kosher_only;
+    setPrefs({ ...prefs, kosher_only: next }); // optimistic
+    try { await api("/api/admin/price-tracker/prefs", { method: "PUT", noOrg: true, body: { kosher_only: next } }); }
+    catch (err) { setPrefs(prefs); toast.error(err instanceof Error ? err.message : String(err)); }
+  }
+
   const loadProducts = useCallback(async () => {
     setLoadingList(true);
     try {
@@ -136,7 +157,7 @@ export default function PriceTrackerPage() {
     }
   }, []);
 
-  useEffect(() => { void loadProducts(); void loadAiCost(); }, [loadProducts, loadAiCost]);
+  useEffect(() => { void loadProducts(); void loadAiCost(); void loadPrefs(); }, [loadProducts, loadAiCost, loadPrefs]);
 
   async function handleIngest(e: React.FormEvent) {
     e.preventDefault();
@@ -253,7 +274,18 @@ export default function PriceTrackerPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">{t("subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* kosher-only toggle — hard filter on alternatives */}
+          {prefs && (
+            <button
+              onClick={toggleKosher}
+              className={`rounded-md border px-3 py-1.5 text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${prefs.kosher_only ? "border-green-500 bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300" : "text-muted-foreground"}`}
+              title={t("kosherOnlyTip")}
+            >
+              <BadgeCheck className="h-3.5 w-3.5" />
+              {t("kosherOnly")}: {prefs.kosher_only ? t("on") : t("off")}
+            </button>
+          )}
           {/* real-time AI cost meter (from token usage) */}
           {aiCost && (
             <div className="rounded-md border px-3 py-1.5 text-xs font-mono leading-tight" title={t("aiMeterTip", { calls: aiCost.calls, all: aiCost.allTime.toFixed(4) })}>
@@ -421,6 +453,39 @@ export default function PriceTrackerPage() {
                 <div className="px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 border-t bg-amber-50/40 dark:bg-amber-950/10">
                   {t("searchDisabled")}
                 </div>
+              )}
+
+              {/* ── alternatives zone: same kind of product, OTHER brands ── */}
+              {c.alternatives.length > 0 && (
+                <>
+                  {/* clear visual divider */}
+                  <div className="relative text-center pt-5 pb-1">
+                    <div className="border-t-2 border-dashed border-amber-300 dark:border-amber-700/60" />
+                    <span className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[11px] font-mono font-semibold px-3 py-1 rounded-full">
+                      ↓ {t("altsTitle")}
+                    </span>
+                  </div>
+                  <div className="bg-amber-50/50 dark:bg-amber-950/15">
+                    {c.alternatives.map((a) => (
+                      <div key={a.store + a.url} className={`grid grid-cols-[1fr_5rem_6rem_2rem] gap-x-2 items-center px-3 py-2 border-t border-amber-100 dark:border-amber-900/30 text-sm ${a.isCheapest ? "bg-amber-100/60 dark:bg-amber-900/20" : ""}`}>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] font-semibold px-1.5 py-0 rounded-full bg-amber-200/70 text-amber-800 dark:bg-amber-800/40 dark:text-amber-200">{t("altTag")}</span>
+                            {a.kosher === "kosher" && <span className="text-[10px] font-semibold px-1.5 py-0 rounded-full bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">{t("kosher")}</span>}
+                            {a.isCheapest && <span className="text-[10px] font-semibold px-1.5 py-0 rounded-full bg-green-600 text-white">{t("cheapest")}</span>}
+                          </div>
+                          <div className="text-[12px] mt-0.5 truncate" dir="ltr" title={a.title}>{a.title}</div>
+                          <div className="text-[11px] text-muted-foreground">{a.storeLabel}{a.sizeLabel ? ` · ${a.sizeLabel}` : ""}</div>
+                        </div>
+                        <span className="text-end font-medium tabular-nums">{a.price != null ? fmtMoney(a.price, a.currency) : "—"}</span>
+                        <span className={`text-end font-semibold tabular-nums ${a.isCheapest ? "text-amber-700 dark:text-amber-300" : ""}`}>{fmtPerOz(a.pricePerOz)}</span>
+                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="justify-self-end text-muted-foreground hover:text-foreground" title={a.error ?? a.url}>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           ))}

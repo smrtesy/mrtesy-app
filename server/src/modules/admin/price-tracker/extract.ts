@@ -1000,3 +1000,126 @@ export async function findInStore(
 export function searchAvailable(): boolean {
   return !!process.env.JINA_API_KEY;
 }
+
+// ── substitution engine: find the same KIND of product from other brands ─────
+
+export interface ProductConcept {
+  category: string;
+  subtype: string;
+  flavor: string | null;
+  diet: string[];           // ["kosher","gluten-free",…]
+  keyIngredients: string[];
+  searchTerms: string[];    // brand-less queries
+}
+
+const CONCEPT_SYSTEM = `Extract a structured "product concept" from a grocery/household product, for finding equivalent products from OTHER brands.
+Return ONLY JSON:
+{"category":"<broad e.g. breakfast cereal>","subtype":"<specific e.g. honey nut oat cereal>","flavor":"<or null>","diet":["kosher"|"gluten-free"|"organic"|"vegan"|...],"key_ingredients":["…"],"search_terms":["2-4 brand-LESS search phrases that would find this kind of product"]}
+Rules: diet includes "kosher" ONLY if a hechsher/kosher mark is evident. search_terms must NOT contain the brand name.`;
+
+export async function extractConcept(
+  title: string | null,
+  brand: string | null,
+  userId: string,
+): Promise<{ concept: ProductConcept | null; costUsd: number }> {
+  if (!title) return { concept: null, costUsd: 0 };
+  try {
+    const { content, costUsd } = await simpleCall(
+      "haiku",
+      CONCEPT_SYSTEM,
+      `Brand: ${brand ?? "?"}\nTitle: ${title}`,
+      400,
+      { component: "server.price-tracker.concept", userId },
+    );
+    const p = parseJsonResponse<{ category: string; subtype: string; flavor: string | null; diet: string[]; key_ingredients: string[]; search_terms: string[] }>(content);
+    if (!p?.subtype) return { concept: null, costUsd };
+    return {
+      concept: {
+        category: p.category ?? "",
+        subtype: p.subtype,
+        flavor: p.flavor ?? null,
+        diet: Array.isArray(p.diet) ? p.diet : [],
+        keyIngredients: Array.isArray(p.key_ingredients) ? p.key_ingredients : [],
+        searchTerms: Array.isArray(p.search_terms) && p.search_terms.length ? p.search_terms : [p.subtype],
+      },
+      costUsd,
+    };
+  } catch {
+    return { concept: null, costUsd: 0 };
+  }
+}
+
+export interface SubstituteHit {
+  store: Store;
+  url: string;
+  title: string;
+  tier: "close" | "loose";
+  score: number;
+  kosher: "kosher" | "not_kosher" | "unclear";
+  reason: string;
+}
+
+const SUB_JUDGE_SYSTEM = `You judge whether candidate products are valid SUBSTITUTES for a reference product concept — same KIND of item, DIFFERENT brand. Size/pack may differ.
+For each candidate also judge kosher status from its title/brand (kosher only if a hechsher/kosher mark/word is evident; else unclear; non-kosher by nature → not_kosher).
+tier: "same"=identical product type; "close"=same subtype+diet, minor differences; "loose"=same category, notable flavor/attribute difference; "reject"=different category/diet.
+Return ONLY JSON: {"results":[{"index":<n>,"tier":"same|close|loose|reject","score":<0-100>,"kosher":"kosher|not_kosher|unclear","reason":"<short>"}]}`;
+
+/**
+ * Find substitute products (other brands) for a concept, on one store.
+ * Brand-less search → exclude the original brand → batched LLM judge with
+ * kosher verdict → filter by the user's kosher toggle + substitution level.
+ */
+export async function findSubstitutes(
+  concept: ProductConcept,
+  originalBrand: string | null,
+  store: Store,
+  opts: { kosherOnly: boolean; level: "exact" | "close" | "loose" },
+  userId: string,
+): Promise<{ alts: SubstituteHit[]; costUsd: number }> {
+  if (opts.level === "exact") return { alts: [], costUsd: 0 };
+
+  const dietHint = concept.diet.filter((d) => d !== "kosher").join(" ");
+  const query = `${concept.searchTerms[0] ?? concept.subtype} ${dietHint}`.trim();
+  const hits = await jinaSearch(`${query} site:${STORE_SEARCH_DOMAIN[store]}`);
+  const brand = (originalBrand ?? "").toLowerCase();
+  let candidates = hits
+    .filter((h) => PRODUCT_URL_RE[store].test(h.url))
+    .filter((h) => !brand || !h.title.toLowerCase().includes(brand)); // other brands only
+  const seen = new Set<string>();
+  candidates = candidates.filter((c) => !seen.has(c.url) && seen.add(c.url)).slice(0, 6);
+  if (!candidates.length) return { alts: [], costUsd: 0 };
+
+  try {
+    const list = candidates.map((c, i) => `${i}. ${c.title} — ${c.url}`).join("\n");
+    const { content, costUsd } = await simpleCall(
+      "haiku",
+      SUB_JUDGE_SYSTEM,
+      `Reference concept:\n  category: ${concept.category}\n  subtype: ${concept.subtype}\n  flavor: ${concept.flavor ?? "?"}\n  diet: ${concept.diet.join(", ") || "—"}\n\nCandidates on ${STORE_LABELS[store]}:\n${list}`,
+      512,
+      { component: "server.price-tracker.substitute", userId },
+    );
+    const parsed = parseJsonResponse<{ results: Array<{ index: number; tier: string; score: number; kosher: string; reason: string }> }>(content);
+    const results = Array.isArray(parsed?.results) ? parsed!.results : [];
+    const minScore = (tier: string) => (tier === "loose" ? 88 : tier === "close" || tier === "same" ? 75 : 101);
+    const allowTier = (tier: string) =>
+      opts.level === "loose" ? (tier === "close" || tier === "same" || tier === "loose")
+        : (tier === "close" || tier === "same"); // 'close' level
+    const clean = (s: string) => stripStoreSuffix(decodeEntities(s));
+
+    const alts: SubstituteHit[] = [];
+    for (const r of results) {
+      if (!Number.isInteger(r.index) || r.index < 0 || r.index >= candidates.length) continue;
+      if (!allowTier(r.tier) || (r.score ?? 0) < minScore(r.tier)) continue;
+      const kosher = (["kosher", "not_kosher", "unclear"].includes(r.kosher) ? r.kosher : "unclear") as SubstituteHit["kosher"];
+      if (opts.kosherOnly && kosher !== "kosher") continue; // hard filter
+      alts.push({
+        store, url: candidates[r.index].url, title: clean(candidates[r.index].title),
+        tier: r.tier === "loose" ? "loose" : "close", score: r.score ?? 0, kosher,
+        reason: r.reason ?? "",
+      });
+    }
+    return { alts, costUsd };
+  } catch {
+    return { alts: [], costUsd: 0 };
+  }
+}

@@ -2922,6 +2922,12 @@
     "aiToday": "AI today",
     "aiMonth": "month",
     "aiCostTip": "Real AI cost of this comparison (from actual tokens)",
-    "aiMeterTip": "{calls} AI calls · ${all} all-time"
+    "aiMeterTip": "{calls} AI calls · ${all} all-time",
+    "kosherOnly": "Kosher only",
+    "kosherOnlyTip": "When on — non-kosher or \"unclear\" alternatives are filtered out",
+    "on": "on",
+    "off": "off",
+    "altsTitle": "cheaper alternatives · other brands",
+    "altTag": "alternative"
   }
 }

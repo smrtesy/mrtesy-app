@@ -22,10 +22,62 @@ import {
   classifyKosher,
   findInStore,
   searchAvailable,
+  extractConcept,
+  findSubstitutes,
   STORE_LABELS,
   type Store,
   type ParsedSize,
+  type ProductConcept,
 } from "./extract";
+
+type Prefs = { kosher_only: boolean; substitution_level: "off" | "exact" | "close" | "loose" };
+
+async function loadPrefs(userId: string): Promise<Prefs> {
+  const { data } = await db
+    .from("price_user_prefs")
+    .select("kosher_only, substitution_level")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return {
+    kosher_only: data?.kosher_only ?? true,
+    substitution_level: (data?.substitution_level as Prefs["substitution_level"]) ?? "close",
+  };
+}
+
+/** Load the cached product concept, or extract+cache it. Returns AI cost too. */
+async function loadOrExtractConcept(
+  product: { id: string; name: string; brand: string | null },
+  userId: string,
+): Promise<{ concept: ProductConcept | null; costUsd: number }> {
+  const { data } = await db
+    .from("price_product_concepts")
+    .select("*")
+    .eq("product_id", product.id)
+    .maybeSingle();
+  if (data) {
+    return {
+      concept: {
+        category: data.category ?? "",
+        subtype: data.subtype ?? "",
+        flavor: data.flavor ?? null,
+        diet: Array.isArray(data.diet) ? data.diet : [],
+        keyIngredients: Array.isArray(data.key_ingredients) ? data.key_ingredients : [],
+        searchTerms: Array.isArray(data.search_terms) ? data.search_terms : [],
+      },
+      costUsd: 0,
+    };
+  }
+  const { concept, costUsd } = await extractConcept(product.name, product.brand, userId);
+  if (concept) {
+    const { error } = await db.from("price_product_concepts").insert({
+      product_id: product.id,
+      category: concept.category, subtype: concept.subtype, flavor: concept.flavor,
+      diet: concept.diet, key_ingredients: concept.keyIngredients, search_terms: concept.searchTerms,
+    });
+    if (error) console.error("[price-tracker] concept cache failed:", error.message);
+  }
+  return { concept, costUsd };
+}
 
 const router = Router();
 
@@ -148,7 +200,7 @@ router.post("/admin/price-tracker/ingest", requireAuth, requireSuperAdmin, async
     if (!product) return res.status(500).json({ error: "product vanished after insert" });
     // Auto-run the comparison so adding a product immediately shows prices
     // across every store — no separate "Run comparison" click needed.
-    const comparison = await compareProduct(product, req.user!.id);
+    const comparison = await compareProduct(product, req.user!.id, await loadPrefs(req.user!.id));
     // fold the one-time kosher-classification cost into this add's AI total
     comparison.aiCost = +(comparison.aiCost + (result.kosherCostUsd ?? 0)).toFixed(6);
     return res.json({ product, comparison });
@@ -183,7 +235,7 @@ router.post("/admin/price-tracker/ingest-by-name", requireAuth, requireSuperAdmi
     const catalogue = await loadCatalogue(req.user!.id);
     const product = catalogue.find((p) => p.id === result.productId);
     if (!product) return res.status(500).json({ error: "product vanished after insert" });
-    const comparison = await compareProduct(product, req.user!.id);
+    const comparison = await compareProduct(product, req.user!.id, await loadPrefs(req.user!.id));
     comparison.aiCost = +(comparison.aiCost + (result.kosherCostUsd ?? 0)).toFixed(6);
     return res.json({ product, comparison });
   } catch (err) {
@@ -351,6 +403,22 @@ interface CompRow {
   error: string | null;
 }
 
+interface AlternativeRow {
+  store: Store;
+  storeLabel: string;
+  url: string;
+  title: string;            // the alternative product (different brand)
+  tier: "close" | "loose";
+  kosher: "kosher" | "not_kosher" | "unclear";
+  price: number | null;
+  currency: string;
+  pricePerOz: number | null;
+  sizeLabel: string | null;
+  inStock: boolean | null;
+  isCheapest: boolean;
+  error: string | null;
+}
+
 interface Comparison {
   productId: string;
   name: string;
@@ -360,6 +428,7 @@ interface Comparison {
   kosherStatus: string;
   kosherNote: string | null;
   rows: CompRow[];
+  alternatives: AlternativeRow[]; // same kind of product, OTHER brands
   cheapestStore: Store | null;
   searchEnabled: boolean;
   aiCost: number; // real AI $ spent on this comparison (from token usage)
@@ -375,6 +444,7 @@ interface Comparison {
 async function compareProduct(
   product: Awaited<ReturnType<typeof loadCatalogue>>[number],
   userId: string,
+  prefs: Prefs,
 ): Promise<Comparison> {
   const canonical = {
     name: product.name,
@@ -498,6 +568,43 @@ async function compareProduct(
     if (error) console.error("[price-tracker] image backfill failed:", error.message);
   }
 
+  // ── substitutes: same kind of product, OTHER brands (cheaper alternative) ──
+  let alternatives: AlternativeRow[] = [];
+  if (prefs.substitution_level !== "off" && searchAvailable()) {
+    const { concept, costUsd: conceptCost } = await loadOrExtractConcept(product, userId);
+    aiCosts.push(conceptCost);
+    if (concept) {
+      const perStore = await Promise.all(
+        STORES.map((store) =>
+          findSubstitutes(concept, product.brand, store,
+            { kosherOnly: prefs.kosher_only, level: prefs.substitution_level as "exact" | "close" | "loose" }, userId)
+            .catch(() => ({ alts: [], costUsd: 0 })),
+        ),
+      );
+      perStore.forEach((p) => aiCosts.push(p.costUsd));
+      const hits = perStore.flatMap((p) => p.alts).slice(0, 8); // cap reads
+      const read = await Promise.all(
+        hits.map(async (h) => {
+          try { return { h, r: await readPrice(h.url, h.store) }; }
+          catch (e) { return { h, r: null, err: e instanceof Error ? e.message : String(e) }; }
+        }),
+      );
+      alternatives = read.map(({ h, r, err }: { h: typeof hits[number]; r: Awaited<ReturnType<typeof readPrice>> | null; err?: string }) => ({
+        store: h.store, storeLabel: STORE_LABELS[h.store], url: h.url, title: h.title,
+        tier: h.tier, kosher: h.kosher,
+        price: r?.price ?? null, currency: r?.currency ?? "USD",
+        pricePerOz: r?.pricePerOz ?? null, sizeLabel: r?.size?.label ?? null,
+        inStock: r?.inStock ?? null, isCheapest: false, error: r?.error ?? err ?? null,
+      }));
+      const okOz = alternatives.filter((a) => a.pricePerOz != null).map((a) => a.pricePerOz!);
+      if (okOz.length) {
+        const min = Math.min(...okOz);
+        for (const a of alternatives) if (a.pricePerOz != null && Math.abs(a.pricePerOz - min) < 0.0005) a.isCheapest = true;
+      }
+      alternatives.sort((a, b) => (a.pricePerOz ?? Infinity) - (b.pricePerOz ?? Infinity));
+    }
+  }
+
   return {
     productId: product.id,
     name: product.name,
@@ -507,6 +614,7 @@ async function compareProduct(
     kosherStatus: product.kosher_status,
     kosherNote: product.kosher_note,
     rows,
+    alternatives,
     cheapestStore: rows.find((r) => r.isCheapest)?.store ?? null,
     searchEnabled: searchAvailable(),
     aiCost: +aiCosts.reduce((a, b) => a + b, 0).toFixed(6),
@@ -522,11 +630,12 @@ router.post("/admin/price-tracker/check", requireAuth, requireSuperAdmin, async 
   try {
     const catalogue = await loadCatalogue(req.user!.id);
     const selected = catalogue.filter((p) => ids.includes(p.id));
+    const prefs = await loadPrefs(req.user!.id);
     // One product at a time: each fans out to up to 5 stores (search + read),
     // so per-product parallelism is plenty without hammering Jina's rate limit.
     const comparisons: Comparison[] = [];
     for (const product of selected) {
-      comparisons.push(await compareProduct(product, req.user!.id));
+      comparisons.push(await compareProduct(product, req.user!.id, prefs));
     }
     const totalAiCost = +comparisons.reduce((s, c) => s + c.aiCost, 0).toFixed(6);
     return res.json({ comparisons, totalAiCost });
@@ -535,6 +644,24 @@ router.post("/admin/price-tracker/check", requireAuth, requireSuperAdmin, async 
     console.error("[price-tracker] check failed:", err);
     return res.status(500).json({ error: msg });
   }
+});
+
+// Preferences: kosher-only toggle + substitution aggressiveness.
+router.get("/admin/price-tracker/prefs", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+  return res.json({ prefs: await loadPrefs(req.user!.id) });
+});
+
+router.put("/admin/price-tracker/prefs", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+  const kosherOnly = typeof req.body?.kosher_only === "boolean" ? req.body.kosher_only : undefined;
+  const level = req.body?.substitution_level;
+  const validLevels = ["off", "exact", "close", "loose"];
+  const patch: Record<string, unknown> = { user_id: req.user!.id, updated_at: new Date().toISOString() };
+  if (kosherOnly !== undefined) patch.kosher_only = kosherOnly;
+  if (typeof level === "string" && validLevels.includes(level)) patch.substitution_level = level;
+
+  const { error } = await db.from("price_user_prefs").upsert(patch, { onConflict: "user_id" });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ prefs: await loadPrefs(req.user!.id) });
 });
 
 // Running AI-cost meter: real $ spent on this tool's AI calls, from the
