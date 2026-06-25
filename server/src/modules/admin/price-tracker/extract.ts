@@ -715,6 +715,7 @@ export function parseProduct(store: Store, html: string): ParsedProduct {
 export interface KosherVerdict {
   status: "kosher" | "not_kosher" | "unclear";
   note: string | null;
+  costUsd: number;
 }
 
 const KOSHER_SYSTEM = `You judge whether a food/grocery product is kosher-certified from its title, brand and any visible text.
@@ -732,23 +733,23 @@ export async function classifyKosher(
   extraText: string,
   userId: string,
 ): Promise<KosherVerdict> {
-  if (!title && !brand) return { status: "unclear", note: null };
+  if (!title && !brand) return { status: "unclear", note: null, costUsd: 0 };
   try {
-    const { content } = await simpleCall(
+    const { content, costUsd } = await simpleCall(
       "haiku",
       KOSHER_SYSTEM,
       `Brand: ${brand ?? "?"}\nTitle: ${title ?? "?"}\nExtra: ${extraText.slice(0, 1500)}`,
       256,
       { component: "server.price-tracker.kosher", userId },
     );
-    const parsed = parseJsonResponse<KosherVerdict>(content);
+    const parsed = parseJsonResponse<{ status: KosherVerdict["status"]; note: string | null }>(content);
     if (parsed && ["kosher", "not_kosher", "unclear"].includes(parsed.status)) {
-      return { status: parsed.status, note: parsed.note ?? null };
+      return { status: parsed.status, note: parsed.note ?? null, costUsd };
     }
+    return { status: "unclear", note: null, costUsd };
   } catch {
-    /* fall through to unclear */
+    return { status: "unclear", note: null, costUsd: 0 };
   }
-  return { status: "unclear", note: null };
 }
 
 // ── public extraction entry points ───────────────────────────────────────────
@@ -947,7 +948,7 @@ export async function findInStore(
   store: Store,
   userId: string,
   limit = 3,
-): Promise<Array<{ url: string; title: string }>> {
+): Promise<{ matches: Array<{ url: string; title: string }>; costUsd: number }> {
   // Build a clean keyword query: brand + name, without repeating the brand if
   // the name already starts with it. Drop trailing pack/size noise — search
   // engines match the core product better without "(Pack of 4)".
@@ -970,12 +971,13 @@ export async function findInStore(
   candidates = candidates.filter((c) => !seen.has(c.url) && seen.add(c.url)).slice(0, 8);
 
   const clean = (s: string) => stripStoreSuffix(decodeEntities(s));
-  if (!candidates.length) return [];
-  if (candidates.length === 1) return [{ url: candidates[0].url, title: clean(candidates[0].title) }];
+  if (!candidates.length) return { matches: [], costUsd: 0 };
+  // 0–1 candidate needs no LLM judging → no AI cost.
+  if (candidates.length === 1) return { matches: [{ url: candidates[0].url, title: clean(candidates[0].title) }], costUsd: 0 };
 
   try {
     const list = candidates.map((c, i) => `${i}. ${c.title} — ${c.url}`).join("\n");
-    const { content } = await simpleCall(
+    const { content, costUsd } = await simpleCall(
       "haiku",
       MATCH_SYSTEM,
       `Reference product:\n  Brand: ${canonical.brand ?? "?"}\n  Name: ${canonical.name}\n  Size: ${canonical.sizeLabel ?? "?"}\n\nCandidates on ${STORE_LABELS[store]}:\n${list}`,
@@ -988,11 +990,10 @@ export async function findInStore(
       .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length)
       .slice(0, limit)
       .map((i) => ({ url: candidates[i].url, title: clean(candidates[i].title) }));
-    return picked;
+    return { matches: picked, costUsd };
   } catch {
-    /* fall through */
+    return { matches: [], costUsd: 0 };
   }
-  return [];
 }
 
 /** Is cross-store auto-discovery available (i.e. is the search key set)? */

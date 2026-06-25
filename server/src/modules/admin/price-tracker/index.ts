@@ -133,7 +133,7 @@ async function ingestUrl(userId: string, rawUrl: string) {
     .insert({ product_id: product.id, store, url });
   if (linkErr) console.error("[price-tracker] link insert failed:", linkErr.message);
 
-  return { ok: true as const, url, productId: product.id, read };
+  return { ok: true as const, url, productId: product.id, read, kosherCostUsd: kosher.costUsd };
 }
 
 router.post("/admin/price-tracker/ingest", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
@@ -149,6 +149,8 @@ router.post("/admin/price-tracker/ingest", requireAuth, requireSuperAdmin, async
     // Auto-run the comparison so adding a product immediately shows prices
     // across every store — no separate "Run comparison" click needed.
     const comparison = await compareProduct(product, req.user!.id);
+    // fold the one-time kosher-classification cost into this add's AI total
+    comparison.aiCost = +(comparison.aiCost + (result.kosherCostUsd ?? 0)).toFixed(6);
     return res.json({ product, comparison });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -171,7 +173,7 @@ router.post("/admin/price-tracker/ingest-by-name", requireAuth, requireSuperAdmi
     const canonical = { name, brand: null, sizeLabel: null };
     let sourceUrl: string | null = null;
     for (const store of ["amazon", "walmart", "costco"] as Store[]) {
-      const matches = await findInStore(canonical, store, req.user!.id, 1);
+      const { matches } = await findInStore(canonical, store, req.user!.id, 1);
       if (matches.length) { sourceUrl = matches[0].url; break; }
     }
     if (!sourceUrl) return res.status(422).json({ error: `No product found for "${name}"` });
@@ -182,6 +184,7 @@ router.post("/admin/price-tracker/ingest-by-name", requireAuth, requireSuperAdmi
     const product = catalogue.find((p) => p.id === result.productId);
     if (!product) return res.status(500).json({ error: "product vanished after insert" });
     const comparison = await compareProduct(product, req.user!.id);
+    comparison.aiCost = +(comparison.aiCost + (result.kosherCostUsd ?? 0)).toFixed(6);
     return res.json({ product, comparison });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -359,6 +362,7 @@ interface Comparison {
   rows: CompRow[];
   cheapestStore: Store | null;
   searchEnabled: boolean;
+  aiCost: number; // real AI $ spent on this comparison (from token usage)
 }
 
 /**
@@ -383,6 +387,7 @@ async function compareProduct(
   // Collect any product image seen across stores so a product missing its own
   // image can be backfilled (every store usually carries one).
   const foundImages: string[] = [];
+  const aiCosts: number[] = []; // real AI cost accrued by store matching
 
   const rows = await Promise.all(
     STORES.map(async (store): Promise<CompRow> => {
@@ -402,7 +407,9 @@ async function compareProduct(
       if (cached) {
         candidates = [{ url: cached.url, title: cached.matched_title ?? null }];
       } else if (searchAvailable()) {
-        candidates = await findInStore(canonical, store, userId);
+        const found = await findInStore(canonical, store, userId);
+        candidates = found.matches;
+        aiCosts.push(found.costUsd);
       } else {
         return { ...base, error: "Auto-search needs JINA_API_KEY" };
       }
@@ -502,6 +509,7 @@ async function compareProduct(
     rows,
     cheapestStore: rows.find((r) => r.isCheapest)?.store ?? null,
     searchEnabled: searchAvailable(),
+    aiCost: +aiCosts.reduce((a, b) => a + b, 0).toFixed(6),
   };
 }
 
@@ -520,11 +528,44 @@ router.post("/admin/price-tracker/check", requireAuth, requireSuperAdmin, async 
     for (const product of selected) {
       comparisons.push(await compareProduct(product, req.user!.id));
     }
-    return res.json({ comparisons });
+    const totalAiCost = +comparisons.reduce((s, c) => s + c.aiCost, 0).toFixed(6);
+    return res.json({ comparisons, totalAiCost });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[price-tracker] check failed:", err);
     return res.status(500).json({ error: msg });
+  }
+});
+
+// Running AI-cost meter: real $ spent on this tool's AI calls, from the
+// ai_usage ledger (today / 7-day / 30-day / all-time), for this operator.
+router.get("/admin/price-tracker/ai-cost", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await db
+      .from("ai_usage")
+      .select("cost_usd, created_at")
+      .eq("user_id", req.user!.id)
+      .like("component", "server.price-tracker%");
+    if (error) return res.status(500).json({ error: error.message });
+
+    const now = Date.now();
+    const DAY = 86_400_000;
+    const rows = (data ?? []) as Array<{ cost_usd: number | null; created_at: string }>;
+    const sumSince = (ms: number) =>
+      +rows
+        .filter((r) => now - new Date(r.created_at).getTime() <= ms)
+        .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0)
+        .toFixed(6);
+
+    return res.json({
+      today: sumSince(DAY),
+      week: sumSince(7 * DAY),
+      month: sumSince(30 * DAY),
+      allTime: +rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0).toFixed(6),
+      calls: rows.length,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

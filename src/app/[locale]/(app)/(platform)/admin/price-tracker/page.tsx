@@ -68,7 +68,9 @@ interface Comparison {
   rows: CompRow[];
   cheapestStore: Store | null;
   searchEnabled: boolean;
+  aiCost: number;
 }
+interface AiCost { today: number; week: number; month: number; allTime: number; calls: number }
 
 // ── small presentational helpers ────────────────────────────────────────────
 
@@ -115,6 +117,13 @@ export default function PriceTrackerPage() {
   const [comparisons, setComparisons] = useState<Comparison[]>([]);
 
 
+  const [aiCost, setAiCost] = useState<AiCost | null>(null);
+  const loadAiCost = useCallback(async () => {
+    try {
+      setAiCost(await api<AiCost>("/api/admin/price-tracker/ai-cost", { noOrg: true }));
+    } catch { /* meter is non-critical */ }
+  }, []);
+
   const loadProducts = useCallback(async () => {
     setLoadingList(true);
     try {
@@ -127,7 +136,7 @@ export default function PriceTrackerPage() {
     }
   }, []);
 
-  useEffect(() => { void loadProducts(); }, [loadProducts]);
+  useEffect(() => { void loadProducts(); void loadAiCost(); }, [loadProducts, loadAiCost]);
 
   async function handleIngest(e: React.FormEvent) {
     e.preventDefault();
@@ -147,6 +156,7 @@ export default function PriceTrackerPage() {
       if (comparison) setComparisons((prev) => [comparison, ...prev.filter((c) => c.productId !== comparison.productId)]);
       setUrl("");
       toast.success(t("added"));
+      void loadAiCost();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
@@ -223,6 +233,7 @@ export default function PriceTrackerPage() {
         method: "POST", noOrg: true, body: { productIds: ids },
       });
       setComparisons(comparisons);
+      void loadAiCost();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
@@ -242,11 +253,22 @@ export default function PriceTrackerPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">{t("subtitle")}</p>
         </div>
-        {/* Bulk upload — collapsed by default (compact UI convention) */}
-        <Button variant="outline" size="sm" onClick={() => setBulkOpen((v) => !v)}>
-          <Upload className="h-3.5 w-3.5" />
-          <span className="ms-1.5">{t("bulkUpload")}</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* real-time AI cost meter (from token usage) */}
+          {aiCost && (
+            <div className="rounded-md border px-3 py-1.5 text-xs font-mono leading-tight" title={t("aiMeterTip", { calls: aiCost.calls, all: aiCost.allTime.toFixed(4) })}>
+              <span className="text-muted-foreground">{t("aiToday")} </span>
+              <span className="font-semibold tabular-nums">${aiCost.today.toFixed(4)}</span>
+              <span className="text-muted-foreground"> · {t("aiMonth")} </span>
+              <span className="font-semibold tabular-nums">${aiCost.month.toFixed(4)}</span>
+            </div>
+          )}
+          {/* Bulk upload — collapsed by default (compact UI convention) */}
+          <Button variant="outline" size="sm" onClick={() => setBulkOpen((v) => !v)}>
+            <Upload className="h-3.5 w-3.5" />
+            <span className="ms-1.5">{t("bulkUpload")}</span>
+          </Button>
+        </div>
       </div>
 
       {/* add single product */}
@@ -329,7 +351,12 @@ export default function PriceTrackerPage() {
                     {c.sizeLabel && <span dir="ltr">· {c.sizeLabel}</span>}
                   </div>
                 </div>
-                <KosherBadge status={c.kosherStatus} note={c.kosherNote} />
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] font-mono text-muted-foreground tabular-nums" title={t("aiCostTip")}>
+                    AI ${c.aiCost.toFixed(4)}
+                  </span>
+                  <KosherBadge status={c.kosherStatus} note={c.kosherNote} />
+                </div>
               </div>
               <div className="grid grid-cols-[1fr_5rem_6rem_5rem_2rem] gap-x-2 px-3 py-1.5 text-[11px] font-medium text-muted-foreground border-b">
                 <span>{t("store")}</span>

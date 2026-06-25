@@ -2917,6 +2917,10 @@
     "refresh": "רענן מהמקור",
     "refreshed": "המוצר עודכן",
     "urlOrNamePlaceholder": "הדבק לינק למוצר, או הקלד שם מוצר לחיפוש…",
-    "differentSize": "גודל שונה"
+    "differentSize": "גודל שונה",
+    "aiToday": "AI היום",
+    "aiMonth": "החודש",
+    "aiCostTip": "עלות ה-AI האמיתית של ההשוואה הזו (לפי הטוקנים בפועל)",
+    "aiMeterTip": "{calls} קריאות AI · סך הכל ${all}"
   }
 }

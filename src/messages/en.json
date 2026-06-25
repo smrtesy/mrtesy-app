@@ -2918,6 +2918,10 @@
     "refresh": "Refresh from source",
     "refreshed": "Product updated",
     "urlOrNamePlaceholder": "Paste a product link, or type a product name to search…",
-    "differentSize": "different size"
+    "differentSize": "different size",
+    "aiToday": "AI today",
+    "aiMonth": "month",
+    "aiCostTip": "Real AI cost of this comparison (from actual tokens)",
+    "aiMeterTip": "{calls} AI calls · ${all} all-time"
   }
 }
