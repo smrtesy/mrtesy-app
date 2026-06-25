@@ -152,16 +152,43 @@ async function browserFetch(url: string): Promise<FetchResult> {
  * Fetch through a third-party scraping provider (residential proxies + a
  * real rendering engine). This is the only reliable way past Walmart's and
  * Costco's Akamai / PerimeterX edge protection — a headless browser from a
- * datacenter IP gets fingerprinted and blocked. Provider-agnostic: set
- *   SCRAPER_PROVIDER = "scraperapi" | "scrapingbee"
- *   SCRAPER_API_KEY  = <key>
- *   SCRAPER_ULTRA    = "true"   (optional — residential/ultra tier; Walmart
- *                                often needs it)
- * Returns null when no provider is configured so callers can fall back.
+ * datacenter IP gets fingerprinted and blocked. Provider-agnostic:
+ *   SCRAPER_PROVIDER = "oxylabs" | "scraperapi" | "scrapingbee"
+ *   Oxylabs:  OXYLABS_USERNAME + OXYLABS_PASSWORD  (+ optional OXYLABS_GEO, e.g.
+ *             a US ZIP — required for Costco Same-Day / Instacart prices, which
+ *             only render once a delivery location is set)
+ *   ScraperAPI / ScrapingBee:  SCRAPER_API_KEY  (+ optional SCRAPER_ULTRA=true)
+ * Returns null when no provider is configured so callers fall back to Jina.
  */
 async function providerFetch(url: string): Promise<FetchResult | null> {
   const provider = (process.env.SCRAPER_PROVIDER ?? "").toLowerCase();
   const key = process.env.SCRAPER_API_KEY ?? "";
+
+  // Oxylabs Web Scraper API — basic-auth, residential proxies, JS render, and
+  // ZIP-level geo-targeting (the only way to get Costco Same-Day prices).
+  if (provider === "oxylabs") {
+    const user = process.env.OXYLABS_USERNAME;
+    const pass = process.env.OXYLABS_PASSWORD;
+    if (user && pass) {
+      const body: Record<string, unknown> = { source: "universal", url, render: "html" };
+      const geo = process.env.OXYLABS_GEO;
+      if (geo) body.geo_location = geo;
+      const resp = await fetch("https://realtime.oxylabs.io/v1/queries", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Basic " + Buffer.from(`${user}:${pass}`).toString("base64"),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const json = (await resp.json().catch(() => null)) as
+        | { results?: Array<{ content?: unknown }> } | null;
+      const content = json?.results?.[0]?.content;
+      const html = typeof content === "string" ? content : content ? JSON.stringify(content) : "";
+      return { html, status: resp.status, blocked: !resp.ok || looksBlocked(html), viaBrowser: true };
+    }
+  }
 
   // Premium providers (paid, residential proxies) take precedence when keyed.
   if (key && (provider === "scraperapi" || provider === "scrapingbee")) {
