@@ -149,29 +149,99 @@ async function browserFetch(url: string): Promise<FetchResult> {
 }
 
 /**
- * Fetch a page, escalating from raw GET to a real browser only when the
- * cheap path is blocked. Never throws on a browser-unavailable env — the
- * raw result (with blocked=true) is returned so the caller can report it.
+ * Fetch through a third-party scraping provider (residential proxies + a
+ * real rendering engine). This is the only reliable way past Walmart's and
+ * Costco's Akamai / PerimeterX edge protection — a headless browser from a
+ * datacenter IP gets fingerprinted and blocked. Provider-agnostic: set
+ *   SCRAPER_PROVIDER = "scraperapi" | "scrapingbee"
+ *   SCRAPER_API_KEY  = <key>
+ *   SCRAPER_ULTRA    = "true"   (optional — residential/ultra tier; Walmart
+ *                                often needs it)
+ * Returns null when no provider is configured so callers can fall back.
+ */
+async function providerFetch(url: string): Promise<FetchResult | null> {
+  const provider = (process.env.SCRAPER_PROVIDER ?? "").toLowerCase();
+  const key = process.env.SCRAPER_API_KEY ?? "";
+
+  // Premium providers (paid, residential proxies) take precedence when keyed.
+  if (key && (provider === "scraperapi" || provider === "scrapingbee")) {
+    const ultra = (process.env.SCRAPER_ULTRA ?? "").toLowerCase() === "true";
+    let endpoint: string;
+    if (provider === "scrapingbee") {
+      const p = new URLSearchParams({ api_key: key, url, render_js: "true", country_code: "us" });
+      if (ultra) p.set("premium_proxy", "true");
+      endpoint = `https://app.scrapingbee.com/api/v1/?${p.toString()}`;
+    } else {
+      const p = new URLSearchParams({ api_key: key, url, render: "true", country_code: "us" });
+      if (ultra) p.set("ultra_premium", "true");
+      endpoint = `https://api.scraperapi.com/?${p.toString()}`;
+    }
+    const resp = await fetch(endpoint, { signal: AbortSignal.timeout(70_000) });
+    const html = await resp.text();
+    return { html, status: resp.status, blocked: !resp.ok || looksBlocked(html), viaBrowser: true };
+  }
+
+  // Free default: Jina Reader (r.jina.ai) — renders the page through its own
+  // browser + proxy pool and returns full HTML, which sails past Walmart's and
+  // Costco's Akamai edge. An optional JINA_API_KEY raises the rate limit.
+  return jinaFetch(url);
+}
+
+/** Jina Reader fetch in full-HTML mode. Free; no key required. */
+async function jinaFetch(url: string): Promise<FetchResult> {
+  const headers: Record<string, string> = { "X-Return-Format": "html" };
+  const jinaKey = process.env.JINA_API_KEY;
+  if (jinaKey) headers.Authorization = `Bearer ${jinaKey}`;
+  const resp = await fetch(`https://r.jina.ai/${url}`, {
+    headers,
+    signal: AbortSignal.timeout(70_000),
+  });
+  const html = await resp.text();
+  return { html, status: resp.status, blocked: !resp.ok || looksBlocked(html), viaBrowser: true };
+}
+
+/**
+ * Fetch a page, escalating cheapest-first:
+ *   1. raw GET (free; enough for Amazon)
+ *   2. scraping provider, if configured (the only thing that beats Akamai)
+ *   3. local headless browser (last resort; works for soft blocks)
+ * Never throws on a browser-unavailable env — the best blocked result is
+ * returned so the caller can report it honestly.
  */
 export async function fetchPage(url: string): Promise<FetchResult> {
-  let raw: FetchResult | null = null;
+  const attempts: FetchResult[] = [];
+
   try {
-    raw = await rawFetch(url);
+    const raw = await rawFetch(url);
     if (!raw.blocked) return raw;
+    attempts.push(raw);
   } catch {
-    /* fall through to the browser attempt */
+    /* continue escalating */
   }
+
+  try {
+    const viaProvider = await providerFetch(url);
+    if (viaProvider) {
+      if (!viaProvider.blocked) return viaProvider;
+      attempts.push(viaProvider);
+    }
+  } catch {
+    /* provider error — fall through to local browser */
+  }
+
   try {
     const viaBrowser = await browserFetch(url);
-    // If the browser also came back blocked but the raw fetch had more
-    // content, prefer whichever has real markup.
     if (!viaBrowser.blocked) return viaBrowser;
-    if (raw && raw.html.length > viaBrowser.html.length) return raw;
-    return viaBrowser;
+    attempts.push(viaBrowser);
   } catch {
-    if (raw) return raw;
-    return { html: "", status: 0, blocked: true, viaBrowser: false };
+    /* browser unavailable */
   }
+
+  // Everything was blocked / errored — return whichever attempt carried the
+  // most markup (best chance the parser still finds a price), or an empty
+  // blocked result if we got nothing at all.
+  if (!attempts.length) return { html: "", status: 0, blocked: true, viaBrowser: false };
+  return attempts.reduce((a, b) => (b.html.length > a.html.length ? b : a));
 }
 
 // ── size normalization ─────────────────────────────────────────────────────────
@@ -581,11 +651,15 @@ export async function readPrice(
   try {
     const fetched = await fetchPage(url);
     if (fetched.blocked && !/\$|"price"|a-price/i.test(fetched.html)) {
+      const providerOn = !!(process.env.SCRAPER_API_KEY && process.env.SCRAPER_PROVIDER);
+      const hint = providerOn
+        ? " Try enabling SCRAPER_ULTRA=true (residential tier)."
+        : " Set SCRAPER_PROVIDER + SCRAPER_API_KEY to route this store through a scraping proxy.";
       return {
         ok: false, store, url, price: null, currency: "USD", pricePerOz: null,
         size: null, inStock: null, title: null, brand: null, imageUrl: null,
         viaBrowser: fetched.viaBrowser,
-        error: `Blocked by ${STORE_LABELS[store]} (anti-bot). No price could be read.`,
+        error: `Blocked by ${STORE_LABELS[store]} (anti-bot).${hint}`,
       };
     }
     const parsed = parseProduct(store, fetched.html);
@@ -612,4 +686,143 @@ export async function readPrice(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+// ── official-API seam (prepared, not yet wired) ──────────────────────────────
+//
+// Today every store is read by scraping (readPrice above). The stores that
+// offer an official, sanctioned API are Amazon and Walmart; Costco has none.
+// When the operator opens those accounts, wiring the official path is a
+// drop-in: implement the adapter and make officialApiAvailable() return true.
+//
+//   Amazon  → Product Advertising API 5.0
+//             env: AMAZON_PAAPI_KEY, AMAZON_PAAPI_SECRET, AMAZON_PARTNER_TAG
+//   Walmart → Walmart.io Affiliate API
+//             env: WALMART_API_KEY, WALMART_API_SECRET
+//
+// resolveSource() is the single decision point both readPrice and findInStore
+// consult, so the rest of the engine never needs to know which backend served
+// a price.
+export type PriceSourceKind = "official" | "scrape";
+
+export function officialApiAvailable(store: Store): boolean {
+  // NOTE: returns false until the adapters below are implemented. The env
+  // checks document the exact contract; flip each clause on once wired.
+  switch (store) {
+    case "amazon":
+    case "amazon_fresh":
+      // return !!(process.env.AMAZON_PAAPI_KEY && process.env.AMAZON_PAAPI_SECRET && process.env.AMAZON_PARTNER_TAG);
+      return false;
+    case "walmart":
+      // return !!(process.env.WALMART_API_KEY && process.env.WALMART_API_SECRET);
+      return false;
+    default:
+      return false; // costco / costco_sameday: no official API exists
+  }
+}
+
+export function resolveSource(store: Store): PriceSourceKind {
+  return officialApiAvailable(store) ? "official" : "scrape";
+}
+
+// ── cross-store search + match (card = product, not product-in-a-store) ──────
+
+export interface SearchHit {
+  url: string;
+  title: string;
+  description: string;
+}
+
+const STORE_DOMAIN: Record<Store, string> = {
+  amazon: "amazon.com",
+  amazon_fresh: "amazon.com",
+  walmart: "walmart.com",
+  costco: "costco.com",
+  costco_sameday: "costco.com",
+};
+
+// Which URLs on each store are actual product pages (not category/search).
+const PRODUCT_URL_RE: Record<Store, RegExp> = {
+  amazon: /amazon\.com\/(?:[^?#]*\/)?(?:dp|gp\/product)\/[A-Z0-9]{10}/i,
+  amazon_fresh: /amazon\.com\/(?:[^?#]*\/)?(?:dp|gp\/product)\/[A-Z0-9]{10}/i,
+  walmart: /walmart\.com\/ip\//i,
+  costco: /costco\.com\/[^?#]*\.(?:product\.\d+\.)?html/i,
+  costco_sameday: /(?:sameday\.costco\.com|instacart\.com)\/[^?#]+/i,
+};
+
+/**
+ * Web search via Jina (s.jina.ai). Returns [] when JINA_API_KEY is unset —
+ * the search endpoint requires a (free) key, unlike the reader. This is the
+ * one piece of the auto-discovery flow that needs the key.
+ */
+export async function jinaSearch(query: string): Promise<SearchHit[]> {
+  const key = process.env.JINA_API_KEY;
+  if (!key) return [];
+  try {
+    const resp = await fetch(`https://s.jina.ai/?q=${encodeURIComponent(query)}`, {
+      headers: {
+        Authorization: `Bearer ${key}`,
+        Accept: "application/json",
+        "X-Respond-With": "no-content",
+      },
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!resp.ok) return [];
+    const json = (await resp.json().catch(() => null)) as
+      | { data?: Array<{ url?: string; title?: string; description?: string }> }
+      | null;
+    return (json?.data ?? [])
+      .filter((d) => typeof d.url === "string")
+      .map((d) => ({ url: d.url as string, title: d.title ?? "", description: d.description ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
+const MATCH_SYSTEM = `You match a reference grocery/household product to the SAME product on another store.
+The size/pack may differ (e.g. 12oz vs 16oz, single vs 4-pack) — that is fine, it is still the same product.
+A DIFFERENT flavor, brand, or fundamentally different item is NOT a match.
+You are given the reference product and a numbered list of candidate results from one store.
+Pick the index of the best true match, or -1 if none is the same product.
+Return ONLY JSON: {"index": <number>, "reason": "<short>"}`;
+
+/**
+ * Find the same product on a given store. Searches the web (scoped to the
+ * store domain), filters to real product URLs, and asks Claude to pick the
+ * true match (allowing size/pack differences). Returns the chosen URL or null.
+ */
+export async function findInStore(
+  canonical: { name: string; brand: string | null; sizeLabel: string | null },
+  store: Store,
+  userId: string,
+): Promise<{ url: string; title: string } | null> {
+  const query = `${canonical.brand ?? ""} ${canonical.name} site:${STORE_DOMAIN[store]}`.trim();
+  const hits = await jinaSearch(query);
+  const candidates = hits.filter((h) => PRODUCT_URL_RE[store].test(h.url)).slice(0, 6);
+  if (!candidates.length) return null;
+  if (candidates.length === 1) return { url: candidates[0].url, title: candidates[0].title };
+
+  try {
+    const list = candidates.map((c, i) => `${i}. ${c.title} — ${c.url}`).join("\n");
+    const { content } = await simpleCall(
+      "haiku",
+      MATCH_SYSTEM,
+      `Reference product:\n  Brand: ${canonical.brand ?? "?"}\n  Name: ${canonical.name}\n  Size: ${canonical.sizeLabel ?? "?"}\n\nCandidates on ${STORE_LABELS[store]}:\n${list}`,
+      256,
+      { component: "server.price-tracker.match", userId },
+    );
+    const parsed = parseJsonResponse<{ index: number }>(content);
+    const idx = parsed?.index;
+    if (typeof idx === "number" && idx >= 0 && idx < candidates.length) {
+      return { url: candidates[idx].url, title: candidates[idx].title };
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+/** Is cross-store auto-discovery available (i.e. is the search key set)? */
+export function searchAvailable(): boolean {
+  return !!process.env.JINA_API_KEY;
 }
