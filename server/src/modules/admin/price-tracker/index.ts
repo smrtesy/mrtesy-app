@@ -250,24 +250,35 @@ router.post("/admin/price-tracker/products/:id/refresh", requireAuth, requireSup
 
   try {
     const read = await readPrice(product.source_url, (product.source_store as Store) ?? undefined);
-    const kosher = await classifyKosher(read.title, read.brand, read.title ?? "", req.user!.id);
-    const { error } = await db
-      .from("price_products")
-      .update({
-        name: read.title ?? product.source_url,
-        brand: read.brand,
-        image_url: read.imageUrl,
-        size_value: read.size?.value ?? null,
-        size_unit: read.size?.unit ?? null,
-        size_label: read.size?.label ?? null,
-        kosher_status: kosher.status,
-        kosher_note: kosher.note,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", product.id);
-    if (error) return res.status(500).json({ error: error.message });
+
+    // Non-destructive: only overwrite a field when the re-read actually
+    // produced a value. A blocked/rate-limited read must NEVER replace a good
+    // name with the URL or wipe the image.
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (read.title) update.name = read.title;       // parser already cleaned/guarded it
+    if (read.brand) update.brand = read.brand;
+    if (read.imageUrl) update.image_url = read.imageUrl;
+    if (read.size) {
+      update.size_value = read.size.value;
+      update.size_unit = read.size.unit;
+      update.size_label = read.size.label;
+    }
+    if (read.title) {
+      const kosher = await classifyKosher(read.title, read.brand, read.title, req.user!.id);
+      update.kosher_status = kosher.status;
+      update.kosher_note = kosher.note;
+    }
+
+    const refreshedAnything = Object.keys(update).length > 1;
+    if (refreshedAnything) {
+      const { error } = await db.from("price_products").update(update).eq("id", product.id);
+      if (error) return res.status(500).json({ error: error.message });
+    }
     const catalogue = await loadCatalogue(req.user!.id);
-    return res.json({ product: catalogue.find((p) => p.id === product.id) });
+    return res.json({
+      product: catalogue.find((p) => p.id === product.id),
+      warning: refreshedAnything ? undefined : (read.error ?? "Could not read the source page (kept existing data)"),
+    });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

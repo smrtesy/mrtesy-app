@@ -187,17 +187,32 @@ async function providerFetch(url: string): Promise<FetchResult | null> {
   return jinaFetch(url);
 }
 
-/** Jina Reader fetch in full-HTML mode. Free; no key required. */
+/**
+ * Jina Reader fetch in full-HTML mode. Free; a JINA_API_KEY (if set) raises the
+ * rate limit. Retries on a rate-limit / transient block — reading many sizes
+ * across stores in one comparison can briefly trip Jina's throttle, and a short
+ * backoff usually clears it.
+ */
 async function jinaFetch(url: string): Promise<FetchResult> {
   const headers: Record<string, string> = { "X-Return-Format": "html" };
   const jinaKey = process.env.JINA_API_KEY;
   if (jinaKey) headers.Authorization = `Bearer ${jinaKey}`;
-  const resp = await fetch(`https://r.jina.ai/${url}`, {
-    headers,
-    signal: AbortSignal.timeout(70_000),
-  });
-  const html = await resp.text();
-  return { html, status: resp.status, blocked: !resp.ok || looksBlocked(html), viaBrowser: true };
+
+  let last: FetchResult = { html: "", status: 0, blocked: true, viaBrowser: true };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 1500));
+    try {
+      const resp = await fetch(`https://r.jina.ai/${url}`, { headers, signal: AbortSignal.timeout(70_000) });
+      const html = await resp.text();
+      last = { html, status: resp.status, blocked: !resp.ok || looksBlocked(html), viaBrowser: true };
+      // Retry only on throttling / transient failures, not on a real page.
+      if (resp.status !== 429 && resp.status !== 503 && !(resp.status === 451) && !last.blocked) return last;
+      if (resp.ok && !last.blocked) return last;
+    } catch {
+      /* network blip — retry */
+    }
+  }
+  return last;
 }
 
 /**
@@ -744,10 +759,10 @@ export async function readPrice(
   try {
     const fetched = await fetchPage(url);
     if (fetched.blocked && !/\$|"price"|a-price/i.test(fetched.html)) {
-      const providerOn = !!(process.env.SCRAPER_API_KEY && process.env.SCRAPER_PROVIDER);
-      const hint = providerOn
+      const paidProvider = !!(process.env.SCRAPER_API_KEY && process.env.SCRAPER_PROVIDER);
+      const hint = paidProvider
         ? " Try enabling SCRAPER_ULTRA=true (residential tier)."
-        : " Set SCRAPER_PROVIDER + SCRAPER_API_KEY to route this store through a scraping proxy.";
+        : " Temporary block (likely rate-limited) — try again in a moment.";
       return {
         ok: false, store, url, price: null, currency: "USD", pricePerOz: null,
         size: null, inStock: null, title: null, brand: null, imageUrl: null,

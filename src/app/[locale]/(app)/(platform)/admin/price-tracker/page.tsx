@@ -180,11 +180,12 @@ export default function PriceTrackerPage() {
   async function handleRefresh(id: string) {
     setRefreshing(id);
     try {
-      const { product } = await api<{ product: Product }>(`/api/admin/price-tracker/products/${id}/refresh`, {
+      const { product, warning } = await api<{ product: Product; warning?: string }>(`/api/admin/price-tracker/products/${id}/refresh`, {
         method: "POST", noOrg: true,
       });
       setProducts((prev) => prev.map((p) => (p.id === id ? product : p)));
-      toast.success(t("refreshed"));
+      if (warning) toast.warning(warning);
+      else toast.success(t("refreshed"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
