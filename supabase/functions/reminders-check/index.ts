@@ -153,7 +153,7 @@ async function replyArrived(task: { user_id: string | null; source_message_id: s
   if (!task.source_message_id || !task.user_id) return false;
   const { data: sent } = await supabase
     .from("source_messages")
-    .select("source_type, received_at, metadata")
+    .select("source_type, received_at, metadata, recipient, subject")
     .eq("id", task.source_message_id)
     .maybeSingle();
   if (!sent) return false;
@@ -174,7 +174,47 @@ async function replyArrived(task: { user_id: string | null; source_message_id: s
       .eq("source_type", "gmail")
       .gt("received_at", sentAt)
       .filter("metadata->>threadId", "eq", threadId);
-    return (count ?? 0) > 0;
+    if ((count ?? 0) > 0) return true;
+    // Fall through to the recipient fallback — threadId is not always stamped
+    // consistently on the outgoing row, so a thread miss is NOT proof the other
+    // side stayed silent (the "היא ענתה, למה המעקב חזר אחרי 48ש'?" bug).
+  }
+
+  // Gmail fallback (no threadId, or thread match found nothing): a reply is an
+  // inbound gmail FROM the address we wrote to, arriving after we sent. Catches
+  // the common case where the outgoing row carried no usable threadId.
+  if (!chatId) {
+    const recipientRaw =
+      (sent.recipient as string | undefined) ||
+      (meta.to as string | undefined) ||
+      null;
+    if (recipientRaw) {
+      const addr = (recipientRaw.match(/<([^>]+)>/)?.[1] ?? recipientRaw).trim();
+      if (addr) {
+        // Scope by SUBJECT too, not just the address: a high-frequency
+        // correspondent (or a newsletter from the same address) would otherwise
+        // mark an unrelated later email as "the reply" and wrongly suppress the
+        // reminder. Strip Re:/Fwd: prefixes so the reply's "Re: <x>" matches the
+        // original "<x>"; escape LIKE wildcards in the subject.
+        const baseSubject = String(sent.subject ?? "")
+          .replace(/^((re|fwd|fw|aw|תשובה|הועבר)\s*:\s*)+/i, "")
+          .trim();
+        let q = supabase
+          .from("source_messages")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", task.user_id)
+          .eq("source_type", "gmail")
+          .gt("received_at", sentAt)
+          .ilike("sender_email", addr);
+        if (baseSubject) {
+          const escaped = baseSubject.replace(/[%_\\]/g, "\\$&");
+          q = q.ilike("subject", `%${escaped}%`);
+        }
+        const { count } = await q;
+        if ((count ?? 0) > 0) return true;
+      }
+    }
+    return false;
   }
 
   if (chatId) {
