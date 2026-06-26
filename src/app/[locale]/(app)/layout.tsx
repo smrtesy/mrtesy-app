@@ -102,7 +102,7 @@ export default async function AppLayout({
           {/* Main content — data-sidebar-main lets globals.css drop the inline-start
               margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
               swaps the centered page for side-by-side panes when tabs are open. */}
-          <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-64">
+          <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-52">
             <TabsArea>{children}</TabsArea>
           </main>
           {hasSmrtTask && (

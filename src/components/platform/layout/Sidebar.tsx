@@ -303,7 +303,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       </div>
 
       {/* Desktop Sidebar */}
-      <aside data-sidebar className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
+      <aside data-sidebar className="hidden md:flex md:w-52 md:flex-col md:fixed md:inset-y-0 border-e bg-background z-30">
         <div className="relative flex h-16 items-center justify-between border-b px-4">
           <Link
             href={basePath}
