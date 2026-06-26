@@ -14,6 +14,7 @@ import {
   BookOpen,
   DollarSign,
   Globe,
+  ShoppingCart,
 } from "lucide-react";
 
 // Platform-level only. Per-app concerns (services, prompts) now live
@@ -30,6 +31,7 @@ const items = [
   { key: "usage",        href: "usage",          labelKey: "usage",        icon: DollarSign },
   { key: "docs",         href: "docs",           labelKey: "docs",         icon: BookOpen },
   { key: "domain-tracker", href: "domain-tracker", labelKey: "domainTracker", icon: Globe },
+  { key: "price-tracker",  href: "price-tracker",  labelKey: "priceTracker",  icon: ShoppingCart },
 ];
 
 export function AdminNav() {

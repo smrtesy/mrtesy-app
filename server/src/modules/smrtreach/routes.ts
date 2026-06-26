@@ -165,6 +165,7 @@ function pick<T extends Record<string, unknown>>(body: T, keys: readonly string[
 const EMAIL_COLS = [
   "subject", "preview", "sender", "reply_to", "html_body", "language", "provider",
   "priority", "send_hours", "exclude_shabbat", "rate_limit", "cooldown_seconds", "sto_enabled",
+  "font_size",
 ] as const;
 const WHATSAPP_COLS = [
   "bot_ref", "template", "template_lang", "template_params", "recipient_cap",

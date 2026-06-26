@@ -10,8 +10,8 @@
 
 import { db } from "../../db";
 import { sendEmail } from "./ses-client";
-import { sendViaGmail } from "./gmail-client";
-import { render, resolveRegion } from "./send-service";
+import { sendViaReachGmail } from "./gmail-client";
+import { render, resolveRegion, wrapEmailBody } from "./send-service";
 
 const SMRTBOT_SEND_URL =
   process.env.SMRTBOT_INTERNAL_URL ??
@@ -28,6 +28,48 @@ const SAMPLE_VARS: Record<string, string> = {
 };
 
 /**
+ * Resolve which Gmail sending inbox a test/GMass send should go out from: the
+ * campaign's allocated Gmail sender (first one), falling back to the campaign's
+ * `sender` field if it names a Gmail sender. Returns null when the campaign has
+ * no Gmail sending inbox selected — the caller then errors rather than silently
+ * falling back to an org member's personal connected Gmail.
+ */
+async function resolveCampaignGmailSender(
+  orgId: string,
+  campaignId: string,
+  fallbackSenderEmail: string | null,
+): Promise<{ id: string; email: string; daily_cap: number | null } | null> {
+  const { data: allocs } = await db
+    .from("smrtreach_campaign_senders")
+    .select("sender_id")
+    .eq("org_id", orgId)
+    .eq("campaign_id", campaignId);
+  const ids = (allocs ?? []).map((a) => a.sender_id as string);
+  if (ids.length > 0) {
+    const { data: senders } = await db
+      .from("smrtreach_senders")
+      .select("id, email, daily_cap")
+      .eq("org_id", orgId)
+      .eq("provider", "gmail")
+      .in("id", ids)
+      .order("id", { ascending: true });
+    const s = (senders ?? [])[0];
+    if (s) return { id: s.id as string, email: s.email as string, daily_cap: (s.daily_cap as number | null) ?? null };
+  }
+  if (fallbackSenderEmail) {
+    const { data: s } = await db
+      .from("smrtreach_senders")
+      .select("id, email, daily_cap")
+      .eq("org_id", orgId)
+      .eq("provider", "gmail")
+      .eq("email", fallbackSenderEmail)
+      .maybeSingle();
+    if (s) return { id: s.id as string, email: s.email as string, daily_cap: (s.daily_cap as number | null) ?? null };
+  }
+  return null;
+}
+
+/**
  * Render a campaign's email content and send it to one address via the
  * campaign's provider (SES or Gmail). Returns the message id and the actual
  * sending address (the Gmail account, or the SES verified sender).
@@ -41,19 +83,34 @@ export async function sendCampaignEmailTo(
 ): Promise<{ messageId: string | null; from: string }> {
   const { data: detail } = await db
     .from("smrtreach_campaign_email")
-    .select("subject, html_body, sender, reply_to, language, provider")
+    .select("subject, html_body, sender, reply_to, language, provider, font_size")
     .eq("campaign_id", campaignId)
     .eq("org_id", orgId)
     .maybeSingle();
   if (!detail) throw new Error("campaign has no email content");
 
   const subject = `${subjectPrefix}${render((detail.subject as string) ?? "", SAMPLE_VARS)}`;
-  const html = render((detail.html_body as string) ?? "", SAMPLE_VARS);
+  const html = wrapEmailBody(
+    render((detail.html_body as string) ?? "", SAMPLE_VARS),
+    (detail.font_size as number | null) ?? null,
+  );
   const replyTo = (detail.reply_to as string | null) ?? null;
   const provider = (detail.provider as string) ?? "ses";
 
   if (provider === "gmail") {
-    return sendViaGmail(orgId, { to, subject, html, replyTo });
+    // Send the test from the SAME inbox the campaign sends from — the allocated
+    // smrtReach Gmail sender — never an org member's personal connected Gmail.
+    const sender = await resolveCampaignGmailSender(
+      orgId,
+      campaignId,
+      (detail.sender as string | null) ?? null,
+    );
+    if (!sender) {
+      throw new Error(
+        "no Gmail sending inbox is selected for this campaign — choose one in the sender allocation",
+      );
+    }
+    return sendViaReachGmail(orgId, sender, { to, subject, html, replyTo });
   }
 
   if (!detail.sender) throw new Error("campaign has no sender set");

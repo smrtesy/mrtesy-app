@@ -813,6 +813,33 @@ async function closeRunSession(
 // Per-message → whatsapp_messages row
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Skip inline Gemini transcription above this raw-bytes size. Gemini caps the
+// whole inline_data request at ~20MB; base64 inflates by ~33%, so ~15MB raw is
+// the safe ceiling. Bigger recordings also overflow the transcription token
+// budget, so an inline attempt just burns money and rate-limits the next notes.
+const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
+
+// Has this exact wamid already been stored with a REAL transcript (not a
+// placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
+async function existingTranscript(
+  db: SupabaseAdmin,
+  userId: string,
+  wamid: string,
+): Promise<string | null> {
+  if (!wamid) return null;
+  const { data } = await db
+    .from("whatsapp_messages")
+    .select("body_text")
+    .eq("user_id", userId)
+    .eq("wamid", wamid)
+    .maybeSingle();
+  const body = String(data?.body_text ?? "").trim();
+  // Placeholders all start with "[" (e.g. "[אודיו - לא ניתן לתמלל כרגע]",
+  // "[הקלטה ארוכה …]"). A real transcript never does — reuse only those.
+  if (body.length > 0 && !body.startsWith("[")) return body;
+  return null;
+}
+
 async function buildMessageRow(
   db: SupabaseAdmin,
   userId: string,
@@ -846,6 +873,16 @@ async function buildMessageRow(
       if (nm.isHistory) {
         body = mediaId ? "[אודיו מהיסטוריה - לא תומלל]" : "[אודיו ישן - לא ניתן להורדה]";
       } else if (mediaId && accessToken) {
+        // Redelivery guard: Meta re-sends the same webhook when it isn't acked
+        // fast enough. Re-downloading + re-transcribing the SAME wamid is what
+        // multiplied a single long voice note into 5 Gemini calls (~$1, and it
+        // tripped the rate limit so later notes failed too). If a prior delivery
+        // already produced a real transcript for this wamid, reuse it.
+        const prior = await existingTranscript(db, userId, m.id!);
+        if (prior) {
+          body = prior;
+          break;
+        }
         try {
           const blob = await downloadMetaMedia(db, mediaId, accessToken);
           // Persist the audio blob to storage alongside images. Without this
@@ -869,6 +906,18 @@ async function buildMessageRow(
             mediaSize = stored.size;
           } catch (e) {
             console.error("[whatsapp-webhook] audio storage upload failed:", e);
+          }
+
+          // Oversize guard: Gemini inline_data caps the whole request at ~20MB,
+          // and a very long recording also overflows maxOutputTokens — so big
+          // files can't be transcribed in one inline shot anyway. Attempting it
+          // burns ~$0.21/try and rate-limits the next notes. Store the audio
+          // (done above) but skip transcription with an honest placeholder.
+          const approxBytes = Math.floor(blob.base64.length * 0.75);
+          if (approxBytes > AUDIO_TRANSCRIBE_MAX_BYTES) {
+            const mb = (approxBytes / 1024 / 1024).toFixed(0);
+            body = `[הקלטה ארוכה (${mb}MB) — לא תומללה אוטומטית. האזן בטלפון]`;
+            break;
           }
 
           const transcript = await transcribeAudio(db, blob.base64, blob.mimeType);
@@ -1387,6 +1436,27 @@ async function performImageOcr(
 // source_messages thread refresh
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Render a stored UTC timestamp as "MM-DD HH:mm" in the user's local timezone.
+// The classifier reasons about these [INCOMING/OUTGOING <ts>] markers and copies
+// times back into task titles/descriptions; passing raw UTC made every
+// WhatsApp-derived time wrong by the user's offset (the "שעות לא נכונות" bug).
+function fmtTsLocal(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso ?? "").slice(0, 16);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${g("month")}-${g("day")} ${g("hour")}:${g("minute")}`;
+}
+
+async function getUserTz(db: SupabaseAdmin, userId: string): Promise<string> {
+  const { data } = await db.from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  const tz = String(data?.timezone ?? "").trim();
+  return tz || "Asia/Jerusalem";
+}
+
 async function refreshSourceMessageThread(
   db: SupabaseAdmin,
   userId: string,
@@ -1394,7 +1464,7 @@ async function refreshSourceMessageThread(
 ): Promise<void> {
   const { data: msgs, error } = await db
     .from("whatsapp_messages")
-    .select("wamid, direction, body_text, received_at, from_phone, from_name, to_phone, is_history")
+    .select("wamid, direction, body_text, received_at, from_phone, from_name, to_phone, is_history, is_reaction, reaction_emoji")
     .eq("user_id", userId)
     .eq("chat_id", chatId)
     .order("received_at", { ascending: false })
@@ -1402,6 +1472,8 @@ async function refreshSourceMessageThread(
 
   if (error) throw new Error(error.message);
   if (!msgs || msgs.length === 0) return;
+
+  const tz = await getUserTz(db, userId);
 
   // The user's own connected WhatsApp number(s) — ALL active lines, not just
   // one. Used for two things:
@@ -1486,8 +1558,17 @@ async function refreshSourceMessageThread(
   const MAX_MSG_CHARS = 600;
   const CONVO_BUDGET = 2600;
   const allLines = ordered.map((m) => {
-    const ts = String(m.received_at ?? "").slice(0, 16);
+    const ts = fmtTsLocal(String(m.received_at ?? ""), tz);
     const dir = String(m.direction ?? "incoming").toUpperCase();
+    // A reaction is an acknowledgement of a SPECIFIC earlier message, not a new
+    // message. Label it so the classifier reads an outgoing 👍 as "the user
+    // acknowledged what the other side sent" (loop closed) rather than ignoring
+    // it — the "שלחתי שלוש thumb up, למה זה נקרא שלא עניתי?" correction.
+    if (m.is_reaction) {
+      const emoji = String(m.reaction_emoji ?? m.body_text ?? "").trim() || "👍";
+      const who = dir === "OUTGOING" ? "המשתמש הגיב" : "הצד השני הגיב";
+      return `[${dir} ${ts}] (${who} ${emoji} על ההודעה הקודמת — אישור/סגירה, לא הודעה חדשה)`;
+    }
     let text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
     if (text.length > MAX_MSG_CHARS) text = text.slice(0, MAX_MSG_CHARS) + " …";
     return `[${dir} ${ts}] ${text}`;
@@ -1511,7 +1592,7 @@ async function refreshSourceMessageThread(
     isSelfChat
       ? `Self-chat: true (this is the user talking to their own WhatsApp number — they use it as a voice-memo channel for task capture; every message is a deliberate self-note, treat as ACTIONABLE unless clearly a status remark)`
       : "",
-    `\n--- CONVERSATION (last 20 messages) ---`,
+    `\n--- CONVERSATION (last 20 messages; timestamps in ${tz}, the user's local timezone) ---`,
     conversationLines,
   ]
     .filter(Boolean)
@@ -1690,6 +1771,8 @@ async function emitSelfChatPerMessageSourceRows(
   }
   if (!outgoing || outgoing.length === 0) return;
 
+  const tz = await getUserTz(db, userId);
+
   // Filter out empty bodies (e.g. failed transcripts, empty stickers). A
   // source_message with no text gives the classifier nothing to act on
   // and just costs tokens.
@@ -1698,7 +1781,7 @@ async function emitSelfChatPerMessageSourceRows(
     .filter((m) => String(m.body_text ?? "").trim().length > 0)
     .map((m) => {
       const text = String(m.body_text ?? "").trim();
-      const ts = String(m.received_at ?? "").slice(0, 16);
+      const ts = fmtTsLocal(String(m.received_at ?? ""), tz);
       const rawContent = [
         `Chat: ${chatName}`,
         `Phone: ${fromPhone}`,

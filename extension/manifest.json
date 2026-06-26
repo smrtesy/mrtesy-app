@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Comparoz",
+  "version": "0.1.0",
+  "description": "Compare the prices you actually pay across your store accounts — from your own browser session.",
+  "permissions": ["cookies", "alarms", "storage"],
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.walmart.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Comparoz" },
+  "externally_connectable": {
+    "matches": [
+      "https://comparoz.com/*",
+      "https://*.comparoz.com/*",
+      "http://localhost:3000/*"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://comparoz.com/*", "https://*.comparoz.com/*", "http://localhost:3000/*"],
+      "js": ["presence.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

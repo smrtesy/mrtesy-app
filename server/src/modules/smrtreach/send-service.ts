@@ -161,6 +161,32 @@ function wrapLinks(html: string, campaignId: string, contactId: string): string 
   });
 }
 
+/**
+ * Email body typography. Applied identically here (sent HTML) and in the
+ * editor surface (RichEmailEditor) so the compose view is a faithful preview
+ * of what lands in the inbox — same font, size and line spacing. "Google Sans"
+ * is the intended face; email clients that lack it fall back down the stack.
+ * Keep this list in sync with EMAIL_FONT_STACK in RichEmailEditor.tsx.
+ */
+export const EMAIL_FONT_STACK =
+  "'Google Sans','Product Sans',Roboto,'Helvetica Neue',Arial,sans-serif";
+export const DEFAULT_EMAIL_FONT_SIZE = 14;
+
+/**
+ * Wrap a rendered email body in the base typography container so every send
+ * carries the chosen font/size/spacing (recipients' clients otherwise impose
+ * their own default font and collapse the spacing the author saw). Child inline
+ * styles (footer, etc.) still override per-element.
+ */
+export function wrapEmailBody(inner: string, fontSize: number | null): string {
+  const size = fontSize && fontSize > 0 ? fontSize : DEFAULT_EMAIL_FONT_SIZE;
+  return (
+    `<div style="font-family:${EMAIL_FONT_STACK};font-size:${size}px;line-height:1.6">` +
+    inner +
+    `</div>`
+  );
+}
+
 /** A campaign sender with its effective per-campaign budget (alloc). */
 interface AllocSender {
   id: string;
@@ -372,6 +398,7 @@ interface EmailDetail {
   excludeShabbat: boolean;
   rateLimit: number | null;
   provider: string;
+  fontSize: number | null;
 }
 
 /**
@@ -412,7 +439,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
     if (detailCache.has(campaignId)) return detailCache.get(campaignId)!;
     const { data } = await db
       .from("smrtreach_campaign_email")
-      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit, provider")
+      .select("subject, preview, html_body, sender, reply_to, language, send_hours, exclude_shabbat, rate_limit, provider, font_size")
       .eq("campaign_id", campaignId)
       .maybeSingle();
     if (!data) { detailCache.set(campaignId, null); return null; }
@@ -428,6 +455,7 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
       excludeShabbat: (data.exclude_shabbat as boolean | null) ?? true,
       rateLimit: (data.rate_limit as number | null) ?? null,
       provider: (data.provider as string) ?? "ses",
+      fontSize: (data.font_size as number | null) ?? null,
     };
     detailCache.set(campaignId, detail);
     return detail;
@@ -527,7 +555,10 @@ export async function processEmailQueue(orgId: string, limit = 100): Promise<Pro
     const subject = render(detail.subject, vars);
     const html =
       preheader(render(detail.preview, vars)) +
-      wrapLinks(render(detail.html, vars), campaignId, contactId) +
+      wrapEmailBody(
+        wrapLinks(render(detail.html, vars), campaignId, contactId),
+        detail.fontSize,
+      ) +
       unsubscribeFooter(orgId, contactId) +
       openPixel(campaignId, contactId);
 
