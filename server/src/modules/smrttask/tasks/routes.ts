@@ -330,6 +330,24 @@ router.post("/tasks", async (req: Request, res: Response) => {
     }
   }
 
+  // A recurring task created for a FUTURE date must not sit in the active list
+  // weeks before its date (user rule 2026-06-11: "משימות חוזרות צריכות להופיע
+  // רק בתאריך שהן חזרו"). Mirror the complete-spawn path: snooze it until 07:00
+  // local on its due_date — reminders-check wakes it into the inbox that morning.
+  // Skip when the caller set an explicit status/snooze itself.
+  if (typeof updates.recurrence_rule === "string"
+      && typeof updates.due_date === "string"
+      && updates.status === undefined && updates.snoozed_until === undefined) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (updates.due_date > today) {
+      const { data: us } = await db
+        .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
+      const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+      updates.status = "snoozed";
+      updates.snoozed_until = utcInstantForLocalHour(updates.due_date, 7, tz).toISOString();
+    }
+  }
+
   const payload = {
     user_id: req.user!.id,
     organization_id: req.org!.id,

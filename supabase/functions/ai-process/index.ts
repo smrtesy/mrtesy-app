@@ -1048,7 +1048,7 @@ async function appendUpdateToTask(
   taskId = await resolveRecurringOccurrence(taskId, msg);
   const { data: existing } = await supabase
     .from("tasks")
-    .select("updates, status, title_he, manually_verified")
+    .select("updates, status, title_he, manually_verified, due_date, recurrence_rule, recurrence_parent_id")
     .eq("id", taskId)
     .single();
   const existingUpdates: any[] = Array.isArray(existing?.updates) ? (existing!.updates as any[]) : [];
@@ -1122,6 +1122,37 @@ async function appendUpdateToTask(
     updateFields.title = freshTitle;
   }
 
+  // A completion signal closes the cycle the signal BELONGS to, not necessarily
+  // the occurrence a stale pointer routed us to. resolveRecurringOccurrence only
+  // sees OPEN occurrences, so when the cycle the signal confirms is already
+  // archived, the signal lands on the next (future, snoozed) occurrence and would
+  // wrongly mark it done (real case 2026-06: a June salary payment arriving after
+  // the June occurrence was archived flipped the snoozed July occurrence to
+  // pending_completion and dragged it into ממתינות). Detect that: if the resolved
+  // occurrence is in the future AND an already-closed sibling sits NEARER the
+  // signal date, the signal confirms that closed cycle — leave the future
+  // occurrence snoozed (the update is still recorded below). An early completion
+  // of the upcoming cycle, with no nearer closed sibling, still goes through.
+  const signalDate = msg?.received_at ? new Date(msg.received_at).toISOString().slice(0, 10) : null;
+  let staleCompletionForFuture = false;
+  if (analysis.completionSignal && signalDate
+      && (existing?.recurrence_rule || existing?.recurrence_parent_id)
+      && existing?.due_date && (existing.due_date as string) > signalDate) {
+    const futureGap = dayDiff(signalDate, existing.due_date as string);
+    const seriesKey = (existing.recurrence_parent_id as string | null) ?? taskId;
+    const { data: closedSibs } = await supabase
+      .from("tasks")
+      .select("due_date")
+      .eq("user_id", msg.user_id)
+      .or(`id.eq.${seriesKey},recurrence_parent_id.eq.${seriesKey}`)
+      .in("status", ["archived", "completed"]);
+    staleCompletionForFuture = futureGap !== null && (closedSibs ?? []).some((s) => {
+      const gap = dayDiff(signalDate, s.due_date as string | null);
+      return gap !== null && gap < futureGap;
+    });
+  }
+  const markCompletion = analysis.completionSignal && !staleCompletionForFuture;
+
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
@@ -1129,7 +1160,7 @@ async function appendUpdateToTask(
     updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
-  } else if (analysis.completionSignal) {
+  } else if (markCompletion) {
     updateFields.status = "pending_completion";
     updateFields.completion_signal_detected = true;
     updateFields.completion_signal_reason = analysis.completionReason;
@@ -1147,7 +1178,7 @@ async function appendUpdateToTask(
   await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: opts?.reopen ? "reopened" : analysis.completionSignal ? "completion_signal" : "thread_followup",
+    activity_type: opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
