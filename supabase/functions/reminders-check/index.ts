@@ -1,10 +1,30 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { nextOccurrence, recurrenceFreq } from "../_shared/recurrence.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
+
+// UTC instant of `hour`:00 local time in `tz` on `dateStr` (YYYY-MM-DD).
+// Mirror of the helper in server/.../tasks/routes.ts so a materialised
+// occurrence wakes at the same 07:00-local moment a completed one would.
+function utcInstantForLocalHour(dateStr: string, hour: number, tz: string): Date {
+  const target = Date.parse(`${dateStr}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+  const wallAsUtc = (instant: number): number => {
+    const parts: Record<string, string> = {};
+    for (const p of new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(new Date(instant))) parts[p.type] = p.value;
+    const hh = parts.hour === "24" ? "00" : parts.hour;
+    return Date.parse(`${parts.year}-${parts.month}-${parts.day}T${hh}:${parts.minute}:${parts.second}.000Z`);
+  };
+  let x = target - (wallAsUtc(target) - target);
+  x = x - (wallAsUtc(x) - target);
+  return new Date(x);
+}
 
 Deno.serve(async (req) => {
   try {
@@ -130,10 +150,124 @@ Deno.serve(async (req) => {
       }).eq("id", task.id);
     }
 
+    // ── Recurring materialisation ──────────────────────────────────────────
+    // complete-spawn only advances a recurring task when the user COMPLETES the
+    // current occurrence, so a task they never close (e.g. a daily "check the
+    // log") never produces its next instance and just lingers overdue. Advance
+    // each series whose latest open occurrence is already overdue — i.e. nothing
+    // is scheduled for today or later:
+    //   DAILY / WEEKLY      → roll the SAME row forward to its next date (one
+    //                         fresh item per period; no pile-up of missed days).
+    //   MONTHLY / YEARLY /  → spawn the next occurrence snoozed to its date,
+    //   HEBREW_*              leaving the overdue one visible (a missed monthly
+    //                         obligation stays on the desk).
+    const today = now.slice(0, 10);
+    const yesterday = new Date(new Date(`${today}T00:00:00.000Z`).getTime() - 86_400_000)
+      .toISOString().slice(0, 10);
+
+    const { data: openRec } = await supabase
+      .from("tasks")
+      .select("id, user_id, organization_id, status, due_date, due_time, reminder_at, recurrence_rule, recurrence_until, recurrence_parent_id, title, title_he, description, priority, task_type, project_id, tags, checklist")
+      .not("recurrence_rule", "is", null)
+      .in("status", ["inbox", "in_progress", "snoozed", "pending_completion"]);
+
+    // Per series (recurrence_parent_id ?? id), keep only the latest occurrence.
+    const latestPerSeries = new Map<string, Record<string, unknown>>();
+    for (const t of openRec || []) {
+      if (!t.due_date) continue;
+      const key = (t.recurrence_parent_id as string | null) ?? (t.id as string);
+      const cur = latestPerSeries.get(key);
+      if (!cur || (t.due_date as string) > (cur.due_date as string)) latestPerSeries.set(key, t);
+    }
+    const toAdvance = [...latestPerSeries.values()].filter((t) => (t.due_date as string) < today);
+
+    // Batch-load owners' timezones for the 07:00-local wake of stacked/snoozed rows.
+    const tzByUser = new Map<string, string>();
+    if (toAdvance.length) {
+      const userIds = [...new Set(toAdvance.map((t) => t.user_id as string).filter(Boolean))];
+      const { data: settings } = await supabase
+        .from("user_settings").select("user_id, timezone").in("user_id", userIds);
+      for (const s of settings || []) {
+        tzByUser.set(s.user_id as string, (s.timezone as string | null) || "Asia/Jerusalem");
+      }
+    }
+
+    let rolledForward = 0;
+    let stacked = 0;
+    for (const t of toAdvance) {
+      // Don't advance a series whose current occurrence the user is actively
+      // engaged with: roll-forward would wipe in-progress checklist state, and a
+      // pending_completion row is awaiting the user's confirm (after which
+      // complete-spawn handles the next one). Leave it; advance on a later run.
+      if (t.status === "in_progress" || t.status === "pending_completion") continue;
+      const rule = t.recurrence_rule as string;
+      // First scheduled date strictly after yesterday → on/after today.
+      const next = nextOccurrence(rule, t.due_date as string, yesterday);
+      if (!next || next < today) continue; // unparseable, or catch-up cap left it stale
+      const until = t.recurrence_until as string | null;
+      if (until && next > until) continue; // series ended
+
+      const tz = tzByUser.get(t.user_id as string) || "Asia/Jerusalem";
+      const isToday = next === today; // next >= today guaranteed; equal → due today
+      const status = isToday ? "inbox" : "snoozed";
+      const snoozedUntil = isToday ? null : utcInstantForLocalHour(next, 7, tz).toISOString();
+
+      // Carry the reminder offset (gap between due_date and reminder_at) forward.
+      let nextReminder: string | null = null;
+      if (t.reminder_at && t.due_date) {
+        const offsetMs = new Date(t.reminder_at as string).getTime()
+          - new Date(`${t.due_date}T00:00:00.000Z`).getTime();
+        nextReminder = new Date(new Date(`${next}T00:00:00.000Z`).getTime() + offsetMs).toISOString();
+      }
+      const checklist = Array.isArray(t.checklist)
+        ? (t.checklist as Record<string, unknown>[]).map((c) => ({ ...c, done: false, completed_at: null }))
+        : t.checklist;
+
+      const freq = recurrenceFreq(rule);
+      const rollForward = freq === "DAILY" || freq === "WEEKLY";
+
+      if (rollForward) {
+        const { error: updErr } = await supabase.from("tasks").update({
+          due_date: next,
+          reminder_at: nextReminder,
+          status,
+          snoozed_until: snoozedUntil,
+          woke_from_snooze_at: isToday ? now : null,
+          completion_signal_detected: false,
+          completion_signal_reason: null,
+          checklist,
+          last_updated_reason: "recurrence_rolled_forward",
+          status_changed_at: now,
+          updated_at: now,
+        }).eq("id", t.id as string);
+        if (!updErr) rolledForward++;
+        else console.error(`[reminders-check] failed to roll forward recurrence ${t.id}: ${updErr.message}`);
+      } else {
+        const { error: insErr } = await supabase.from("tasks").insert({
+          user_id: t.user_id,
+          organization_id: t.organization_id,
+          title: t.title, title_he: t.title_he, description: t.description,
+          priority: t.priority, task_type: t.task_type ?? "action",
+          status, manually_verified: true,
+          snoozed_until: snoozedUntil,
+          due_date: next, due_time: t.due_time,
+          reminder_at: nextReminder,
+          recurrence_rule: t.recurrence_rule,
+          recurrence_until: t.recurrence_until,
+          recurrence_parent_id: (t.recurrence_parent_id as string | null) ?? (t.id as string),
+          project_id: t.project_id, tags: t.tags, checklist,
+        });
+        if (!insErr) stacked++;
+        else console.error(`[reminders-check] failed to stack recurrence for ${t.id}: ${insErr.message}`);
+      }
+    }
+
     return new Response(JSON.stringify({
       reminders_processed: processed,
       snoozed_woken: (snoozedTasks?.length || 0) - suppressed,
       followups_suppressed: suppressed,
+      recurrences_rolled_forward: rolledForward,
+      recurrences_stacked: stacked,
     }), {
       headers: { "Content-Type": "application/json" },
     });
