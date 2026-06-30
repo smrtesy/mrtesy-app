@@ -67,13 +67,18 @@ export interface Project {
   created_by: string;
   name: string;
   description: string | null;
+  code: string | null;
   language: "he" | "en";
   google_doc_id: string | null;
   google_doc_url: string | null;
+  google_doc_tab_id: string | null;
+  google_doc_tab_title: string | null;
   script_imported_at: string | null;
   generation_mode: "sts" | "tts";
   input_recording_path: string | null;
   status: ProjectStatus;
+  gdrive_target_folder_id: string | null;
+  gdrive_target_folder_url: string | null;
   total_lines: number;
   completed_lines: number;
   failed_lines: number;
@@ -107,12 +112,16 @@ export interface ScriptLine {
   text_clean: string;
   text_pointed: string | null;
   text_for_tts: string | null;
+  tts_body: string | null;
+  tags: Array<{ tag: string; type?: string; source?: string }>;
   directions: string[];
   llm_processed: boolean;
   llm_processed_at: string | null;
   emotion: string | null;
+  emotion_source: "script" | "llm" | "none" | null;
   emotion_profile_id: string | null;
   resemble_prompt: string | null;
+  resemble_request: Record<string, unknown> | null;
   final_exaggeration: number | null;
   final_pitch: number | null;
   final_pace: string | null;
@@ -124,6 +133,10 @@ export interface ScriptLine {
   attempt_count: number;
   error_message: string | null;
   generation_cost_usd: number | null;
+  redo_requested: boolean;
+  redo_reason: string | null;
+  redo_instructions: string | null;
+  redone_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -201,8 +214,12 @@ export interface CreateJobRequest {
   mode: "sts" | "tts";
   google_doc_id?: string;
   google_oauth_token?: string;
+  google_doc_tab_id?: string;
+  google_doc_tab_title?: string;
   input_audio_url?: string;
   llm_model?: string;
+  code?: string;
+  line_numbers?: number[];
   callback_url: string;
   callback_secret?: string;
   characters?: Array<{ name: string; resemble_voice_id?: string }>;
@@ -252,9 +269,12 @@ export interface WebhookPayload {
 export interface CreateProjectRequest {
   name: string;
   description?: string;
+  code?: string;
   language: "he" | "en";
   google_doc_url: string;
-  generation_mode: "sts" | "tts";
+  google_doc_tab_id?: string;
+  google_doc_tab_title?: string;
+  generation_mode?: "sts" | "tts";
 }
 
 export interface CreateCharacterRequest {
