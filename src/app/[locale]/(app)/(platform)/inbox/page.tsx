@@ -3,8 +3,8 @@ export const dynamic = "force-dynamic";
 import { getTranslations } from "next-intl/server";
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
-import Link from "next/link";
 import { ExternalLink } from "lucide-react";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
@@ -15,6 +15,7 @@ export default async function InboxPage({
 }) {
   const { locale } = await params;
   const t = await getTranslations("inbox");
+  const tNav = await getTranslations("nav");
 
   // Check if smrtTask is enabled for the user's active org. On app.smrtesy.com
   // the middleware strips smrt_org_id (no org context on the platform domain),
@@ -62,18 +63,19 @@ export default async function InboxPage({
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold">{t("title")}</h1>
-        {/* Quick jump to the source log — navigates in-app like the other
-            pages (same tab), instead of popping a new window. Shown next to
-            the title for both the Suggestions and Notifications views, which
+        {/* Quick jump to the source log. Inside a workspace pane this opens the
+            log as its OWN tab rather than replacing the current pane. Shown next
+            to the title for both the Suggestions and Notifications views, which
             share this header. */}
-        <Link
+        <OpenTabLink
           href={`/${locale}/log`}
+          label={tNav("log")}
           aria-label={t("openLog")}
           title={t("openLog")}
           className="text-muted-foreground transition-colors hover:text-foreground"
         >
           <ExternalLink className="h-4 w-4" />
-        </Link>
+        </OpenTabLink>
         {/* Same corrections export as the log page, pinned to the trailing
             (left in RTL) edge of the title row. */}
         {hasSmrtTask && (

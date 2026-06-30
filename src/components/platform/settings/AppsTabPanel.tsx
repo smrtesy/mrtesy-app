@@ -7,7 +7,8 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen } from "lucide-react";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
+import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -219,12 +220,21 @@ function SmrtTaskSettings({ locale, pathname }: {
               {t("driveFolders")}
             </Button>
           </Link>
-          <Link href={`/${locale}/log`}>
+          <Link href={`${base}/sms`}>
+            <Button
+              variant={isLink("sms") ? "default" : "outline"}
+              className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2"
+            >
+              <Smartphone className="h-4 w-4" />
+              {t("smsDevices")}
+            </Button>
+          </Link>
+          <OpenTabLink href={`/${locale}/log`} label={tNav("log")}>
             <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
               <FileText className="h-4 w-4" />
               {tNav("log")}
             </Button>
-          </Link>
+          </OpenTabLink>
         </CardContent>
       </Card>
 

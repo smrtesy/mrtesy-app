@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "rea
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock, Search, ChevronUp, ChevronDown } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock, Search, ChevronUp, ChevronDown, AudioLines, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -113,6 +113,120 @@ interface PendingImage {
   id: string;
   file: File;
   url: string;
+}
+
+/** Max voice-note duration. Keeps the base64 upload under the server's 10 MB
+ *  JSON body cap and matches a sensible WhatsApp-note length. On reaching it
+ *  the recording stops and sends automatically. */
+const VOICE_NOTE_MAX_SECONDS = 5 * 60;
+
+/** Browser-safe base64 of a Blob's bytes, chunked to avoid a call-stack
+ *  overflow on long recordings. Shared by the dictation + voice-note paths. */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const arrayBuf = await blob.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(arrayBuf);
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** Seconds → "m:ss" for the recording timer. */
+function fmtDuration(total: number): string {
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Live mic-level waveform for the voice-note recording bar — the WhatsApp-Web
+ * cue that tells you it's actually picking up your voice. Taps the recording
+ * MediaStream with a Web Audio AnalyserNode and paints a scrolling bar meter
+ * (newest sample on the right) on a canvas via requestAnimationFrame. Owns its
+ * own AudioContext and tears everything down on unmount, so it never leaks an
+ * audio graph across recordings. Colour follows the element's CSS `color`, so
+ * it themes itself (we render it in the recording accent colour).
+ */
+const WAVEFORM_BARS = 48;
+function RecordingWaveform({ stream }: { stream: MediaStream }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const audioCtx = new AudioCtx();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    // Autoplay policies can leave the context suspended until a gesture; the
+    // mic tap is one, but resume() defensively so the meter always animates.
+    void audioCtx.resume?.();
+
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const levels = new Array(WAVEFORM_BARS).fill(0);
+    const canvas = canvasRef.current;
+    const cctx = canvas?.getContext("2d") ?? null;
+    const color = canvas ? getComputedStyle(canvas).color : "#888";
+    const hasRoundRect = typeof cctx?.roundRect === "function";
+    let raf = 0;
+
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      if (!canvas || !cctx) return;
+      // RMS of the time-domain signal → a 0..1 loudness for this frame.
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      // Scroll the history left and append the new level (clamped, scaled up a
+      // touch so normal speech fills a satisfying portion of the meter).
+      levels.push(Math.min(1, rms * 2.6));
+      levels.shift();
+
+      const w = canvas.width;
+      const h = canvas.height;
+      cctx.clearRect(0, 0, w, h);
+      cctx.fillStyle = color;
+      const slot = w / WAVEFORM_BARS;
+      const barW = Math.max(1.5, slot * 0.55);
+      for (let i = 0; i < WAVEFORM_BARS; i++) {
+        const bh = Math.max(2, levels[i] * h);
+        const x = i * slot + (slot - barW) / 2;
+        const y = (h - bh) / 2;
+        if (hasRoundRect) {
+          cctx.beginPath();
+          cctx.roundRect(x, y, barW, bh, barW / 2);
+          cctx.fill();
+        } else {
+          cctx.fillRect(x, y, barW, bh);
+        }
+      }
+    };
+    draw();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      try {
+        source.disconnect();
+        analyser.disconnect();
+      } catch {
+        /* graph already torn down */
+      }
+      void audioCtx.close().catch(() => {});
+    };
+  }, [stream]);
+
+  return <canvas ref={canvasRef} width={300} height={36} className="h-7 w-full text-status-late" />;
 }
 
 /** Read a File into a base64 string (no data: prefix — the backend also strips
@@ -1003,12 +1117,28 @@ function ComposeBox({
   // don't re-call it on every keystroke after the user paused once.
   const lastCheckedRef = useRef<string>("");
 
-  // Voice recording state. We only spin up MediaRecorder when the user
-  // taps the mic button (and the browser supports it) — no eager
-  // getUserMedia prompt.
+  // Dictation recording state (mic → transcribe to text). We only spin up
+  // MediaRecorder when the user taps the mic button (and the browser supports
+  // it) — no eager getUserMedia prompt.
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // Voice-note recording state (mic → send as an actual WhatsApp voice note,
+  // like WhatsApp Web's mic button). Distinct from the dictation flow above:
+  // here the recording is uploaded and sent to the chat as audio (transcoded to
+  // ogg/opus server-side), never transcribed into the textarea.
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceElapsed, setVoiceElapsed] = useState(0);
+  const [sendingVoice, setSendingVoice] = useState(false);
+  // The live stream, exposed as state (not just the ref) so the waveform meter
+  // can subscribe to it while recording.
+  const [voiceStream, setVoiceStream] = useState<MediaStream | null>(null);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceCancelledRef = useRef(false);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Per-message direction inside the input itself so Hebrew & English both
   // render naturally. Defaults to RTL when the field is empty (the most
@@ -1062,16 +1192,7 @@ function ComposeBox({
   async function sendForTranscription(blob: Blob) {
     setTranscribing(true);
     try {
-      const arrayBuf = await blob.arrayBuffer();
-      // Browser-safe base64 encode of binary data (chunked to avoid
-      // call-stack overflow on long recordings).
-      let binary = "";
-      const bytes = new Uint8Array(arrayBuf);
-      const CHUNK = 0x8000;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
-      const base64 = btoa(binary);
+      const base64 = await blobToBase64(blob);
 
       const { text: transcript } = await api<{ text: string }>(
         "/api/whatsapp/compose/transcribe",
@@ -1091,6 +1212,144 @@ function ComposeBox({
       setTranscribing(false);
     }
   }
+
+  // ── Voice note (WhatsApp-Web-style mic) ──────────────────────────────────
+  const stopVoiceTimer = useCallback(() => {
+    if (voiceTimerRef.current) {
+      clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+  }, []);
+
+  // Upload the recorded blob and send it as a voice note. The server transcodes
+  // to ogg/opus, sends via Meta, and inserts the outgoing row — onSent() then
+  // refetches so the bubble (native <audio> player) appears.
+  async function sendVoiceNote(blob: Blob) {
+    setSendingVoice(true);
+    try {
+      const base64 = await blobToBase64(blob);
+      await api("/api/whatsapp/messages/send-audio", {
+        method: "POST",
+        body: { to_phone: chatId, audio_base64: base64, mime_type: blob.type },
+      });
+      onSent?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSendingVoice(false);
+    }
+  }
+
+  async function startVoiceNote() {
+    if (voiceRecording || recording || transcribing || sendingVoice) return;
+    if (!withinWindow) {
+      toast.error(t("windowClosedShort"));
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      toast.error(t("micUnsupported"));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceStreamRef.current = stream;
+      setVoiceStream(stream);
+      voiceChunksRef.current = [];
+      voiceCancelledRef.current = false;
+      // A low capture bitrate keeps the upload small; the server re-encodes to
+      // 32 kbps opus regardless. Fall back to defaults if the option is rejected.
+      let mr: MediaRecorder;
+      try {
+        mr = new MediaRecorder(stream, { audioBitsPerSecond: 48000 });
+      } catch {
+        mr = new MediaRecorder(stream);
+      }
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) voiceChunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        stopVoiceTimer();
+        stream.getTracks().forEach((tr) => tr.stop());
+        voiceStreamRef.current = null;
+        setVoiceStream(null);
+        const chunks = voiceChunksRef.current;
+        voiceChunksRef.current = [];
+        // Cancelled (trash button / chat switch): discard without sending.
+        if (voiceCancelledRef.current || chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        await sendVoiceNote(blob);
+      };
+      mr.start();
+      voiceRecorderRef.current = mr;
+      setVoiceElapsed(0);
+      setVoiceRecording(true);
+      voiceTimerRef.current = setInterval(() => {
+        setVoiceElapsed((s) => s + 1);
+      }, 1000);
+    } catch (e) {
+      // Release the mic + reset state if anything after getUserMedia threw
+      // (e.g. MediaRecorder construction) — otherwise the track stays live.
+      voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+      voiceStreamRef.current = null;
+      setVoiceStream(null);
+      setVoiceRecording(false);
+      stopVoiceTimer();
+      toast.error(e instanceof Error ? e.message : t("micPermissionError"));
+    }
+  }
+
+  // Stop recording and send (the mic's Send button, and the auto-stop at the
+  // duration cap). The recorder's onstop handler does the actual upload.
+  const finishVoiceNote = useCallback(() => {
+    const mr = voiceRecorderRef.current;
+    if (!mr) return;
+    voiceCancelledRef.current = false;
+    voiceRecorderRef.current = null;
+    setVoiceRecording(false);
+    if (mr.state !== "inactive") mr.stop();
+  }, []);
+
+  // Discard the recording (trash button) — stop the recorder but flag it so
+  // onstop drops the audio instead of sending.
+  const cancelVoiceNote = useCallback(() => {
+    const mr = voiceRecorderRef.current;
+    voiceCancelledRef.current = true;
+    voiceRecorderRef.current = null;
+    setVoiceRecording(false);
+    stopVoiceTimer();
+    setVoiceElapsed(0);
+    if (mr && mr.state !== "inactive") {
+      mr.stop();
+    } else {
+      voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+      voiceStreamRef.current = null;
+      setVoiceStream(null);
+    }
+  }, [stopVoiceTimer]);
+
+  // Auto-stop + send when the recording hits the duration cap.
+  useEffect(() => {
+    if (voiceRecording && voiceElapsed >= VOICE_NOTE_MAX_SECONDS) {
+      finishVoiceNote();
+    }
+  }, [voiceRecording, voiceElapsed, finishVoiceNote]);
+
+  // Switching chats (or unmount) mid-recording: drop it so a half-recorded
+  // note never lands in the wrong conversation, and release the mic.
+  useEffect(() => {
+    return () => {
+      if (voiceRecorderRef.current) {
+        voiceCancelledRef.current = true;
+        const mr = voiceRecorderRef.current;
+        voiceRecorderRef.current = null;
+        if (mr.state !== "inactive") mr.stop();
+      }
+      stopVoiceTimer();
+      voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+      voiceStreamRef.current = null;
+      setVoiceStream(null);
+    };
+  }, [chatId, stopVoiceTimer]);
 
   // Auto-check English: debounce 1.2s after the user stops typing, then
   // run the cheap Haiku polish call if the text looks English and hasn't
@@ -1347,9 +1606,10 @@ function ComposeBox({
         </div>
       )}
 
-      {/* Recording / transcribing status line. Shows while either is
-          active so the user knows what's happening. */}
-      {(recording || transcribing) && (
+      {/* Recording / transcribing / sending status line. Shows while any is
+          active so the user knows what's happening. (Voice-note recording has
+          its own inline bar below; this covers its upload phase.) */}
+      {(recording || transcribing || sendingVoice) && (
         <div className="flex items-center gap-1.5 text-[11px] bg-status-ok-bg text-status-ok border rounded px-2 py-1">
           {recording && (
             <>
@@ -1361,6 +1621,12 @@ function ComposeBox({
             <>
               <Loader2 className="h-3 w-3 animate-spin" />
               {t("transcribing")}
+            </>
+          )}
+          {sendingVoice && (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {t("sendingVoiceNote")}
             </>
           )}
         </div>
@@ -1425,72 +1691,121 @@ function ComposeBox({
         </div>
       )}
 
-      <div className="flex gap-2 items-end">
-        {/* Hidden file input behind the attach button — the primary path on
-            mobile (and a fallback to paste/drag on desktop). */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={IMAGE_ALLOWED_MIME.join(",")}
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            if (files.length > 0) onAddImages(files);
-            // Reset so re-picking the same file fires onChange again.
-            e.target.value = "";
-          }}
-        />
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          disabled={!withinWindow || transcribing}
-          onClick={() => fileInputRef.current?.click()}
-          aria-label={t("attachImage")}
-          title={t("attachImage")}
-        >
-          <ImagePlus className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          size="icon"
-          variant={recording ? "destructive" : "outline"}
-          disabled={!withinWindow || transcribing}
-          onClick={recording ? stopRecording : startRecording}
-          aria-label={recording ? t("stopRecording") : t("startRecording")}
-          title={recording ? t("stopRecording") : t("startRecording")}
-        >
-          {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-        </Button>
-        <Textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={
-            !withinWindow
-              ? t("composeDisabled")
-              : hasImages
-                ? t("imageCaptionPlaceholder")
-                : t("composePlaceholder")
-          }
-          disabled={!withinWindow || transcribing}
-          dir={dir}
-          rows={1}
-          className="resize-none min-h-[40px] max-h-[140px] text-sm"
-        />
-        <Button
-          type="button"
-          onClick={handleSend}
-          disabled={!withinWindow || sending || (!text.trim() && !hasImages)}
-          size="icon"
-          aria-label={hasImages ? t("sendImage") : t("send")}
-        >
-          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </Button>
-      </div>
+      {voiceRecording ? (
+        /* Voice-note recording bar — replaces the composer while recording,
+           mirroring WhatsApp Web's mic UX: a trash button to discard, a live
+           timer, and a send button. */
+        <div className="flex items-center gap-3 rounded-md border bg-card px-3 py-2">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={cancelVoiceNote}
+            aria-label={t("cancelVoiceNote")}
+            title={t("cancelVoiceNote")}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+          <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-status-late animate-pulse" />
+          <span className="shrink-0 text-sm tabular-nums text-foreground" dir="ltr">
+            {fmtDuration(voiceElapsed)}
+          </span>
+          {/* Live mic-level meter — immediate "it's recording and hearing me"
+              feedback, like WhatsApp Web. */}
+          <div className="min-w-0 flex-1">
+            {voiceStream && <RecordingWaveform stream={voiceStream} />}
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            onClick={finishVoiceNote}
+            aria-label={t("sendVoiceNote")}
+            title={t("sendVoiceNote")}
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <div className="flex gap-2 items-end">
+          {/* Hidden file input behind the attach button — the primary path on
+              mobile (and a fallback to paste/drag on desktop). */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={IMAGE_ALLOWED_MIME.join(",")}
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) onAddImages(files);
+              // Reset so re-picking the same file fires onChange again.
+              e.target.value = "";
+            }}
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            disabled={!withinWindow || transcribing || sendingVoice}
+            onClick={() => fileInputRef.current?.click()}
+            aria-label={t("attachImage")}
+            title={t("attachImage")}
+          >
+            <ImagePlus className="h-4 w-4" />
+          </Button>
+          {/* Dictation mic — records and transcribes into the textarea. */}
+          <Button
+            type="button"
+            size="icon"
+            variant={recording ? "destructive" : "outline"}
+            disabled={!withinWindow || transcribing || sendingVoice}
+            onClick={recording ? stopRecording : startRecording}
+            aria-label={recording ? t("stopRecording") : t("startRecording")}
+            title={recording ? t("stopRecording") : t("startRecording")}
+          >
+            {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          </Button>
+          {/* Voice-note mic — records and sends an actual audio message. */}
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            disabled={!withinWindow || recording || transcribing || sendingVoice}
+            onClick={startVoiceNote}
+            aria-label={t("startVoiceNote")}
+            title={t("startVoiceNote")}
+          >
+            {sendingVoice ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
+          </Button>
+          <Textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={
+              !withinWindow
+                ? t("composeDisabled")
+                : hasImages
+                  ? t("imageCaptionPlaceholder")
+                  : t("composePlaceholder")
+            }
+            disabled={!withinWindow || transcribing}
+            dir={dir}
+            rows={1}
+            className="resize-none min-h-[40px] max-h-[140px] text-sm"
+          />
+          <Button
+            type="button"
+            onClick={handleSend}
+            disabled={!withinWindow || sending || (!text.trim() && !hasImages)}
+            size="icon"
+            aria-label={hasImages ? t("sendImage") : t("send")}
+          >
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </Button>
+        </div>
+      )}
       {/* Tiny status line for the in-flight English polish call — a
           subtle hint so the user knows the AI is thinking. */}
       {checking && !suggestion && (

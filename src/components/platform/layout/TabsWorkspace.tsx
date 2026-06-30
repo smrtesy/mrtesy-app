@@ -1,8 +1,8 @@
 "use client";
 
-import { Fragment, useCallback, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
   useTabsWorkspace,
@@ -18,6 +18,13 @@ function withEmbed(href: string): string {
 
 /** Smallest a pane may be dragged to, in pixels. */
 const MIN_PANE_PX = 200;
+
+/** True if the tab is the WhatsApp reader pane (not /whatsapp/autoreply). The
+ *  href is locale-prefixed and may carry a query, so compare the bare path. */
+function isWhatsAppTab(tab: WorkspaceTab): boolean {
+  const path = tab.href.split("?")[0].split("#")[0].replace(/\/+$/, "");
+  return path.endsWith("/whatsapp");
+}
 
 /**
  * Resolve each pane's width as a fraction (0..1) of the workspace.
@@ -66,8 +73,26 @@ export function TabsWorkspace() {
   const { tabs, activeId, widths, setActive, closeTab, setWidths, resetWidths } =
     useTabsWorkspace();
   const t = useTranslations("tabsWorkspace");
-  const n = tabs.length;
-  const fractions = resolveFractions(tabs, activeId, widths);
+  const locale = useLocale();
+  const isRtl = locale === "he";
+
+  // Pin the WhatsApp pane to the physical-left edge regardless of when it was
+  // opened. The panes are a flex row that follows the page direction, so the
+  // left edge is the LAST DOM child in RTL and the FIRST in LTR (see the
+  // getBoundingClientRect check in onHandleDown). We only reorder for display +
+  // divider adjacency; the stored tab order (and its open/close semantics) is
+  // untouched. Fractions/active state are keyed by id, so order doesn't affect
+  // them.
+  const orderedTabs = useMemo(() => {
+    if (tabs.length < 2) return tabs;
+    const wa = tabs.filter(isWhatsAppTab);
+    if (wa.length === 0) return tabs;
+    const rest = tabs.filter((tab) => !isWhatsAppTab(tab));
+    return isRtl ? [...rest, ...wa] : [...wa, ...rest];
+  }, [tabs, isRtl]);
+
+  const n = orderedTabs.length;
+  const fractions = resolveFractions(orderedTabs, activeId, widths);
 
   const dragRef = useRef<DragState | null>(null);
   const [resizingIdx, setResizingIdx] = useState<number | null>(null);
@@ -139,7 +164,7 @@ export function TabsWorkspace() {
 
   return (
     <div className="flex h-[100dvh] w-full overflow-x-auto">
-      {tabs.map((tab, i) => {
+      {orderedTabs.map((tab, i) => {
         const active = tab.id === activeId;
         const frac = fractions[tab.id] ?? 1 / n;
         return (
@@ -198,7 +223,7 @@ export function TabsWorkspace() {
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("resizePane")}
-                onPointerDown={(e) => onHandleDown(e, i, tab, tabs[i + 1])}
+                onPointerDown={(e) => onHandleDown(e, i, tab, orderedTabs[i + 1])}
                 onPointerMove={onHandleMove}
                 onPointerUp={onHandleUp}
                 onPointerCancel={onHandleUp}
