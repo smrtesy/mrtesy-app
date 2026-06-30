@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
@@ -228,12 +229,12 @@ function SmrtTaskSettings({ locale, pathname }: {
               {t("smsDevices")}
             </Button>
           </Link>
-          <Link href={`/${locale}/log`}>
+          <OpenTabLink href={`/${locale}/log`} label={tNav("log")}>
             <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
               <FileText className="h-4 w-4" />
               {tNav("log")}
             </Button>
-          </Link>
+          </OpenTabLink>
         </CardContent>
       </Card>
 
