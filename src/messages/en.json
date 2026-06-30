@@ -2326,7 +2326,10 @@
       "archiveAfterDays": "Archive after (days)",
       "save": "Save",
       "defaultLlmModel": "LLM model (script preprocessing)",
-      "defaultLlmModelDefault": "Default (server)"
+      "defaultLlmModelDefault": "Default (server)",
+      "postprocess": "Post-production",
+      "postprocessCompress": "Compressor (smooth volume jumps)",
+      "postprocessSpeed": "Speed (WSOLA, 1.0 = unchanged)"
     },
     "guide": {
       "title": "smrtVoice guide",

@@ -194,6 +194,9 @@ export interface Settings {
   gdrive_archive_folder_url: string | null;
   project_folder_template: string;
   audio_file_template: string;
+  postprocess_enabled: boolean;
+  postprocess_compress: boolean;
+  postprocess_speed: number;
   notify_on_completion: boolean;
   notify_on_budget_warn: boolean;
   notify_via_whatsapp: boolean;
@@ -220,6 +223,9 @@ export interface CreateJobRequest {
   llm_model?: string;
   code?: string;
   line_numbers?: number[];
+  postprocess_enabled?: boolean;
+  postprocess_compress?: boolean;
+  postprocess_speed?: number;
   callback_url: string;
   callback_secret?: string;
   characters?: Array<{ name: string; resemble_voice_id?: string }>;

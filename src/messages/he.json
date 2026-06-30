@@ -2325,7 +2325,10 @@
       "archiveAfterDays": "ארכוב אחרי (ימים)",
       "save": "שמור",
       "defaultLlmModel": "מודל LLM (עיבוד סקריפט)",
-      "defaultLlmModelDefault": "ברירת מחדל (שרת)"
+      "defaultLlmModelDefault": "ברירת מחדל (שרת)",
+      "postprocess": "עיבוד אחרי-הפקה",
+      "postprocessCompress": "קומפרסור (ריכוך קפיצות ווליום)",
+      "postprocessSpeed": "מהירות (WSOLA, 1.0 = ללא שינוי)"
     },
     "guide": {
       "title": "מדריך smrtVoice",

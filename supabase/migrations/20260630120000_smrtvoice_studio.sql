@@ -84,3 +84,12 @@ ALTER TABLE smrtvoice_settings ALTER COLUMN audio_file_template SET DEFAULT '{co
 UPDATE smrtvoice_settings
    SET audio_file_template = '{code}_{line:03d}'
  WHERE audio_file_template = '{line:03d}_{speaker}';
+
+-- ─── POST-PRODUCTION DSP (opt-in) ────────────────────────────
+-- Gentle compressor (tames <build-intensity> volume jumps) + WSOLA
+-- time-stretch (adds pace/expression without distorting pitch).
+ALTER TABLE smrtvoice_settings
+  ADD COLUMN IF NOT EXISTS postprocess_enabled  boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS postprocess_compress boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS postprocess_speed    numeric NOT NULL DEFAULT 1.0
+    CHECK (postprocess_speed BETWEEN 0.5 AND 2.0);

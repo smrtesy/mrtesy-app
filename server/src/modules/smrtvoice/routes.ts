@@ -720,6 +720,9 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
       code: project.code ?? undefined,
+      postprocess_enabled: settings?.postprocess_enabled ?? undefined,
+      postprocess_compress: settings?.postprocess_compress ?? undefined,
+      postprocess_speed: settings?.postprocess_speed ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -1016,7 +1019,9 @@ async function queueRegeneration(
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("default_adapter, default_llm_model")
+    .select(
+      "default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed",
+    )
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
@@ -1032,6 +1037,9 @@ async function queueRegeneration(
       llm_model: settings?.default_llm_model ?? undefined,
       code: project.code ?? undefined,
       line_numbers: lineNumbers,
+      postprocess_enabled: settings?.postprocess_enabled ?? undefined,
+      postprocess_compress: settings?.postprocess_compress ?? undefined,
+      postprocess_speed: settings?.postprocess_speed ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -1220,6 +1228,9 @@ const SETTINGS_UPDATABLE = new Set([
   "gdrive_archive_folder_url",
   "project_folder_template",
   "audio_file_template",
+  "postprocess_enabled",
+  "postprocess_compress",
+  "postprocess_speed",
   "notify_on_completion",
   "notify_on_budget_warn",
   "notify_via_whatsapp",
