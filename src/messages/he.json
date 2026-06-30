@@ -2253,7 +2253,14 @@
         "stsMode": "STS — מקלטת לעורך",
         "ttsMode": "TTS — מטקסט בלבד",
         "submit": "צור פרויקט",
-        "cancel": "ביטול"
+        "cancel": "ביטול",
+        "code": "קוד (1-2 אותיות + מספר)",
+        "codePlaceholder": "BR1",
+        "codeHelp": "משמש לשמות הקבצים ולתיקיית הדרייב, למשל BR1_010.wav",
+        "loadTabs": "טען טאבים",
+        "loadingTabs": "טוען…",
+        "tab": "טאב (שפה)",
+        "tabHelp": "נבחר אוטומטית הטאב בעברית; אפשר לשנות"
       },
       "status": {
         "draft": "טיוטה",
@@ -2342,7 +2349,8 @@
       "progressCloning": "יוצר קלון ברזמבל…",
       "successReady": "הקלון מוכן!",
       "successTraining": "הקלון בתהליך אימון (ידע אותך כשמוכן)",
-      "help": "העלה הקלטה של 30–60 שניות באיכות נקייה (בלי רעש רקע, בלי מוזיקה). רזמבל ילמד את הקול ומחזיר voice_id שמשמש לייצור."
+      "help": "העלה הקלטה של 30–60 שניות באיכות נקייה (בלי רעש רקע, בלי מוזיקה). רזמבל ילמד את הקול ומחזיר voice_id שמשמש לייצור.",
+      "progressTraining": "הקלון בתהליך אימון ושדרוג ל-Ultra… ({status})"
     },
     "recordingUploader": {
       "titleNew": "העלה הקלטת עורך (STS)",
@@ -2355,6 +2363,33 @@
       "progressUploading": "מעלה {fileName}…",
       "success": "הקלטה הועלתה",
       "help": "קובץ WAV/MP3 של ההקלטה המלאה. voice-engine יחתוך אותה לפי שתיקות ויתאים לכל שורה את הקטע המתאים."
+    },
+    "studio": {
+      "play": "השמע",
+      "playAll": "נגן הכל",
+      "stop": "עצור",
+      "playNew": "נגן חדשים ({count})",
+      "rerunRedos": "הרץ מחדש ({count})",
+      "redoQueued": "{count} שורות נשלחו להקלטה מחדש",
+      "saveToDrive": "שמור ל-Drive",
+      "saving": "שומר…",
+      "savedToDrive": "נשמרו {uploaded} קבצים ל-Drive ({skipped} דולגו)",
+      "openFolder": "פתח תיקייה",
+      "settings": "הגדרות ששלחנו לרזמבל",
+      "markRedo": "סמן להקלטה מחדש",
+      "needsRedo": "צריך הקלטה מחדש",
+      "clearRedo": "בטל סימון",
+      "model": "מודל",
+      "sampleRate": "קצב דגימה",
+      "mode": "מצב",
+      "tags": "תגיות",
+      "sentBody": "הטקסט שנשלח",
+      "sourceScript": "סקריפט",
+      "sourceLlm": "LLM",
+      "redoReasonPlaceholder": "סיבה (למה צריך הקלטה מחדש?)",
+      "redoInstructionsPlaceholder": "מה התיקון הנדרש?",
+      "redoSubmit": "סמן",
+      "cancel": "ביטול"
     }
   },
   "projectCombobox": {

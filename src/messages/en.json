@@ -2254,7 +2254,14 @@
         "stsMode": "STS — from editor recording",
         "ttsMode": "TTS — text only",
         "submit": "Create project",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "code": "Code (1-2 letters + number)",
+        "codePlaceholder": "BR1",
+        "codeHelp": "Used for file names and the Drive folder, e.g. BR1_010.wav",
+        "loadTabs": "Load tabs",
+        "loadingTabs": "Loading…",
+        "tab": "Tab (language)",
+        "tabHelp": "The Hebrew tab is auto-selected; you can change it"
       },
       "status": {
         "draft": "Draft",
@@ -2343,7 +2350,8 @@
       "progressCloning": "Creating clone in Resemble…",
       "successReady": "Clone ready!",
       "successTraining": "Clone is training (we'll notify you when ready)",
-      "help": "Upload a clean 30–60 second recording (no background noise, no music). Resemble learns the voice and returns a voice_id used for generation."
+      "help": "Upload a clean 30–60 second recording (no background noise, no music). Resemble learns the voice and returns a voice_id used for generation.",
+      "progressTraining": "Clone is training and upgrading to Ultra… ({status})"
     },
     "recordingUploader": {
       "titleNew": "Upload editor recording (STS)",
@@ -2356,6 +2364,33 @@
       "progressUploading": "Uploading {fileName}…",
       "success": "Recording uploaded",
       "help": "WAV/MP3 file of the full recording. voice-engine will split it by silence and match each line to the matching segment."
+    },
+    "studio": {
+      "play": "Play",
+      "playAll": "Play all",
+      "stop": "Stop",
+      "playNew": "Play new ({count})",
+      "rerunRedos": "Re-run ({count})",
+      "redoQueued": "{count} lines queued for re-recording",
+      "saveToDrive": "Save to Drive",
+      "saving": "Saving…",
+      "savedToDrive": "Saved {uploaded} files to Drive ({skipped} skipped)",
+      "openFolder": "Open folder",
+      "settings": "Settings sent to Resemble",
+      "markRedo": "Mark for re-record",
+      "needsRedo": "Needs re-record",
+      "clearRedo": "Clear",
+      "model": "Model",
+      "sampleRate": "Sample rate",
+      "mode": "Mode",
+      "tags": "Tags",
+      "sentBody": "Text sent",
+      "sourceScript": "script",
+      "sourceLlm": "LLM",
+      "redoReasonPlaceholder": "Reason (why re-record?)",
+      "redoInstructionsPlaceholder": "What's the required fix?",
+      "redoSubmit": "Mark",
+      "cancel": "Cancel"
     }
   },
   "projectCombobox": {

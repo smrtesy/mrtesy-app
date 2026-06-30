@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
@@ -19,9 +19,39 @@ type VoiceType = "rapid" | "pro";
 export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: Props) {
   const t = useTranslations("smrtVoice.cloneUploader");
   const [file, setFile] = useState<File | null>(null);
-  const [voiceType, setVoiceType] = useState<VoiceType>("pro");
+  const [voiceType, setVoiceType] = useState<VoiceType>("rapid");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Poll Resemble clone/upgrade readiness for a short window. The upgrade to
+  // Ultra runs async (~minutes); we surface progress for ~40s then leave it
+  // training in the background.
+  async function pollStatus(): Promise<string | null> {
+    const READY = new Set(["ready", "completed", "active", "done", "available"]);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      if (!mountedRef.current) return null;
+      try {
+        const { status } = await api<{ status: string | null }>(
+          `/api/voice/characters/${characterId}/voice-status`,
+        );
+        if (status && READY.has(status.toLowerCase())) return status;
+        if (mountedRef.current) {
+          setProgress(t("progressTraining", { status: status ?? "training" }));
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }
+    return null;
+  }
 
   async function onUpload() {
     if (!file) return;
@@ -55,14 +85,24 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         body: { sample_path: path, voice_type: voiceType },
       });
 
-      toast.success(status === "ready" ? t("successReady") : t("successTraining"));
       onCloned?.(character.resemble_voice_id);
       setFile(null);
+
+      // Clone created as rapid and upgrading to Ultra — poll readiness briefly.
+      if (status === "ready") {
+        toast.success(t("successReady"));
+      } else {
+        setProgress(t("progressTraining", { status: "training" }));
+        const ready = await pollStatus();
+        toast.success(ready ? t("successReady") : t("successTraining"));
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setBusy(false);
-      setProgress(null);
+      if (mountedRef.current) {
+        setBusy(false);
+        setProgress(null);
+      }
     }
   }
 
