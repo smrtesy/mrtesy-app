@@ -243,10 +243,19 @@ export function WhatsAppReader({
   // Visibility classes per layout. "split" keeps the mobile-stacked behaviour
   // but shows both panes side-by-side on md+. "stacked" toggles list ↔ chat at
   // every width (the narrow panel can't fit two panes).
+  //
+  // `grid-rows-1` (→ grid-template-rows: minmax(0,1fr)) is load-bearing: it
+  // clamps the single row to the container's height instead of letting it grow
+  // to the tallest column. Without it the thread-list column (which can hold far
+  // more rows than fit) stretches the row past the viewport, the whole page
+  // scrolls, and the chat pane's grey message area stretches to match — leaving
+  // a long grey expanse below the conversation. With it, each pane is bounded to
+  // the viewport and scrolls on its own (the list via its inner overflow, the
+  // chat via its messages area), so the menu scrolls independently of the chat.
   const gridClass =
     layout === "split"
-      ? "grid grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)] gap-3"
-      : "grid grid-cols-1 gap-3";
+      ? "grid grid-rows-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)] gap-3"
+      : "grid grid-rows-1 grid-cols-1 gap-3";
   const listVisibility =
     layout === "split"
       ? `md:block ${selectedChatId ? "hidden" : "block"}`
