@@ -140,6 +140,95 @@ function fmtDuration(total: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/**
+ * Live mic-level waveform for the voice-note recording bar — the WhatsApp-Web
+ * cue that tells you it's actually picking up your voice. Taps the recording
+ * MediaStream with a Web Audio AnalyserNode and paints a scrolling bar meter
+ * (newest sample on the right) on a canvas via requestAnimationFrame. Owns its
+ * own AudioContext and tears everything down on unmount, so it never leaks an
+ * audio graph across recordings. Colour follows the element's CSS `color`, so
+ * it themes itself (we render it in the recording accent colour).
+ */
+const WAVEFORM_BARS = 48;
+function RecordingWaveform({ stream }: { stream: MediaStream }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const audioCtx = new AudioCtx();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    // Autoplay policies can leave the context suspended until a gesture; the
+    // mic tap is one, but resume() defensively so the meter always animates.
+    void audioCtx.resume?.();
+
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const levels = new Array(WAVEFORM_BARS).fill(0);
+    const canvas = canvasRef.current;
+    const cctx = canvas?.getContext("2d") ?? null;
+    const color = canvas ? getComputedStyle(canvas).color : "#888";
+    const hasRoundRect = typeof cctx?.roundRect === "function";
+    let raf = 0;
+
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      if (!canvas || !cctx) return;
+      // RMS of the time-domain signal → a 0..1 loudness for this frame.
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      // Scroll the history left and append the new level (clamped, scaled up a
+      // touch so normal speech fills a satisfying portion of the meter).
+      levels.push(Math.min(1, rms * 2.6));
+      levels.shift();
+
+      const w = canvas.width;
+      const h = canvas.height;
+      cctx.clearRect(0, 0, w, h);
+      cctx.fillStyle = color;
+      const slot = w / WAVEFORM_BARS;
+      const barW = Math.max(1.5, slot * 0.55);
+      for (let i = 0; i < WAVEFORM_BARS; i++) {
+        const bh = Math.max(2, levels[i] * h);
+        const x = i * slot + (slot - barW) / 2;
+        const y = (h - bh) / 2;
+        if (hasRoundRect) {
+          cctx.beginPath();
+          cctx.roundRect(x, y, barW, bh, barW / 2);
+          cctx.fill();
+        } else {
+          cctx.fillRect(x, y, barW, bh);
+        }
+      }
+    };
+    draw();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      try {
+        source.disconnect();
+        analyser.disconnect();
+      } catch {
+        /* graph already torn down */
+      }
+      void audioCtx.close().catch(() => {});
+    };
+  }, [stream]);
+
+  return <canvas ref={canvasRef} width={300} height={36} className="h-7 w-full text-status-late" />;
+}
+
 /** Read a File into a base64 string (no data: prefix — the backend also strips
  *  one defensively, but we keep the payload clean). */
 function fileToBase64(file: File): Promise<string> {
@@ -1042,6 +1131,9 @@ function ComposeBox({
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceElapsed, setVoiceElapsed] = useState(0);
   const [sendingVoice, setSendingVoice] = useState(false);
+  // The live stream, exposed as state (not just the ref) so the waveform meter
+  // can subscribe to it while recording.
+  const [voiceStream, setVoiceStream] = useState<MediaStream | null>(null);
   const voiceRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceCancelledRef = useRef(false);
@@ -1161,6 +1253,7 @@ function ComposeBox({
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       voiceStreamRef.current = stream;
+      setVoiceStream(stream);
       voiceChunksRef.current = [];
       voiceCancelledRef.current = false;
       // A low capture bitrate keeps the upload small; the server re-encodes to
@@ -1178,6 +1271,7 @@ function ComposeBox({
         stopVoiceTimer();
         stream.getTracks().forEach((tr) => tr.stop());
         voiceStreamRef.current = null;
+        setVoiceStream(null);
         const chunks = voiceChunksRef.current;
         voiceChunksRef.current = [];
         // Cancelled (trash button / chat switch): discard without sending.
@@ -1193,6 +1287,13 @@ function ComposeBox({
         setVoiceElapsed((s) => s + 1);
       }, 1000);
     } catch (e) {
+      // Release the mic + reset state if anything after getUserMedia threw
+      // (e.g. MediaRecorder construction) — otherwise the track stays live.
+      voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+      voiceStreamRef.current = null;
+      setVoiceStream(null);
+      setVoiceRecording(false);
+      stopVoiceTimer();
       toast.error(e instanceof Error ? e.message : t("micPermissionError"));
     }
   }
@@ -1222,6 +1323,7 @@ function ComposeBox({
     } else {
       voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
       voiceStreamRef.current = null;
+      setVoiceStream(null);
     }
   }, [stopVoiceTimer]);
 
@@ -1245,6 +1347,7 @@ function ComposeBox({
       stopVoiceTimer();
       voiceStreamRef.current?.getTracks().forEach((tr) => tr.stop());
       voiceStreamRef.current = null;
+      setVoiceStream(null);
     };
   }, [chatId, stopVoiceTimer]);
 
@@ -1604,9 +1707,14 @@ function ComposeBox({
             <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
           <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-status-late animate-pulse" />
-          <span className="flex-1 text-sm tabular-nums text-foreground" dir="ltr">
+          <span className="shrink-0 text-sm tabular-nums text-foreground" dir="ltr">
             {fmtDuration(voiceElapsed)}
           </span>
+          {/* Live mic-level meter — immediate "it's recording and hearing me"
+              feedback, like WhatsApp Web. */}
+          <div className="min-w-0 flex-1">
+            {voiceStream && <RecordingWaveform stream={voiceStream} />}
+          </div>
           <Button
             type="button"
             size="icon"
