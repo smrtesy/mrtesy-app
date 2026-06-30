@@ -15,6 +15,7 @@ import actionsRouter from "./routes/actions";
 import knowledgeRouter from "./routes/knowledge";
 import syncRouter from "./routes/sync";
 import whatsappViewRouter from "./routes/whatsapp-view";
+import smsRouter from "./routes/sms";
 import routerRouter from "./routes/router";
 import transcriptionExperimentRouter from "./routes/transcription-experiment";
 
@@ -37,6 +38,8 @@ router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);
 // Authenticated read API powering /[locale]/whatsapp.
 router.use(whatsappViewRouter);
+// Authenticated SMS device-connection API (webhook lives on the Next.js side).
+router.use(smsRouter);
 
 export default router;
 

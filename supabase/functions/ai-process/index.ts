@@ -101,8 +101,8 @@ async function loadSystemParams(): Promise<SystemParams> {
   };
 }
 
-const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "google_calendar", "google_drive", "gmail", "gmail_sent"];
-const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
+const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "google_calendar", "google_drive", "gmail", "gmail_sent"];
+const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.sms,source_type.eq.google_calendar,source_type.eq.google_drive";
 
 const DEFAULT_FILTERED_CATEGORY_KEYS = new Set(["promotions", "social", "forums"]);
 const CATEGORY_KEY_TO_GMAIL_LABEL: Record<string, string> = {
