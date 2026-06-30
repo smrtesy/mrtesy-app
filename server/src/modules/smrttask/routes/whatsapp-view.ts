@@ -1077,12 +1077,18 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
 
   // Step 2 — send the audio message referencing the uploaded media id. Audio
   // messages carry no caption in the Cloud API.
+  //
+  // `voice: true` is what makes WhatsApp render this as a voice note (the PTT
+  // bubble with the waveform + play head), exactly like a recording made in
+  // WhatsApp Web — NOT a generic downloadable audio file. Meta only honours the
+  // flag for .ogg/OPUS media (which transcodeToOggOpus guarantees); without it
+  // the same bytes arrive as a file attachment.
   const payload: Record<string, unknown> = {
     messaging_product: "whatsapp",
     recipient_type: "individual",
     to: chatId,
     type: "audio",
-    audio: { id: mediaId },
+    audio: { id: mediaId, voice: true },
   };
   const sendRes = await fetch(
     `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
