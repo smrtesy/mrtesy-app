@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import Link from "next/link";
 import {
   DndContext,
   closestCorners,
@@ -677,18 +678,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         renders right under this). */}
     <div className="mb-3 flex items-center gap-3">
       {title && <h1 className="text-2xl font-bold">{title}</h1>}
-      {/* Quick jump to the source log (opens on the platform domain in a
-          new tab), mirroring the shortcut on the inbox header. */}
-      <a
-        href="https://app.smrtesy.com/he/log"
-        target="_blank"
-        rel="noopener noreferrer"
+      {/* Quick jump to the source log — navigates in-app like the other
+          pages (same tab), instead of popping a new window. */}
+      <Link
+        href={`/${locale}/log`}
         aria-label={t("openLog")}
         title={t("openLog")}
         className="text-muted-foreground transition-colors hover:text-foreground"
       >
         <ExternalLink className="h-4 w-4" />
-      </a>
+      </Link>
       <InstallAppButton />
       <div className="ms-auto flex rounded-lg border p-0.5">
         {contextChips.map((chip) => (
