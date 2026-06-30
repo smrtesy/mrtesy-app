@@ -2391,10 +2391,8 @@
   "sms": {
     "title": "SMS messages",
     "description": "Connect your phone so smrtTask reads your text messages too and turns them into tasks. It uses the open-source SMS Gateway for Android app, which runs on your phone and forwards each incoming SMS here. One-time verification codes (OTP) are detected automatically and never sent to the AI.",
-    "webhookUrl": "Webhook URL",
-    "webhookUrlHint": "Paste this into the app's Webhooks settings on your phone.",
-    "signingKeyTitle": "Signing key",
-    "signingKeyHint": "Copy it now — it is shown only once and cannot be retrieved later. Paste it into the app's Webhooks settings.",
+    "webhookReadyTitle": "Your webhook URL (includes a secret token)",
+    "webhookReadyHint": "Copy it now — the token is shown only once. Register a webhook on your phone with this URL and the 'sms:received' event.",
     "empty": "No device connected yet. SMS won't be ingested until you connect a phone.",
     "connectedDevices": "Connected devices",
     "deviceFallbackName": "Phone",
@@ -2411,10 +2409,10 @@
     "connected": "Device connected. Copy the signing key and paste it into the app.",
     "errorInUse": "This device ID is already registered to another account.",
     "instructionsTitle": "How to connect:",
-    "step1": "Install SMS Gateway for Android on your phone and run it in local / self-hosted mode.",
-    "step2": "Open 'Connect device' here, paste the Device ID from the app, and click Connect.",
-    "step3": "Copy the Webhook URL and the signing key shown here.",
-    "step4": "In the app: Settings → Webhooks → paste the URL and signing key, and select the 'SMS received' event."
+    "step1": "Install SMS Gateway for Android, turn on 'Local server' (ON), and grant the SMS read permission.",
+    "step2": "Open 'Connect device' here, paste the Device ID from the app's HOME screen, and click Connect.",
+    "step3": "Copy the Webhook URL shown here (the secret token is already embedded in it).",
+    "step4": "Register a webhook on your phone with this URL and the 'sms:received' event (via the app's API — the exact command is provided in chat)."
   },
   "smrtPlan": {
     "title": "Planning board",

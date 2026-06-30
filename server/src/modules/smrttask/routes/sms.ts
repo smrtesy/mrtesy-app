@@ -97,9 +97,13 @@ router.post("/sms/connect", ...gate, async (req: Request, res: Response) => {
   );
   if (upsertErr) return res.status(500).json({ error: upsertErr.message });
 
+  // The token rides inside the webhook URL: the Android app forwards a stored
+  // URL verbatim and (in current builds) has no UI to share its own HMAC key
+  // with us, so a secret URL token is the practical proof of authenticity.
+  const webhookUrl = `${appBaseUrl()}/api/webhooks/sms?token=${encodeURIComponent(signingKey)}`;
   return res.json({
     ok: true,
-    webhook_url: `${appBaseUrl()}/api/webhooks/sms`,
+    webhook_url: webhookUrl,
     signing_key: signingKey,
     device_id: device,
   });

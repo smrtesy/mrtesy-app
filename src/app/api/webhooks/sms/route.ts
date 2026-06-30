@@ -109,16 +109,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "unknown_device" }, { status: 200 });
   }
 
-  // Signature verification. A connection with no signing key cannot be verified,
-  // so we refuse to ingest it rather than trust an unsigned request.
+  // Authentication. A connection with no secret cannot be verified, so we
+  // refuse to ingest rather than trust an unauthenticated request.
   if (!conn.signingKey) {
-    console.error(`[sms-webhook] no signing key for deviceId=${deviceId}, refusing unverified ingest`);
+    console.error(`[sms-webhook] no secret for deviceId=${deviceId}, refusing unverified ingest`);
     return NextResponse.json({ ok: false, error: "no_signing_key" }, { status: 200 });
   }
-  const sigOk = verifySignature(request, rawBody, conn.signingKey);
-  if (!sigOk.ok) {
-    console.warn(`[sms-webhook] signature check failed (${sigOk.reason}) for deviceId=${deviceId}`);
-    return NextResponse.json({ ok: false, error: sigOk.reason }, { status: 200 });
+  const authed = authenticateRequest(request, rawBody, conn.signingKey);
+  if (!authed.ok) {
+    console.warn(`[sms-webhook] auth failed (${authed.reason}) for deviceId=${deviceId}`);
+    return NextResponse.json({ ok: false, error: authed.reason }, { status: 200 });
   }
 
   try {
@@ -168,6 +168,35 @@ async function resolveConnection(
   if (!signingKey) signingKey = process.env.SMS_GATEWAY_SIGNING_KEY ?? null;
 
   return { userId, signingKey };
+}
+
+/**
+ * Authenticate an inbound webhook against the device's shared secret. Two
+ * accepted proofs, in priority order:
+ *
+ *   1. Secret token in the URL — `?token=<secret>`. This is the path used by
+ *      the SMS Gateway for Android app, whose current build forwards a stored
+ *      URL verbatim but exposes no UI to share its own HMAC signing key with
+ *      us. The token rides inside the HTTPS-encrypted URL and is compared in
+ *      constant time. Replay isn't a concern: ingestion is idempotent on
+ *      (user_id, messageId), so a replayed body is a no-op upsert.
+ *   2. HMAC-SHA256 over `rawBody + X-Timestamp` (hex, ±300s freshness) — the
+ *      stronger proof, kept for any client that CAN be configured with our
+ *      signing key.
+ */
+function authenticateRequest(
+  request: NextRequest,
+  rawBody: string,
+  secret: string,
+): { ok: true } | { ok: false; reason: string } {
+  const token = new URL(request.url).searchParams.get("token");
+  if (token) {
+    return timingSafeEqual(token, secret) ? { ok: true } : { ok: false, reason: "bad_token" };
+  }
+  if (request.headers.get("x-signature")) {
+    return verifySignature(request, rawBody, secret);
+  }
+  return { ok: false, reason: "missing_auth" };
 }
 
 function verifySignature(

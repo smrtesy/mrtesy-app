@@ -38,7 +38,6 @@ export function SmsDeviceManager() {
   const t = useTranslations("sms");
 
   const [connections, setConnections] = useState<SmsConnection[]>([]);
-  const [webhookUrl, setWebhookUrl] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [deviceId, setDeviceId] = useState("");
@@ -51,9 +50,8 @@ export function SmsDeviceManager() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api<{ connections: SmsConnection[]; webhook_url: string }>("/api/sms/connections");
+      const r = await api<{ connections: SmsConnection[] }>("/api/sms/connections");
       setConnections((r.connections ?? []).filter((c) => !c.disconnected_at));
-      setWebhookUrl(r.webhook_url ?? "");
     } catch (e) {
       if (e instanceof ApiError && e.status !== 401) toast.error((e as Error).message);
     } finally {
@@ -83,7 +81,6 @@ export function SmsDeviceManager() {
         body: { deviceId: device, label: label.trim() || undefined },
       });
       setResult(r);
-      setWebhookUrl(r.webhook_url);
       setDeviceId("");
       setLabel("");
       setFormOpen(false);
@@ -114,49 +111,30 @@ export function SmsDeviceManager() {
 
   return (
     <div className="space-y-4">
-      {/* Webhook URL — the destination the user pastes into the app. */}
-      <div className="rounded-md border p-3 space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">{t("webhookUrl")}</p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs" dir="ltr">
-            {webhookUrl || "—"}
-          </code>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={() => copy(webhookUrl, "url")}
-            disabled={!webhookUrl}
-            aria-label={t("copy")}
-          >
-            {copied === "url" ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">{t("webhookUrlHint")}</p>
-      </div>
-
-      {/* One-time signing key, shown right after a successful connect. */}
+      {/* Tokenized webhook URL — shown once, right after a successful connect.
+          The secret token is embedded in the URL, so this is the only value
+          the user needs to register on the phone. */}
       {result && (
         <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-1.5">
           <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
             <KeyRound className="h-3.5 w-3.5" />
-            {t("signingKeyTitle")}
+            {t("webhookReadyTitle")}
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs" dir="ltr">
-              {result.signing_key}
+              {result.webhook_url}
             </code>
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
-              onClick={() => copy(result.signing_key, "key")}
+              onClick={() => copy(result.webhook_url, "url")}
               aria-label={t("copy")}
             >
-              {copied === "key" ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
+              {copied === "url" ? <Check className="h-4 w-4 text-status-ok" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
-          <p className="text-xs text-status-warn">{t("signingKeyHint")}</p>
+          <p className="text-xs text-status-warn">{t("webhookReadyHint")}</p>
         </div>
       )}
 
