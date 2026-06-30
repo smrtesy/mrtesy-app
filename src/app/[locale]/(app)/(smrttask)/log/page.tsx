@@ -12,7 +12,10 @@ export default async function LogPage({
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-start">{t("title")}</h1>
+      <div className="flex items-baseline gap-2 text-start">
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <span className="text-xs text-muted-foreground">{t("window48h")}</span>
+      </div>
       <LogPageClient locale={locale} />
     </div>
   );

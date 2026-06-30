@@ -132,11 +132,16 @@ export function LogPageClient({ locale }: { locale: string }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
 
+    // Show every item from the last 48 hours — not just the newest 200.
+    // The window is defined on ingestion time (created_at); the high limit is
+    // only a safety net so a busy 48h window is never silently truncated.
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     let query = supabase
       .from("source_messages")
       .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
+      .gte("created_at", cutoff)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(1000);
 
     if (sourceFilter !== "all") {
       if (sourceFilter === "whatsapp") {
@@ -232,6 +237,15 @@ export function LogPageClient({ locale }: { locale: string }) {
         }
       }
     }
+
+    // Merge the two timestamps into one sort key so the list is ordered by the
+    // date each row actually shows (processed time when present, else ingestion
+    // time) — otherwise pending items (no log_created_at) drift out of order.
+    mapped.sort((a: SourceEntry, b: SourceEntry) => {
+      const da = new Date(a.log_created_at || a.created_at).getTime();
+      const db = new Date(b.log_created_at || b.created_at).getTime();
+      return db - da;
+    });
 
     setLogs(mapped as SourceEntry[]);
     setLoading(false);
