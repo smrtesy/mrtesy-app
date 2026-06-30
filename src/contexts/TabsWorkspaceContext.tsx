@@ -132,6 +132,23 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     });
   }, []);
 
+  // Bridge: links inside a pane (an iframe) can't reach this context, so they
+  // postMessage up here to open a sibling tab instead of replacing their own
+  // iframe (see requestOpenTab). Only the TOP-level provider owns the tab set —
+  // the providers that also mount inside panes must ignore these, or the tab
+  // would be opened in the wrong (invisible) tree.
+  useEffect(() => {
+    if (typeof window === "undefined" || window.top !== window.self) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const data = e.data as { type?: string; href?: string; label?: string } | null;
+      if (!data || data.type !== "smrtesy:open-tab" || typeof data.href !== "string") return;
+      openTab(data.href, typeof data.label === "string" && data.label ? data.label : data.href);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [openTab]);
+
   const setActive = useCallback((id: string) => setActiveId(id), []);
   const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);
   const resetWidths = useCallback(() => setWidthsState({}), []);
