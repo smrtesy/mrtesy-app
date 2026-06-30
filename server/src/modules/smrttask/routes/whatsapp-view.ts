@@ -12,6 +12,11 @@
  */
 
 import { Router, Request, Response } from "express";
+import { spawn } from "child_process";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { randomUUID } from "crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { simpleCall } from "../../../anthropic";
@@ -458,6 +463,70 @@ const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SEND_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const SEND_IMAGE_ALLOWED_MIME = new Set(["image/jpeg", "image/png"]);
 
+// Outgoing voice-note constraints. Browsers record audio in whatever container
+// they support (Chrome → audio/webm;codecs=opus, Safari → audio/mp4, Firefox →
+// audio/ogg;codecs=opus). Meta's Cloud API audio message does NOT accept webm,
+// so we always transcode the upload to ogg/opus — the same format WhatsApp uses
+// for its own voice notes — before sending (see transcodeToOggOpus). The 6 MB
+// cap keeps the base64 payload comfortably under the server's 10 MB JSON body
+// limit (a few minutes of opus is well under this).
+const SEND_AUDIO_MAX_BYTES = 6 * 1024 * 1024;
+// Map the browser-reported source mime to a temp-file extension ffmpeg can
+// demux. Anything unknown falls back to webm (Chrome's default).
+const AUDIO_SRC_EXT: Record<string, string> = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/mp4": "mp4",
+  "audio/mpeg": "mp3",
+  "audio/aac": "aac",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+};
+
+/**
+ * Transcode an arbitrary browser recording into ogg/opus — the one audio
+ * container Meta's Cloud API renders as a WhatsApp voice note. Uses the ffmpeg
+ * binary from the Railway nix environment (declared in server/nixpacks.toml).
+ * We write temp files rather than piping so matroska/webm demuxing never trips
+ * over a non-seekable stdin. Mono / 48 kHz / 32 kbps matches WhatsApp's own
+ * voice-note encoding and keeps the file tiny.
+ */
+async function transcodeToOggOpus(input: Buffer, inputExt: string): Promise<Buffer> {
+  const dir = os.tmpdir();
+  const id = randomUUID();
+  const inPath = path.join(dir, `wa-voice-${id}.${inputExt || "webm"}`);
+  const outPath = path.join(dir, `wa-voice-${id}.ogg`);
+  await fs.writeFile(inPath, input);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const ff = spawn("ffmpeg", [
+        "-y",
+        "-i", inPath,
+        "-vn",
+        "-ac", "1",
+        "-ar", "48000",
+        "-c:a", "libopus",
+        "-b:a", "32k",
+        "-f", "ogg",
+        outPath,
+      ]);
+      let stderr = "";
+      ff.stderr.on("data", (d) => {
+        stderr += String(d);
+      });
+      ff.on("error", reject);
+      ff.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-400)}`));
+      });
+    });
+    return await fs.readFile(outPath);
+  } finally {
+    await fs.rm(inPath, { force: true }).catch(() => {});
+    await fs.rm(outPath, { force: true }).catch(() => {});
+  }
+}
+
 /**
  * Refresh (or create) the per-burst source_messages row for an outgoing
  * WhatsApp message so the smrtTask classifier / dashboards see it on the next
@@ -870,6 +939,202 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
       media_url: mediaUrl,
       media_filename: safeName,
       media_size: buf.length,
+      is_reaction: false,
+      is_history: false,
+      received_at: nowIso,
+      raw_payload: { sent_via: "smrttask", api_payload: payload },
+    },
+    { onConflict: "user_id,wamid" },
+  );
+
+  // Respond immediately; refresh the thread row in the background (see the
+  // text-send route for the same rationale).
+  res.json({ ok: true, wamid });
+  void refreshThreadSourceMessageRow(req.user!.id, chatId, wamid, nowIso);
+  return;
+});
+
+// ── Send a voice note via Meta Cloud API ─────────────────────────────────
+//
+// Mirrors send-image's three-step flow but for audio: (1) transcode the
+// browser recording to ogg/opus (Meta rejects webm — see transcodeToOggOpus),
+// (2) upload the bytes to /{phone_number_id}/media for a media id, (3) send a
+// type=audio message referencing it. We persist the ogg to our bucket and
+// insert an outgoing whatsapp_messages row (message_type='voice') so the bubble
+// renders inline with a native <audio> player immediately, without waiting for
+// Meta's echo webhook.
+//
+// Body: { to_phone: string, audio_base64: string, mime_type?: string }
+// Returns: { ok: true, wamid: string }
+router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: Response) => {
+  const { to_phone, audio_base64, mime_type } = (req.body ?? {}) as {
+    to_phone?: string;
+    audio_base64?: string;
+    mime_type?: string;
+  };
+
+  if (!to_phone || typeof to_phone !== "string") {
+    return res.status(400).json({ error: "to_phone is required" });
+  }
+  if (!audio_base64 || typeof audio_base64 !== "string") {
+    return res.status(400).json({ error: "audio_base64 is required" });
+  }
+
+  // Strip a data: URL prefix if the client sent one, then decode.
+  const cleaned = audio_base64.replace(/^data:[^;]+;base64,/, "");
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(cleaned, "base64");
+  } catch {
+    return res.status(400).json({ error: "invalid_base64" });
+  }
+  if (buf.length === 0) return res.status(400).json({ error: "empty_audio" });
+  if (buf.length > SEND_AUDIO_MAX_BYTES) {
+    return res.status(400).json({ error: "audio_too_large" });
+  }
+
+  // Resolve the caller's active connection + access token (same as text send).
+  const { data: conn, error: connErr } = await db
+    .from("whatsapp_connections")
+    .select("phone_number_id, access_token_secret_id")
+    .eq("user_id", req.user!.id)
+    .is("disconnected_at", null)
+    .maybeSingle();
+  if (connErr) return res.status(500).json({ error: connErr.message });
+  if (!conn) return res.status(404).json({ error: "no_whatsapp_connection" });
+
+  const secretId = conn.access_token_secret_id as string | null;
+  if (!secretId) return res.status(400).json({ error: "access_token_not_configured" });
+
+  const { data: tokenPlain, error: tokenErr } = await db.rpc("vault_read_secret", {
+    secret_id: secretId,
+  });
+  if (tokenErr) return res.status(500).json({ error: `vault: ${tokenErr.message}` });
+  const accessToken = typeof tokenPlain === "string" ? tokenPlain : null;
+  if (!accessToken) return res.status(500).json({ error: "access_token_unreadable" });
+
+  // 24h window — identical rule to the text/image send paths.
+  const chatId = to_phone.replace(/\D/g, "");
+  const { data: lastIncoming } = await db
+    .from("whatsapp_messages")
+    .select("received_at")
+    .eq("user_id", req.user!.id)
+    .eq("chat_id", chatId)
+    .eq("direction", "incoming")
+    .order("received_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lastIncomingAt = lastIncoming?.received_at
+    ? new Date(lastIncoming.received_at).getTime()
+    : null;
+  if (lastIncomingAt === null || Date.now() - lastIncomingAt >= SEND_WINDOW_MS) {
+    return res.status(403).json({
+      error: "outside_24h_window",
+      last_incoming_at: lastIncoming?.received_at ?? null,
+    });
+  }
+
+  // Transcode whatever the browser recorded → ogg/opus (Meta requirement).
+  const srcMime = (mime_type ?? "").toLowerCase().split(";")[0].trim();
+  const inputExt = AUDIO_SRC_EXT[srcMime] ?? "webm";
+  let oggBuf: Buffer;
+  try {
+    oggBuf = await transcodeToOggOpus(buf, inputExt);
+  } catch (e) {
+    console.error("[whatsapp-send-audio] transcode failed:", e);
+    return res.status(500).json({ error: "audio_transcode_failed" });
+  }
+  if (!oggBuf || oggBuf.length === 0) {
+    return res.status(500).json({ error: "audio_transcode_empty" });
+  }
+
+  const OGG_MIME = "audio/ogg";
+
+  // Step 1 — upload the ogg bytes to Meta to obtain a media id.
+  let mediaId: string;
+  try {
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", OGG_MIME);
+    form.append("file", new Blob([oggBuf], { type: OGG_MIME }), "voice.ogg");
+    const uploadRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/media`,
+      { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: form },
+    );
+    const uploadJson = (await uploadRes.json().catch(() => ({}))) as {
+      id?: string;
+      error?: { message?: string };
+    };
+    if (!uploadRes.ok || !uploadJson.id) {
+      return res
+        .status(502)
+        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+    }
+    mediaId = uploadJson.id;
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+
+  // Step 2 — send the audio message referencing the uploaded media id. Audio
+  // messages carry no caption in the Cloud API.
+  const payload: Record<string, unknown> = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: chatId,
+    type: "audio",
+    audio: { id: mediaId },
+  };
+  const sendRes = await fetch(
+    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const sendJson = (await sendRes.json().catch(() => ({}))) as {
+    messages?: Array<{ id?: string }>;
+    error?: { message?: string };
+  };
+  if (!sendRes.ok) {
+    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+  }
+  const wamid = sendJson.messages?.[0]?.id ?? null;
+  if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
+
+  // Persist the ogg to our bucket so the bubble renders inline (mirrors the
+  // webhook's storage convention: "<user_id>/<wamid>.<ext>"). Best-effort.
+  const safeBase = wamid.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80);
+  const storagePath = `${req.user!.id}/${safeBase}.ogg`;
+  let mediaUrl: string | null = null;
+  const { error: uploadErr } = await db.storage
+    .from("whatsapp-media")
+    .upload(storagePath, oggBuf, { contentType: OGG_MIME, upsert: true });
+  if (uploadErr) {
+    console.warn("[whatsapp-send-audio] storage upload failed:", uploadErr.message);
+  } else {
+    mediaUrl = storagePath;
+  }
+
+  // Optimistically insert the outgoing voice note so the UI sees it
+  // immediately. The webhook echo upserts on (user_id, wamid) → no-op.
+  const nowIso = new Date().toISOString();
+  await db.from("whatsapp_messages").upsert(
+    {
+      user_id: req.user!.id,
+      wamid,
+      chat_id: chatId,
+      direction: "outgoing",
+      from_phone: conn.phone_number_id,
+      from_name: "אני (מהמערכת)",
+      to_phone: chatId,
+      message_type: "voice",
+      body_text: null,
+      media_id: mediaId,
+      media_mime: OGG_MIME,
+      media_url: mediaUrl,
+      media_filename: "voice.ogg",
+      media_size: oggBuf.length,
       is_reaction: false,
       is_history: false,
       received_at: nowIso,

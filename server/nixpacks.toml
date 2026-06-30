@@ -8,8 +8,15 @@
 # Ubuntu library paths (/usr/lib/...) where the playwright-downloaded binary
 # can actually find them.  Nix packages live in /nix/store/... and are not
 # visible to dynamically-linked binaries compiled for standard paths.
+#
+# ffmpeg is added here for the WhatsApp voice-note feature: browsers record
+# audio/webm (Opus), which Meta's Cloud API rejects, so the send-audio route
+# transcodes the upload to ogg/opus with ffmpeg before sending. Unlike Chromium
+# (which needs system libs in standard /usr/lib paths), nix-provided ffmpeg is
+# self-contained via its RPATH into /nix/store and runs fine when spawned.
 nixPkgs = [
   "nodejs_22",
+  "ffmpeg",
 ]
 
 # Dependency install runs in its OWN cached layer, keyed only on the lockfiles.
