@@ -2369,7 +2369,14 @@
       "successReady": "Clone ready!",
       "successTraining": "Clone is training (we'll notify you when ready)",
       "help": "Upload a clean 30–60 second recording (no background noise, no music). Resemble learns the voice and returns a voice_id used for generation.",
-      "progressTraining": "Clone is training and upgrading to Ultra… ({status})"
+      "progressTraining": "Clone is training and upgrading to Ultra… ({status})",
+      "fromComputer": "From computer",
+      "fromDrive": "From Google Drive",
+      "driveFolderLabel": "Drive folder link (with the recording files)",
+      "loadFiles": "Load files",
+      "loadingFiles": "Loading…",
+      "noFiles": "No audio files found in the folder",
+      "cloneFromDriveCount": "Create clone from {count} files"
     },
     "recordingUploader": {
       "titleNew": "Upload editor recording (STS)",

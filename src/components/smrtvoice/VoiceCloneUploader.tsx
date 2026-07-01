@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
 interface Props {
@@ -15,24 +16,37 @@ interface Props {
 }
 
 type VoiceType = "rapid" | "pro";
+type Mode = "upload" | "drive";
+interface DriveFile {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size?: string;
+}
 
 export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: Props) {
   const t = useTranslations("smrtVoice.cloneUploader");
+  const [mode, setMode] = useState<Mode>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [voiceType, setVoiceType] = useState<VoiceType>("rapid");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
-  const mountedRef = useRef(true);
 
+  // Drive mode state
+  const [folder, setFolder] = useState("");
+  const [driveFiles, setDriveFiles] = useState<DriveFile[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loadingFiles, setLoadingFiles] = useState(false);
+
+  const mountedRef = useRef(true);
   useEffect(() => {
     return () => {
       mountedRef.current = false;
     };
   }, []);
 
-  // Poll Resemble clone/upgrade readiness for a short window. The upgrade to
-  // Ultra runs async (~minutes); we surface progress for ~40s then leave it
-  // training in the background.
+  // Poll Resemble clone/upgrade readiness for a short window (upgrade to Ultra
+  // runs async ~minutes); surface progress for ~40s then leave it in the bg.
   async function pollStatus(): Promise<string | null> {
     const READY = new Set(["ready", "completed", "active", "done", "available"]);
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -53,18 +67,26 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
     return null;
   }
 
+  async function afterClone(status: string, voiceId: string) {
+    onCloned?.(voiceId);
+    if (status === "ready") {
+      toast.success(t("successReady"));
+    } else {
+      setProgress(t("progressTraining", { status: "training" }));
+      const ready = await pollStatus();
+      toast.success(ready ? t("successReady") : t("successTraining"));
+    }
+  }
+
   async function onUpload() {
     if (!file) return;
     setBusy(true);
     setProgress(t("progressGettingUrl"));
     try {
-      const { upload_url, path } = await api<{
-        upload_url: string;
-        path: string;
-      }>(`/api/voice/characters/${characterId}/sample-upload-url`, {
-        method: "POST",
-        body: { fileName: file.name },
-      });
+      const { upload_url, path } = await api<{ upload_url: string; path: string }>(
+        `/api/voice/characters/${characterId}/sample-upload-url`,
+        { method: "POST", body: { fileName: file.name } },
+      );
 
       setProgress(t("progressUploading", { fileName: file.name }));
       const uploadResp = await fetch(upload_url, {
@@ -84,18 +106,57 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         method: "POST",
         body: { sample_path: path, voice_type: voiceType },
       });
-
-      onCloned?.(character.resemble_voice_id);
       setFile(null);
-
-      // Clone created as rapid and upgrading to Ultra — poll readiness briefly.
-      if (status === "ready") {
-        toast.success(t("successReady"));
-      } else {
-        setProgress(t("progressTraining", { status: "training" }));
-        const ready = await pollStatus();
-        toast.success(ready ? t("successReady") : t("successTraining"));
+      await afterClone(status, character.resemble_voice_id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      if (mountedRef.current) {
+        setBusy(false);
+        setProgress(null);
       }
+    }
+  }
+
+  async function loadDriveFiles() {
+    if (!folder.trim()) return;
+    setLoadingFiles(true);
+    try {
+      const { files } = await api<{ files: DriveFile[] }>("/api/voice/drive/list-audio", {
+        method: "POST",
+        body: { folder },
+      });
+      setDriveFiles(files);
+      setSelected(new Set(files.map((f) => f.id))); // pre-select all parts
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoadingFiles(false);
+    }
+  }
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function onCloneFromDrive() {
+    if (selected.size === 0) return;
+    setBusy(true);
+    setProgress(t("progressCloning"));
+    try {
+      const { status, character } = await api<{
+        status: string;
+        character: { resemble_voice_id: string };
+      }>(`/api/voice/characters/${characterId}/clone-from-drive`, {
+        method: "POST",
+        body: { file_ids: Array.from(selected) },
+      });
+      await afterClone(status, character.resemble_voice_id);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -114,31 +175,108 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <input
-          type="file"
-          accept="audio/wav,audio/mpeg,audio/mp4"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="block w-full text-sm file:me-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-secondary file:text-secondary-foreground"
-        />
-
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">{t("voiceTypeLabel")}</label>
-          <select
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            value={voiceType}
-            onChange={(e) => setVoiceType(e.target.value as VoiceType)}
+        {/* Source toggle */}
+        <div className="flex gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "upload" ? "default" : "outline"}
+            onClick={() => setMode("upload")}
             disabled={busy}
           >
-            <option value="pro">{t("voiceTypePro")}</option>
-            <option value="rapid">{t("voiceTypeRapid")}</option>
-          </select>
+            {t("fromComputer")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "drive" ? "default" : "outline"}
+            onClick={() => setMode("drive")}
+            disabled={busy}
+          >
+            {t("fromDrive")}
+          </Button>
         </div>
 
-        {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
+        {mode === "upload" ? (
+          <>
+            <input
+              type="file"
+              accept="audio/wav,audio/mpeg,audio/mp4"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm file:me-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-secondary file:text-secondary-foreground"
+            />
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">{t("voiceTypeLabel")}</label>
+              <select
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={voiceType}
+                onChange={(e) => setVoiceType(e.target.value as VoiceType)}
+                disabled={busy}
+              >
+                <option value="rapid">{t("voiceTypeRapid")}</option>
+                <option value="pro">{t("voiceTypePro")}</option>
+              </select>
+            </div>
+            {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
+            <Button onClick={onUpload} disabled={!file || busy}>
+              {busy ? t("uploading") : hasExistingVoice ? t("submitReplace") : t("submitNew")}
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">{t("driveFolderLabel")}</label>
+              <div className="flex gap-2">
+                <Input
+                  value={folder}
+                  onChange={(e) => setFolder(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  disabled={busy}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={loadDriveFiles}
+                  disabled={!folder.trim() || loadingFiles || busy}
+                >
+                  {loadingFiles ? t("loadingFiles") : t("loadFiles")}
+                </Button>
+              </div>
+            </div>
 
-        <Button onClick={onUpload} disabled={!file || busy}>
-          {busy ? t("uploading") : hasExistingVoice ? t("submitReplace") : t("submitNew")}
-        </Button>
+            {driveFiles && driveFiles.length === 0 && (
+              <p className="text-xs text-muted-foreground">{t("noFiles")}</p>
+            )}
+
+            {driveFiles && driveFiles.length > 0 && (
+              <div className="space-y-1 max-h-56 overflow-y-auto rounded-md border p-2">
+                {driveFiles.map((f) => (
+                  <label key={f.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(f.id)}
+                      onChange={() => toggle(f.id)}
+                      disabled={busy}
+                    />
+                    <span className="truncate" dir="ltr">
+                      {f.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
+
+            {driveFiles && driveFiles.length > 0 && (
+              <Button onClick={onCloneFromDrive} disabled={selected.size === 0 || busy}>
+                {busy
+                  ? t("uploading")
+                  : t("cloneFromDriveCount", { count: selected.size })}
+              </Button>
+            )}
+          </>
+        )}
 
         <p className="text-xs text-muted-foreground leading-relaxed">{t("help")}</p>
       </CardContent>

@@ -333,6 +333,187 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
   }
 });
 
+// POST /voice/drive/list-audio — list audio files in a Google Drive folder,
+// so the user can pick which recordings to clone from. Body: { folder }
+// (a Drive folder URL or a bare folder id).
+router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
+  const raw: string = (req.body?.folder ?? "").toString().trim();
+  if (!raw) return res.status(400).json({ error: "folder is required" });
+  // Accept a full Drive folder URL or a bare id.
+  const m = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/) ?? raw.match(/^([a-zA-Z0-9_-]+)$/);
+  const folderId = m?.[1];
+  if (!folderId) return res.status(400).json({ error: "Invalid Drive folder URL or id" });
+
+  try {
+    const drive = await getDriveClient(req.user!.id);
+    const out = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      pageSize: 200,
+      fields: "files(id, name, mimeType, size)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const AUDIO_RE = /\.(wav|mp3|m4a|aac|flac|ogg|opus)$/i;
+    const files = (out.data.files ?? []).filter((f) => {
+      const mime = f.mimeType ?? "";
+      // Google-native items (Docs/Sheets/shortcuts) can't be downloaded via
+      // alt=media even if named ".wav", so exclude them from the picker.
+      if (mime.startsWith("application/vnd.google-apps")) return false;
+      return mime.startsWith("audio/") || AUDIO_RE.test(f.name ?? "");
+    });
+    res.json({ files });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    res.status(502).json({ error: message });
+  }
+});
+
+// POST /voice/characters/:id/clone-from-drive — download the chosen Drive files,
+// stage them in storage, and create an Ultra clone (each part is split into
+// <=12s clips server-side). Body: { file_ids: string[] }.
+router.post(
+  "/voice/characters/:id/clone-from-drive",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const fileIds: string[] = Array.isArray(req.body?.file_ids) ? req.body.file_ids : [];
+    if (fileIds.length === 0) {
+      return res.status(400).json({ error: "file_ids is required" });
+    }
+
+    const { data: character, error: charErr } = await db
+      .from("smrtvoice_characters")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+    if (charErr) return res.status(500).json({ error: charErr.message });
+    if (!character) return res.status(404).json({ error: "Character not found" });
+
+    // Guard against buffering a huge file into memory (whole-file download).
+    const MAX_PART_BYTES = 300 * 1024 * 1024; // 300 MB per part
+
+    try {
+      const drive = await getDriveClient(req.user!.id);
+      const signedUrls: string[] = [];
+      const stagedPaths: string[] = [];
+      const skipped: string[] = [];
+
+      for (const fileId of fileIds) {
+        // Stage each Drive file in Supabase storage so voice-engine (no Google
+        // auth) can fetch it via a signed URL. A single bad file (native type,
+        // too large, transient error) is skipped, not fatal to the batch.
+        try {
+          const meta = await drive.files.get({
+            fileId,
+            fields: "name, mimeType, size",
+            supportsAllDrives: true,
+          });
+          const mime = meta.data.mimeType ?? "";
+          if (mime.startsWith("application/vnd.google-apps")) {
+            skipped.push(meta.data.name ?? fileId);
+            continue;
+          }
+          if (Number(meta.data.size ?? 0) > MAX_PART_BYTES) {
+            skipped.push(meta.data.name ?? fileId);
+            continue;
+          }
+
+          const dl = await drive.files.get(
+            { fileId, alt: "media", supportsAllDrives: true },
+            { responseType: "arraybuffer" },
+          );
+          const buffer = Buffer.from(dl.data as ArrayBuffer);
+          const safeName = (meta.data.name ?? `${fileId}.wav`).replace(/[^\w.\-]+/g, "_");
+          const path = `${req.org!.id}/characters/${character.id}/drive/${safeName}`;
+
+          const { error: upErr } = await db.storage
+            .from("smrtvoice-audio")
+            .upload(path, buffer, { contentType: "audio/wav", upsert: true });
+          if (upErr) {
+            skipped.push(safeName);
+            continue;
+          }
+
+          const { data: signed, error: signErr } = await db.storage
+            .from("smrtvoice-audio")
+            .createSignedUrl(path, 3600);
+          if (signErr || !signed) {
+            skipped.push(safeName);
+            continue;
+          }
+          signedUrls.push(signed.signedUrl);
+          stagedPaths.push(path);
+        } catch (fileErr) {
+          console.warn(
+            `[smrtvoice] drive file ${fileId} skipped:`,
+            fileErr instanceof Error ? fileErr.message : fileErr,
+          );
+          skipped.push(fileId);
+        }
+      }
+
+      if (signedUrls.length === 0) {
+        return res.status(502).json({
+          error: "No Drive files could be downloaded (native type, too large, or unreadable)",
+          skipped,
+        });
+      }
+
+      const client = getVoiceEngineClient();
+      const result = await client.createVoiceClone({
+        sample_urls: signedUrls,
+        name: character.name,
+        language: character.language,
+      });
+
+      // Record staged samples only AFTER the clone succeeds, so a mid-loop
+      // failure doesn't leave orphan rows. Non-fatal if the ledger write fails.
+      for (const path of stagedPaths) {
+        const { error: sErr } = await db.from("smrtvoice_voice_samples").insert({
+          org_id: req.org!.id,
+          character_id: character.id,
+          created_by: req.user!.id,
+          storage_path: path,
+          uploaded_to_resemble: true,
+        });
+        if (sErr) console.warn("[smrtvoice] voice_samples insert failed:", sErr.message);
+      }
+
+      const { data: updated, error: updateError } = await db
+        .from("smrtvoice_characters")
+        .update({ resemble_voice_id: result.voice_id })
+        .eq("id", character.id)
+        .select()
+        .maybeSingle();
+      if (updateError) return res.status(500).json({ error: updateError.message });
+
+      await emitEvent(
+        req.org!.id,
+        "smrtvoice",
+        "character.clone_created",
+        "character",
+        character.id,
+        { voice_id: result.voice_id, source: "drive", parts: signedUrls.length },
+      );
+
+      res.json({ character: updated, status: result.status, skipped });
+    } catch (err) {
+      const message =
+        err instanceof VoiceEngineError
+          ? `Voice Engine: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "Unknown error";
+      await notifyError(req.org!.id, "smrtvoice", {
+        title: "Failed to clone voice from Drive",
+        body: message,
+      });
+      res.status(502).json({ error: message });
+    }
+  },
+);
+
 // ============================================================
 // VOICE PROFILES
 // ============================================================
