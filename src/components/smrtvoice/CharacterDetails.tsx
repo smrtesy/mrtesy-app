@@ -1,8 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
+import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api/client";
 
@@ -23,9 +27,26 @@ interface Character {
 }
 
 export function CharacterDetails({ characterId }: { characterId: string }) {
+  const t = useTranslations("smrtVoice.characters");
   const tf = useTranslations("smrtVoice.characters.form");
+  const router = useRouter();
+  const locale = useLocale();
   const [character, setCharacter] = useState<Character | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function onDelete() {
+    if (!window.confirm(t("deleteConfirm"))) return;
+    setDeleting(true);
+    try {
+      await api(`/api/voice/characters/${characterId}`, { method: "DELETE" });
+      toast.success(t("deleted"));
+      router.push(`/${locale}/voice/characters`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      setDeleting(false);
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -57,19 +78,30 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
           <h1 className="text-2xl font-bold">{character.display_name ?? character.name}</h1>
           <p className="text-muted-foreground">{character.description ?? "—"}</p>
         </div>
-        <CharacterFormDialog
-          character={{
-            id: character.id,
-            name: character.name,
-            display_name: character.display_name,
-            description: character.description,
-            language: character.language,
-            age_years: character.age_years,
-            gender: character.gender,
-            personality_prompt: character.personality_prompt,
-          }}
-          onSaved={refresh}
-        />
+        <div className="flex items-center gap-2">
+          <CharacterFormDialog
+            character={{
+              id: character.id,
+              name: character.name,
+              display_name: character.display_name,
+              description: character.description,
+              language: character.language,
+              age_years: character.age_years,
+              gender: character.gender,
+              personality_prompt: character.personality_prompt,
+            }}
+            onSaved={refresh}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onDelete}
+            disabled={deleting}
+            title={t("delete")}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
       </div>
 
       <Card>

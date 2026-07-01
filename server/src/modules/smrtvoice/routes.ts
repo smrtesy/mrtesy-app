@@ -207,6 +207,26 @@ router.patch(
   },
 );
 
+// DELETE /voice/characters/:id — soft-delete (is_active=false) so the row and
+// any script casting that references it stay intact; it just leaves the list.
+router.delete(
+  "/voice/characters/:id",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { data, error } = await db
+      .from("smrtvoice_characters")
+      .update({ is_active: false })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .select("id")
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "Character not found" });
+    await emitEvent(req.org!.id, "smrtvoice", "character.deleted", "character", req.params.id, {});
+    res.json({ deleted: true });
+  },
+);
+
 // POST /voice/characters/:id/sample-upload-url — signed URL to upload a sample.
 router.post(
   "/voice/characters/:id/sample-upload-url",
@@ -1474,10 +1494,10 @@ router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => 
 // VOICE LIBRARY (Resemble account)
 // ============================================================
 
-router.get("/voice/resemble/account", requireRole("owner", "admin"), async (_req: Request, res: Response) => {
+router.get("/voice/resemble/account", requireRole("owner", "admin"), async (req: Request, res: Response) => {
   try {
     const client = getVoiceEngineClient();
-    res.json(await client.getResembleAccount());
+    res.json(await client.getResembleAccount(req.query.refresh === "true"));
   } catch (err) {
     res.status(502).json({ error: veMessage(err) });
   }
@@ -1486,7 +1506,7 @@ router.get("/voice/resemble/account", requireRole("owner", "admin"), async (_req
 router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: Request, res: Response) => {
   try {
     const client = getVoiceEngineClient();
-    const { voices } = await client.listVoices();
+    const { voices } = await client.listVoices(req.query.refresh === "true");
     // Which voices already have a stored preview for this org.
     const { data: previews } = await db
       .from("smrtvoice_voice_previews")

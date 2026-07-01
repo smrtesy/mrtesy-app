@@ -48,12 +48,13 @@ export function VoiceLibrary() {
   const [playing, setPlaying] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     setError(null);
+    const q = refresh ? "?refresh=true" : "";
     try {
       const [acct, vs, cs] = await Promise.all([
-        api<Account>("/api/voice/resemble/account").catch(() => null),
-        api<{ voices: Voice[] }>("/api/voice/resemble/voices"),
+        api<Account>(`/api/voice/resemble/account${q}`).catch(() => null),
+        api<{ voices: Voice[] }>(`/api/voice/resemble/voices${q}`),
         api<{ characters: Character[] }>("/api/voice/characters").catch(() => ({ characters: [] })),
       ]);
       setAccount(acct);
@@ -173,7 +174,7 @@ export function VoiceLibrary() {
             </a>
             <p className="text-[11px] text-muted-foreground">{t("creditsNote")}</p>
           </div>
-          <Button variant="outline" size="sm" onClick={load}>
+          <Button variant="outline" size="sm" onClick={() => load(true)}>
             <RefreshCw className="h-4 w-4 me-1" /> {t("refresh")}
           </Button>
         </CardContent>

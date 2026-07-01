@@ -2411,6 +2411,9 @@
       "subtitle": "Manage voice clones",
       "new": "New character",
       "empty": "No characters yet",
+      "delete": "Delete character",
+      "deleteConfirm": "Delete this character? It will be removed from your list.",
+      "deleted": "Character deleted",
       "form": {
         "nameLabel": "Real name",
         "namePlaceholder": "e.g. Rivka",
