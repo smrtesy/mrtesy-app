@@ -158,6 +158,7 @@
     "projects": "פרויקטים",
     "whatsapp": "WhatsApp",
     "whatsappAutoreply": "מענה אוטומטי",
+    "sms": "SMS",
     "knowledge": "מאגר ידע",
     "admin": "פלטפורמה",
     "platformAdmin": "ניהול כללי",
@@ -239,6 +240,15 @@
     "noTags": "אין עדיין תגיות. תייג אנשי קשר כדי לנתב לפי תגית.",
     "tagPhonePrompt": "מספר טלפון (לדוגמה 9725...):",
     "tagTagsPrompt": "תגיות (מופרדות בפסיק, למשל vip,לקוחות):"
+  },
+  "smsPage": {
+    "title": "הודעות SMS",
+    "conversations": "שיחות",
+    "refresh": "רענן",
+    "empty": "אין עדיין הודעות SMS. ברגע שיגיעו, הן יופיעו כאן.",
+    "selectConversation": "בחר שיחה כדי לצפות בהודעות",
+    "noMessages": "אין הודעות בשיחה הזו",
+    "back": "חזרה"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",

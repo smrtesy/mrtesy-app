@@ -45,10 +45,12 @@ interface SmsReceivedPayload {
   /** Originating phone number (preferred over the deprecated `phoneNumber`). */
   sender?: string;
   phoneNumber?: string;
-  /** The device's own receiving number; may be null. */
+  /** The device's own receiving number (incoming) / the destination (outgoing). */
   recipient?: string;
   simNumber?: number | null;
   receivedAt?: string;
+  /** Outgoing (sms:sent) timestamp field. */
+  sentAt?: string;
 }
 
 interface SmsWebhookEnvelope {
@@ -91,9 +93,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 200 });
   }
 
-  // We only ingest received SMS. Ack everything else (sent/delivered/failed,
-  // MMS, data-SMS) so the gateway treats them as handled and moves on.
-  if (envelope.event !== "sms:received") {
+  // Ingest both received (incoming) and sent (outgoing) SMS — the pipeline
+  // reads the user's whole conversation, like WhatsApp. Ack everything else
+  // (delivered/failed receipts, MMS, data-SMS) so the gateway moves on.
+  const isIncoming = envelope.event === "sms:received";
+  const isOutgoing = envelope.event === "sms:sent";
+  if (!isIncoming && !isOutgoing) {
     return NextResponse.json({ ok: true, ignored: envelope.event ?? "unknown" }, { status: 200 });
   }
 
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   try {
-    await ingestReceivedSms(db, conn.userId, deviceId, envelope.payload ?? {});
+    await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
   } catch (err) {
     console.error("[sms-webhook] ingest error:", err);
     return NextResponse.json({ ok: false, error: "ingest_failed" }, { status: 500 });
@@ -235,37 +240,45 @@ function timingSafeEqual(a: string, b: string): boolean {
 // Ingestion
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function ingestReceivedSms(
+async function ingestSms(
   db: SupabaseAdmin,
   userId: string,
   deviceId: string,
+  isIncoming: boolean,
   payload: SmsReceivedPayload,
 ): Promise<void> {
   const messageId = String(payload.messageId ?? "").trim();
-  const sender = String(payload.sender ?? payload.phoneNumber ?? "").trim();
+  // The conversation peer is the OTHER party: the sender for an incoming SMS,
+  // the recipient for one we sent. `phoneNumber` is the deprecated fallback.
+  const peer = String(
+    (isIncoming ? payload.sender : payload.recipient) ?? payload.phoneNumber ?? "",
+  ).trim();
   const body = String(payload.message ?? "");
-  if (!messageId || !sender) {
-    console.warn("[sms-webhook] payload missing messageId/sender, skipping");
+  if (!messageId || !peer) {
+    console.warn("[sms-webhook] payload missing messageId/peer, skipping");
     return;
   }
 
-  const receivedAt = parseReceivedAt(payload.receivedAt);
+  const receivedAt = parseReceivedAt(payload.receivedAt ?? payload.sentAt);
   const simNumber =
     typeof payload.simNumber === "number" && Number.isFinite(payload.simNumber)
       ? payload.simNumber
       : null;
-  const isOtp = looksLikeOtp(body);
+  // OTP detection applies only to INCOMING messages — an outgoing SMS the user
+  // wrote is never a one-time code to suppress.
+  const isOtp = isIncoming ? looksLikeOtp(body) : false;
 
-  // 1. Durable record of the SMS (idempotent on re-delivery). OTP codes are
-  //    kept here for audit but go no further.
+  // 1. Durable record (idempotent on re-delivery). For outgoing SMS the "from"
+  //    is the user's own line, which the gateway doesn't report, so we store a
+  //    "me" sentinel (from_phone is NOT NULL) and key threads off the peer.
   const { error: smsErr } = await db.from("sms_messages").upsert(
     {
       user_id: userId,
       message_id: messageId,
       device_id: deviceId,
-      direction: "incoming",
-      from_phone: sender,
-      to_phone: payload.recipient ?? null,
+      direction: isIncoming ? "incoming" : "outgoing",
+      from_phone: isIncoming ? peer : "me",
+      to_phone: isIncoming ? (payload.recipient ?? null) : peer,
       sim_number: simNumber,
       body_text: body,
       is_otp: isOtp,
@@ -276,18 +289,19 @@ async function ingestReceivedSms(
   );
   if (smsErr) throw new Error(`sms_messages upsert: ${smsErr.message}`);
 
-  // 2. OTP / verification codes never reach the AI pipeline.
+  // 2. OTP / verification codes never reach the AI pipeline; empty bodies have
+  //    nothing to classify.
   if (isOtp) return;
-  // Nothing actionable in an empty body either.
   if (body.trim().length === 0) return;
 
-  const digits = sender.replace(/[^\d+]/g, "");
-  const subject = `SMS מ-${sender}`;
+  const dirLabel = isIncoming ? "INCOMING" : "OUTGOING";
+  const subject = isIncoming ? `SMS מ-${peer}` : `SMS ל-${peer}`;
   const rawContent = [
-    `SMS from: ${sender}`,
-    `Received: ${receivedAt}`,
+    `SMS conversation with: ${peer}`,
+    `Direction: ${dirLabel}${isIncoming ? "" : " (sent by the user)"}`,
+    `Time: ${receivedAt}`,
     `\n--- MESSAGE ---`,
-    body.replace(/\s+/g, " ").trim(),
+    `[${dirLabel}] ${body.replace(/\s+/g, " ").trim()}`,
   ].join("\n");
 
   const { error: srcErr } = await db.from("source_messages").upsert(
@@ -295,17 +309,19 @@ async function ingestReceivedSms(
       user_id: userId,
       source_type: "sms",
       source_id: `sms:${messageId}`,
-      sender,
+      sender: peer,
       sender_email: null,
       subject,
       body_text: body.slice(0, 1000),
       raw_content: rawContent.slice(0, 3000),
       received_at: receivedAt,
-      source_url: digits ? `sms:${digits}` : null,
-      reply_to_context: sender,
+      // Carry the exact peer so the in-app SMS reader can match the thread; also
+      // a valid sms: URI as a mobile fallback (opens the native SMS app).
+      source_url: `sms:${peer}`,
+      reply_to_context: peer,
       processing_status: "pending",
       ai_classification: null,
-      metadata: { fromPhone: sender, deviceId, messageId, channel: "sms" },
+      metadata: { peerPhone: peer, direction: isIncoming ? "incoming" : "outgoing", deviceId, messageId, channel: "sms" },
     },
     { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
   );
