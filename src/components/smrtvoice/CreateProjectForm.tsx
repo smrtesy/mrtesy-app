@@ -17,6 +17,12 @@ interface Tab {
   title: string;
 }
 
+interface DriveDoc {
+  id: string;
+  name: string;
+  url: string;
+}
+
 export function CreateProjectForm() {
   const t = useTranslations("smrtVoice.projects.form");
   const locale = useLocale();
@@ -33,6 +39,34 @@ export function CreateProjectForm() {
   const [mode, setMode] = useState<GenerationMode>("tts");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Google Drive doc picker (alternative to pasting the link).
+  const [docFolder, setDocFolder] = useState("");
+  const [driveDocs, setDriveDocs] = useState<DriveDoc[] | null>(null);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+
+  async function loadDocs() {
+    if (!docFolder.trim()) return;
+    setLoadingDocs(true);
+    try {
+      const { files } = await api<{ files: DriveDoc[] }>("/api/voice/drive/list-docs", {
+        method: "POST",
+        body: { folder: docFolder },
+      });
+      setDriveDocs(files);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoadingDocs(false);
+    }
+  }
+
+  function pickDoc(doc: DriveDoc) {
+    setGoogleDocUrl(doc.url);
+    setTabs([]);
+    setTabId("");
+    setDriveDocs(null);
+  }
 
   async function loadTabs() {
     if (!googleDocUrl) return;
@@ -118,6 +152,42 @@ export function CreateProjectForm() {
           <option value="he">עברית</option>
           <option value="en">English</option>
         </select>
+      </div>
+
+      <div className="space-y-1 rounded-md border p-3">
+        <label className="text-sm font-medium">{t("pickFromDrive")}</label>
+        <div className="flex gap-2">
+          <Input
+            value={docFolder}
+            onChange={(e) => setDocFolder(e.target.value)}
+            placeholder="https://drive.google.com/drive/folders/..."
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={loadDocs}
+            disabled={!docFolder.trim() || loadingDocs}
+          >
+            {loadingDocs ? t("loadingDocs") : t("loadDocs")}
+          </Button>
+        </div>
+        {driveDocs && driveDocs.length === 0 && (
+          <p className="text-xs text-muted-foreground">{t("noDocs")}</p>
+        )}
+        {driveDocs && driveDocs.length > 0 && (
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {driveDocs.map((doc) => (
+              <button
+                key={doc.id}
+                type="button"
+                onClick={() => pickDoc(doc)}
+                className="block w-full text-start rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+              >
+                {doc.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="space-y-1">

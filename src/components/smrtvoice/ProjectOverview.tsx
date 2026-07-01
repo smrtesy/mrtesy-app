@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useLocale } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +31,8 @@ interface Project {
 
 export function ProjectOverview({ projectId }: { projectId: string }) {
   const locale = useLocale();
+  const router = useRouter();
+  const t = useTranslations("smrtVoice.projects");
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,6 +103,19 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
     }
   }
 
+  async function onDelete() {
+    if (!window.confirm(t("deleteConfirm"))) return;
+    setBusy(true);
+    try {
+      await api(`/api/voice/projects/${projectId}`, { method: "DELETE" });
+      toast.success(t("deleted"));
+      router.push(`/${locale}/voice`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      setBusy(false);
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!project) return <p className="text-sm text-muted-foreground">…</p>;
 
@@ -142,6 +159,9 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
             <Button variant="ghost">Google Doc ↗</Button>
           </a>
         )}
+        <Button variant="destructive" onClick={onDelete} disabled={busy} className="ms-auto">
+          {t("delete")}
+        </Button>
       </div>
 
       {project.generation_mode === "sts" && (

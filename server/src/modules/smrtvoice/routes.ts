@@ -635,6 +635,38 @@ router.post("/voice/projects", async (req: Request, res: Response) => {
   res.status(201).json({ project: data });
 });
 
+// POST /voice/drive/list-docs — list Google Docs in a Drive folder, so the
+// user can pick the script doc instead of pasting a link. Body: { folder }.
+router.post("/voice/drive/list-docs", async (req: Request, res: Response) => {
+  const raw: string = (req.body?.folder ?? "").toString().trim();
+  if (!raw) return res.status(400).json({ error: "folder is required" });
+  const m = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/) ?? raw.match(/^([a-zA-Z0-9_-]+)$/);
+  const folderId = m?.[1];
+  if (!folderId) return res.status(400).json({ error: "Invalid Drive folder URL or id" });
+
+  try {
+    const drive = await getDriveClient(req.user!.id);
+    const out = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.document'`,
+      pageSize: 200,
+      fields: "files(id, name, webViewLink)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    // webViewLink is the canonical /document/d/<id>/edit URL the project form expects.
+    const files = (out.data.files ?? []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      url: f.webViewLink ?? `https://docs.google.com/document/d/${f.id}/edit`,
+    }));
+    res.json({ files });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    res.status(502).json({ error: message });
+  }
+});
+
 // POST /voice/doc-tabs — list the tabs of a Google Doc (for the language-tab
 // picker in the create-project form). Body: { google_doc_url }.
 router.post("/voice/doc-tabs", async (req: Request, res: Response) => {
@@ -729,6 +761,23 @@ router.get("/voice/projects/:id", async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Project not found" });
   res.json({ project: data });
+});
+
+// DELETE /voice/projects/:id — remove a project (lines & jobs cascade via FK).
+router.delete("/voice/projects/:id", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_projects")
+    .delete()
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select("id")
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Project not found" });
+
+  await emitEvent(req.org!.id, "smrtvoice", "project.deleted", "project", req.params.id, {});
+  res.json({ deleted: true });
 });
 
 router.post("/voice/projects/:id/parse", async (req: Request, res: Response) => {

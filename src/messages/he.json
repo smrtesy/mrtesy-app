@@ -2258,6 +2258,9 @@
       "new": "פרויקט חדש",
       "empty": "אין פרויקטים עדיין",
       "createFirst": "צור את הפרויקט הראשון שלך",
+      "delete": "מחק פרויקט",
+      "deleteConfirm": "למחוק את הפרויקט? הפעולה בלתי הפיכה ותמחק גם את השורות וההקלטות שלו.",
+      "deleted": "הפרויקט נמחק",
       "form": {
         "name": "שם הפרויקט",
         "namePlaceholder": "לדוגמה: NM57",
@@ -2275,7 +2278,11 @@
         "loadTabs": "טען טאבים",
         "loadingTabs": "טוען…",
         "tab": "טאב (שפה)",
-        "tabHelp": "נבחר אוטומטית הטאב בעברית; אפשר לשנות"
+        "tabHelp": "נבחר אוטומטית הטאב בעברית; אפשר לשנות",
+        "pickFromDrive": "בחר מסמך מ-Google Drive",
+        "loadDocs": "טען מסמכים",
+        "loadingDocs": "טוען…",
+        "noDocs": "לא נמצאו מסמכי Google Docs בתיקיה"
       },
       "status": {
         "draft": "טיוטה",
@@ -2319,6 +2326,7 @@
         "genderNeutral": "ניטרלי",
         "personalityPromptLabel": "Personality prompt (English, ל-LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "cloneHint": "אחרי היצירה — במסך הדמות תוכל להעלות הקלטה מהמחשב או לבחור קבצים מ-Google Drive כדי ליצור את הקלון (Ultra).",
         "submit": "צור דמות",
         "cancel": "ביטול"
       }

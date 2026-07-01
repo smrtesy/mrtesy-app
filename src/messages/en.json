@@ -2259,6 +2259,9 @@
       "new": "New project",
       "empty": "No projects yet",
       "createFirst": "Create your first project",
+      "delete": "Delete project",
+      "deleteConfirm": "Delete this project? This is irreversible and also removes its lines and recordings.",
+      "deleted": "Project deleted",
       "form": {
         "name": "Project name",
         "namePlaceholder": "e.g. NM57",
@@ -2276,7 +2279,11 @@
         "loadTabs": "Load tabs",
         "loadingTabs": "Loading…",
         "tab": "Tab (language)",
-        "tabHelp": "The Hebrew tab is auto-selected; you can change it"
+        "tabHelp": "The Hebrew tab is auto-selected; you can change it",
+        "pickFromDrive": "Pick a document from Google Drive",
+        "loadDocs": "Load documents",
+        "loadingDocs": "Loading…",
+        "noDocs": "No Google Docs found in the folder"
       },
       "status": {
         "draft": "Draft",
@@ -2320,6 +2327,7 @@
         "genderNeutral": "Neutral",
         "personalityPromptLabel": "Personality prompt (English, for LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "cloneHint": "After creating — on the character screen you can upload a recording or pick files from Google Drive to create the (Ultra) clone.",
         "submit": "Create character",
         "cancel": "Cancel"
       }
