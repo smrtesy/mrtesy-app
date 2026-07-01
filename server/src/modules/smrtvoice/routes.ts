@@ -8,6 +8,7 @@
  * is mounted separately at app level (before the auth guards).
  */
 
+import crypto from "node:crypto";
 import { Readable } from "node:stream";
 
 import { Router } from "express";
@@ -47,6 +48,20 @@ async function getGoogleAccessToken(userId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Make a Supabase-Storage-safe object key segment. Storage rejects non-ASCII
+ * (e.g. Hebrew) and some punctuation → "InvalidKey". Keep [A-Za-z0-9._-],
+ * collapse the rest to "_", and always prefix a short random token so two
+ * differently-named-but-same-after-sanitising files never collide/overwrite.
+ */
+function safeStorageName(name: string, fallback = "audio.wav"): string {
+  const cleaned = (name || "")
+    .replace(/[^\w.\-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const base = cleaned || fallback;
+  return `${crypto.randomBytes(4).toString("hex")}_${base}`;
 }
 
 /** Resolve a Drive folder id from a full folder URL or a bare id. */
@@ -110,6 +125,7 @@ router.post(
         // All clones are created rapid then upgraded to Ultra; kept for the column.
         voice_type: body.voice_type ?? "rapid",
         age_group: body.age_group ?? null,
+        age_years: typeof body.age_years === "number" ? body.age_years : null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
         ...(orgSettings?.default_resemble_model
@@ -155,6 +171,7 @@ const CHARACTER_UPDATABLE = new Set([
   "language",
   "voice_type",
   "age_group",
+  "age_years",
   "gender",
   "personality_prompt",
   "resemble_model",
@@ -208,7 +225,7 @@ router.post(
     if (charErr) return res.status(500).json({ error: charErr.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    const path = `${req.org!.id}/characters/${characterId}/samples/${fileName}`;
+    const path = `${req.org!.id}/characters/${characterId}/samples/${safeStorageName(fileName)}`;
     const { data, error } = await db.storage
       .from("smrtvoice-audio")
       .createSignedUploadUrl(path);
@@ -218,13 +235,18 @@ router.post(
   },
 );
 
-// POST /voice/characters/:id/clone — body: { sample_path }
+// POST /voice/characters/:id/clone — body: { sample_path } or { sample_paths: [] }
 router.post(
   "/voice/characters/:id/clone",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { sample_path } = req.body ?? {};
-    if (!sample_path) return res.status(400).json({ error: "sample_path is required" });
+    // Accept one path (legacy) or many (multi-file upload from the computer).
+    const paths: string[] = Array.isArray(req.body?.sample_paths)
+      ? req.body.sample_paths.filter(Boolean)
+      : req.body?.sample_path
+        ? [req.body.sample_path]
+        : [];
+    if (paths.length === 0) return res.status(400).json({ error: "sample_path(s) required" });
 
     const { data: character, error: charError } = await db
       .from("smrtvoice_characters")
@@ -236,17 +258,21 @@ router.post(
     if (charError) return res.status(500).json({ error: charError.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    const { data: signed, error: signErr } = await db.storage
-      .from("smrtvoice-audio")
-      .createSignedUrl(sample_path, 3600);
-    if (signErr || !signed) {
-      return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+    const signedUrls: string[] = [];
+    for (const p of paths) {
+      const { data: signed, error: signErr } = await db.storage
+        .from("smrtvoice-audio")
+        .createSignedUrl(p, 3600);
+      if (signErr || !signed) {
+        return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+      }
+      signedUrls.push(signed.signedUrl);
     }
 
     try {
       const client = getVoiceEngineClient();
       const result = await client.createVoiceClone({
-        sample_url: signed.signedUrl,
+        sample_urls: signedUrls,
         name: character.name,
         language: character.language,
       });
@@ -259,27 +285,25 @@ router.post(
         .maybeSingle();
       if (updateError) return res.status(500).json({ error: updateError.message });
 
-      const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
-        org_id: req.org!.id,
-        character_id: character.id,
-        created_by: req.user!.id,
-        storage_path: sample_path,
-        uploaded_to_resemble: true,
-        resemble_sample_id: result.voice_id,
-      });
-      if (sampleErr) console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
+      for (const p of paths) {
+        const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
+          org_id: req.org!.id,
+          character_id: character.id,
+          created_by: req.user!.id,
+          storage_path: p,
+          uploaded_to_resemble: true,
+          resemble_sample_id: result.voice_id,
+        });
+        if (sampleErr) console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
+      }
 
       await emitEvent(req.org!.id, "smrtvoice", "character.clone_created", "character", character.id, {
         voice_id: result.voice_id,
+        parts: paths.length,
       });
       res.json({ character: updated, status: result.status });
     } catch (err) {
-      const message =
-        err instanceof VoiceEngineError
-          ? `Voice Engine: ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : "Unknown error";
+      const message = veMessage(err);
       await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create voice clone", body: message });
       res.status(502).json({ error: message });
     }
@@ -448,12 +472,7 @@ router.post(
       });
       res.json({ character: updated, status: result.status, skipped });
     } catch (err) {
-      const message =
-        err instanceof VoiceEngineError
-          ? `Voice Engine: ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : "Unknown error";
+      const message = veMessage(err);
       await notifyError(req.org!.id, "smrtvoice", { title: "Failed to clone voice from Drive", body: message });
       res.status(502).json({ error: message });
     }
@@ -1097,7 +1116,7 @@ router.post("/voice/scripts/:id/upload-url", async (req: Request, res: Response)
   if (sErr) return res.status(500).json({ error: sErr.message });
   if (!script) return res.status(404).json({ error: "Script not found" });
 
-  const path = `${req.org!.id}/scripts/${scriptId}/input/${fileName}`;
+  const path = `${req.org!.id}/scripts/${scriptId}/input/${safeStorageName(fileName, "recording.wav")}`;
   const { data, error } = await db.storage.from("smrtvoice-audio").createSignedUploadUrl(path);
   if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
   res.json({ upload_url: data.signedUrl, path: data.path, token: data.token });

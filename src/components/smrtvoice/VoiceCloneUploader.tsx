@@ -15,7 +15,6 @@ interface Props {
   onCloned?: (voiceId: string) => void;
 }
 
-type VoiceType = "rapid" | "pro";
 type Mode = "upload" | "drive";
 interface DriveFile {
   id: string;
@@ -27,8 +26,7 @@ interface DriveFile {
 export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: Props) {
   const t = useTranslations("smrtVoice.cloneUploader");
   const [mode, setMode] = useState<Mode>("upload");
-  const [file, setFile] = useState<File | null>(null);
-  const [voiceType, setVoiceType] = useState<VoiceType>("rapid");
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
 
@@ -79,23 +77,26 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
   }
 
   async function onUpload() {
-    if (!file) return;
+    if (files.length === 0) return;
     setBusy(true);
-    setProgress(t("progressGettingUrl"));
     try {
-      const { upload_url, path } = await api<{ upload_url: string; path: string }>(
-        `/api/voice/characters/${characterId}/sample-upload-url`,
-        { method: "POST", body: { fileName: file.name } },
-      );
-
-      setProgress(t("progressUploading", { fileName: file.name }));
-      const uploadResp = await fetch(upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "audio/wav" },
-        body: file,
-      });
-      if (!uploadResp.ok) {
-        throw new Error(`Upload failed: ${uploadResp.status} ${await uploadResp.text()}`);
+      // Upload every selected file, then build the clone from all parts.
+      const paths: string[] = [];
+      for (const f of files) {
+        setProgress(t("progressUploading", { fileName: f.name }));
+        const { upload_url, path } = await api<{ upload_url: string; path: string }>(
+          `/api/voice/characters/${characterId}/sample-upload-url`,
+          { method: "POST", body: { fileName: f.name } },
+        );
+        const uploadResp = await fetch(upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": f.type || "audio/wav" },
+          body: f,
+        });
+        if (!uploadResp.ok) {
+          throw new Error(`Upload failed: ${uploadResp.status} ${await uploadResp.text()}`);
+        }
+        paths.push(path);
       }
 
       setProgress(t("progressCloning"));
@@ -104,9 +105,9 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         character: { resemble_voice_id: string };
       }>(`/api/voice/characters/${characterId}/clone`, {
         method: "POST",
-        body: { sample_path: path, voice_type: voiceType },
+        body: { sample_paths: paths },
       });
-      setFile(null);
+      setFiles([]);
       await afterClone(status, character.resemble_voice_id);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
@@ -201,24 +202,19 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
           <>
             <input
               type="file"
+              multiple
               accept="audio/wav,audio/mpeg,audio/mp4"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              disabled={busy}
               className="block w-full text-sm file:me-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-secondary file:text-secondary-foreground"
             />
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">{t("voiceTypeLabel")}</label>
-              <select
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={voiceType}
-                onChange={(e) => setVoiceType(e.target.value as VoiceType)}
-                disabled={busy}
-              >
-                <option value="rapid">{t("voiceTypeRapid")}</option>
-                <option value="pro">{t("voiceTypePro")}</option>
-              </select>
-            </div>
+            {files.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {files.map((f) => f.name).join(", ")}
+              </p>
+            )}
             {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
-            <Button onClick={onUpload} disabled={!file || busy}>
+            <Button onClick={onUpload} disabled={files.length === 0 || busy}>
               {busy ? t("uploading") : hasExistingVoice ? t("submitReplace") : t("submitNew")}
             </Button>
           </>
