@@ -106,15 +106,19 @@ class VoiceEngineClient {
   }
 
   async createVoiceClone(params: {
-    sample_url: string;
+    sample_url?: string;
+    sample_urls?: string[];
     name: string;
     voice_type?: "rapid" | "pro";
     language?: string;
   }): Promise<{ voice_id: string; status: string }> {
     return this.request("POST", "/voices/clone", {
-      sample_audio_url: params.sample_url,
+      // Prefer the multi-part list (each part is split into <=12s clips
+      // server-side); fall back to a single sample for the legacy path.
+      sample_audio_urls: params.sample_urls ?? undefined,
+      sample_audio_url: params.sample_url ?? undefined,
       voice_name: params.name,
-      voice_type: params.voice_type ?? "pro",
+      voice_type: params.voice_type ?? "rapid",
       language: params.language ?? "he",
     });
   }

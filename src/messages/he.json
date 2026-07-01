@@ -2358,7 +2358,14 @@
       "successReady": "הקלון מוכן!",
       "successTraining": "הקלון בתהליך אימון (ידע אותך כשמוכן)",
       "help": "העלה הקלטה של 30–60 שניות באיכות נקייה (בלי רעש רקע, בלי מוזיקה). רזמבל ילמד את הקול ומחזיר voice_id שמשמש לייצור.",
-      "progressTraining": "הקלון בתהליך אימון ושדרוג ל-Ultra… ({status})"
+      "progressTraining": "הקלון בתהליך אימון ושדרוג ל-Ultra… ({status})",
+      "fromComputer": "מהמחשב",
+      "fromDrive": "מ-Google Drive",
+      "driveFolderLabel": "קישור לתיקיית Drive (עם קבצי ההקלטה)",
+      "loadFiles": "טען קבצים",
+      "loadingFiles": "טוען…",
+      "noFiles": "לא נמצאו קבצי אודיו בתיקיה",
+      "cloneFromDriveCount": "צור קלון מ-{count} קבצים"
     },
     "recordingUploader": {
       "titleNew": "העלה הקלטת עורך (STS)",
