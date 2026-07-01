@@ -726,6 +726,12 @@ router.post("/voice/projects/:id/scripts", async (req: Request, res: Response) =
     .single();
 
   if (error || !data) {
+    // Two scripts added to the same folder at once race on MAX(seq)+1 and
+    // collide on UNIQUE(project_id,seq)/(org_id,code). Surface a friendly
+    // retry instead of a raw 500 — the next attempt picks the next seq.
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "A script was just added — please try again" });
+    }
     return res.status(500).json({ error: error?.message ?? "create failed" });
   }
   await emitEvent(req.org!.id, "smrtvoice", "script.created", "script", data.id, { code });
@@ -989,6 +995,19 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
 
+  // Any speaker left uncast — or cast to a character that has no voice clone
+  // yet — would have its lines silently dropped. Block and name them so the
+  // user can finish casting rather than generate a broken take.
+  const unvoiced = (cast ?? [])
+    .filter((c) => !speakerMap[c.speaker_name])
+    .map((c) => c.speaker_name);
+  if (unvoiced.length > 0) {
+    return res.status(400).json({
+      error: `These speakers have no usable voice yet: ${unvoiced.join(", ")}`,
+      speakers: unvoiced,
+    });
+  }
+
   try {
     let inputAudioUrl: string | undefined;
     if (script.generation_mode === "sts" && script.input_recording_path) {
@@ -1227,7 +1246,13 @@ router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
 async function queueRegeneration(
   req: Request,
   res: Response,
-  script: { id: string; project_id: string; code: string },
+  script: {
+    id: string;
+    project_id: string;
+    code: string;
+    generation_mode?: "sts" | "tts";
+    input_recording_path?: string | null;
+  },
   lineNumbers: number[],
 ) {
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
@@ -1263,6 +1288,18 @@ async function queueRegeneration(
     }
   }
 
+  // Preserve the script's generation mode — regenerating a line in an STS
+  // script must re-render via speech-to-speech (with the input recording),
+  // not fall back to TTS and produce a mismatched take.
+  const mode = script.generation_mode ?? "tts";
+  let inputAudioUrl: string | undefined;
+  if (mode === "sts" && script.input_recording_path) {
+    const { data: urlData } = await db.storage
+      .from("smrtvoice-audio")
+      .createSignedUrl(script.input_recording_path, 3600);
+    inputAudioUrl = urlData?.signedUrl;
+  }
+
   try {
     const client = getVoiceEngineClient();
     const engineJob = await client.createJob({
@@ -1272,7 +1309,8 @@ async function queueRegeneration(
       user_id: req.user!.id,
       job_type: "regenerate_line",
       adapter: settings?.default_adapter ?? "resemble",
-      mode: "tts",
+      mode,
+      input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
@@ -1322,7 +1360,7 @@ async function loadScriptForLine(req: Request, lineId: string) {
   if (!line) return null;
   const { data: script } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code")
+    .select("id, project_id, code, generation_mode, input_recording_path")
     .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1366,7 +1404,7 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
 router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code")
+    .select("id, project_id, code, generation_mode, input_recording_path")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
