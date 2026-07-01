@@ -109,6 +109,98 @@ router.post("/sms/connect", ...gate, async (req: Request, res: Response) => {
   });
 });
 
+// ── Conversation list ────────────────────────────────────────────────────────
+// One row per conversation peer (the other party), newest first. Mirrors the
+// WhatsApp threads endpoint: pull a recent window and aggregate in JS. The peer
+// is the sender on incoming rows and the recipient on outgoing rows (outgoing
+// from_phone is the "me" sentinel, so it is never a peer).
+router.get("/sms/threads", ...gate, async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 2000);
+  const { data, error } = await db
+    .from("sms_messages")
+    .select("direction, from_phone, to_phone, body_text, is_otp, received_at")
+    .eq("user_id", req.user!.id)
+    .order("received_at", { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Tasks created from SMS, grouped by the peer stored in metadata.
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("id, source_messages!inner(source_type, user_id, metadata)")
+    .eq("source_messages.source_type", "sms")
+    .eq("source_messages.user_id", req.user!.id)
+    .neq("status", "archived")
+    .limit(2000);
+  const tasksByPeer = new Map<string, number>();
+  for (const t of taskRows ?? []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sm = (t as any).source_messages;
+    const row = Array.isArray(sm) ? sm[0] : sm;
+    const peer = (row?.metadata?.peerPhone as string | undefined) ?? undefined;
+    if (!peer) continue;
+    tasksByPeer.set(peer, (tasksByPeer.get(peer) ?? 0) + 1);
+  }
+
+  type Row = NonNullable<typeof data>[number];
+  const peerOf = (m: Row) => (m.direction === "incoming" ? m.from_phone : m.to_phone);
+  const latest = new Map<string, Row>();
+  for (const row of data ?? []) {
+    const peer = peerOf(row);
+    if (!peer || peer === "me") continue;
+    if (!latest.has(peer)) latest.set(peer, row);
+  }
+  const threads = [...latest.entries()].map(([peer, m]) => ({
+    peer,
+    last_message_at: m.received_at,
+    last_direction: m.direction,
+    last_body_text: m.body_text,
+    task_count: tasksByPeer.get(peer) ?? 0,
+  }));
+  return res.json({ threads });
+});
+
+// ── Messages within a conversation ───────────────────────────────────────────
+// GET /sms/messages?peer=<phone>  → chronological (oldest→newest), read-only.
+router.get("/sms/messages", ...gate, async (req: Request, res: Response) => {
+  const peer = String(req.query.peer ?? "").trim();
+  if (!peer) return res.status(400).json({ error: "peer is required" });
+  // Strip PostgREST or()-delimiter characters so the filter can't be broken.
+  const safePeer = peer.replace(/[,()*\\]/g, "");
+  const limit = Math.min(parseInt(String(req.query.limit ?? "300"), 10) || 300, 1000);
+
+  const { data, error } = await db
+    .from("sms_messages")
+    .select("id, message_id, direction, from_phone, to_phone, body_text, is_otp, received_at")
+    .eq("user_id", req.user!.id)
+    .or(`from_phone.eq.${safePeer},to_phone.eq.${safePeer}`)
+    .order("received_at", { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Tasks created from this peer's messages (badge in the UI).
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("id, title, title_he, status, created_at, source_messages!inner(source_type, user_id, metadata)")
+    .eq("source_messages.source_type", "sms")
+    .eq("source_messages.user_id", req.user!.id)
+    // Parameterized eq (not an or() filter), so match the RAW peer — peerPhone
+    // is stored verbatim in metadata; using the sanitized form could under-count.
+    .eq("source_messages.metadata->>peerPhone", peer)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  const tasks = (taskRows ?? []).map((t) => ({
+    id: t.id,
+    title: t.title,
+    title_he: t.title_he,
+    status: t.status,
+    created_at: t.created_at,
+  }));
+
+  return res.json({ messages: [...(data ?? [])].reverse(), tasks });
+});
+
 // ── Deactivate a device ──────────────────────────────────────────────────────
 // Body: { id: string }  (sms_connections.id)
 router.post("/sms/disconnect", ...gate, async (req: Request, res: Response) => {

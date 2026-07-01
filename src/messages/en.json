@@ -158,6 +158,7 @@
     "projects": "Projects",
     "whatsapp": "WhatsApp",
     "whatsappAutoreply": "Auto-reply",
+    "sms": "SMS",
     "knowledge": "Knowledge",
     "admin": "Platform",
     "platformAdmin": "Admin",
@@ -239,6 +240,15 @@
     "noTags": "No tags yet. Tag contacts to route by tag.",
     "tagPhonePrompt": "Phone number (e.g. 9725...):",
     "tagTagsPrompt": "Tags (comma separated, e.g. vip,clients):"
+  },
+  "smsPage": {
+    "title": "SMS Messages",
+    "conversations": "Conversations",
+    "refresh": "Refresh",
+    "empty": "No SMS yet. They'll show up here once they arrive.",
+    "selectConversation": "Select a conversation to view its messages",
+    "noMessages": "No messages in this conversation",
+    "back": "Back"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Mail, MessageCircle, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
 import { SourceMessageReader } from "./SourceMessageReader";
@@ -12,6 +13,7 @@ const SOURCE_ICONS: Record<string, typeof Mail> = {
   gmail_sent:      Send,
   whatsapp:        MessageCircle,
   whatsapp_echo:   MessageCircle,
+  sms:             MessageSquare,
   google_drive:    FolderOpen,
   google_calendar: Calendar,
 };
@@ -46,6 +48,8 @@ interface SourceLinkProps {
  */
 export function SourceLink({ source, stopPropagation, className }: SourceLinkProps) {
   const waPanel = useWhatsAppPanel();
+  const router = useRouter();
+  const { locale } = useParams() as { locale: string };
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
   // In-app email reader, opened on mobile Gmail taps (see handleClick below).
@@ -90,6 +94,26 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
           else waPanel.open();
         }}
         title={`${label} — open in WhatsApp`}
+        className={cn(base, interactive, className)}
+      >
+        <Icon className="h-3 w-3" />
+        <span>{label}</span>
+      </button>
+    );
+  }
+
+  // SMS sources open the in-app SMS reader on the matching conversation, not the
+  // native sms: link. The peer is stored verbatim in source_url as `sms:<peer>`.
+  if (row.source_type === "sms") {
+    const peer = (row.source_url ?? "").startsWith("sms:") ? (row.source_url as string).slice(4) : "";
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          if (stopPropagation) e.stopPropagation();
+          router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}` : `/${locale}/sms`);
+        }}
+        title={`${label} — open in SMS`}
         className={cn(base, interactive, className)}
       >
         <Icon className="h-3 w-3" />

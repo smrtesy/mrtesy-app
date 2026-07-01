@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Shield,
   MessageCircle,
+  MessageSquare,
   FlaskConical,
   PanelRightClose,
   PanelRightOpen,
@@ -49,6 +50,7 @@ const smrtTaskItems = [
   { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
   { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
   { key: "whatsappAutoreply", href: "/whatsapp/autoreply", icon: Reply },
+  { key: "sms",           href: "/sms",      icon: MessageSquare },
   { key: "projects",      href: "/projects", icon: FolderOpen    },
   { key: "knowledge",     href: "/knowledge", icon: BookOpen     },
 ] as const;
