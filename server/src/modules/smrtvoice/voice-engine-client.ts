@@ -74,11 +74,35 @@ class VoiceEngineClient {
     await this.request<void>("POST", `/jobs/${jobId}/cancel`);
   }
 
-  async parseScript(googleDocId: string, googleOauthToken?: string): Promise<ParsedScript> {
+  async parseScript(
+    googleDocId: string,
+    googleOauthToken?: string,
+    tab?: { id?: string | null; title?: string | null },
+  ): Promise<ParsedScript> {
     return this.request<ParsedScript>("POST", "/parse", {
       google_doc_id: googleDocId,
       google_oauth_token: googleOauthToken,
+      google_doc_tab_id: tab?.id ?? undefined,
+      google_doc_tab_title: tab?.title ?? undefined,
     });
+  }
+
+  /** List the tabs of a Google Doc so the UI can offer a language picker. */
+  async listDocumentTabs(
+    googleDocId: string,
+    googleOauthToken?: string,
+  ): Promise<{ tabs: Array<{ id: string; title: string }> }> {
+    return this.request("POST", "/parse/tabs", {
+      google_doc_id: googleDocId,
+      google_oauth_token: googleOauthToken,
+    });
+  }
+
+  /** Poll a voice's readiness after a clone/upgrade. */
+  async getVoiceStatus(
+    voiceUuid: string,
+  ): Promise<{ voice_uuid: string; name: string | null; status: string | null; dataset: string | null }> {
+    return this.request("GET", `/voices/${voiceUuid}/status`);
   }
 
   async createVoiceClone(params: {

@@ -14,6 +14,9 @@ interface Settings {
   default_resemble_model: string | null;
   default_llm_model: string | null;
   archive_after_days: number;
+  postprocess_enabled: boolean;
+  postprocess_compress: boolean;
+  postprocess_speed: number;
 }
 
 export function SettingsForm() {
@@ -51,6 +54,9 @@ export function SettingsForm() {
             default_resemble_model: settings.default_resemble_model,
             default_llm_model: settings.default_llm_model,
             archive_after_days: settings.archive_after_days,
+            postprocess_enabled: settings.postprocess_enabled,
+            postprocess_compress: settings.postprocess_compress,
+            postprocess_speed: settings.postprocess_speed,
           },
         },
       );
@@ -145,6 +151,46 @@ export function SettingsForm() {
             setSettings({ ...settings, archive_after_days: Number(e.target.value) })
           }
         />
+      </div>
+
+      <div className="space-y-2 rounded-md border p-3">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={settings.postprocess_enabled}
+            onChange={(e) =>
+              setSettings({ ...settings, postprocess_enabled: e.target.checked })
+            }
+          />
+          {t("postprocess")}
+        </label>
+        {settings.postprocess_enabled && (
+          <div className="space-y-2 ps-6">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.postprocess_compress}
+                onChange={(e) =>
+                  setSettings({ ...settings, postprocess_compress: e.target.checked })
+                }
+              />
+              {t("postprocessCompress")}
+            </label>
+            <div className="space-y-1">
+              <label className="text-sm">{t("postprocessSpeed")}</label>
+              <Input
+                type="number"
+                min="0.5"
+                max="2"
+                step="0.05"
+                value={settings.postprocess_speed}
+                onChange={(e) =>
+                  setSettings({ ...settings, postprocess_speed: Number(e.target.value) })
+                }
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <Button type="submit" disabled={busy}>

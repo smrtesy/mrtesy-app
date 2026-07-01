@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,31 +12,63 @@ import { api } from "@/lib/api/client";
 
 type GenerationMode = "sts" | "tts";
 
+interface Tab {
+  id: string;
+  title: string;
+}
+
 export function CreateProjectForm() {
   const t = useTranslations("smrtVoice.projects.form");
   const locale = useLocale();
   const router = useRouter();
 
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
   const [description, setDescription] = useState("");
   const [language, setLanguage] = useState<"he" | "en">("he");
   const [googleDocUrl, setGoogleDocUrl] = useState("");
-  const [mode, setMode] = useState<GenerationMode>("sts");
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [tabId, setTabId] = useState<string>("");
+  const [loadingTabs, setLoadingTabs] = useState(false);
+  const [mode, setMode] = useState<GenerationMode>("tts");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function loadTabs() {
+    if (!googleDocUrl) return;
+    setLoadingTabs(true);
+    try {
+      const { tabs } = await api<{ tabs: Tab[] }>("/api/voice/doc-tabs", {
+        method: "POST",
+        body: { google_doc_url: googleDocUrl },
+      });
+      setTabs(tabs);
+      // Auto-pick the Hebrew-titled tab when present.
+      const hebrew = tabs.find((tab) => /[֐-׿]/.test(tab.title));
+      setTabId((hebrew ?? tabs[0])?.id ?? "");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoadingTabs(false);
+    }
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
+      const selectedTab = tabs.find((tab) => tab.id === tabId);
       const { project } = await api<{ project: { id: string } }>("/api/voice/projects", {
         method: "POST",
         body: {
           name,
+          code: code || undefined,
           description: description || undefined,
           language,
           google_doc_url: googleDocUrl,
+          google_doc_tab_id: tabId || undefined,
+          google_doc_tab_title: selectedTab?.title || undefined,
           generation_mode: mode,
         },
       });
@@ -60,11 +93,19 @@ export function CreateProjectForm() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium">{t("description")}</label>
-        <Textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
+        <label className="text-sm font-medium">{t("code")}</label>
+        <Input
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder={t("codePlaceholder")}
+          maxLength={8}
         />
+        <p className="text-xs text-muted-foreground">{t("codeHelp")}</p>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("description")}</label>
+        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} />
       </div>
 
       <div className="space-y-1">
@@ -81,14 +122,37 @@ export function CreateProjectForm() {
 
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("googleDocUrl")}</label>
-        <Input
-          required
-          type="url"
-          value={googleDocUrl}
-          onChange={(e) => setGoogleDocUrl(e.target.value)}
-          placeholder="https://docs.google.com/document/d/..."
-        />
+        <div className="flex gap-2">
+          <Input
+            required
+            type="url"
+            value={googleDocUrl}
+            onChange={(e) => setGoogleDocUrl(e.target.value)}
+            placeholder="https://docs.google.com/document/d/..."
+          />
+          <Button type="button" variant="outline" onClick={loadTabs} disabled={!googleDocUrl || loadingTabs}>
+            {loadingTabs ? t("loadingTabs") : t("loadTabs")}
+          </Button>
+        </div>
       </div>
+
+      {tabs.length > 0 && (
+        <div className="space-y-1">
+          <label className="text-sm font-medium">{t("tab")}</label>
+          <select
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            value={tabId}
+            onChange={(e) => setTabId(e.target.value)}
+          >
+            {tabs.map((tab) => (
+              <option key={tab.id} value={tab.id}>
+                {tab.title || tab.id}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">{t("tabHelp")}</p>
+        </div>
+      )}
 
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("generationMode")}</label>
@@ -97,8 +161,8 @@ export function CreateProjectForm() {
           value={mode}
           onChange={(e) => setMode(e.target.value as GenerationMode)}
         >
-          <option value="sts">{t("stsMode")}</option>
           <option value="tts">{t("ttsMode")}</option>
+          <option value="sts">{t("stsMode")}</option>
         </select>
       </div>
 
@@ -108,11 +172,7 @@ export function CreateProjectForm() {
         <Button type="submit" disabled={busy}>
           {t("submit")}
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => router.back()}
-        >
+        <Button type="button" variant="outline" onClick={() => router.back()}>
           {t("cancel")}
         </Button>
       </div>
