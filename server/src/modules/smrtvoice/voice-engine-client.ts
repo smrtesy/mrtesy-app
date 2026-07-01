@@ -120,6 +120,19 @@ class VoiceEngineClient {
     return this.request("DELETE", `/voices/${voiceUuid}`);
   }
 
+  /** Synthesize a short preview clip with a voice (voice library). */
+  async generateSample(
+    voiceUuid: string,
+    text: string,
+    opts?: { language?: string; model?: string },
+  ): Promise<{ audio_url: string; duration: number; cost: number }> {
+    return this.request("POST", `/voices/${voiceUuid}/sample`, {
+      text,
+      language: opts?.language ?? "he",
+      model: opts?.model ?? undefined,
+    });
+  }
+
   /** Poll a voice's readiness after a clone/upgrade. */
   async getVoiceStatus(
     voiceUuid: string,
