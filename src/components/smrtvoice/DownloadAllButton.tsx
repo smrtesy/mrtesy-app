@@ -21,7 +21,7 @@ interface Line {
  * leaves for later. This is a "good enough" version that lets the editor
  * grab every clip in one click.
  */
-export function DownloadAllButton({ projectId }: { projectId: string }) {
+export function DownloadAllButton({ scriptId }: { scriptId: string }) {
   const t = useTranslations("smrtVoice.audio");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -31,7 +31,7 @@ export function DownloadAllButton({ projectId }: { projectId: string }) {
     setProgress(0);
     try {
       const { lines } = await api<{ lines: Line[] }>(
-        `/api/voice/projects/${projectId}/lines`,
+        `/api/voice/scripts/${scriptId}/lines`,
       );
       const completed = lines.filter((l) => l.output_audio_path);
       if (completed.length === 0) {
