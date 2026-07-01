@@ -51,6 +51,9 @@ interface SmsReceivedPayload {
   receivedAt?: string;
   /** Outgoing (sms:sent) timestamp field. */
   sentAt?: string;
+  /** MMS carries its text under different keys depending on the message. */
+  text?: string;
+  subject?: string;
 }
 
 interface SmsWebhookEnvelope {
@@ -97,13 +100,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 200 });
   }
 
-  // Ingest both received (incoming) and sent (outgoing) SMS — the pipeline
-  // reads the user's whole conversation, like WhatsApp. Ack everything else
-  // (delivered/failed receipts, MMS, data-SMS) so the gateway moves on.
-  const isIncoming = envelope.event === "sms:received";
-  const isOutgoing = envelope.event === "sms:sent";
+  // Ingest received (incoming) and sent (outgoing) messages — both SMS and MMS.
+  // US carriers frequently deliver even short texts as MMS, which fires the
+  // mms:* events, so we must handle those too. Ack everything else (delivered/
+  // failed receipts, data-SMS) so the gateway moves on.
+  const event = envelope.event ?? "";
+  const isIncoming = event === "sms:received" || event === "mms:received";
+  const isOutgoing = event === "sms:sent" || event === "mms:sent";
   if (!isIncoming && !isOutgoing) {
-    return NextResponse.json({ ok: true, ignored: envelope.event ?? "unknown" }, { status: 200 });
+    return NextResponse.json({ ok: true, ignored: event || "unknown" }, { status: 200 });
   }
 
   const deviceId = String(envelope.deviceId ?? "").trim();
@@ -284,7 +289,8 @@ async function ingestSms(
   const peer = String(
     (isIncoming ? payload.sender : payload.recipient) ?? payload.phoneNumber ?? "",
   ).trim();
-  const body = String(payload.message ?? "");
+  // MMS may carry its text under `text`/`subject` rather than `message`.
+  const body = String(payload.message ?? payload.text ?? payload.subject ?? "");
   if (!messageId || !peer) {
     console.warn("[sms-webhook] payload missing messageId/peer, skipping");
     return;
