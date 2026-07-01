@@ -46,7 +46,7 @@ interface Line {
   redo_instructions: string | null;
 }
 
-export function AudioLineList({ projectId }: { projectId: string }) {
+export function AudioLineList({ scriptId }: { scriptId: string }) {
   const t = useTranslations("smrtVoice");
   const [lines, setLines] = useState<Line[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,26 +69,26 @@ export function AudioLineList({ projectId }: { projectId: string }) {
   const fetchLines = useCallback(async () => {
     try {
       const { lines } = await api<{ lines: Line[] }>(
-        `/api/voice/projects/${projectId}/lines`,
+        `/api/voice/scripts/${scriptId}/lines`,
       );
       setLines(lines);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     }
-  }, [projectId]);
+  }, [scriptId]);
 
   useEffect(() => {
     fetchLines();
     const supabase = createClient();
     const channel = supabase
-      .channel(`smrtvoice_audio_${projectId}`)
+      .channel(`smrtvoice_audio_${scriptId}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "smrtvoice_lines",
-          filter: `project_id=eq.${projectId}`,
+          filter: `script_id=eq.${scriptId}`,
         },
         () => fetchLines(),
       )
@@ -96,7 +96,7 @@ export function AudioLineList({ projectId }: { projectId: string }) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchLines, projectId]);
+  }, [fetchLines, scriptId]);
 
   const rendered = (lines ?? []).filter((l) => l.output_audio_path);
   const redoCount = (lines ?? []).filter((l) => l.redo_requested).length;
@@ -176,7 +176,7 @@ export function AudioLineList({ projectId }: { projectId: string }) {
     setRerunning(true);
     try {
       const { line_numbers } = await api<{ line_numbers: number[] }>(
-        `/api/voice/projects/${projectId}/regenerate-redos`,
+        `/api/voice/scripts/${scriptId}/regenerate-redos`,
         { method: "POST" },
       );
       setNewLineNumbers(line_numbers ?? []);
@@ -196,7 +196,7 @@ export function AudioLineList({ projectId }: { projectId: string }) {
         folder_url: string | null;
         uploaded: number;
         skipped: number;
-      }>(`/api/voice/projects/${projectId}/archive`, { method: "POST" });
+      }>(`/api/voice/scripts/${scriptId}/archive`, { method: "POST" });
       toast.success(
         t("studio.savedToDrive", { uploaded, skipped: skipped ?? 0 }),
         folder_url ? { action: { label: t("studio.openFolder"), onClick: () => window.open(folder_url, "_blank") } } : undefined,
@@ -245,7 +245,7 @@ export function AudioLineList({ projectId }: { projectId: string }) {
               {t("studio.rerunRedos", { count: redoCount })}
             </Button>
           )}
-          {rendered.length > 0 && <DownloadAllButton projectId={projectId} />}
+          {rendered.length > 0 && <DownloadAllButton scriptId={scriptId} />}
           {rendered.length > 0 && (
             <Button size="sm" onClick={saveToDrive} disabled={archiving}>
               <FolderUp className="h-4 w-4 me-1" />

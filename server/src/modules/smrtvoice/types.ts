@@ -68,6 +68,7 @@ export interface Project {
   name: string;
   description: string | null;
   code: string | null;
+  code_prefix: string | null;
   language: "he" | "en";
   google_doc_id: string | null;
   google_doc_url: string | null;
@@ -89,6 +90,48 @@ export interface Project {
   archived_at: string | null;
   audio_ready_at: string | null;
   completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Script {
+  id: string;
+  org_id: string;
+  project_id: string;
+  created_by: string;
+  seq: number;
+  code: string;
+  name: string | null;
+  language: "he" | "en";
+  google_doc_id: string | null;
+  google_doc_url: string | null;
+  google_doc_tab_id: string | null;
+  google_doc_tab_title: string | null;
+  script_imported_at: string | null;
+  generation_mode: "sts" | "tts";
+  input_recording_path: string | null;
+  status: ProjectStatus;
+  total_lines: number;
+  completed_lines: number;
+  failed_lines: number;
+  total_cost_usd: number;
+  total_duration_seconds: number;
+  archive_gdrive_folder_id: string | null;
+  archive_gdrive_folder_url: string | null;
+  archived_at: string | null;
+  audio_ready_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScriptSpeaker {
+  id: string;
+  org_id: string;
+  script_id: string;
+  speaker_name: string;
+  character_id: string | null;
+  resemble_voice_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -212,6 +255,18 @@ export interface CreateJobRequest {
   org_id: string;
   project_id: string;
   user_id?: string;
+  script_id?: string;
+  speaker_map?: Record<
+    string,
+    {
+      resemble_voice_id: string;
+      model?: string | null;
+      language?: string;
+      character_id?: string | null;
+      character_name?: string | null;
+      description?: string | null;
+    }
+  >;
   job_type: "generate_audio" | "regenerate_line" | "parse_script";
   adapter?: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   mode: "sts" | "tts";

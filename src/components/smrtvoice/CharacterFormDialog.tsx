@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -17,17 +18,17 @@ import { api } from "@/lib/api/client";
 
 type AgeGroup = "child" | "teen" | "adult" | "elderly";
 type Gender = "male" | "female" | "neutral";
-type VoiceType = "rapid" | "pro";
 
 export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
   const t = useTranslations("smrtVoice.characters");
   const tf = useTranslations("smrtVoice.characters.form");
+  const router = useRouter();
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
   const [language, setLanguage] = useState<"he" | "en">("he");
-  const [voiceType, setVoiceType] = useState<VoiceType>("pro");
   const [ageGroup, setAgeGroup] = useState<AgeGroup | "">("");
   const [gender, setGender] = useState<Gender | "">("");
   const [personalityPrompt, setPersonalityPrompt] = useState("");
@@ -39,7 +40,6 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
     setDisplayName("");
     setDescription("");
     setLanguage("he");
-    setVoiceType("pro");
     setAgeGroup("");
     setGender("");
     setPersonalityPrompt("");
@@ -51,22 +51,28 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      await api("/api/voice/characters", {
-        method: "POST",
-        body: {
-          name,
-          display_name: displayName || undefined,
-          description: description || undefined,
-          language,
-          voice_type: voiceType,
-          age_group: ageGroup || undefined,
-          gender: gender || undefined,
-          personality_prompt: personalityPrompt || undefined,
+      const { character } = await api<{ character: { id: string } }>(
+        "/api/voice/characters",
+        {
+          method: "POST",
+          body: {
+            name,
+            display_name: displayName || undefined,
+            description: description || undefined,
+            language,
+            // All clones are Ultra (created rapid → upgraded); no type choice.
+            age_group: ageGroup || undefined,
+            gender: gender || undefined,
+            personality_prompt: personalityPrompt || undefined,
+          },
         },
-      });
+      );
       setOpen(false);
       reset();
       onCreated?.();
+      // Go straight to the character page — that's where you upload a recording
+      // or pick files from Google Drive to create the voice clone.
+      if (character?.id) router.push(`/${locale}/voice/characters/${character.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -112,29 +118,16 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">{tf("languageLabel")}</label>
-              <select
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value as "he" | "en")}
-              >
-                <option value="he">עברית</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">{tf("voiceTypeLabel")}</label>
-              <select
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={voiceType}
-                onChange={(e) => setVoiceType(e.target.value as VoiceType)}
-              >
-                <option value="pro">{tf("voiceTypePro")}</option>
-                <option value="rapid">{tf("voiceTypeRapid")}</option>
-              </select>
-            </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{tf("languageLabel")}</label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as "he" | "en")}
+            >
+              <option value="he">עברית</option>
+              <option value="en">English</option>
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -175,6 +168,8 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
               placeholder={tf("personalityPromptPlaceholder")}
             />
           </div>
+
+          <p className="text-xs text-muted-foreground">{tf("cloneHint")}</p>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 

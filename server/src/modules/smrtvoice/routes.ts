@@ -1,5 +1,5 @@
 /**
- * smrtVoice — Express routes.
+ * smrtVoice — Express routes (v2: folders → scripts → per-script casting).
  *
  * Every route below requires the standard chain:
  *   requireAuth → requireOrg → requireApp("smrtvoice")
@@ -22,13 +22,11 @@ import { getDriveClient } from "../../services/drive";
 import { getVoiceEngineClient, VoiceEngineError } from "./voice-engine-client";
 import type {
   CreateCharacterRequest,
-  CreateProjectRequest,
   CreateVoiceProfileRequest,
 } from "./types";
 
-// Program code: 1-2 uppercase letters + digits, e.g. "BR1". Matches the
-// CHECK constraint in 20260630120000_smrtvoice_studio.sql.
-const CODE_RE = /^[A-Z]{1,2}[0-9]+$/;
+// Project (folder) code prefix: 1-3 uppercase letters, e.g. "BR".
+const PREFIX_RE = /^[A-Z]{1,3}$/;
 
 /** Fetch the caller's Google access token (Docs/Drive share one grant). */
 async function getGoogleAccessToken(userId: string): Promise<string | null> {
@@ -38,6 +36,12 @@ async function getGoogleAccessToken(userId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Resolve a Drive folder id from a full folder URL or a bare id. */
+function parseFolderId(raw: string): string | null {
+  const m = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/) ?? raw.match(/^([a-zA-Z0-9_-]+)$/);
+  return m?.[1] ?? null;
 }
 
 const router = Router();
@@ -76,10 +80,7 @@ router.post(
       return res.status(400).json({ error: "name is required" });
     }
 
-    // New characters inherit the org's default Resemble model. The column
-    // has a DB default of 'chatterbox', but the org setting (editable in
-    // /voice/settings) takes precedence so a studio can switch its default
-    // model once and have every new character pick it up.
+    // New characters inherit the org's default Resemble model (resemble-ultra).
     const { data: orgSettings } = await db
       .from("smrtvoice_settings")
       .select("default_resemble_model")
@@ -95,7 +96,8 @@ router.post(
         display_name: body.display_name?.trim() || null,
         description: body.description ?? null,
         language: body.language ?? "he",
-        voice_type: body.voice_type ?? "pro",
+        // All clones are created rapid then upgraded to Ultra; kept for the column.
+        voice_type: body.voice_type ?? "rapid",
         age_group: body.age_group ?? null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
@@ -114,15 +116,9 @@ router.post(
       return res.status(500).json({ error: error?.message ?? "create failed" });
     }
 
-    await emitEvent(
-      req.org!.id,
-      "smrtvoice",
-      "character.created",
-      "character",
-      data.id,
-      { name: data.name },
-    );
-
+    await emitEvent(req.org!.id, "smrtvoice", "character.created", "character", data.id, {
+      name: data.name,
+    });
     res.status(201).json({ character: data });
   },
 );
@@ -140,9 +136,6 @@ router.get("/voice/characters/:id", async (req: Request, res: Response) => {
   res.json({ character: data });
 });
 
-// Whitelisted columns for PATCH — prevents a client from overwriting
-// org_id / created_by / resemble_voice_id (the last is set only by the
-// clone flow, not by free-form edits).
 const CHARACTER_UPDATABLE = new Set([
   "name",
   "display_name",
@@ -186,8 +179,7 @@ router.patch(
   },
 );
 
-// POST /voice/characters/:id/sample-upload-url — get a signed URL to upload
-// a voice sample directly to Supabase Storage. Returns { upload_url, path }.
+// POST /voice/characters/:id/sample-upload-url — signed URL to upload a sample.
 router.post(
   "/voice/characters/:id/sample-upload-url",
   requireRole("owner", "admin"),
@@ -206,7 +198,6 @@ router.post(
     if (!character) return res.status(404).json({ error: "Character not found" });
 
     const path = `${req.org!.id}/characters/${characterId}/samples/${fileName}`;
-
     const { data, error } = await db.storage
       .from("smrtvoice-audio")
       .createSignedUploadUrl(path);
@@ -216,18 +207,13 @@ router.post(
   },
 );
 
-// POST /voice/characters/:id/clone — body: { sample_path, voice_type? }
-// `sample_path` is the storage path returned from /sample-upload-url after
-// the client uploads. We turn it into a signed download URL and hand it to
-// voice-engine, which downloads + multipart-uploads to Resemble.
+// POST /voice/characters/:id/clone — body: { sample_path }
 router.post(
   "/voice/characters/:id/clone",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { sample_path, voice_type } = req.body ?? {};
-    if (!sample_path) {
-      return res.status(400).json({ error: "sample_path is required" });
-    }
+    const { sample_path } = req.body ?? {};
+    if (!sample_path) return res.status(400).json({ error: "sample_path is required" });
 
     const { data: character, error: charError } = await db
       .from("smrtvoice_characters")
@@ -239,11 +225,9 @@ router.post(
     if (charError) return res.status(500).json({ error: charError.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    // Sign the sample so voice-engine (Python service, no Supabase auth) can fetch it.
     const { data: signed, error: signErr } = await db.storage
       .from("smrtvoice-audio")
       .createSignedUrl(sample_path, 3600);
-
     if (signErr || !signed) {
       return res.status(500).json({ error: signErr?.message ?? "signing failed" });
     }
@@ -253,7 +237,6 @@ router.post(
       const result = await client.createVoiceClone({
         sample_url: signed.signedUrl,
         name: character.name,
-        voice_type: voice_type ?? "pro",
         language: character.language,
       });
 
@@ -263,13 +246,8 @@ router.post(
         .eq("id", req.params.id)
         .select()
         .maybeSingle();
+      if (updateError) return res.status(500).json({ error: updateError.message });
 
-      if (updateError) {
-        return res.status(500).json({ error: updateError.message });
-      }
-
-      // Persist the sample row for traceability. Non-fatal: log if the row
-      // can't be written but don't fail the clone.
       const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
         org_id: req.org!.id,
         character_id: character.id,
@@ -278,19 +256,11 @@ router.post(
         uploaded_to_resemble: true,
         resemble_sample_id: result.voice_id,
       });
-      if (sampleErr) {
-        console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
-      }
+      if (sampleErr) console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
 
-      await emitEvent(
-        req.org!.id,
-        "smrtvoice",
-        "character.clone_created",
-        "character",
-        character.id,
-        { voice_id: result.voice_id },
-      );
-
+      await emitEvent(req.org!.id, "smrtvoice", "character.clone_created", "character", character.id, {
+        voice_id: result.voice_id,
+      });
       res.json({ character: updated, status: result.status });
     } catch (err) {
       const message =
@@ -299,10 +269,7 @@ router.post(
           : err instanceof Error
             ? err.message
             : "Unknown error";
-      await notifyError(req.org!.id, "smrtvoice", {
-        title: "Failed to create voice clone",
-        body: message,
-      });
+      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create voice clone", body: message });
       res.status(502).json({ error: message });
     }
   },
@@ -319,29 +286,19 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
 
   if (error) return res.status(500).json({ error: error.message });
   if (!character) return res.status(404).json({ error: "Character not found" });
-  if (!character.resemble_voice_id) {
-    return res.json({ status: "none", voice_uuid: null });
-  }
+  if (!character.resemble_voice_id) return res.json({ status: "none", voice_uuid: null });
 
   try {
     const client = getVoiceEngineClient();
-    const status = await client.getVoiceStatus(character.resemble_voice_id);
-    res.json(status);
+    res.json(await client.getVoiceStatus(character.resemble_voice_id));
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
 });
 
-// POST /voice/drive/list-audio — list audio files in a Google Drive folder,
-// so the user can pick which recordings to clone from. Body: { folder }
-// (a Drive folder URL or a bare folder id).
+// POST /voice/drive/list-audio — list audio files in a Drive folder. Body: { folder }.
 router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
-  const raw: string = (req.body?.folder ?? "").toString().trim();
-  if (!raw) return res.status(400).json({ error: "folder is required" });
-  // Accept a full Drive folder URL or a bare id.
-  const m = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/) ?? raw.match(/^([a-zA-Z0-9_-]+)$/);
-  const folderId = m?.[1];
+  const folderId = parseFolderId((req.body?.folder ?? "").toString().trim());
   if (!folderId) return res.status(400).json({ error: "Invalid Drive folder URL or id" });
 
   try {
@@ -357,29 +314,22 @@ router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
     const AUDIO_RE = /\.(wav|mp3|m4a|aac|flac|ogg|opus)$/i;
     const files = (out.data.files ?? []).filter((f) => {
       const mime = f.mimeType ?? "";
-      // Google-native items (Docs/Sheets/shortcuts) can't be downloaded via
-      // alt=media even if named ".wav", so exclude them from the picker.
       if (mime.startsWith("application/vnd.google-apps")) return false;
       return mime.startsWith("audio/") || AUDIO_RE.test(f.name ?? "");
     });
     res.json({ files });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
 });
 
-// POST /voice/characters/:id/clone-from-drive — download the chosen Drive files,
-// stage them in storage, and create an Ultra clone (each part is split into
-// <=12s clips server-side). Body: { file_ids: string[] }.
+// POST /voice/characters/:id/clone-from-drive — body: { file_ids: string[] }
 router.post(
   "/voice/characters/:id/clone-from-drive",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const fileIds: string[] = Array.isArray(req.body?.file_ids) ? req.body.file_ids : [];
-    if (fileIds.length === 0) {
-      return res.status(400).json({ error: "file_ids is required" });
-    }
+    if (fileIds.length === 0) return res.status(400).json({ error: "file_ids is required" });
 
     const { data: character, error: charErr } = await db
       .from("smrtvoice_characters")
@@ -390,7 +340,6 @@ router.post(
     if (charErr) return res.status(500).json({ error: charErr.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    // Guard against buffering a huge file into memory (whole-file download).
     const MAX_PART_BYTES = 300 * 1024 * 1024; // 300 MB per part
 
     try {
@@ -400,9 +349,6 @@ router.post(
       const skipped: string[] = [];
 
       for (const fileId of fileIds) {
-        // Stage each Drive file in Supabase storage so voice-engine (no Google
-        // auth) can fetch it via a signed URL. A single bad file (native type,
-        // too large, transient error) is skipped, not fatal to the batch.
         try {
           const meta = await drive.files.get({
             fileId,
@@ -418,7 +364,6 @@ router.post(
             skipped.push(meta.data.name ?? fileId);
             continue;
           }
-
           const dl = await drive.files.get(
             { fileId, alt: "media", supportsAllDrives: true },
             { responseType: "arraybuffer" },
@@ -434,7 +379,6 @@ router.post(
             skipped.push(safeName);
             continue;
           }
-
           const { data: signed, error: signErr } = await db.storage
             .from("smrtvoice-audio")
             .createSignedUrl(path, 3600);
@@ -467,8 +411,6 @@ router.post(
         language: character.language,
       });
 
-      // Record staged samples only AFTER the clone succeeds, so a mid-loop
-      // failure doesn't leave orphan rows. Non-fatal if the ledger write fails.
       for (const path of stagedPaths) {
         const { error: sErr } = await db.from("smrtvoice_voice_samples").insert({
           org_id: req.org!.id,
@@ -488,15 +430,11 @@ router.post(
         .maybeSingle();
       if (updateError) return res.status(500).json({ error: updateError.message });
 
-      await emitEvent(
-        req.org!.id,
-        "smrtvoice",
-        "character.clone_created",
-        "character",
-        character.id,
-        { voice_id: result.voice_id, source: "drive", parts: signedUrls.length },
-      );
-
+      await emitEvent(req.org!.id, "smrtvoice", "character.clone_created", "character", character.id, {
+        voice_id: result.voice_id,
+        source: "drive",
+        parts: signedUrls.length,
+      });
       res.json({ character: updated, status: result.status, skipped });
     } catch (err) {
       const message =
@@ -505,10 +443,7 @@ router.post(
           : err instanceof Error
             ? err.message
             : "Unknown error";
-      await notifyError(req.org!.id, "smrtvoice", {
-        title: "Failed to clone voice from Drive",
-        body: message,
-      });
+      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to clone voice from Drive", body: message });
       res.status(502).json({ error: message });
     }
   },
@@ -559,7 +494,7 @@ router.post("/voice/profiles", async (req: Request, res: Response) => {
 });
 
 // ============================================================
-// PROJECTS
+// PROJECTS (folders)
 // ============================================================
 
 router.get("/voice/projects", async (req: Request, res: Response) => {
@@ -573,23 +508,14 @@ router.get("/voice/projects", async (req: Request, res: Response) => {
   res.json({ projects: data ?? [] });
 });
 
+// Create a project (folder): { name, description?, code_prefix }.
 router.post("/voice/projects", async (req: Request, res: Response) => {
-  const body = req.body as CreateProjectRequest;
-  if (!body?.name?.trim() || !body?.google_doc_url) {
-    return res.status(400).json({ error: "name and google_doc_url required" });
-  }
+  const body = req.body ?? {};
+  if (!body?.name?.trim()) return res.status(400).json({ error: "name is required" });
 
-  const match = body.google_doc_url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
-  if (!match) {
-    return res.status(400).json({ error: "Invalid Google Doc URL" });
-  }
-  const googleDocId = match[1];
-
-  const code = body.code?.trim().toUpperCase() || null;
-  if (code && !CODE_RE.test(code)) {
-    return res.status(400).json({
-      error: "Invalid code — use 1-2 letters followed by a number (e.g. BR1)",
-    });
+  const prefix = (body.code_prefix ?? "").toString().trim().toUpperCase() || null;
+  if (prefix && !PREFIX_RE.test(prefix)) {
+    return res.status(400).json({ error: "Invalid code prefix — use 1-3 letters (e.g. BR)" });
   }
 
   const { data, error } = await db
@@ -599,14 +525,8 @@ router.post("/voice/projects", async (req: Request, res: Response) => {
       created_by: req.user!.id,
       name: body.name.trim(),
       description: body.description ?? null,
-      code,
-      language: body.language,
-      google_doc_id: googleDocId,
-      google_doc_url: body.google_doc_url,
-      google_doc_tab_id: body.google_doc_tab_id ?? null,
-      google_doc_tab_title: body.google_doc_tab_title ?? null,
-      // resemble-ultra is a TTS recipe; default to TTS unless told otherwise.
-      generation_mode: body.generation_mode ?? "tts",
+      code_prefix: prefix,
+      language: body.language ?? "he",
       status: "draft",
     })
     .select()
@@ -614,29 +534,43 @@ router.post("/voice/projects", async (req: Request, res: Response) => {
 
   if (error || !data) {
     if (error?.code === "23505") {
-      return res.status(409).json({ error: `A project with code "${code}" already exists` });
+      return res.status(409).json({ error: `A project with prefix "${prefix}" already exists` });
     }
-    await notifyError(req.org!.id, "smrtvoice", {
-      title: "Failed to create project",
-      body: error?.message ?? "create failed",
-    });
+    await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create project", body: error?.message ?? "create failed" });
     return res.status(500).json({ error: error?.message ?? "create failed" });
   }
 
-  await emitEvent(
-    req.org!.id,
-    "smrtvoice",
-    "project.created",
-    "project",
-    data.id,
-    { name: data.name, language: data.language },
-  );
-
+  await emitEvent(req.org!.id, "smrtvoice", "project.created", "project", data.id, { name: data.name });
   res.status(201).json({ project: data });
 });
 
-// POST /voice/doc-tabs — list the tabs of a Google Doc (for the language-tab
-// picker in the create-project form). Body: { google_doc_url }.
+// POST /voice/drive/list-docs — list Google Docs in a Drive folder. Body: { folder }.
+router.post("/voice/drive/list-docs", async (req: Request, res: Response) => {
+  const folderId = parseFolderId((req.body?.folder ?? "").toString().trim());
+  if (!folderId) return res.status(400).json({ error: "Invalid Drive folder URL or id" });
+
+  try {
+    const drive = await getDriveClient(req.user!.id);
+    const out = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.document'`,
+      pageSize: 200,
+      fields: "files(id, name, webViewLink)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const files = (out.data.files ?? []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      url: f.webViewLink ?? `https://docs.google.com/document/d/${f.id}/edit`,
+    }));
+    res.json({ files });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+// POST /voice/doc-tabs — list a Google Doc's tabs. Body: { google_doc_url }.
 router.post("/voice/doc-tabs", async (req: Request, res: Response) => {
   const url: string = req.body?.google_doc_url ?? "";
   const match = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
@@ -644,33 +578,21 @@ router.post("/voice/doc-tabs", async (req: Request, res: Response) => {
 
   const token = await getGoogleAccessToken(req.user!.id);
   if (!token) {
-    return res.status(400).json({
-      error: "Google Drive is not connected. Connect via Settings → Connections.",
-    });
+    return res.status(400).json({ error: "Google Drive is not connected. Connect via Settings → Connections." });
   }
-
   try {
     const client = getVoiceEngineClient();
-    const result = await client.listDocumentTabs(match[1], token);
-    res.json(result);
+    res.json(await client.listDocumentTabs(match[1], token));
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
 });
 
-// PATCH /voice/projects/:id — whitelisted field updates.
 const PROJECT_UPDATABLE = new Set([
   "name",
   "description",
-  "code",
+  "code_prefix",
   "language",
-  "google_doc_url",
-  "google_doc_id",
-  "google_doc_tab_id",
-  "google_doc_tab_title",
-  "generation_mode",
-  "input_recording_path",
   "gdrive_target_folder_id",
   "gdrive_target_folder_url",
 ]);
@@ -683,20 +605,13 @@ router.patch("/voice/projects/:id", async (req: Request, res: Response) => {
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "No updatable fields in body" });
   }
-
-  // Normalize + validate code the same way as create.
-  if ("code" in updates) {
-    const raw = updates.code;
-    if (raw === null || raw === "") {
-      updates.code = null;
-    } else {
-      const code = String(raw).trim().toUpperCase();
-      if (!CODE_RE.test(code)) {
-        return res.status(400).json({
-          error: "Invalid code — use 1-2 letters followed by a number (e.g. BR1)",
-        });
-      }
-      updates.code = code;
+  if ("code_prefix" in updates) {
+    const raw = updates.code_prefix;
+    if (raw === null || raw === "") updates.code_prefix = null;
+    else {
+      const p = String(raw).trim().toUpperCase();
+      if (!PREFIX_RE.test(p)) return res.status(400).json({ error: "Invalid code prefix — use 1-3 letters (e.g. BR)" });
+      updates.code_prefix = p;
     }
   }
 
@@ -709,9 +624,7 @@ router.patch("/voice/projects/:id", async (req: Request, res: Response) => {
     .maybeSingle();
 
   if (error) {
-    if (error.code === "23505") {
-      return res.status(409).json({ error: "A project with that code already exists" });
-    }
+    if (error.code === "23505") return res.status(409).json({ error: "That code prefix is already in use" });
     return res.status(500).json({ error: error.message });
   }
   if (!data) return res.status(404).json({ error: "Not found" });
@@ -731,176 +644,401 @@ router.get("/voice/projects/:id", async (req: Request, res: Response) => {
   res.json({ project: data });
 });
 
-router.post("/voice/projects/:id/parse", async (req: Request, res: Response) => {
-  const { data: project, error: projectErr } = await db
+// DELETE /voice/projects/:id — remove a folder (scripts, lines, jobs cascade).
+router.delete("/voice/projects/:id", async (req: Request, res: Response) => {
+  const { data, error } = await db
     .from("smrtvoice_projects")
+    .delete()
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select("id")
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Project not found" });
+  await emitEvent(req.org!.id, "smrtvoice", "project.deleted", "project", req.params.id, {});
+  res.json({ deleted: true });
+});
+
+// ============================================================
+// SCRIPTS (programs inside a folder)
+// ============================================================
+
+router.get("/voice/projects/:id/scripts", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_scripts")
+    .select("*")
+    .eq("project_id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .order("seq");
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ scripts: data ?? [] });
+});
+
+// Create a script under a folder: { name?, google_doc_url, google_doc_tab_id?, google_doc_tab_title? }.
+// Auto-numbers: code = {project.code_prefix}{seq}.
+router.post("/voice/projects/:id/scripts", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  if (!body?.google_doc_url) return res.status(400).json({ error: "google_doc_url is required" });
+  const match = String(body.google_doc_url).match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (!match) return res.status(400).json({ error: "Invalid Google Doc URL" });
+
+  const { data: project, error: projErr } = await db
+    .from("smrtvoice_projects")
+    .select("id, code_prefix, language")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (projErr) return res.status(500).json({ error: projErr.message });
+  if (!project) return res.status(404).json({ error: "Project not found" });
+  if (!project.code_prefix) {
+    return res.status(400).json({ error: "Set a code prefix on the project first (e.g. BR)" });
+  }
+
+  const { data: last } = await db
+    .from("smrtvoice_scripts")
+    .select("seq")
+    .eq("project_id", project.id)
+    .order("seq", { ascending: false })
+    .limit(1);
+  const seq = (last?.[0]?.seq ?? 0) + 1;
+  const code = `${project.code_prefix}${seq}`;
+
+  const { data, error } = await db
+    .from("smrtvoice_scripts")
+    .insert({
+      org_id: req.org!.id,
+      project_id: project.id,
+      created_by: req.user!.id,
+      seq,
+      code,
+      name: body.name?.trim() || null,
+      language: body.language ?? project.language ?? "he",
+      google_doc_id: match[1],
+      google_doc_url: body.google_doc_url,
+      google_doc_tab_id: body.google_doc_tab_id ?? null,
+      google_doc_tab_title: body.google_doc_tab_title ?? null,
+      generation_mode: body.generation_mode ?? "tts",
+      status: "draft",
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    // Two scripts added to the same folder at once race on MAX(seq)+1 and
+    // collide on UNIQUE(project_id,seq)/(org_id,code). Surface a friendly
+    // retry instead of a raw 500 — the next attempt picks the next seq.
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "A script was just added — please try again" });
+    }
+    return res.status(500).json({ error: error?.message ?? "create failed" });
+  }
+  await emitEvent(req.org!.id, "smrtvoice", "script.created", "script", data.id, { code });
+  res.status(201).json({ script: data });
+});
+
+router.get("/voice/scripts/:id", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_scripts")
     .select("*")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Script not found" });
+  res.json({ script: data });
+});
 
-  if (projectErr) return res.status(500).json({ error: projectErr.message });
-  if (!project) return res.status(404).json({ error: "Project not found" });
-  if (!project.google_doc_id) return res.status(400).json({ error: "Project has no Google Doc" });
+const SCRIPT_UPDATABLE = new Set([
+  "name",
+  "google_doc_url",
+  "google_doc_id",
+  "google_doc_tab_id",
+  "google_doc_tab_title",
+  "generation_mode",
+  "input_recording_path",
+]);
+
+router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (SCRIPT_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
+
+  const { data, error } = await db
+    .from("smrtvoice_scripts")
+    .update(updates)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select()
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Not found" });
+  res.json({ script: data });
+});
+
+router.delete("/voice/scripts/:id", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_scripts")
+    .delete()
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Script not found" });
+  res.json({ deleted: true });
+});
+
+// Parse a script's Google Doc → populate the speaker list (casting), inheriting
+// the project's first script's casting by speaker name.
+router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("*")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+  if (!script.google_doc_id) return res.status(400).json({ error: "Script has no Google Doc" });
+
+  const token = await getGoogleAccessToken(req.user!.id);
+  if (!token) {
+    return res.status(400).json({ error: "Google Drive is not connected. Connect via Settings → Connections." });
+  }
 
   try {
-    // voice-engine needs the user's Google access token to fetch the doc.
-    let googleAccessToken: string | undefined;
-    try {
-      const oauthClient = await getOAuthClient(req.user!.id, "drive");
-      googleAccessToken = oauthClient.credentials.access_token ?? undefined;
-    } catch {
-      return res.status(400).json({
-        error: "Google Drive is not connected for this user. Connect via Settings → Connections.",
-      });
-    }
-    if (!googleAccessToken) {
-      return res.status(400).json({ error: "Failed to obtain Google access token" });
-    }
-
     const client = getVoiceEngineClient();
-    const result = await client.parseScript(project.google_doc_id, googleAccessToken, {
-      id: project.google_doc_tab_id,
-      title: project.google_doc_tab_title,
+    const result = await client.parseScript(script.google_doc_id, token, {
+      id: script.google_doc_tab_id,
+      title: script.google_doc_tab_title,
     });
 
+    // Inherit casting from the project's first script (lowest seq, not this one).
+    const inherited = new Map<string, { character_id: string | null; resemble_voice_id: string | null }>();
+    const { data: firstScript } = await db
+      .from("smrtvoice_scripts")
+      .select("id")
+      .eq("project_id", script.project_id)
+      .neq("id", script.id)
+      .order("seq")
+      .limit(1);
+    if (firstScript?.[0]) {
+      const { data: firstCast } = await db
+        .from("smrtvoice_script_speakers")
+        .select("speaker_name, character_id, resemble_voice_id")
+        .eq("script_id", firstScript[0].id);
+      for (const c of firstCast ?? []) {
+        inherited.set(c.speaker_name, {
+          character_id: c.character_id,
+          resemble_voice_id: c.resemble_voice_id,
+        });
+      }
+    }
+
+    // Only add speakers not already cast on this script.
+    const { data: existing } = await db
+      .from("smrtvoice_script_speakers")
+      .select("speaker_name")
+      .eq("script_id", script.id);
+    const existingSet = new Set((existing ?? []).map((s: { speaker_name: string }) => s.speaker_name));
+
+    const rows = (result.speakers ?? [])
+      .filter((sp: string) => !existingSet.has(sp))
+      .map((sp: string) => ({
+        org_id: req.org!.id,
+        script_id: script.id,
+        speaker_name: sp,
+        character_id: inherited.get(sp)?.character_id ?? null,
+        resemble_voice_id: inherited.get(sp)?.resemble_voice_id ?? null,
+      }));
+    if (rows.length > 0) {
+      const { error: insErr } = await db.from("smrtvoice_script_speakers").insert(rows);
+      if (insErr) console.warn("[smrtvoice] script_speakers insert failed:", insErr.message);
+    }
+
     const { error: updateErr } = await db
-      .from("smrtvoice_projects")
+      .from("smrtvoice_scripts")
       .update({
         status: "parsed",
         total_lines: result.total_lines,
         script_imported_at: new Date().toISOString(),
       })
-      .eq("id", project.id);
-
+      .eq("id", script.id);
     if (updateErr) return res.status(500).json({ error: updateErr.message });
+
     res.json({ parsed: result });
   } catch (err) {
     let message = err instanceof Error ? err.message : "Unknown error";
     if (err instanceof VoiceEngineError && err.details) {
       const d = err.details as { detail?: unknown };
-      const detail =
-        d && typeof d === "object" && "detail" in d ? d.detail : err.details;
-      if (detail) {
-        message += ` — ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
-      }
+      const detail = d && typeof d === "object" && "detail" in d ? d.detail : err.details;
+      if (detail) message += ` — ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
     }
-    await notifyError(req.org!.id, "smrtvoice", {
-      title: "Failed to parse script",
-      body: message,
-    });
+    await notifyError(req.org!.id, "smrtvoice", { title: "Failed to parse script", body: message });
     res.status(502).json({ error: message });
   }
 });
 
-router.post("/voice/projects/:id/upload-url", async (req: Request, res: Response) => {
-  const projectId = req.params.id;
-  const fileName: string = (req.body?.fileName as string) || "recording.wav";
-
-  const { data: project, error: projectErr } = await db
-    .from("smrtvoice_projects")
-    .select("id")
-    .eq("id", projectId)
+// GET/PATCH the per-script casting (speaker_name → character or stock voice).
+router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_script_speakers")
+    .select("*")
+    .eq("script_id", req.params.id)
     .eq("org_id", req.org!.id)
-    .maybeSingle();
-
-  if (projectErr) return res.status(500).json({ error: projectErr.message });
-  if (!project) return res.status(404).json({ error: "Project not found" });
-
-  const path = `${req.org!.id}/projects/${projectId}/input/${fileName}`;
-
-  const { data, error } = await db.storage
-    .from("smrtvoice-audio")
-    .createSignedUploadUrl(path);
-
-  if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
-  res.json({ upload_url: data.signedUrl, path: data.path, token: data.token });
+    .order("speaker_name");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ speakers: data ?? [] });
 });
 
-router.post("/voice/projects/:id/generate", async (req: Request, res: Response) => {
-  const { data: project, error: projectErr } = await db
-    .from("smrtvoice_projects")
+router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
+  const list: Array<{ speaker_name: string; character_id?: string | null; resemble_voice_id?: string | null }> =
+    Array.isArray(req.body?.speakers) ? req.body.speakers : [];
+  if (list.length === 0) return res.status(400).json({ error: "speakers array is required" });
+
+  const rows = list
+    .filter((s) => s.speaker_name)
+    .map((s) => ({
+      org_id: req.org!.id,
+      script_id: req.params.id,
+      speaker_name: s.speaker_name,
+      character_id: s.character_id ?? null,
+      resemble_voice_id: s.resemble_voice_id ?? null,
+    }));
+
+  const { data, error } = await db
+    .from("smrtvoice_script_speakers")
+    .upsert(rows, { onConflict: "script_id,speaker_name" })
+    .select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ speakers: data ?? [] });
+});
+
+// POST /voice/scripts/:id/generate — build the speaker_map from casting and queue.
+router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
     .select("*")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-
-  if (projectErr) return res.status(500).json({ error: projectErr.message });
-  if (!project) return res.status(404).json({ error: "Project not found" });
-  if (project.status === "queued" || project.status === "processing") {
-    return res.status(409).json({ error: "Project is already being processed" });
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+  if (script.status === "queued" || script.status === "processing") {
+    return res.status(409).json({ error: "Script is already being processed" });
   }
 
-  // Budget check
   const { data: settings } = await db
     .from("smrtvoice_settings")
     .select("*")
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
+  // Monthly budget check (sum of script costs this month).
   if (settings) {
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
-
     const { data: monthCosts } = await db
-      .from("smrtvoice_projects")
+      .from("smrtvoice_scripts")
       .select("total_cost_usd")
       .eq("org_id", req.org!.id)
       .gte("created_at", monthStart.toISOString());
-
     const totalThisMonth = (monthCosts ?? []).reduce(
-      (sum: number, p: { total_cost_usd: number | null }) => sum + (p.total_cost_usd ?? 0),
+      (sum: number, s: { total_cost_usd: number | null }) => sum + (s.total_cost_usd ?? 0),
       0,
     );
-
     if (totalThisMonth >= settings.monthly_budget_usd * settings.budget_block_threshold) {
-      return res.status(402).json({
-        error: "monthly_budget_exceeded",
-        current: totalThisMonth,
-        budget: settings.monthly_budget_usd,
-      });
+      return res.status(402).json({ error: "monthly_budget_exceeded", current: totalThisMonth, budget: settings.monthly_budget_usd });
     }
+  }
+
+  // Build the speaker_map from casting.
+  const { data: cast, error: castErr } = await db
+    .from("smrtvoice_script_speakers")
+    .select("speaker_name, character_id, resemble_voice_id")
+    .eq("script_id", script.id);
+  if (castErr) return res.status(500).json({ error: castErr.message });
+
+  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
+  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
+  if (charIds.length > 0) {
+    const { data: chars } = await db
+      .from("smrtvoice_characters")
+      .select("id, name, description, resemble_voice_id, resemble_model, language")
+      .in("id", charIds)
+      .eq("org_id", req.org!.id);
+    for (const c of chars ?? []) charMap.set(c.id, c);
+  }
+
+  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
+  for (const c of cast ?? []) {
+    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
+      const ch = charMap.get(c.character_id)!;
+      speakerMap[c.speaker_name] = {
+        resemble_voice_id: ch.resemble_voice_id!,
+        model: ch.resemble_model,
+        language: ch.language,
+        character_id: c.character_id,
+        character_name: ch.name,
+        description: ch.description,
+      };
+    } else if (c.resemble_voice_id) {
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+    }
+  }
+  if (Object.keys(speakerMap).length === 0) {
+    return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
+  }
+
+  // Any speaker left uncast — or cast to a character that has no voice clone
+  // yet — would have its lines silently dropped. Block and name them so the
+  // user can finish casting rather than generate a broken take.
+  const unvoiced = (cast ?? [])
+    .filter((c) => !speakerMap[c.speaker_name])
+    .map((c) => c.speaker_name);
+  if (unvoiced.length > 0) {
+    return res.status(400).json({
+      error: `These speakers have no usable voice yet: ${unvoiced.join(", ")}`,
+      speakers: unvoiced,
+    });
   }
 
   try {
     let inputAudioUrl: string | undefined;
-    if (project.generation_mode === "sts" && project.input_recording_path) {
+    if (script.generation_mode === "sts" && script.input_recording_path) {
       const { data: urlData } = await db.storage
         .from("smrtvoice-audio")
-        .createSignedUrl(project.input_recording_path, 3600);
+        .createSignedUrl(script.input_recording_path, 3600);
       inputAudioUrl = urlData?.signedUrl;
     }
 
-    // voice-engine needs the user's Google access token to fetch the doc when
-    // running the orchestrator. We pass it along on every job that has a doc.
-    let googleAccessToken: string | undefined;
-    if (project.google_doc_id) {
-      try {
-        const oauthClient = await getOAuthClient(req.user!.id, "drive");
-        googleAccessToken = oauthClient.credentials.access_token ?? undefined;
-      } catch {
-        return res.status(400).json({
-          error: "Google Drive is not connected. Connect via Settings → Connections before generating.",
-        });
-      }
+    const token = await getGoogleAccessToken(req.user!.id);
+    if (!token && script.google_doc_id) {
+      return res.status(400).json({ error: "Google Drive is not connected. Connect via Settings → Connections before generating." });
     }
 
     const client = getVoiceEngineClient();
     const engineJob = await client.createJob({
       org_id: req.org!.id,
-      project_id: project.id,
+      project_id: script.project_id,
+      script_id: script.id,
       user_id: req.user!.id,
       job_type: "generate_audio",
       adapter: settings?.default_adapter ?? "resemble",
-      mode: project.generation_mode,
-      google_doc_id: project.google_doc_id ?? undefined,
-      google_oauth_token: googleAccessToken,
-      google_doc_tab_id: project.google_doc_tab_id ?? undefined,
-      google_doc_tab_title: project.google_doc_tab_title ?? undefined,
+      mode: script.generation_mode,
+      google_doc_id: script.google_doc_id ?? undefined,
+      google_oauth_token: token ?? undefined,
+      google_doc_tab_id: script.google_doc_tab_id ?? undefined,
+      google_doc_tab_title: script.google_doc_tab_title ?? undefined,
       input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
-      code: project.code ?? undefined,
+      code: script.code,
+      speaker_map: speakerMap,
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
@@ -910,7 +1048,8 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       .from("smrtvoice_jobs")
       .insert({
         org_id: req.org!.id,
-        project_id: project.id,
+        project_id: script.project_id,
+        script_id: script.id,
         created_by: req.user!.id,
         job_type: "generate_audio",
         adapter: settings?.default_adapter ?? "resemble",
@@ -919,166 +1058,105 @@ router.post("/voice/projects/:id/generate", async (req: Request, res: Response) 
       })
       .select()
       .single();
+    if (jobErr || !job) return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
 
-    if (jobErr || !job) {
-      return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
-    }
-
-    const { error: projectUpdateErr } = await db
-      .from("smrtvoice_projects")
-      .update({ status: "queued" })
-      .eq("id", project.id);
-
-    if (projectUpdateErr) {
-      // Surface this but don't fail the request — the job is already queued upstream.
-      await notifyError(req.org!.id, "smrtvoice", {
-        title: "Failed to update project status after queueing job",
-        body: projectUpdateErr.message,
-      });
-    }
-
-    await emitEvent(
-      req.org!.id,
-      "smrtvoice",
-      "job.queued",
-      "job",
-      job.id,
-      { project_id: project.id, estimated_seconds: engineJob.estimated_seconds },
-    );
-
+    await db.from("smrtvoice_scripts").update({ status: "queued" }).eq("id", script.id);
+    await emitEvent(req.org!.id, "smrtvoice", "job.queued", "job", job.id, {
+      script_id: script.id,
+      estimated_seconds: engineJob.estimated_seconds,
+    });
     res.json({ job, estimated_seconds: engineJob.estimated_seconds });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    await notifyError(req.org!.id, "smrtvoice", {
-      title: "Failed to start audio generation",
-      body: message,
-    });
+    await notifyError(req.org!.id, "smrtvoice", { title: "Failed to start audio generation", body: message });
     res.status(502).json({ error: message });
   }
 });
 
-router.post("/voice/projects/:id/mark-complete", async (req: Request, res: Response) => {
-  const { data, error } = await db
-    .from("smrtvoice_projects")
-    .update({
-      status: "completed",
-      completed_at: new Date().toISOString(),
-    })
-    .eq("id", req.params.id)
+// STS input-recording upload URL for a script.
+router.post("/voice/scripts/:id/upload-url", async (req: Request, res: Response) => {
+  const scriptId = req.params.id;
+  const fileName: string = (req.body?.fileName as string) || "recording.wav";
+  const { data: script, error: sErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id")
+    .eq("id", scriptId)
     .eq("org_id", req.org!.id)
-    .select()
     .maybeSingle();
+  if (sErr) return res.status(500).json({ error: sErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
 
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: "Not found" });
-
-  await emitEvent(
-    req.org!.id,
-    "smrtvoice",
-    "project.completed",
-    "project",
-    data.id,
-    { name: data.name },
-  );
-
-  res.json({ project: data });
+  const path = `${req.org!.id}/scripts/${scriptId}/input/${fileName}`;
+  const { data, error } = await db.storage.from("smrtvoice-audio").createSignedUploadUrl(path);
+  if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
+  res.json({ upload_url: data.signedUrl, path: data.path, token: data.token });
 });
 
-// POST /voice/projects/:id/archive — save all completed line audio to Drive.
-// Creates a sub-folder named by the program code under the target folder
-// (per-project override → org archive folder), uploads every completed WAV,
-// then records the folder + marks the project archived.
-router.post("/voice/projects/:id/archive", async (req: Request, res: Response) => {
-  const { data: project, error: projErr } = await db
-    .from("smrtvoice_projects")
+// POST /voice/scripts/:id/archive — save the script's completed audio to Drive.
+router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
     .select("*")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-  if (projErr) return res.status(500).json({ error: projErr.message });
-  if (!project) return res.status(404).json({ error: "Project not found" });
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
 
+  const { data: project } = await db
+    .from("smrtvoice_projects")
+    .select("gdrive_target_folder_id")
+    .eq("id", script.project_id)
+    .maybeSingle();
   const { data: settings } = await db
     .from("smrtvoice_settings")
     .select("gdrive_archive_folder_id")
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
-  // Per-project override wins; otherwise the org-wide archive root.
-  const rootFolderId = project.gdrive_target_folder_id || settings?.gdrive_archive_folder_id;
+  const rootFolderId = project?.gdrive_target_folder_id || settings?.gdrive_archive_folder_id;
   if (!rootFolderId) {
-    return res.status(400).json({
-      error:
-        "No Drive folder configured. Set an archive folder in Voice settings, " +
-        "or a target folder on this project.",
-    });
+    return res.status(400).json({ error: "No Drive folder configured. Set an archive folder in Voice settings or a target folder on the project." });
   }
 
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
-    .select("line_number, speaker_name, output_audio_path")
-    .eq("project_id", project.id)
+    .select("line_number, output_audio_path")
+    .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
     .eq("status", "completed")
     .not("output_audio_path", "is", null)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
-  if (!lines || lines.length === 0) {
-    return res.status(400).json({ error: "No completed audio to archive yet" });
-  }
+  if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
 
   try {
     const drive = await getDriveClient(req.user!.id);
-
-    // Reuse an existing sub-folder for this project, else create one.
-    let folderId = project.archive_gdrive_folder_id as string | null;
-    let folderUrl = project.archive_gdrive_folder_url as string | null;
+    let folderId = script.archive_gdrive_folder_id as string | null;
+    let folderUrl = script.archive_gdrive_folder_url as string | null;
     if (!folderId) {
-      const folderName = project.code || project.name;
       const folder = await drive.files.create({
-        requestBody: {
-          name: folderName,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [rootFolderId],
-        },
+        requestBody: { name: script.code, mimeType: "application/vnd.google-apps.folder", parents: [rootFolderId] },
         fields: "id, webViewLink",
         supportsAllDrives: true,
       });
       folderId = folder.data.id ?? null;
       folderUrl = folder.data.webViewLink ?? null;
     }
-    if (!folderId) {
-      return res.status(502).json({ error: "Failed to create Drive folder" });
-    }
+    if (!folderId) return res.status(502).json({ error: "Failed to create Drive folder" });
 
-    const { error: archivingErr } = await db
-      .from("smrtvoice_projects")
-      .update({ status: "archiving" })
-      .eq("id", project.id);
-    if (archivingErr) {
-      console.warn("[smrtvoice] failed to set archiving status:", archivingErr.message);
-    }
+    await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
 
     let uploaded = 0;
     let skipped = 0;
-    for (const line of lines as Array<{
-      line_number: number;
-      speaker_name: string;
-      output_audio_path: string;
-    }>) {
-      const { data: blob, error: dlErr } = await db.storage
-        .from("smrtvoice-audio")
-        .download(line.output_audio_path);
+    for (const line of lines as Array<{ line_number: number; output_audio_path: string }>) {
+      const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(line.output_audio_path);
       if (dlErr || !blob) {
         skipped += 1;
         continue;
       }
-
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const baseName = project.code
-        ? `${project.code}_${String(line.line_number).padStart(3, "0")}.wav`
-        : (line.output_audio_path.split("/").pop() ?? `line_${line.line_number}.wav`);
-
+      const baseName = `${script.code}_${String(line.line_number).padStart(3, "0")}.wav`;
       await drive.files.create({
         requestBody: { name: baseName, parents: [folderId] },
         media: { mimeType: "audio/wav", body: Readable.from(buffer) },
@@ -1088,62 +1166,45 @@ router.post("/voice/projects/:id/archive", async (req: Request, res: Response) =
       uploaded += 1;
     }
 
-    // Nothing uploaded → don't claim success; revert so the user can retry.
     if (uploaded === 0) {
-      await db
-        .from("smrtvoice_projects")
-        .update({ status: "audio_ready" })
-        .eq("id", project.id);
-      return res
-        .status(502)
-        .json({ error: "Failed to upload any audio to Drive", skipped });
+      await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+      return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
-    // Only mark fully archived when every file made it; on a partial upload
-    // leave the project in audio_ready so the remaining files can be re-archived.
     const fullyArchived = skipped === 0;
     const { data: updated, error: updErr } = await db
-      .from("smrtvoice_projects")
+      .from("smrtvoice_scripts")
       .update({
         status: fullyArchived ? "archived" : "audio_ready",
         archive_gdrive_folder_id: folderId,
         archive_gdrive_folder_url: folderUrl,
         archived_at: fullyArchived ? new Date().toISOString() : null,
       })
-      .eq("id", project.id)
+      .eq("id", script.id)
       .select()
       .maybeSingle();
     if (updErr) return res.status(500).json({ error: updErr.message });
 
-    await emitEvent(req.org!.id, "smrtvoice", "project.archived", "project", project.id, {
-      folder_url: folderUrl,
-      uploaded,
-      skipped,
-    });
-
-    res.json({ project: updated, folder_url: folderUrl, uploaded, skipped });
+    await emitEvent(req.org!.id, "smrtvoice", "script.archived", "script", script.id, { folder_url: folderUrl, uploaded, skipped });
+    res.json({ script: updated, folder_url: folderUrl, uploaded, skipped });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    await notifyError(req.org!.id, "smrtvoice", {
-      title: "Failed to archive project to Drive",
-      body: message,
-    });
+    await notifyError(req.org!.id, "smrtvoice", { title: "Failed to archive to Drive", body: message });
     res.status(502).json({ error: message });
   }
 });
 
 // ============================================================
-// LINES
+// LINES (per script)
 // ============================================================
 
-router.get("/voice/projects/:id/lines", async (req: Request, res: Response) => {
+router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("smrtvoice_lines")
     .select("*")
-    .eq("project_id", req.params.id)
+    .eq("script_id", req.params.id)
     .eq("org_id", req.org!.id)
     .order("line_number");
-
   if (error) return res.status(500).json({ error: error.message });
   res.json({ lines: data ?? [] });
 });
@@ -1156,7 +1217,6 @@ const LINE_UPDATABLE = new Set([
   "emotion",
   "emotion_source",
   "character_id",
-  "emotion_profile_id",
   "final_exaggeration",
   "final_pitch",
   "final_pace",
@@ -1168,9 +1228,7 @@ router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
   for (const [k, v] of Object.entries(req.body ?? {})) {
     if (LINE_UPDATABLE.has(k)) updates[k] = v;
   }
-  if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ error: "No updatable fields in body" });
-  }
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
 
   const { data, error } = await db
     .from("smrtvoice_lines")
@@ -1179,44 +1237,83 @@ router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id)
     .select()
     .maybeSingle();
-
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Not found" });
   res.json({ line: data });
 });
 
-// Re-render a set of line numbers in a project via voice-engine. Inserts a
-// tracking job row and returns it. Shared by single-line regenerate and the
-// batch "re-run everything marked for redo" action.
+// Re-render a set of line numbers in a script via voice-engine + track the job.
 async function queueRegeneration(
   req: Request,
   res: Response,
-  project: { id: string; code: string | null },
+  script: {
+    id: string;
+    project_id: string;
+    code: string;
+    generation_mode?: "sts" | "tts";
+    input_recording_path?: string | null;
+  },
   lineNumbers: number[],
 ) {
-  if (lineNumbers.length === 0) {
-    return res.status(400).json({ error: "No lines to regenerate" });
-  }
+  if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select(
-      "default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed",
-    )
+    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed")
     .eq("org_id", req.org!.id)
     .maybeSingle();
+
+  // Rebuild the casting map so regenerated lines use the current voices.
+  const { data: cast } = await db
+    .from("smrtvoice_script_speakers")
+    .select("speaker_name, character_id, resemble_voice_id")
+    .eq("script_id", script.id);
+  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
+  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
+  if (charIds.length > 0) {
+    const { data: chars } = await db
+      .from("smrtvoice_characters")
+      .select("id, name, description, resemble_voice_id, resemble_model, language")
+      .in("id", charIds)
+      .eq("org_id", req.org!.id);
+    for (const c of chars ?? []) charMap.set(c.id, c);
+  }
+  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
+  for (const c of cast ?? []) {
+    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
+      const ch = charMap.get(c.character_id)!;
+      speakerMap[c.speaker_name] = { resemble_voice_id: ch.resemble_voice_id!, model: ch.resemble_model, language: ch.language, character_id: c.character_id, character_name: ch.name, description: ch.description };
+    } else if (c.resemble_voice_id) {
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+    }
+  }
+
+  // Preserve the script's generation mode — regenerating a line in an STS
+  // script must re-render via speech-to-speech (with the input recording),
+  // not fall back to TTS and produce a mismatched take.
+  const mode = script.generation_mode ?? "tts";
+  let inputAudioUrl: string | undefined;
+  if (mode === "sts" && script.input_recording_path) {
+    const { data: urlData } = await db.storage
+      .from("smrtvoice-audio")
+      .createSignedUrl(script.input_recording_path, 3600);
+    inputAudioUrl = urlData?.signedUrl;
+  }
 
   try {
     const client = getVoiceEngineClient();
     const engineJob = await client.createJob({
       org_id: req.org!.id,
-      project_id: project.id,
+      project_id: script.project_id,
+      script_id: script.id,
       user_id: req.user!.id,
       job_type: "regenerate_line",
       adapter: settings?.default_adapter ?? "resemble",
-      mode: "tts",
+      mode,
+      input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
-      code: project.code ?? undefined,
+      code: script.code,
+      speaker_map: speakerMap,
       line_numbers: lineNumbers,
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
@@ -1227,7 +1324,8 @@ async function queueRegeneration(
       .from("smrtvoice_jobs")
       .insert({
         org_id: req.org!.id,
-        project_id: project.id,
+        project_id: script.project_id,
+        script_id: script.id,
         created_by: req.user!.id,
         job_type: "regenerate_line",
         adapter: settings?.default_adapter ?? "resemble",
@@ -1236,80 +1334,60 @@ async function queueRegeneration(
       })
       .select()
       .single();
+    if (jobErr || !job) return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
 
-    if (jobErr || !job) {
-      return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
-    }
-
-    // Flip the queued lines to processing and clear their redo flag now, so a
-    // second "re-run redos" click doesn't re-queue the same lines while they're
-    // mid-render. redone_at marks them as freshly re-rendered (for "play new").
     const { error: flipErr } = await db
       .from("smrtvoice_lines")
-      .update({
-        status: "processing",
-        redo_requested: false,
-        redone_at: new Date().toISOString(),
-      })
-      .eq("project_id", project.id)
+      .update({ status: "processing", redo_requested: false, redone_at: new Date().toISOString() })
+      .eq("script_id", script.id)
       .eq("org_id", req.org!.id)
       .in("line_number", lineNumbers);
-    if (flipErr) {
-      console.warn("[smrtvoice] failed to flip redo lines to processing:", flipErr.message);
-    }
+    if (flipErr) console.warn("[smrtvoice] failed to flip redo lines to processing:", flipErr.message);
 
     res.json({ job, line_numbers: lineNumbers });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
 }
 
-router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) => {
-  const { data: line, error: lineErr } = await db
+async function loadScriptForLine(req: Request, lineId: string) {
+  const { data: line } = await db
     .from("smrtvoice_lines")
-    .select("project_id, line_number")
-    .eq("id", req.params.id)
+    .select("script_id, line_number")
+    .eq("id", lineId)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-
-  if (lineErr) return res.status(500).json({ error: lineErr.message });
-  if (!line) return res.status(404).json({ error: "Line not found" });
-
-  const { data: project } = await db
-    .from("smrtvoice_projects")
-    .select("id, code")
-    .eq("id", line.project_id)
+  if (!line) return null;
+  const { data: script } = await db
+    .from("smrtvoice_scripts")
+    .select("id, project_id, code, generation_mode, input_recording_path")
+    .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-  if (!project) return res.status(404).json({ error: "Project not found" });
+  return script ? { script, line } : null;
+}
 
-  await queueRegeneration(req, res, project, [line.line_number]);
+router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) => {
+  const found = await loadScriptForLine(req, req.params.id);
+  if (!found) return res.status(404).json({ error: "Line not found" });
+  await queueRegeneration(req, res, found.script, [found.line.line_number]);
 });
 
-// Mark a line as needing a re-record, with the reason / required fix.
 router.post("/voice/lines/:id/redo", async (req: Request, res: Response) => {
   const reason: string = (req.body?.reason ?? "").toString().trim();
   const instructions: string = (req.body?.instructions ?? "").toString().trim();
-
   const { data, error } = await db
     .from("smrtvoice_lines")
-    .update({
-      redo_requested: true,
-      redo_reason: reason || null,
-      redo_instructions: instructions || null,
-    })
+    .update({ redo_requested: true, redo_reason: reason || null, redo_instructions: instructions || null })
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .select()
     .maybeSingle();
-
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Not found" });
   res.json({ line: data });
 });
 
-// Clear a redo flag without regenerating.
 router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("smrtvoice_lines")
@@ -1318,55 +1396,141 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id)
     .select()
     .maybeSingle();
-
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "Not found" });
   res.json({ line: data });
 });
 
-// Re-run every line marked for redo in a project.
-router.post("/voice/projects/:id/regenerate-redos", async (req: Request, res: Response) => {
-  const { data: project, error: projErr } = await db
-    .from("smrtvoice_projects")
-    .select("id, code")
+router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, project_id, code, generation_mode, input_recording_path")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-  if (projErr) return res.status(500).json({ error: projErr.message });
-  if (!project) return res.status(404).json({ error: "Project not found" });
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
 
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
     .select("line_number")
-    .eq("project_id", project.id)
+    .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
     .eq("redo_requested", true)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
 
   const lineNumbers = (lines ?? []).map((l: { line_number: number }) => l.line_number);
-  if (lineNumbers.length === 0) {
-    return res.status(400).json({ error: "No lines are marked for redo" });
-  }
-  await queueRegeneration(req, res, project, lineNumbers);
+  if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines are marked for redo" });
+  await queueRegeneration(req, res, script, lineNumbers);
 });
 
 router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => {
   const { data: line, error: lineErr } = await db
     .from("smrtvoice_lines")
-    .select("output_audio_path, org_id")
+    .select("output_audio_path")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
-
   if (lineErr) return res.status(500).json({ error: lineErr.message });
   if (!line || !line.output_audio_path) return res.status(404).json({ error: "Audio not found" });
 
-  const { data, error } = await db.storage
-    .from("smrtvoice-audio")
-    .createSignedUrl(line.output_audio_path, 3600);
-
+  const { data, error } = await db.storage.from("smrtvoice-audio").createSignedUrl(line.output_audio_path, 3600);
   if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
+  res.json({ audio_url: data.signedUrl });
+});
+
+// ============================================================
+// VOICE LIBRARY (Resemble account)
+// ============================================================
+
+router.get("/voice/resemble/account", requireRole("owner", "admin"), async (_req: Request, res: Response) => {
+  try {
+    const client = getVoiceEngineClient();
+    res.json(await client.getResembleAccount());
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  try {
+    const client = getVoiceEngineClient();
+    const { voices } = await client.listVoices();
+    // Which voices already have a stored preview for this org.
+    const { data: previews } = await db
+      .from("smrtvoice_voice_previews")
+      .select("resemble_voice_id")
+      .eq("org_id", req.org!.id);
+    const hasPreview = new Set((previews ?? []).map((p: { resemble_voice_id: string }) => p.resemble_voice_id));
+    res.json({
+      voices: (voices ?? []).map((v) => ({ ...v, has_preview: hasPreview.has(String(v.uuid)) })),
+    });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const uuid = req.params.uuid;
+  try {
+    const client = getVoiceEngineClient();
+    const result = await client.deleteVoice(uuid);
+    // Unlink any characters + drop the stored preview.
+    await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    res.json({ deleted: result.deleted });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+// POST /voice/resemble/voices/:uuid/sample — synthesize + store a preview.
+router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const uuid = req.params.uuid;
+  const { data: settings } = await db
+    .from("smrtvoice_settings")
+    .select("sample_text")
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  const text = (req.body?.text as string)?.trim() || settings?.sample_text || "שלום, זו דוגמה קצרה לקול.";
+
+  try {
+    const client = getVoiceEngineClient();
+    const sample = await client.generateSample(uuid, text);
+    // Download the synthesized clip and store it so replays are free.
+    const resp = await fetch(sample.audio_url);
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch sample: ${resp.status}` });
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const path = `${req.org!.id}/previews/${uuid}.wav`;
+    const { error: upErr } = await db.storage.from("smrtvoice-audio").upload(path, buffer, { contentType: "audio/wav", upsert: true });
+    if (upErr) return res.status(500).json({ error: upErr.message });
+
+    const { error: pErr } = await db
+      .from("smrtvoice_voice_previews")
+      .upsert({ org_id: req.org!.id, resemble_voice_id: uuid, storage_path: path, sample_text: text }, { onConflict: "org_id,resemble_voice_id" });
+    if (pErr) return res.status(500).json({ error: pErr.message });
+
+    res.json({ ok: true, cost: sample.cost });
+  } catch (err) {
+    const message =
+      err instanceof VoiceEngineError ? `Voice Engine: ${err.message}` : err instanceof Error ? err.message : "Unknown error";
+    res.status(502).json({ error: message });
+  }
+});
+
+router.get("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const { data: preview, error } = await db
+    .from("smrtvoice_voice_previews")
+    .select("storage_path")
+    .eq("org_id", req.org!.id)
+    .eq("resemble_voice_id", req.params.uuid)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!preview) return res.status(404).json({ error: "No sample yet" });
+
+  const { data, error: signErr } = await db.storage.from("smrtvoice-audio").createSignedUrl(preview.storage_path, 3600);
+  if (signErr || !data) return res.status(500).json({ error: signErr?.message ?? "signing failed" });
   res.json({ audio_url: data.signedUrl });
 });
 
@@ -1394,8 +1558,6 @@ router.get("/voice/settings", async (req: Request, res: Response) => {
   res.json({ settings: data });
 });
 
-// Whitelisted settings columns — blocks a client from rewriting id/org_id/
-// timestamps via free-form PATCH body.
 const SETTINGS_UPDATABLE = new Set([
   "monthly_budget_usd",
   "budget_warning_threshold",
@@ -1412,6 +1574,7 @@ const SETTINGS_UPDATABLE = new Set([
   "postprocess_enabled",
   "postprocess_compress",
   "postprocess_speed",
+  "sample_text",
   "notify_on_completion",
   "notify_on_budget_warn",
   "notify_via_whatsapp",
@@ -1425,9 +1588,7 @@ router.patch(
     for (const [k, v] of Object.entries(req.body ?? {})) {
       if (SETTINGS_UPDATABLE.has(k)) updates[k] = v;
     }
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: "No updatable fields in body" });
-    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
 
     const { data, error } = await db
       .from("smrtvoice_settings")
@@ -1435,7 +1596,6 @@ router.patch(
       .eq("org_id", req.org!.id)
       .select()
       .single();
-
     if (error) return res.status(500).json({ error: error.message });
     res.json({ settings: data });
   },
@@ -1451,7 +1611,6 @@ router.get("/voice/lexicon", async (req: Request, res: Response) => {
     .select("*")
     .eq("org_id", req.org!.id)
     .order("original_word");
-
   if (error) return res.status(500).json({ error: error.message });
   res.json({ entries: data ?? [] });
 });
@@ -1461,7 +1620,6 @@ router.post("/voice/lexicon", async (req: Request, res: Response) => {
   if (!original_word || !pronounced_as) {
     return res.status(400).json({ error: "original_word and pronounced_as required" });
   }
-
   const { data, error } = await db
     .from("smrtvoice_pronunciation_lexicon")
     .insert({
@@ -1474,7 +1632,6 @@ router.post("/voice/lexicon", async (req: Request, res: Response) => {
     })
     .select()
     .single();
-
   if (error || !data) return res.status(500).json({ error: error?.message ?? "create failed" });
   res.status(201).json({ entry: data });
 });
@@ -1485,7 +1642,6 @@ router.delete("/voice/lexicon/:id", async (req: Request, res: Response) => {
     .delete()
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id);
-
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).end();
 });

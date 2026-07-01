@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api/client";
 
 interface Props {
-  projectId: string;
+  scriptId: string;
   existingPath: string | null;
   onUploaded?: (path: string) => void;
 }
@@ -18,7 +18,7 @@ interface Props {
  * Uploads the editor's full recording for STS mode. voice-engine will
  * silence-split it into per-line segments during the orchestrator run.
  */
-export function RecordingUploader({ projectId, existingPath, onUploaded }: Props) {
+export function RecordingUploader({ scriptId, existingPath, onUploaded }: Props) {
   const t = useTranslations("smrtVoice.recordingUploader");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,7 +32,7 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
       const { upload_url, path } = await api<{
         upload_url: string;
         path: string;
-      }>(`/api/voice/projects/${projectId}/upload-url`, {
+      }>(`/api/voice/scripts/${scriptId}/upload-url`, {
         method: "POST",
         body: { fileName: file.name },
       });
@@ -47,7 +47,7 @@ export function RecordingUploader({ projectId, existingPath, onUploaded }: Props
         throw new Error(`Upload failed: ${resp.status} ${await resp.text()}`);
       }
 
-      await api(`/api/voice/projects/${projectId}`, {
+      await api(`/api/voice/scripts/${scriptId}`, {
         method: "PATCH",
         body: { input_recording_path: path },
       });

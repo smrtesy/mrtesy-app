@@ -6,6 +6,11 @@
  *
  * Body must be the raw JSON we receive; do not modify it before
  * verification.
+ *
+ * v2: work is scoped to a SCRIPT (a project is now a folder of scripts).
+ * The webhook envelope still carries `project_id` at the top level, but the
+ * script it belongs to is resolved from the job row (smrtvoice_jobs.script_id)
+ * or, for line events, from `data.script_id` sent by the orchestrator.
  */
 
 import { Router } from "express";
@@ -50,16 +55,16 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
   try {
     switch (event_type) {
       case "smrtvoice.job.started":
-        await handleJobStarted(job_id, project_id);
+        await handleJobStarted(job_id);
         break;
       case "smrtvoice.line.completed":
-        await handleLineCompleted(job_id, project_id, data ?? {});
+        await handleLineCompleted(job_id, data ?? {});
         break;
       case "smrtvoice.job.completed":
-        await handleJobCompleted(job_id, project_id, data ?? {});
+        await handleJobCompleted(job_id, data ?? {});
         break;
       case "smrtvoice.job.failed":
-        await handleJobFailed(job_id, project_id, data ?? {});
+        await handleJobFailed(job_id, data ?? {});
         break;
       default:
         // Unknown event types are non-fatal — log and ack.
@@ -72,24 +77,32 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
   }
 });
 
-async function handleJobStarted(jobId: string, projectId: string): Promise<void> {
-  await db
+/** Resolve the script this voice-engine job belongs to (via the job row). */
+async function scriptIdForJob(jobId: string): Promise<string | null> {
+  const { data } = await db
     .from("smrtvoice_jobs")
-    .update({
-      status: "running",
-      started_at: new Date().toISOString(),
-    })
-    .eq("voice_engine_job_id", jobId);
+    .select("script_id")
+    .eq("voice_engine_job_id", jobId)
+    .maybeSingle();
+  return (data?.script_id as string | undefined) ?? null;
+}
 
-  await db
-    .from("smrtvoice_projects")
-    .update({ status: "processing" })
-    .eq("id", projectId);
+async function handleJobStarted(jobId: string): Promise<void> {
+  const { data: job } = await db
+    .from("smrtvoice_jobs")
+    .update({ status: "running", started_at: new Date().toISOString() })
+    .eq("voice_engine_job_id", jobId)
+    .select("script_id")
+    .maybeSingle();
+
+  const scriptId = (job?.script_id as string | undefined) ?? null;
+  if (scriptId) {
+    await db.from("smrtvoice_scripts").update({ status: "processing" }).eq("id", scriptId);
+  }
 }
 
 async function handleLineCompleted(
-  _jobId: string,
-  projectId: string,
+  jobId: string,
   data: Record<string, unknown>,
 ): Promise<void> {
   const lineId = data.line_id as string | undefined;
@@ -122,17 +135,20 @@ async function handleLineCompleted(
     } catch { /* ledger insert must not break webhook handling */ }
   }
 
-  // Increment per-project totals via RPC.
-  await db.rpc("increment_project_progress", {
-    p_project_id: projectId,
-    p_cost: cost,
-    p_duration: duration,
-  });
+  // Increment per-script totals via RPC. The orchestrator sends script_id in
+  // the line payload; fall back to the job row if it's absent.
+  const scriptId = (data.script_id as string | undefined) ?? (await scriptIdForJob(jobId));
+  if (scriptId) {
+    await db.rpc("increment_script_progress", {
+      p_script_id: scriptId,
+      p_cost: cost,
+      p_duration: duration,
+    });
+  }
 }
 
 async function handleJobCompleted(
   jobId: string,
-  projectId: string,
   data: Record<string, unknown>,
 ): Promise<void> {
   const totalCost = (data.total_cost_usd as number | undefined) ?? 0;
@@ -140,7 +156,7 @@ async function handleJobCompleted(
   const linesCompleted = (data.lines_completed as number | undefined) ?? 0;
   const linesFailed = (data.lines_failed as number | undefined) ?? 0;
 
-  await db
+  const { data: job } = await db
     .from("smrtvoice_jobs")
     .update({
       status: "completed",
@@ -149,80 +165,94 @@ async function handleJobCompleted(
       total_cost_usd: totalCost,
       result: data,
     })
-    .eq("voice_engine_job_id", jobId);
-
-  const { data: project, error: projectErr } = await db
-    .from("smrtvoice_projects")
-    .update({
-      status: "audio_ready",
-      audio_ready_at: new Date().toISOString(),
-      total_cost_usd: totalCost,
-      total_duration_seconds: totalDuration,
-      completed_lines: linesCompleted,
-      failed_lines: linesFailed,
-    })
-    .eq("id", projectId)
-    .select()
+    .eq("voice_engine_job_id", jobId)
+    .select("job_type, script_id")
     .maybeSingle();
 
-  if (projectErr) {
-    console.error("[smrtvoice webhook] project update failed:", projectErr.message);
+  const scriptId =
+    (job?.script_id as string | undefined) ?? (data.script_id as string | undefined) ?? null;
+  if (!scriptId) return;
+
+  // A line-regeneration job must not clobber a fully-completed script back to
+  // audio_ready with a partial count — only stamp counts on full generation.
+  const isRegenerate = job?.job_type === "regenerate_line";
+
+  const scriptUpdate: Record<string, unknown> = {
+    status: "audio_ready",
+    audio_ready_at: new Date().toISOString(),
+  };
+  if (!isRegenerate) {
+    scriptUpdate.total_cost_usd = totalCost;
+    scriptUpdate.total_duration_seconds = totalDuration;
+    scriptUpdate.completed_lines = linesCompleted;
+    scriptUpdate.failed_lines = linesFailed;
+  }
+
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .update(scriptUpdate)
+    .eq("id", scriptId)
+    .select("id, org_id, project_id, created_by, code, name")
+    .maybeSingle();
+
+  if (scriptErr) {
+    console.error("[smrtvoice webhook] script update failed:", scriptErr.message);
     return;
   }
-  if (!project) return;
+  if (!script) return;
 
-  await notify(project.org_id, project.created_by, {
+  const label = script.name || script.code;
+  await notify(script.org_id, script.created_by, {
     app_slug: "smrtvoice",
     type: "success",
-    title: `הקול לפרויקט ${project.name} מוכן`,
+    title: `הקול ל-${label} מוכן`,
     body: `${linesCompleted} שורות הסתיימו בהצלחה. עלות: $${totalCost.toFixed(2)}`,
-    link: `/voice/projects/${projectId}/audio`,
-    entity_type: "project",
-    entity_id: projectId,
+    link: `/voice/scripts/${scriptId}`,
+    entity_type: "script",
+    entity_id: scriptId,
   });
 
-  await emitEvent(
-    project.org_id,
-    "smrtvoice",
-    "audio.ready",
-    "project",
-    projectId,
-    {
-      lines_completed: linesCompleted,
-      total_cost_usd: totalCost,
-      total_duration_seconds: totalDuration,
-    },
-  );
+  await emitEvent(script.org_id, "smrtvoice", "audio.ready", "script", scriptId, {
+    project_id: script.project_id,
+    lines_completed: linesCompleted,
+    total_cost_usd: totalCost,
+    total_duration_seconds: totalDuration,
+  });
 }
 
 async function handleJobFailed(
   jobId: string,
-  projectId: string,
   data: Record<string, unknown>,
 ): Promise<void> {
   const errorMessage = (data.error as string | undefined) ?? "Unknown error";
 
-  await db
+  const { data: job } = await db
     .from("smrtvoice_jobs")
     .update({
       status: "failed",
       completed_at: new Date().toISOString(),
       error_message: errorMessage,
     })
-    .eq("voice_engine_job_id", jobId);
-
-  const { data: project } = await db
-    .from("smrtvoice_projects")
-    .update({ status: "failed" })
-    .eq("id", projectId)
-    .select()
+    .eq("voice_engine_job_id", jobId)
+    .select("script_id")
     .maybeSingle();
 
-  if (project) {
-    await notifyError(project.org_id, "smrtvoice", {
-      title: `הייצור לפרויקט ${project.name} נכשל`,
+  const scriptId =
+    (job?.script_id as string | undefined) ?? (data.script_id as string | undefined) ?? null;
+  if (!scriptId) return;
+
+  const { data: script } = await db
+    .from("smrtvoice_scripts")
+    .update({ status: "failed" })
+    .eq("id", scriptId)
+    .select("id, org_id, code, name")
+    .maybeSingle();
+
+  if (script) {
+    await notifyError(script.org_id, "smrtvoice", {
+      title: `הייצור ל-${script.name || script.code} נכשל`,
       body: errorMessage,
-      link: `/voice/projects/${projectId}`,
+      link: `/voice/scripts/${scriptId}`,
     });
   }
 }

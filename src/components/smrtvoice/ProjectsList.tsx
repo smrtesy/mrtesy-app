@@ -3,34 +3,33 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
+import { Folder } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
 import { api, ApiError } from "@/lib/api/client";
-import { ProjectStatusBadge } from "./ProjectStatusBadge";
 
-interface Project {
+/** v2: a project is a folder (name + letter code-prefix) holding many scripts. */
+interface FolderRow {
   id: string;
   name: string;
   description: string | null;
-  language: "he" | "en";
-  status: string;
-  total_lines: number;
-  completed_lines: number;
+  code_prefix: string | null;
   created_at: string;
 }
 
 export function ProjectsList() {
-  const t = useTranslations("smrtVoice");
+  const t = useTranslations("smrtVoice.folders");
   const locale = useLocale();
-  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [folders, setFolders] = useState<FolderRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const { projects } = await api<{ projects: Project[] }>("/api/voice/projects");
-        if (mounted) setProjects(projects);
+        const { projects } = await api<{ projects: FolderRow[] }>("/api/voice/projects");
+        if (mounted) setFolders(projects);
       } catch (err) {
         if (!mounted) return;
         if (err instanceof ApiError && err.status === 403) {
@@ -45,24 +44,16 @@ export function ProjectsList() {
     };
   }, []);
 
-  if (error) {
-    return <div className="text-sm text-destructive">{error}</div>;
-  }
+  if (error) return <div className="text-sm text-destructive">{error}</div>;
+  if (folders === null) return <div className="text-sm text-muted-foreground">…</div>;
 
-  if (projects === null) {
-    return <div className="text-sm text-muted-foreground">…</div>;
-  }
-
-  if (projects.length === 0) {
+  if (folders.length === 0) {
     return (
       <Card>
         <CardContent className="p-6 text-center space-y-2">
-          <p className="text-muted-foreground">{t("projects.empty")}</p>
-          <Link
-            href={`/${locale}/voice/projects/new`}
-            className="text-primary underline"
-          >
-            {t("projects.createFirst")}
+          <p className="text-muted-foreground">{t("empty")}</p>
+          <Link href={`/${locale}/voice/projects/new`} className="text-primary underline">
+            {t("createFirst")}
           </Link>
         </CardContent>
       </Card>
@@ -70,23 +61,19 @@ export function ProjectsList() {
   }
 
   return (
-    <div className="grid gap-3">
-      {projects.map((p) => (
-        <Link
-          key={p.id}
-          href={`/${locale}/voice/projects/${p.id}`}
-          className="block"
-        >
-          <Card className="hover:bg-accent transition-colors">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {folders.map((f) => (
+        <Link key={f.id} href={`/${locale}/voice/projects/${f.id}`} className="block">
+          <Card className="hover:bg-accent transition-colors h-full">
             <CardHeader className="flex flex-row items-center justify-between gap-3 pb-2">
-              <CardTitle className="text-base">{p.name}</CardTitle>
-              <ProjectStatusBadge status={p.status} />
+              <CardTitle className="text-base flex items-center gap-2">
+                <Folder className="h-4 w-4 text-muted-foreground" />
+                {f.name}
+              </CardTitle>
+              {f.code_prefix && <Badge variant="secondary">{f.code_prefix}</Badge>}
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              {p.description ?? "—"}
-              <div className="mt-2 text-xs">
-                {p.completed_lines}/{p.total_lines}
-              </div>
+              {f.description ?? "—"}
             </CardContent>
           </Card>
         </Link>
