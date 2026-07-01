@@ -82,6 +82,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
   }
 
+  // TEMP DIAGNOSTIC: record every inbound request so we can inspect the SMS
+  // Gateway app's real payload shape. Best-effort; remove once confirmed.
+  void recordSmsDebug(db, request, rawBody);
+
   let envelope: SmsWebhookEnvelope;
   try {
     const raw = JSON.parse(rawBody) as SmsWebhookEnvelope;
@@ -234,6 +238,33 @@ function timingSafeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
   return crypto.timingSafeEqual(ab, bb);
+}
+
+// TEMP DIAGNOSTIC helper — logs the raw inbound webhook (payload shape, headers,
+// query) into sms_webhook_debug so we can see exactly what the app sends.
+// Remove once SMS delivery is verified end-to-end.
+async function recordSmsDebug(db: SupabaseAdmin, request: NextRequest, rawBody: string): Promise<void> {
+  try {
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      /* keep raw only */
+    }
+    await db.from("sms_webhook_debug").insert({
+      query: new URL(request.url).search,
+      headers: {
+        "content-type": request.headers.get("content-type"),
+        "x-signature": request.headers.get("x-signature") ? "present" : null,
+        "x-timestamp": request.headers.get("x-timestamp"),
+        "user-agent": request.headers.get("user-agent"),
+      },
+      payload: payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null,
+      raw: rawBody.slice(0, 4000),
+    });
+  } catch (e) {
+    console.error("[sms-webhook] debug insert failed:", e instanceof Error ? e.message : e);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
