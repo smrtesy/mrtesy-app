@@ -28,6 +28,17 @@ import type {
 // Project (folder) code prefix: 1-3 uppercase letters, e.g. "BR".
 const PREFIX_RE = /^[A-Z]{1,3}$/;
 
+/** Human-readable message for a voice-engine error, unwrapping FastAPI `detail`. */
+function veMessage(err: unknown): string {
+  if (err instanceof VoiceEngineError) {
+    const d = err.details as { detail?: unknown } | undefined;
+    const detail = d && typeof d === "object" && "detail" in d ? d.detail : undefined;
+    if (detail) return typeof detail === "string" ? detail : JSON.stringify(detail);
+    return err.message;
+  }
+  return err instanceof Error ? err.message : "Unknown error";
+}
+
 /** Fetch the caller's Google access token (Docs/Drive share one grant). */
 async function getGoogleAccessToken(userId: string): Promise<string | null> {
   try {
@@ -1449,7 +1460,7 @@ router.get("/voice/resemble/account", requireRole("owner", "admin"), async (_req
     const client = getVoiceEngineClient();
     res.json(await client.getResembleAccount());
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
@@ -1467,7 +1478,7 @@ router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: 
       voices: (voices ?? []).map((v) => ({ ...v, has_preview: hasPreview.has(String(v.uuid)) })),
     });
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
@@ -1481,7 +1492,7 @@ router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), asy
     await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
     res.json({ deleted: result.deleted });
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
@@ -1513,9 +1524,7 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
 
     res.json({ ok: true, cost: sample.cost });
   } catch (err) {
-    const message =
-      err instanceof VoiceEngineError ? `Voice Engine: ${err.message}` : err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
