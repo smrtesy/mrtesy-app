@@ -2412,8 +2412,9 @@
       "new": "New character",
       "empty": "No characters yet",
       "form": {
-        "nameLabel": "Name (as it appears in the script)",
-        "namePlaceholder": "Dovi",
+        "nameLabel": "Character name",
+        "nameHelp": "Just a label to identify this voice — it need not match any script. You assign voices to script speakers later, in casting.",
+        "namePlaceholder": "e.g. Rivka",
         "displayNameLabel": "Display name",
         "displayNamePlaceholder": "Dovi'le",
         "descriptionLabel": "Description",

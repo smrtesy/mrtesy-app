@@ -2411,8 +2411,9 @@
       "new": "דמות חדשה",
       "empty": "אין דמויות עדיין",
       "form": {
-        "nameLabel": "שם (כפי שמופיע בסקריפט)",
-        "namePlaceholder": "דובי",
+        "nameLabel": "שם הדמות",
+        "nameHelp": "סתם תווית לזיהוי הקול — לא חייב להתאים לשם בסקריפט. את ההתאמה לדוברים בסקריפט עושים אחר כך, בליהוק.",
+        "namePlaceholder": "למשל: רבקה",
         "displayNameLabel": "שם תצוגה",
         "displayNamePlaceholder": "דוד'לה",
         "descriptionLabel": "תיאור",

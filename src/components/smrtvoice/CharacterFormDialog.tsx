@@ -98,6 +98,7 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
               onChange={(e) => setName(e.target.value)}
               placeholder={tf("namePlaceholder")}
             />
+            <p className="text-xs text-muted-foreground">{tf("nameHelp")}</p>
           </div>
 
           <div className="space-y-1">
