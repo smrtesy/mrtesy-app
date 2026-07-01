@@ -2384,7 +2384,7 @@ function ReactionButton({
       <button
         type="button"
         onClick={onTogglePicker}
-        className="opacity-0 group-hover:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
+        className="opacity-0 group-hover:opacity-100 touch:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
         aria-label="React"
       >
         <SmilePlus className="h-4 w-4 text-muted-foreground" />
@@ -2421,7 +2421,7 @@ function ReplyButton({ onReply, label }: { onReply: () => void; label: string })
     <button
       type="button"
       onClick={onReply}
-      className="opacity-0 group-hover:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
+      className="opacity-0 group-hover:opacity-100 touch:opacity-100 transition rounded-full p-1 hover:bg-muted/60"
       aria-label={label}
       title={label}
     >

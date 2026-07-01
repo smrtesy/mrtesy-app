@@ -47,7 +47,7 @@ export interface IconButtonProps
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
   ({ label, color = "neutral", side = "top", className, children, ...props }, ref) => (
-    <TooltipProvider delayDuration={300}>
+    <TooltipProvider delayDuration={300} disableHoverableContent>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
