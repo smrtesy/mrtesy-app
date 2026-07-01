@@ -98,6 +98,28 @@ class VoiceEngineClient {
     });
   }
 
+  /** Connected Resemble account + total voice count (no credit API exists). */
+  async getResembleAccount(): Promise<{
+    email: string | null;
+    name: string | null;
+    teams: number | null;
+    total_voices: number;
+    credits_available: number | null;
+    billing_url: string;
+  }> {
+    return this.request("GET", "/voices/account");
+  }
+
+  /** List all voices on the Resemble account. */
+  async listVoices(): Promise<{ voices: Array<Record<string, unknown>> }> {
+    return this.request("GET", "/voices");
+  }
+
+  /** Delete a voice from the Resemble account. */
+  async deleteVoice(voiceUuid: string): Promise<{ deleted: boolean }> {
+    return this.request("DELETE", `/voices/${voiceUuid}`);
+  }
+
   /** Poll a voice's readiness after a clone/upgrade. */
   async getVoiceStatus(
     voiceUuid: string,
