@@ -351,6 +351,16 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
   }
 });
 
+// GET /voice/google/access-token — hand the browser the caller's own Google
+// OAuth token so the Google Drive Picker can render client-side. Short-lived.
+router.get("/voice/google/access-token", async (req: Request, res: Response) => {
+  const token = await getGoogleAccessToken(req.user!.id);
+  if (!token) {
+    return res.status(400).json({ error: "Google Drive is not connected. Connect via Settings → Connections." });
+  }
+  res.json({ access_token: token });
+});
+
 // POST /voice/drive/list-audio — list audio files in a Drive folder. Body: { folder }.
 router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
   const folderId = parseFolderId((req.body?.folder ?? "").toString().trim());

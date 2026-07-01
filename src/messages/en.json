@@ -2295,6 +2295,7 @@
       "tab": "Tab (language)",
       "tabHelp": "The Hebrew tab is auto-selected; you can change it",
       "pickFromDrive": "Pick a document from Google Drive",
+      "browseDrive": "Browse Drive",
       "loadDocs": "Load documents",
       "loadingDocs": "Loading…",
       "noDocs": "No Google Docs found in the folder",

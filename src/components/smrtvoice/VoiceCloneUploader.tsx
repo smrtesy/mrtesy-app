@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
+import { DriveFolderPicker } from "./DriveFolderPicker";
+
 interface Props {
   characterId: string;
   hasExistingVoice: boolean;
@@ -119,13 +121,14 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
     }
   }
 
-  async function loadDriveFiles() {
-    if (!folder.trim()) return;
+  async function loadDriveFiles(folderArg?: string) {
+    const f = (folderArg ?? folder).trim();
+    if (!f) return;
     setLoadingFiles(true);
     try {
       const { files } = await api<{ files: DriveFile[] }>("/api/voice/drive/list-audio", {
         method: "POST",
-        body: { folder },
+        body: { folder: f },
       });
       setDriveFiles(files);
       setSelected(new Set(files.map((f) => f.id))); // pre-select all parts
@@ -222,17 +225,24 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
           <>
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">{t("driveFolderLabel")}</label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <DriveFolderPicker
+                  onPicked={(f) => {
+                    setFolder(f.url);
+                    loadDriveFiles(f.id);
+                  }}
+                />
                 <Input
                   value={folder}
                   onChange={(e) => setFolder(e.target.value)}
                   placeholder="https://drive.google.com/drive/folders/..."
                   disabled={busy}
+                  className="flex-1 min-w-[10rem]"
                 />
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={loadDriveFiles}
+                  onClick={() => loadDriveFiles()}
                   disabled={!folder.trim() || loadingFiles || busy}
                 >
                   {loadingFiles ? t("loadingFiles") : t("loadFiles")}

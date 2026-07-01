@@ -15,6 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
+import { DriveFolderPicker } from "./DriveFolderPicker";
+
 interface Tab {
   id: string;
   title: string;
@@ -61,13 +63,14 @@ export function CreateScriptForm({
     setError(null);
   }
 
-  async function loadDocs() {
-    if (!docFolder.trim()) return;
+  async function loadDocs(folderArg?: string) {
+    const folder = (folderArg ?? docFolder).trim();
+    if (!folder) return;
     setLoadingDocs(true);
     try {
       const { files } = await api<{ files: DriveDoc[] }>("/api/voice/drive/list-docs", {
         method: "POST",
-        body: { folder: docFolder },
+        body: { folder },
       });
       setDriveDocs(files);
     } catch (err) {
@@ -155,13 +158,20 @@ export function CreateScriptForm({
 
           <div className="space-y-1 rounded-md border p-3">
             <label className="text-sm font-medium">{t("pickFromDrive")}</label>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <DriveFolderPicker
+                onPicked={(f) => {
+                  setDocFolder(f.url);
+                  loadDocs(f.id);
+                }}
+              />
               <Input
                 value={docFolder}
                 onChange={(e) => setDocFolder(e.target.value)}
                 placeholder="https://drive.google.com/drive/folders/..."
+                className="flex-1 min-w-[10rem]"
               />
-              <Button type="button" variant="outline" onClick={loadDocs} disabled={!docFolder.trim() || loadingDocs}>
+              <Button type="button" variant="outline" onClick={() => loadDocs()} disabled={!docFolder.trim() || loadingDocs}>
                 {loadingDocs ? t("loadingDocs") : t("loadDocs")}
               </Button>
             </div>
