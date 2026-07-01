@@ -1001,7 +1001,7 @@ function PlanGroup(props: {
                     title={t("table.stage")}
                     className={cn(
                       "max-w-[70px] flex-shrink-0 rounded border border-input bg-background px-0.5 text-[9.5px] text-muted-foreground outline-none focus:ring-1 focus:ring-ring",
-                      "opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100",
+                      "opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100 touch:opacity-100",
                       props.active?.r === r && "opacity-100",
                     )}
                   >

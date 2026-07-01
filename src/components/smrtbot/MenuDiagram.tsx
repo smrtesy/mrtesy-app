@@ -74,7 +74,7 @@ function MenuNodeCard({ data }: NodeProps) {
           title={d.nodeKey}
         >
           <span className="truncate text-sm font-semibold" dir="auto">{d.title}</span>
-          {!d.broken && <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-100" />}
+          {!d.broken && <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-100 touch:opacity-100" />}
         </button>
         {!d.active && <span className="rounded bg-muted px-1 text-[9px] text-muted-foreground">off</span>}
         {d.hasChildren && (

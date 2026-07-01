@@ -325,7 +325,7 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
                     color="primary"
                     disabled={saving}
                     onClick={() => handleStartEdit(item)}
-                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition shrink-0"
                   >
                     <Pencil />
                   </IconButton>
@@ -334,7 +334,7 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
                     color="primary"
                     disabled={saving}
                     onClick={() => handlePromote(item)}
-                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition shrink-0"
                   >
                     <ArrowUpRight />
                   </IconButton>
@@ -343,7 +343,7 @@ export function TaskChecklist({ taskId, items, onChange, dir = "rtl" }: TaskChec
                     color="red"
                     disabled={saving}
                     onClick={() => handleRemove(item.id)}
-                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 transition shrink-0"
+                    className="h-6 w-6 min-h-0 min-w-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition shrink-0"
                   >
                     <X />
                   </IconButton>
