@@ -48,8 +48,26 @@ export async function reportError(orgId: string, p: ReportErrorParams): Promise<
   });
 }
 
-/** Convenience: derive message + stack from a thrown value. */
+/** Convenience: derive message + stack from a thrown value.
+ *
+ * When the error carries a `detail` payload (e.g. WhatsAppSendError holds
+ * Meta's raw error body), fold it into the message so the notification/log
+ * shows *why* Meta rejected the send — otherwise a bare "Meta API 400"
+ * strands the real reason (error code, subcode) in a field nobody reads. */
 export function errInfo(e: unknown): { message: string; stack?: string } {
-  if (e instanceof Error) return { message: e.message, stack: e.stack };
+  if (e instanceof Error) {
+    const detail = (e as { detail?: unknown }).detail;
+    return { message: e.message + formatDetail(detail), stack: e.stack };
+  }
   return { message: String(e) };
+}
+
+/** Render an error's `detail` as a short suffix, capped so a large upstream
+ *  body can't bloat the notification. Empty/absent detail → no suffix. */
+function formatDetail(detail: unknown): string {
+  if (detail === undefined || detail === null || detail === "") return "";
+  const str = typeof detail === "string" ? detail : JSON.stringify(detail);
+  if (!str) return "";
+  const MAX = 800;
+  return ` — ${str.length > MAX ? `${str.slice(0, MAX)}…` : str}`;
 }
