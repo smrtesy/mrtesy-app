@@ -36,6 +36,7 @@ interface Character {
 }
 
 const LANG_FLAG: Record<string, string> = { he: "🇮🇱", en: "🇺🇸" };
+const CACHE_KEY = "smrtvoice.library.v1";
 
 export function VoiceLibrary() {
   const t = useTranslations("smrtVoice.library");
@@ -54,9 +55,11 @@ export function VoiceLibrary() {
   const [refreshing, setRefreshing] = useState(false);
   // Inline rename: { uuid, value } while editing a voice's display name.
   const [editing, setEditing] = useState<{ uuid: string; value: string } | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (refresh = false) => {
     setError(null);
+    setLoading(true);
     if (refresh) setRefreshing(true);
     const q = refresh ? "?refresh=true" : "";
     try {
@@ -71,14 +74,41 @@ export function VoiceLibrary() {
       const seed: Record<string, boolean> = {};
       for (const v of vs.voices ?? []) if (v.has_preview) seed[v.uuid] = true;
       setPreviews(seed);
+      // Cache for instant paint next time (stale-while-revalidate).
+      try {
+        localStorage.setItem(
+          CACHE_KEY,
+          JSON.stringify({ voices: vs.voices ?? [], account: acct, chars: cs.characters ?? [] }),
+        );
+      } catch {
+        /* quota/serialization — non-fatal */
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loadError"));
     } finally {
       setRefreshing(false);
+      setLoading(false);
     }
   }, [t]);
 
   useEffect(() => {
+    // Paint last-known voices instantly, then revalidate in the background.
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (raw) {
+        const c = JSON.parse(raw) as { voices?: Voice[]; account?: Account | null; chars?: Character[] };
+        if (c.voices) {
+          setVoices(c.voices);
+          setAccount(c.account ?? null);
+          setChars(c.chars ?? []);
+          const seed: Record<string, boolean> = {};
+          for (const v of c.voices) if (v.has_preview) seed[v.uuid] = true;
+          setPreviews(seed);
+        }
+      }
+    } catch {
+      /* ignore cache read errors */
+    }
     load();
   }, [load]);
 
@@ -275,9 +305,25 @@ export function VoiceLibrary() {
         )}
       </div>
 
+      {/* Subtle "refreshing" line when we already show cached voices. */}
+      {loading && voices !== null && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          {t("loading")}
+        </div>
+      )}
+
       {/* Voices */}
       {voices === null ? (
-        <p className="text-sm text-muted-foreground">…</p>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            {t("loading")}
+          </div>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-14 rounded-md border bg-muted/30 animate-pulse" />
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("noVoices")}</p>
       ) : (
