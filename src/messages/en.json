@@ -2434,6 +2434,7 @@
       "noVoice": "No voice yet",
       "form": {
         "nameLabel": "Real name",
+        "dialogDesc": "Character and voice details",
         "namePlaceholder": "e.g. Rivka",
         "displayNameLabel": "Display name",
         "displayNamePlaceholder": "Dovi'le",

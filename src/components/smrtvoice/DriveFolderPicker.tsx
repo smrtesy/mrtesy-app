@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -114,6 +115,7 @@ export function DriveFolderPicker({
         <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col gap-3">
           <DialogHeader>
             <DialogTitle>{t("browseTitle")}</DialogTitle>
+            <DialogDescription className="sr-only">{t("browseTitle")}</DialogDescription>
           </DialogHeader>
 
           {/* Search */}

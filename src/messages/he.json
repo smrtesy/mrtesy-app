@@ -2433,6 +2433,7 @@
       "noVoice": "אין קול עדיין",
       "form": {
         "nameLabel": "שם אמיתי",
+        "dialogDesc": "פרטי הדמות והקול",
         "namePlaceholder": "למשל: רבקה",
         "displayNameLabel": "שם תצוגה",
         "displayNamePlaceholder": "דוד'לה",

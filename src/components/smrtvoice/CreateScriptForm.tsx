@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -147,9 +148,9 @@ export function CreateScriptForm({
           <DialogTitle>
             {t("newScript")} · <span className="font-mono">{nextCode}</span>
           </DialogTitle>
+          <DialogDescription>{t("autoNumberHint", { code: nextCode })}</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
-          <p className="text-xs text-muted-foreground">{t("autoNumberHint", { code: nextCode })}</p>
 
           <div className="space-y-1">
             <label className="text-sm font-medium">{t("name")}</label>
