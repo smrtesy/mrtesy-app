@@ -102,7 +102,18 @@ export async function POST(request: NextRequest): Promise<Response> {
   // failed receipts, data-SMS) so the gateway moves on.
   const event = envelope.event ?? "";
   const isIncoming = event === "sms:received" || event === "mms:received";
-  const isOutgoing = event === "sms:sent" || event === "mms:sent";
+  // `sms:sent-observed` is emitted by our forked gateway when the user sends an
+  // SMS manually from the phone's own messaging app (observed in
+  // content://sms/sent). Its payload carries recipient/message/sentAt/messageId,
+  // which ingestSms already maps for outgoing messages.
+  //
+  // Its messageId is the Android provider row `_id`, whereas `sms:sent` (a send
+  // the gateway itself performed via its API) carries the gateway's own id. If
+  // gateway-originated sending is ever enabled here, the same physical SMS could
+  // arrive under both events with different ids and ingest twice; that path is
+  // intentionally deferred today, so observed sends are the only outgoing source.
+  const isOutgoing =
+    event === "sms:sent" || event === "mms:sent" || event === "sms:sent-observed";
   if (!isIncoming && !isOutgoing) {
     return NextResponse.json({ ok: true, ignored: event || "unknown" }, { status: 200 });
   }
