@@ -361,19 +361,35 @@ router.get("/voice/google/access-token", async (req: Request, res: Response) => 
   res.json({ access_token: token });
 });
 
-// POST /voice/drive/list-folders — list sub-folders for the in-app folder
-// browser. Body: { parent? } — omit for the My Drive root. No Google API key
-// needed (reuses the user's Drive OAuth).
+// POST /voice/drive/list-folders — folder source for the in-app browser.
+// Body: { parent? } drill under a folder (default My Drive root);
+//        { q } search folders by name across the user's Drive;
+//        { shared: true } list folders shared with the user.
+// No Google API key needed (reuses the user's Drive OAuth).
 router.post("/voice/drive/list-folders", async (req: Request, res: Response) => {
-  const parentRaw = (req.body?.parent ?? "").toString().trim();
-  const parent = parentRaw ? parseFolderId(parentRaw) : "root";
-  if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+  const FOLDER = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+  const q = (req.body?.q ?? "").toString().trim();
+  const shared = req.body?.shared === true;
+
+  let query: string;
+  if (q) {
+    // Escape backslashes then single quotes for the Drive query string.
+    const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    query = `${FOLDER} and name contains '${esc}'`;
+  } else if (shared) {
+    query = `${FOLDER} and sharedWithMe = true`;
+  } else {
+    const parentRaw = (req.body?.parent ?? "").toString().trim();
+    const parent = parentRaw ? parseFolderId(parentRaw) : "root";
+    if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+    query = `'${parent}' in parents and ${FOLDER}`;
+  }
 
   try {
     const drive = await getDriveClient(req.user!.id);
     const out = await drive.files.list({
-      q: `'${parent}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      pageSize: 200,
+      q: query,
+      pageSize: 100,
       fields: "files(id, name, webViewLink)",
       orderBy: "name",
       supportsAllDrives: true,
@@ -384,7 +400,7 @@ router.post("/voice/drive/list-folders", async (req: Request, res: Response) => 
       name: f.name,
       url: f.webViewLink ?? `https://drive.google.com/drive/folders/${f.id}`,
     }));
-    res.json({ parent, folders });
+    res.json({ folders });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
