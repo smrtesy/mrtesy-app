@@ -2431,6 +2431,7 @@
       "deleted": "הדמות נמחקה",
       "voiceReady": "קול מוכן",
       "noVoice": "אין קול עדיין",
+      "training": "באימון…",
       "form": {
         "nameLabel": "שם אמיתי",
         "dialogDesc": "פרטי הדמות והקול",
@@ -2491,6 +2492,11 @@
     "cloneUploader": {
       "titleNew": "יצירת קלון קול",
       "titleReplace": "החלף קלון קול",
+      "stepUpload": "מעלה קבצים",
+      "stepProcess": "מכין את הדגימה",
+      "stepTrain": "מאמן ומשדרג ל-Ultra",
+      "stepReady": "מוכן",
+      "bgNote": "ממשיך להתאמן ברקע — הקול יופיע כאן כמוכן בקרוב.",
       "voiceTypeLabel": "סוג קלון",
       "voiceTypePro": "Pro — איכות גבוהה, ~כמה דקות אימון",
       "voiceTypeRapid": "Rapid — מיידי, איכות נמוכה יותר",

@@ -2432,6 +2432,7 @@
       "deleted": "Character deleted",
       "voiceReady": "Voice ready",
       "noVoice": "No voice yet",
+      "training": "Training…",
       "form": {
         "nameLabel": "Real name",
         "dialogDesc": "Character and voice details",
@@ -2492,6 +2493,11 @@
     "cloneUploader": {
       "titleNew": "Create voice clone",
       "titleReplace": "Replace voice clone",
+      "stepUpload": "Uploading files",
+      "stepProcess": "Preparing the sample",
+      "stepTrain": "Training & upgrading to Ultra",
+      "stepReady": "Ready",
+      "bgNote": "Still training in the background — it will show as ready here shortly.",
       "voiceTypeLabel": "Clone type",
       "voiceTypePro": "Pro — high quality, ~few minutes of training",
       "voiceTypeRapid": "Rapid — instant, lower quality",

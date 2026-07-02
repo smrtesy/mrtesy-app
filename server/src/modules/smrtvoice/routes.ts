@@ -299,7 +299,7 @@ router.post(
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id })
+        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
         .eq("id", req.params.id)
         .select()
         .maybeSingle();
@@ -345,7 +345,18 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
 
   try {
     const client = getVoiceEngineClient();
-    res.json(await client.getVoiceStatus(character.resemble_voice_id));
+    const result = await client.getVoiceStatus(character.resemble_voice_id);
+    // Self-heal the stored status so the characters list reflects "ready"
+    // without anyone opening the character (Resemble upgrade finishes async).
+    const READY = new Set(["ready", "completed", "active", "done", "available"]);
+    if (result.status && READY.has(result.status.toLowerCase())) {
+      await db
+        .from("smrtvoice_characters")
+        .update({ voice_status: "ready" })
+        .eq("id", req.params.id)
+        .eq("org_id", req.org!.id);
+    }
+    res.json(result);
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
@@ -534,7 +545,7 @@ router.post(
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id })
+        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
         .eq("id", character.id)
         .select()
         .maybeSingle();

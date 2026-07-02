@@ -18,6 +18,7 @@ export interface Character {
   description: string | null;
   notes: string | null;
   resemble_voice_id: string | null;
+  voice_status: "none" | "training" | "ready";
   resemble_model: string;
   chatterbox_sample_path: string | null;
   language: "he" | "en";

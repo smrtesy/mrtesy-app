@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api/client";
 
@@ -15,7 +16,7 @@ interface Character {
   display_name: string | null;
   description: string | null;
   resemble_voice_id: string | null;
-  voice_type: "rapid" | "pro";
+  voice_status: "none" | "training" | "ready";
 }
 
 export function CharactersList() {
@@ -30,6 +31,23 @@ export function CharactersList() {
         "/api/voice/characters",
       );
       setCharacters(characters);
+      // Nudge any still-"training" characters: hitting voice-status flips them
+      // to "ready" server-side once Resemble finishes the async upgrade.
+      const training = characters.filter((c) => c.voice_status === "training");
+      if (training.length > 0) {
+        const results = await Promise.all(
+          training.map((c) =>
+            api<{ status: string | null }>(`/api/voice/characters/${c.id}/voice-status`)
+              .then((r) => r.status)
+              .catch(() => null),
+          ),
+        );
+        const READY = new Set(["ready", "completed", "active", "done", "available"]);
+        if (results.some((s) => s && READY.has(s.toLowerCase()))) {
+          const { characters: fresh } = await api<{ characters: Character[] }>("/api/voice/characters");
+          setCharacters(fresh);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     }
@@ -63,7 +81,15 @@ export function CharactersList() {
                 <CardContent className="text-sm text-muted-foreground space-y-1">
                   <div>{c.description ?? "—"}</div>
                   <div className="text-xs">
-                    {c.resemble_voice_id ? `✓ ${t("voiceReady")}` : t("noVoice")}
+                    {c.voice_status === "training" ? (
+                      <Badge variant="secondary" className="bg-amber-100 text-amber-800">
+                        {t("training")}
+                      </Badge>
+                    ) : c.resemble_voice_id ? (
+                      `✓ ${t("voiceReady")}`
+                    ) : (
+                      t("noVoice")
+                    )}
                   </div>
                 </CardContent>
               </Card>

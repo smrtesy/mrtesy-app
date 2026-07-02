@@ -331,7 +331,11 @@ export function VoiceLibrary() {
                         <Badge variant={isMine ? "default" : "outline"} className="text-[10px]">
                           {isMine ? t("mine") : t("stock")}
                         </Badge>
-                        {v.default_language && (
+                        {/* Resemble's default_language is en-US on rapid clones
+                            regardless of the audio — misleading for my Hebrew
+                            voices. Show it only for stock (where it's accurate);
+                            for mine the language flag already conveys it. */}
+                        {!isMine && v.default_language && (
                           <Badge variant="secondary" className="text-[10px]">{v.default_language}</Badge>
                         )}
                         {v.voice_type && (
