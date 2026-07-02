@@ -1008,7 +1008,22 @@ router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) =>
     .eq("org_id", req.org!.id)
     .order("speaker_name");
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ speakers: data ?? [] });
+
+  // Attach each speaker's line count (how many lines that speaker has).
+  const { data: lines } = await db
+    .from("smrtvoice_lines")
+    .select("speaker_name")
+    .eq("script_id", req.params.id)
+    .eq("org_id", req.org!.id);
+  const counts = new Map<string, number>();
+  for (const l of lines ?? []) {
+    counts.set(l.speaker_name, (counts.get(l.speaker_name) ?? 0) + 1);
+  }
+  const speakers = (data ?? []).map((s: { speaker_name: string }) => ({
+    ...s,
+    line_count: counts.get(s.speaker_name) ?? 0,
+  }));
+  res.json({ speakers });
 });
 
 router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ChevronRight, Trash2 } from "lucide-react";
+import { ChevronRight, Trash2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -110,6 +110,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   if (!script) return <p className="text-sm text-muted-foreground">…</p>;
 
   const parsed = script.status !== "draft";
+  const generating = script.status === "queued" || script.status === "processing";
+  const pct =
+    script.total_lines > 0
+      ? Math.min(100, Math.round((script.completed_lines / script.total_lines) * 100))
+      : 0;
 
   return (
     <div className="space-y-6">
@@ -149,13 +154,35 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
         </CardContent>
       </Card>
 
+      {/* Generation progress — live via the script realtime subscription. */}
+      {generating && (
+        <div className="rounded-md border p-3 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            {script.status === "queued"
+              ? t("queuedBanner")
+              : t("generatingBanner", { done: script.completed_lines, total: script.total_lines })}
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
-        <Button onClick={onParse} disabled={busy} variant="secondary">
+        <Button onClick={onParse} disabled={busy || generating} variant="secondary">
           {busy ? t("parsing") : t("parse")}
         </Button>
-        <Button onClick={onGenerate} disabled={busy || !parsed}>
-          {t("generate")}
+        <Button onClick={onGenerate} disabled={busy || !parsed || generating}>
+          {generating ? (
+            <>
+              <Loader2 className="h-4 w-4 me-1 animate-spin" />
+              {t("generating")}
+            </>
+          ) : (
+            t("generate")
+          )}
         </Button>
         {script.google_doc_url && (
           <a href={script.google_doc_url} target="_blank" rel="noreferrer" className="ms-auto">
