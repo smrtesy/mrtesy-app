@@ -37,6 +37,9 @@ export function CharactersList() {
 
   useEffect(() => {
     fetchCharacters();
+    const onFocus = () => fetchCharacters();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [fetchCharacters]);
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
@@ -60,7 +63,7 @@ export function CharactersList() {
                 <CardContent className="text-sm text-muted-foreground space-y-1">
                   <div>{c.description ?? "—"}</div>
                   <div className="text-xs">
-                    {c.voice_type} · {c.resemble_voice_id ? "cloned" : "no voice yet"}
+                    {c.resemble_voice_id ? `✓ ${t("voiceReady")}` : t("noVoice")}
                   </div>
                 </CardContent>
               </Card>

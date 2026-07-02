@@ -2295,6 +2295,11 @@
       "tabHelp": "נבחר אוטומטית הטאב בעברית; אפשר לשנות",
       "pickFromDrive": "בחר מסמך מ-Google Drive",
       "browseDrive": "עיין ב-Drive",
+      "browseTitle": "בחר תיקייה מ-Drive",
+      "driveRoot": "הדרייב שלי",
+      "selectFolder": "בחר",
+      "selectThisFolder": "בחר תיקייה זו",
+      "noSubfolders": "אין תת-תיקיות כאן",
       "loadDocs": "טען מסמכים",
       "loadingDocs": "טוען…",
       "noDocs": "לא נמצאו מסמכי Google Docs בתיקיה",
@@ -2359,6 +2364,7 @@
       "sampleReady": "הדוגמה מוכנה (${cost})",
       "sampleFailed": "הפקת הדוגמה נכשלה",
       "refresh": "רענן",
+      "refreshing": "מרענן…",
       "loadError": "טעינת הקולות נכשלה"
     },
     "projects": {
@@ -2414,6 +2420,8 @@
       "delete": "מחק דמות",
       "deleteConfirm": "למחוק את הדמות? היא תוסר מהרשימה שלך.",
       "deleted": "הדמות נמחקה",
+      "voiceReady": "קול מוכן",
+      "noVoice": "אין קול עדיין",
       "form": {
         "nameLabel": "שם אמיתי",
         "namePlaceholder": "למשל: רבקה",

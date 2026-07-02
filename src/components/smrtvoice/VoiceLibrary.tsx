@@ -47,9 +47,11 @@ export function VoiceLibrary() {
   const [sampling, setSampling] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (refresh = false) => {
     setError(null);
+    if (refresh) setRefreshing(true);
     const q = refresh ? "?refresh=true" : "";
     try {
       const [acct, vs, cs] = await Promise.all([
@@ -65,6 +67,8 @@ export function VoiceLibrary() {
       setPreviews(seed);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loadError"));
+    } finally {
+      setRefreshing(false);
     }
   }, [t]);
 
@@ -174,8 +178,9 @@ export function VoiceLibrary() {
             </a>
             <p className="text-[11px] text-muted-foreground">{t("creditsNote")}</p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => load(true)}>
-            <RefreshCw className="h-4 w-4 me-1" /> {t("refresh")}
+          <Button variant="outline" size="sm" onClick={() => load(true)} disabled={refreshing}>
+            <RefreshCw className={`h-4 w-4 me-1 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? t("refreshing") : t("refresh")}
           </Button>
         </CardContent>
       </Card>

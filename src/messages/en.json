@@ -2296,6 +2296,11 @@
       "tabHelp": "The Hebrew tab is auto-selected; you can change it",
       "pickFromDrive": "Pick a document from Google Drive",
       "browseDrive": "Browse Drive",
+      "browseTitle": "Choose a Drive folder",
+      "driveRoot": "My Drive",
+      "selectFolder": "Select",
+      "selectThisFolder": "Select this folder",
+      "noSubfolders": "No subfolders here",
       "loadDocs": "Load documents",
       "loadingDocs": "Loading…",
       "noDocs": "No Google Docs found in the folder",
@@ -2360,6 +2365,7 @@
       "sampleReady": "Sample ready (${cost})",
       "sampleFailed": "Sample failed",
       "refresh": "Refresh",
+      "refreshing": "Refreshing…",
       "loadError": "Couldn't load voices"
     },
     "projects": {
@@ -2415,6 +2421,8 @@
       "delete": "Delete character",
       "deleteConfirm": "Delete this character? It will be removed from your list.",
       "deleted": "Character deleted",
+      "voiceReady": "Voice ready",
+      "noVoice": "No voice yet",
       "form": {
         "nameLabel": "Real name",
         "namePlaceholder": "e.g. Rivka",

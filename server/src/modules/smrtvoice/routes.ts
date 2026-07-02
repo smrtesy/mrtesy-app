@@ -361,6 +361,35 @@ router.get("/voice/google/access-token", async (req: Request, res: Response) => 
   res.json({ access_token: token });
 });
 
+// POST /voice/drive/list-folders — list sub-folders for the in-app folder
+// browser. Body: { parent? } — omit for the My Drive root. No Google API key
+// needed (reuses the user's Drive OAuth).
+router.post("/voice/drive/list-folders", async (req: Request, res: Response) => {
+  const parentRaw = (req.body?.parent ?? "").toString().trim();
+  const parent = parentRaw ? parseFolderId(parentRaw) : "root";
+  if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+
+  try {
+    const drive = await getDriveClient(req.user!.id);
+    const out = await drive.files.list({
+      q: `'${parent}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      pageSize: 200,
+      fields: "files(id, name, webViewLink)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const folders = (out.data.files ?? []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      url: f.webViewLink ?? `https://drive.google.com/drive/folders/${f.id}`,
+    }));
+    res.json({ parent, folders });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
 // POST /voice/drive/list-audio — list audio files in a Drive folder. Body: { folder }.
 router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
   const folderId = parseFolderId((req.body?.folder ?? "").toString().trim());
@@ -1517,6 +1546,23 @@ router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: 
   try {
     const client = getVoiceEngineClient();
     const { voices } = await client.listVoices(req.query.refresh === "true");
+    const liveIds = new Set((voices ?? []).map((v) => String(v.uuid)));
+
+    // Self-heal: null any character voice link whose Resemble voice no longer
+    // exists (e.g. deleted directly on the Resemble dashboard). Keeps the
+    // Characters screen honest without a manual unlink.
+    const { data: linked } = await db
+      .from("smrtvoice_characters")
+      .select("id, resemble_voice_id")
+      .eq("org_id", req.org!.id)
+      .not("resemble_voice_id", "is", null);
+    const dangling = (linked ?? [])
+      .filter((c: { resemble_voice_id: string }) => !liveIds.has(c.resemble_voice_id))
+      .map((c: { id: string }) => c.id);
+    if (dangling.length > 0) {
+      await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+    }
+
     // Which voices already have a stored preview for this org.
     const { data: previews } = await db
       .from("smrtvoice_voice_previews")
