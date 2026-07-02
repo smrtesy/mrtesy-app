@@ -2371,6 +2371,10 @@
       "sampleFailed": "Sample failed",
       "refresh": "Refresh",
       "refreshing": "Refreshing…",
+      "rename": "Rename",
+      "displayNamePlaceholder": "Display name…",
+      "saveName": "Save",
+      "cancelName": "Cancel",
       "loadError": "Couldn't load voices"
     },
     "projects": {

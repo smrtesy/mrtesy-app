@@ -2370,6 +2370,10 @@
       "sampleFailed": "הפקת הדוגמה נכשלה",
       "refresh": "רענן",
       "refreshing": "מרענן…",
+      "rename": "שנה שם",
+      "displayNamePlaceholder": "שם תצוגה…",
+      "saveName": "שמור",
+      "cancelName": "ביטול",
       "loadError": "טעינת הקולות נכשלה"
     },
     "projects": {

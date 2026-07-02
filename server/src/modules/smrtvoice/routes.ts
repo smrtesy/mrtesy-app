@@ -1585,8 +1585,22 @@ router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: 
       .select("resemble_voice_id")
       .eq("org_id", req.org!.id);
     const hasPreview = new Set((previews ?? []).map((p: { resemble_voice_id: string }) => p.resemble_voice_id));
+
+    // Custom per-org display names.
+    const { data: labels } = await db
+      .from("smrtvoice_voice_labels")
+      .select("resemble_voice_id, display_name")
+      .eq("org_id", req.org!.id);
+    const labelMap = new Map(
+      (labels ?? []).map((l: { resemble_voice_id: string; display_name: string }) => [l.resemble_voice_id, l.display_name]),
+    );
+
     res.json({
-      voices: (voices ?? []).map((v) => ({ ...v, has_preview: hasPreview.has(String(v.uuid)) })),
+      voices: (voices ?? []).map((v) => ({
+        ...v,
+        has_preview: hasPreview.has(String(v.uuid)),
+        display_name: labelMap.get(String(v.uuid)) ?? null,
+      })),
     });
   } catch (err) {
     res.status(502).json({ error: veMessage(err) });
@@ -1605,6 +1619,29 @@ router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), asy
   } catch (err) {
     res.status(502).json({ error: veMessage(err) });
   }
+});
+
+// PATCH /voice/resemble/voices/:uuid/label — set/clear a custom display name.
+router.patch("/voice/resemble/voices/:uuid/label", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const uuid = req.params.uuid;
+  const name = (req.body?.display_name ?? "").toString().trim();
+  if (!name) {
+    const { error } = await db
+      .from("smrtvoice_voice_labels")
+      .delete()
+      .eq("org_id", req.org!.id)
+      .eq("resemble_voice_id", uuid);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ display_name: null });
+  }
+  const { error } = await db
+    .from("smrtvoice_voice_labels")
+    .upsert(
+      { org_id: req.org!.id, resemble_voice_id: uuid, display_name: name },
+      { onConflict: "org_id,resemble_voice_id" },
+    );
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ display_name: name });
 });
 
 // POST /voice/resemble/voices/:uuid/sample — synthesize + store a preview.

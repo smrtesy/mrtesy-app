@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Play, Trash2, Sparkles, RefreshCw, Search } from "lucide-react";
+import { Play, Trash2, Sparkles, RefreshCw, Search, Pencil, Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ interface Voice {
   voice_type?: string;
   voice_status?: string;
   has_preview?: boolean;
+  display_name?: string | null;
   [k: string]: unknown;
 }
 interface Character {
@@ -51,6 +52,8 @@ export function VoiceLibrary() {
   const [playing, setPlaying] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
+  // Inline rename: { uuid, value } while editing a voice's display name.
+  const [editing, setEditing] = useState<{ uuid: string; value: string } | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     setError(null);
@@ -97,6 +100,25 @@ export function VoiceLibrary() {
     return null;
   }
 
+  // The name to show big: custom label → my character's display name → Resemble.
+  function titleFor(v: Voice): string {
+    return v.display_name || mine.get(v.uuid)?.name || v.name || v.uuid;
+  }
+
+  async function saveRename(uuid: string, value: string) {
+    const display_name = value.trim();
+    setEditing(null);
+    try {
+      await api(`/api/voice/resemble/voices/${uuid}/label`, {
+        method: "PATCH",
+        body: { display_name },
+      });
+      setVoices((vs) => (vs ?? []).map((v) => (v.uuid === uuid ? { ...v, display_name: display_name || null } : v)));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
   const filtered = useMemo(() => {
     if (!voices) return [];
     const q = search.trim().toLowerCase();
@@ -106,7 +128,13 @@ export function VoiceLibrary() {
       if (filter === "stock" && isMine) return false;
       if (lang && voiceLang(v) !== lang) return false;
       if (vtype && (v.voice_type ?? "") !== vtype) return false;
-      if (q && !(v.name ?? "").toLowerCase().includes(q) && !v.uuid.toLowerCase().includes(q)) return false;
+      if (
+        q &&
+        !(v.name ?? "").toLowerCase().includes(q) &&
+        !(v.display_name ?? "").toLowerCase().includes(q) &&
+        !v.uuid.toLowerCase().includes(q)
+      )
+        return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,7 +292,41 @@ export function VoiceLibrary() {
                   <div className="min-w-0 flex items-center gap-2">
                     <span className="text-base" title={l ?? ""}>{l ? (LANG_FLAG[l] ?? "🌐") : "🌐"}</span>
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{v.name || v.uuid}</div>
+                      {editing?.uuid === v.uuid ? (
+                        <div className="flex items-center gap-1">
+                          <Input
+                            autoFocus
+                            value={editing.value}
+                            onChange={(e) => setEditing({ uuid: v.uuid, value: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveRename(v.uuid, editing.value);
+                              if (e.key === "Escape") setEditing(null);
+                            }}
+                            placeholder={t("displayNamePlaceholder")}
+                            className="h-7 py-0 text-sm"
+                          />
+                          <Button size="icon" variant="ghost" className="h-7 w-7" title={t("saveName")} onClick={() => saveRename(v.uuid, editing.value)}>
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" title={t("cancelName")} onClick={() => setEditing(null)}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium truncate">{titleFor(v)}</span>
+                          <button
+                            type="button"
+                            title={t("rename")}
+                            onClick={() => setEditing({ uuid: v.uuid, value: v.display_name ?? "" })}
+                            className="text-muted-foreground hover:text-foreground shrink-0"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )}
+                      {/* Official Resemble name, small */}
+                      <div className="text-[11px] text-muted-foreground truncate">{v.name || v.uuid}</div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <Badge variant={isMine ? "default" : "outline"} className="text-[10px]">
                           {isMine ? t("mine") : t("stock")}
