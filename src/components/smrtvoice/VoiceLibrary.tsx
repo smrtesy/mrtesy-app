@@ -21,7 +21,9 @@ interface Account {
 interface Voice {
   uuid: string;
   name?: string;
-  language?: string;
+  default_language?: string;
+  voice_type?: string;
+  voice_status?: string;
   has_preview?: boolean;
   [k: string]: unknown;
 }
@@ -44,6 +46,7 @@ export function VoiceLibrary() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "mine" | "stock">("all");
   const [lang, setLang] = useState<string>("");
+  const [vtype, setVtype] = useState<string>("");
   const [sampling, setSampling] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
@@ -83,10 +86,14 @@ export function VoiceLibrary() {
     return m;
   }, [chars]);
 
+  // Language tag: my characters carry the reliable he/en; stock voices expose
+  // Resemble's default_language ("he-IL", "en-US", …) → short code.
   function voiceLang(v: Voice): string | null {
     const c = mine.get(v.uuid);
     if (c) return c.language;
-    if (typeof v.language === "string") return v.language;
+    if (typeof v.default_language === "string" && v.default_language) {
+      return v.default_language.slice(0, 2).toLowerCase();
+    }
     return null;
   }
 
@@ -98,11 +105,12 @@ export function VoiceLibrary() {
       if (filter === "mine" && !isMine) return false;
       if (filter === "stock" && isMine) return false;
       if (lang && voiceLang(v) !== lang) return false;
+      if (vtype && (v.voice_type ?? "") !== vtype) return false;
       if (q && !(v.name ?? "").toLowerCase().includes(q) && !v.uuid.toLowerCase().includes(q)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voices, search, filter, lang, mine]);
+  }, [voices, search, filter, lang, vtype, mine]);
 
   async function onSample(uuid: string) {
     setSampling(uuid);
@@ -151,6 +159,9 @@ export function VoiceLibrary() {
 
   const langs = Array.from(
     new Set((voices ?? []).map((v) => voiceLang(v)).filter(Boolean) as string[]),
+  );
+  const types = Array.from(
+    new Set((voices ?? []).map((v) => v.voice_type ?? "").filter(Boolean)),
   );
 
   return (
@@ -222,6 +233,18 @@ export function VoiceLibrary() {
             ))}
           </select>
         )}
+        {types.length > 0 && (
+          <select
+            className="rounded-md border bg-background px-3 py-2 text-sm"
+            value={vtype}
+            onChange={(e) => setVtype(e.target.value)}
+          >
+            <option value="">{t("allTypes")}</option>
+            {types.map((ty) => (
+              <option key={ty} value={ty}>{ty}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Voices */}
@@ -242,11 +265,21 @@ export function VoiceLibrary() {
                     <span className="text-base" title={l ?? ""}>{l ? (LANG_FLAG[l] ?? "🌐") : "🌐"}</span>
                     <div className="min-w-0">
                       <div className="font-medium truncate">{v.name || v.uuid}</div>
-                      <div className="text-[11px] text-muted-foreground font-mono truncate">{v.uuid}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                        <Badge variant={isMine ? "default" : "outline"} className="text-[10px]">
+                          {isMine ? t("mine") : t("stock")}
+                        </Badge>
+                        {v.default_language && (
+                          <Badge variant="secondary" className="text-[10px]">{v.default_language}</Badge>
+                        )}
+                        {v.voice_type && (
+                          <Badge variant="secondary" className="text-[10px]">{v.voice_type}</Badge>
+                        )}
+                        {v.voice_status && v.voice_status !== "Ready" && (
+                          <Badge variant="outline" className="text-[10px]">{v.voice_status}</Badge>
+                        )}
+                      </div>
                     </div>
-                    <Badge variant={isMine ? "default" : "outline"}>
-                      {isMine ? t("mine") : t("stock")}
-                    </Badge>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {hasPreview && (
