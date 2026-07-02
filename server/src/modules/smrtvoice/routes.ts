@@ -1012,8 +1012,12 @@ router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) =>
 });
 
 router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
-  const list: Array<{ speaker_name: string; character_id?: string | null; resemble_voice_id?: string | null }> =
-    Array.isArray(req.body?.speakers) ? req.body.speakers : [];
+  const list: Array<{
+    speaker_name: string;
+    character_id?: string | null;
+    resemble_voice_id?: string | null;
+    skip?: boolean;
+  }> = Array.isArray(req.body?.speakers) ? req.body.speakers : [];
   if (list.length === 0) return res.status(400).json({ error: "speakers array is required" });
 
   const rows = list
@@ -1022,8 +1026,10 @@ router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) 
       org_id: req.org!.id,
       script_id: req.params.id,
       speaker_name: s.speaker_name,
-      character_id: s.character_id ?? null,
-      resemble_voice_id: s.resemble_voice_id ?? null,
+      // A skipped speaker carries no voice — its lines won't be generated.
+      character_id: s.skip ? null : (s.character_id ?? null),
+      resemble_voice_id: s.skip ? null : (s.resemble_voice_id ?? null),
+      skip: s.skip ?? false,
     }));
 
   const { data, error } = await db
@@ -1076,7 +1082,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   // Build the speaker_map from casting.
   const { data: cast, error: castErr } = await db
     .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id")
+    .select("speaker_name, character_id, resemble_voice_id, skip")
     .eq("script_id", script.id);
   if (castErr) return res.status(500).json({ error: castErr.message });
 
@@ -1111,16 +1117,17 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
 
-  // Any speaker left uncast — or cast to a character that has no voice clone
-  // yet — would have its lines silently dropped. Block and name them so the
-  // user can finish casting rather than generate a broken take.
-  const unvoiced = (cast ?? [])
-    .filter((c) => !speakerMap[c.speaker_name])
+  // Every speaker must be decided: either cast to a usable voice, or explicitly
+  // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
+  // doesn't accidentally drop lines — while still allowing "cast one, skip the
+  // rest" to preview a single voice. Skipped speakers' lines aren't generated.
+  const undecided = (cast ?? [])
+    .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
     .map((c) => c.speaker_name);
-  if (unvoiced.length > 0) {
+  if (undecided.length > 0) {
     return res.status(400).json({
-      error: `These speakers have no usable voice yet: ${unvoiced.join(", ")}`,
-      speakers: unvoiced,
+      error: `These speakers need a voice or "skip": ${undecided.join(", ")}`,
+      speakers: undecided,
     });
   }
 
