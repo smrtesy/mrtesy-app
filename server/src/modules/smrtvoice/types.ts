@@ -18,11 +18,13 @@ export interface Character {
   description: string | null;
   notes: string | null;
   resemble_voice_id: string | null;
+  voice_status: "none" | "training" | "ready";
   resemble_model: string;
   chatterbox_sample_path: string | null;
   language: "he" | "en";
   voice_type: "rapid" | "pro";
   age_group: "child" | "teen" | "adult" | "elderly" | null;
+  age_years: number | null;
   gender: "male" | "female" | "neutral" | null;
   default_exaggeration: number;
   default_pitch: number;
@@ -345,6 +347,7 @@ export interface CreateCharacterRequest {
   language?: "he" | "en";
   voice_type?: "rapid" | "pro";
   age_group?: "child" | "teen" | "adult" | "elderly";
+  age_years?: number;
   gender?: "male" | "female" | "neutral";
   personality_prompt?: string;
 }

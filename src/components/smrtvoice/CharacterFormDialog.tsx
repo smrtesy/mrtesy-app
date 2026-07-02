@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -16,31 +17,59 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 
-type AgeGroup = "child" | "teen" | "adult" | "elderly";
 type Gender = "male" | "female" | "neutral";
 
-export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
+interface CharacterInit {
+  id: string;
+  name: string;
+  display_name: string | null;
+  description: string | null;
+  language: "he" | "en";
+  age_years: number | null;
+  gender: Gender | null;
+  personality_prompt: string | null;
+}
+
+/**
+ * Create OR edit a character. Pass `character` to edit (PATCH); omit for create
+ * (POST). A character is just a named voice — the name is a label, casting to
+ * script speakers happens separately.
+ */
+export function CharacterFormDialog({
+  onCreated,
+  onSaved,
+  character,
+}: {
+  onCreated?: () => void;
+  onSaved?: () => void;
+  character?: CharacterInit;
+}) {
   const t = useTranslations("smrtVoice.characters");
   const tf = useTranslations("smrtVoice.characters.form");
   const router = useRouter();
   const locale = useLocale();
+  const isEdit = !!character;
+
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [description, setDescription] = useState("");
-  const [language, setLanguage] = useState<"he" | "en">("he");
-  const [ageGroup, setAgeGroup] = useState<AgeGroup | "">("");
-  const [gender, setGender] = useState<Gender | "">("");
-  const [personalityPrompt, setPersonalityPrompt] = useState("");
+  const [name, setName] = useState(character?.name ?? "");
+  const [displayName, setDisplayName] = useState(character?.display_name ?? "");
+  const [description, setDescription] = useState(character?.description ?? "");
+  const [language, setLanguage] = useState<"he" | "en">(character?.language ?? "he");
+  const [ageYears, setAgeYears] = useState<string>(
+    character?.age_years != null ? String(character.age_years) : "",
+  );
+  const [gender, setGender] = useState<Gender | "">(character?.gender ?? "");
+  const [personalityPrompt, setPersonalityPrompt] = useState(character?.personality_prompt ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
+    if (isEdit) return; // keep edit values; dialog just closes
     setName("");
     setDisplayName("");
     setDescription("");
     setLanguage("he");
-    setAgeGroup("");
+    setAgeYears("");
     setGender("");
     setPersonalityPrompt("");
     setError(null);
@@ -50,29 +79,30 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
     e.preventDefault();
     setError(null);
     setBusy(true);
+    const body = {
+      name,
+      display_name: displayName || undefined,
+      description: description || undefined,
+      language,
+      age_years: ageYears.trim() === "" ? undefined : Number(ageYears),
+      gender: gender || undefined,
+      personality_prompt: personalityPrompt || undefined,
+    };
     try {
-      const { character } = await api<{ character: { id: string } }>(
-        "/api/voice/characters",
-        {
-          method: "POST",
-          body: {
-            name,
-            display_name: displayName || undefined,
-            description: description || undefined,
-            language,
-            // All clones are Ultra (created rapid → upgraded); no type choice.
-            age_group: ageGroup || undefined,
-            gender: gender || undefined,
-            personality_prompt: personalityPrompt || undefined,
-          },
-        },
-      );
-      setOpen(false);
-      reset();
-      onCreated?.();
-      // Go straight to the character page — that's where you upload a recording
-      // or pick files from Google Drive to create the voice clone.
-      if (character?.id) router.push(`/${locale}/voice/characters/${character.id}`);
+      if (isEdit) {
+        await api(`/api/voice/characters/${character!.id}`, { method: "PATCH", body });
+        setOpen(false);
+        onSaved?.();
+      } else {
+        const { character: created } = await api<{ character: { id: string } }>(
+          "/api/voice/characters",
+          { method: "POST", body },
+        );
+        setOpen(false);
+        reset();
+        onCreated?.();
+        if (created?.id) router.push(`/${locale}/voice/characters/${created.id}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -81,13 +111,24 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) reset();
+      }}
+    >
       <DialogTrigger asChild>
-        <Button>{t("new")}</Button>
+        {isEdit ? (
+          <Button variant="outline" size="sm">{tf("edit")}</Button>
+        ) : (
+          <Button>{t("new")}</Button>
+        )}
       </DialogTrigger>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{t("new")}</DialogTitle>
+          <DialogTitle>{isEdit ? tf("editTitle") : t("new")}</DialogTitle>
+          <DialogDescription className="sr-only">{tf("dialogDesc")}</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1">
@@ -132,18 +173,16 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium">{tf("ageGroupLabel")}</label>
-              <select
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={ageGroup}
-                onChange={(e) => setAgeGroup(e.target.value as AgeGroup | "")}
-              >
-                <option value="">{tf("ageGroupNone")}</option>
-                <option value="child">{tf("ageGroupChild")}</option>
-                <option value="teen">{tf("ageGroupTeen")}</option>
-                <option value="adult">{tf("ageGroupAdult")}</option>
-                <option value="elderly">{tf("ageGroupElderly")}</option>
-              </select>
+              <label className="text-sm font-medium">{tf("ageYearsLabel")}</label>
+              <Input
+                type="number"
+                min={0}
+                max={120}
+                inputMode="numeric"
+                value={ageYears}
+                onChange={(e) => setAgeYears(e.target.value)}
+                placeholder={tf("ageYearsPlaceholder")}
+              />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">{tf("genderLabel")}</label>
@@ -169,13 +208,13 @@ export function CharacterFormDialog({ onCreated }: { onCreated?: () => void }) {
             />
           </div>
 
-          <p className="text-xs text-muted-foreground">{tf("cloneHint")}</p>
+          {!isEdit && <p className="text-xs text-muted-foreground">{tf("cloneHint")}</p>}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <div className="flex gap-2">
             <Button type="submit" disabled={busy || !name.trim()}>
-              {tf("submit")}
+              {isEdit ? (busy ? tf("saving") : tf("save")) : tf("submit")}
             </Button>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               {tf("cancel")}

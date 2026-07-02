@@ -98,8 +98,8 @@ class VoiceEngineClient {
     });
   }
 
-  /** Connected Resemble account + total voice count (no credit API exists). */
-  async getResembleAccount(): Promise<{
+  /** Connected Resemble account + total voice count (server-cached ~3 min). */
+  async getResembleAccount(refresh = false): Promise<{
     email: string | null;
     name: string | null;
     teams: number | null;
@@ -107,12 +107,12 @@ class VoiceEngineClient {
     credits_available: number | null;
     billing_url: string;
   }> {
-    return this.request("GET", "/voices/account");
+    return this.request("GET", `/voices/account${refresh ? "?refresh=true" : ""}`);
   }
 
-  /** List all voices on the Resemble account. */
-  async listVoices(): Promise<{ voices: Array<Record<string, unknown>> }> {
-    return this.request("GET", "/voices");
+  /** List all voices on the Resemble account (server-cached ~3 min). */
+  async listVoices(refresh = false): Promise<{ voices: Array<Record<string, unknown>> }> {
+    return this.request("GET", `/voices${refresh ? "?refresh=true" : ""}`);
   }
 
   /** Delete a voice from the Resemble account. */

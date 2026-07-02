@@ -8,6 +8,7 @@
  * is mounted separately at app level (before the auth guards).
  */
 
+import crypto from "node:crypto";
 import { Readable } from "node:stream";
 
 import { Router } from "express";
@@ -28,6 +29,17 @@ import type {
 // Project (folder) code prefix: 1-3 uppercase letters, e.g. "BR".
 const PREFIX_RE = /^[A-Z]{1,3}$/;
 
+/** Human-readable message for a voice-engine error, unwrapping FastAPI `detail`. */
+function veMessage(err: unknown): string {
+  if (err instanceof VoiceEngineError) {
+    const d = err.details as { detail?: unknown } | undefined;
+    const detail = d && typeof d === "object" && "detail" in d ? d.detail : undefined;
+    if (detail) return typeof detail === "string" ? detail : JSON.stringify(detail);
+    return err.message;
+  }
+  return err instanceof Error ? err.message : "Unknown error";
+}
+
 /** Fetch the caller's Google access token (Docs/Drive share one grant). */
 async function getGoogleAccessToken(userId: string): Promise<string | null> {
   try {
@@ -36,6 +48,20 @@ async function getGoogleAccessToken(userId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Make a Supabase-Storage-safe object key segment. Storage rejects non-ASCII
+ * (e.g. Hebrew) and some punctuation → "InvalidKey". Keep [A-Za-z0-9._-],
+ * collapse the rest to "_", and always prefix a short random token so two
+ * differently-named-but-same-after-sanitising files never collide/overwrite.
+ */
+function safeStorageName(name: string, fallback = "audio.wav"): string {
+  const cleaned = (name || "")
+    .replace(/[^\w.\-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const base = cleaned || fallback;
+  return `${crypto.randomBytes(4).toString("hex")}_${base}`;
 }
 
 /** Resolve a Drive folder id from a full folder URL or a bare id. */
@@ -99,6 +125,7 @@ router.post(
         // All clones are created rapid then upgraded to Ultra; kept for the column.
         voice_type: body.voice_type ?? "rapid",
         age_group: body.age_group ?? null,
+        age_years: typeof body.age_years === "number" ? body.age_years : null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
         ...(orgSettings?.default_resemble_model
@@ -144,6 +171,7 @@ const CHARACTER_UPDATABLE = new Set([
   "language",
   "voice_type",
   "age_group",
+  "age_years",
   "gender",
   "personality_prompt",
   "resemble_model",
@@ -179,6 +207,26 @@ router.patch(
   },
 );
 
+// DELETE /voice/characters/:id — soft-delete (is_active=false) so the row and
+// any script casting that references it stay intact; it just leaves the list.
+router.delete(
+  "/voice/characters/:id",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { data, error } = await db
+      .from("smrtvoice_characters")
+      .update({ is_active: false })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .select("id")
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "Character not found" });
+    await emitEvent(req.org!.id, "smrtvoice", "character.deleted", "character", req.params.id, {});
+    res.json({ deleted: true });
+  },
+);
+
 // POST /voice/characters/:id/sample-upload-url — signed URL to upload a sample.
 router.post(
   "/voice/characters/:id/sample-upload-url",
@@ -197,7 +245,7 @@ router.post(
     if (charErr) return res.status(500).json({ error: charErr.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    const path = `${req.org!.id}/characters/${characterId}/samples/${fileName}`;
+    const path = `${req.org!.id}/characters/${characterId}/samples/${safeStorageName(fileName)}`;
     const { data, error } = await db.storage
       .from("smrtvoice-audio")
       .createSignedUploadUrl(path);
@@ -207,13 +255,18 @@ router.post(
   },
 );
 
-// POST /voice/characters/:id/clone — body: { sample_path }
+// POST /voice/characters/:id/clone — body: { sample_path } or { sample_paths: [] }
 router.post(
   "/voice/characters/:id/clone",
   requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
-    const { sample_path } = req.body ?? {};
-    if (!sample_path) return res.status(400).json({ error: "sample_path is required" });
+    // Accept one path (legacy) or many (multi-file upload from the computer).
+    const paths: string[] = Array.isArray(req.body?.sample_paths)
+      ? req.body.sample_paths.filter(Boolean)
+      : req.body?.sample_path
+        ? [req.body.sample_path]
+        : [];
+    if (paths.length === 0) return res.status(400).json({ error: "sample_path(s) required" });
 
     const { data: character, error: charError } = await db
       .from("smrtvoice_characters")
@@ -225,50 +278,52 @@ router.post(
     if (charError) return res.status(500).json({ error: charError.message });
     if (!character) return res.status(404).json({ error: "Character not found" });
 
-    const { data: signed, error: signErr } = await db.storage
-      .from("smrtvoice-audio")
-      .createSignedUrl(sample_path, 3600);
-    if (signErr || !signed) {
-      return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+    const signedUrls: string[] = [];
+    for (const p of paths) {
+      const { data: signed, error: signErr } = await db.storage
+        .from("smrtvoice-audio")
+        .createSignedUrl(p, 3600);
+      if (signErr || !signed) {
+        return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+      }
+      signedUrls.push(signed.signedUrl);
     }
 
     try {
       const client = getVoiceEngineClient();
       const result = await client.createVoiceClone({
-        sample_url: signed.signedUrl,
+        sample_urls: signedUrls,
         name: character.name,
         language: character.language,
       });
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id })
+        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
         .eq("id", req.params.id)
         .select()
         .maybeSingle();
       if (updateError) return res.status(500).json({ error: updateError.message });
 
-      const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
-        org_id: req.org!.id,
-        character_id: character.id,
-        created_by: req.user!.id,
-        storage_path: sample_path,
-        uploaded_to_resemble: true,
-        resemble_sample_id: result.voice_id,
-      });
-      if (sampleErr) console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
+      for (const p of paths) {
+        const { error: sampleErr } = await db.from("smrtvoice_voice_samples").insert({
+          org_id: req.org!.id,
+          character_id: character.id,
+          created_by: req.user!.id,
+          storage_path: p,
+          uploaded_to_resemble: true,
+          resemble_sample_id: result.voice_id,
+        });
+        if (sampleErr) console.warn("[smrtvoice] voice_samples insert failed:", sampleErr.message);
+      }
 
       await emitEvent(req.org!.id, "smrtvoice", "character.clone_created", "character", character.id, {
         voice_id: result.voice_id,
+        parts: paths.length,
       });
       res.json({ character: updated, status: result.status });
     } catch (err) {
-      const message =
-        err instanceof VoiceEngineError
-          ? `Voice Engine: ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : "Unknown error";
+      const message = veMessage(err);
       await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create voice clone", body: message });
       res.status(502).json({ error: message });
     }
@@ -290,7 +345,73 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
 
   try {
     const client = getVoiceEngineClient();
-    res.json(await client.getVoiceStatus(character.resemble_voice_id));
+    const result = await client.getVoiceStatus(character.resemble_voice_id);
+    // Self-heal the stored status so the characters list reflects "ready"
+    // without anyone opening the character (Resemble upgrade finishes async).
+    const READY = new Set(["ready", "completed", "active", "done", "available"]);
+    if (result.status && READY.has(result.status.toLowerCase())) {
+      await db
+        .from("smrtvoice_characters")
+        .update({ voice_status: "ready" })
+        .eq("id", req.params.id)
+        .eq("org_id", req.org!.id);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+// GET /voice/google/access-token — hand the browser the caller's own Google
+// OAuth token so the Google Drive Picker can render client-side. Short-lived.
+router.get("/voice/google/access-token", async (req: Request, res: Response) => {
+  const token = await getGoogleAccessToken(req.user!.id);
+  if (!token) {
+    return res.status(400).json({ error: "Google Drive is not connected. Connect via Settings → Connections." });
+  }
+  res.json({ access_token: token });
+});
+
+// POST /voice/drive/list-folders — folder source for the in-app browser.
+// Body: { parent? } drill under a folder (default My Drive root);
+//        { q } search folders by name across the user's Drive;
+//        { shared: true } list folders shared with the user.
+// No Google API key needed (reuses the user's Drive OAuth).
+router.post("/voice/drive/list-folders", async (req: Request, res: Response) => {
+  const FOLDER = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+  const q = (req.body?.q ?? "").toString().trim();
+  const shared = req.body?.shared === true;
+
+  let query: string;
+  if (q) {
+    // Escape backslashes then single quotes for the Drive query string.
+    const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    query = `${FOLDER} and name contains '${esc}'`;
+  } else if (shared) {
+    query = `${FOLDER} and sharedWithMe = true`;
+  } else {
+    const parentRaw = (req.body?.parent ?? "").toString().trim();
+    const parent = parentRaw ? parseFolderId(parentRaw) : "root";
+    if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+    query = `'${parent}' in parents and ${FOLDER}`;
+  }
+
+  try {
+    const drive = await getDriveClient(req.user!.id);
+    const out = await drive.files.list({
+      q: query,
+      pageSize: 100,
+      fields: "files(id, name, webViewLink)",
+      orderBy: "name",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const folders = (out.data.files ?? []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      url: f.webViewLink ?? `https://drive.google.com/drive/folders/${f.id}`,
+    }));
+    res.json({ folders });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
@@ -424,7 +545,7 @@ router.post(
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id })
+        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
         .eq("id", character.id)
         .select()
         .maybeSingle();
@@ -437,12 +558,7 @@ router.post(
       });
       res.json({ character: updated, status: result.status, skipped });
     } catch (err) {
-      const message =
-        err instanceof VoiceEngineError
-          ? `Voice Engine: ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : "Unknown error";
+      const message = veMessage(err);
       await notifyError(req.org!.id, "smrtvoice", { title: "Failed to clone voice from Drive", body: message });
       res.status(502).json({ error: message });
     }
@@ -892,12 +1008,31 @@ router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) =>
     .eq("org_id", req.org!.id)
     .order("speaker_name");
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ speakers: data ?? [] });
+
+  // Attach each speaker's line count (how many lines that speaker has).
+  const { data: lines } = await db
+    .from("smrtvoice_lines")
+    .select("speaker_name")
+    .eq("script_id", req.params.id)
+    .eq("org_id", req.org!.id);
+  const counts = new Map<string, number>();
+  for (const l of lines ?? []) {
+    counts.set(l.speaker_name, (counts.get(l.speaker_name) ?? 0) + 1);
+  }
+  const speakers = (data ?? []).map((s: { speaker_name: string }) => ({
+    ...s,
+    line_count: counts.get(s.speaker_name) ?? 0,
+  }));
+  res.json({ speakers });
 });
 
 router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
-  const list: Array<{ speaker_name: string; character_id?: string | null; resemble_voice_id?: string | null }> =
-    Array.isArray(req.body?.speakers) ? req.body.speakers : [];
+  const list: Array<{
+    speaker_name: string;
+    character_id?: string | null;
+    resemble_voice_id?: string | null;
+    skip?: boolean;
+  }> = Array.isArray(req.body?.speakers) ? req.body.speakers : [];
   if (list.length === 0) return res.status(400).json({ error: "speakers array is required" });
 
   const rows = list
@@ -906,8 +1041,10 @@ router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) 
       org_id: req.org!.id,
       script_id: req.params.id,
       speaker_name: s.speaker_name,
-      character_id: s.character_id ?? null,
-      resemble_voice_id: s.resemble_voice_id ?? null,
+      // A skipped speaker carries no voice — its lines won't be generated.
+      character_id: s.skip ? null : (s.character_id ?? null),
+      resemble_voice_id: s.skip ? null : (s.resemble_voice_id ?? null),
+      skip: s.skip ?? false,
     }));
 
   const { data, error } = await db
@@ -960,7 +1097,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   // Build the speaker_map from casting.
   const { data: cast, error: castErr } = await db
     .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id")
+    .select("speaker_name, character_id, resemble_voice_id, skip")
     .eq("script_id", script.id);
   if (castErr) return res.status(500).json({ error: castErr.message });
 
@@ -995,16 +1132,17 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
 
-  // Any speaker left uncast — or cast to a character that has no voice clone
-  // yet — would have its lines silently dropped. Block and name them so the
-  // user can finish casting rather than generate a broken take.
-  const unvoiced = (cast ?? [])
-    .filter((c) => !speakerMap[c.speaker_name])
+  // Every speaker must be decided: either cast to a usable voice, or explicitly
+  // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
+  // doesn't accidentally drop lines — while still allowing "cast one, skip the
+  // rest" to preview a single voice. Skipped speakers' lines aren't generated.
+  const undecided = (cast ?? [])
+    .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
     .map((c) => c.speaker_name);
-  if (unvoiced.length > 0) {
+  if (undecided.length > 0) {
     return res.status(400).json({
-      error: `These speakers have no usable voice yet: ${unvoiced.join(", ")}`,
-      speakers: unvoiced,
+      error: `These speakers need a voice or "skip": ${undecided.join(", ")}`,
+      speakers: undecided,
     });
   }
 
@@ -1086,7 +1224,7 @@ router.post("/voice/scripts/:id/upload-url", async (req: Request, res: Response)
   if (sErr) return res.status(500).json({ error: sErr.message });
   if (!script) return res.status(404).json({ error: "Script not found" });
 
-  const path = `${req.org!.id}/scripts/${scriptId}/input/${fileName}`;
+  const path = `${req.org!.id}/scripts/${scriptId}/input/${safeStorageName(fileName, "recording.wav")}`;
   const { data, error } = await db.storage.from("smrtvoice-audio").createSignedUploadUrl(path);
   if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
   res.json({ upload_url: data.signedUrl, path: data.path, token: data.token });
@@ -1444,30 +1582,61 @@ router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => 
 // VOICE LIBRARY (Resemble account)
 // ============================================================
 
-router.get("/voice/resemble/account", requireRole("owner", "admin"), async (_req: Request, res: Response) => {
+router.get("/voice/resemble/account", requireRole("owner", "admin"), async (req: Request, res: Response) => {
   try {
     const client = getVoiceEngineClient();
-    res.json(await client.getResembleAccount());
+    res.json(await client.getResembleAccount(req.query.refresh === "true"));
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
 router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: Request, res: Response) => {
   try {
     const client = getVoiceEngineClient();
-    const { voices } = await client.listVoices();
+    const { voices } = await client.listVoices(req.query.refresh === "true");
+    const liveIds = new Set((voices ?? []).map((v) => String(v.uuid)));
+
+    // Self-heal: null any character voice link whose Resemble voice no longer
+    // exists (e.g. deleted directly on the Resemble dashboard). Keeps the
+    // Characters screen honest without a manual unlink.
+    const { data: linked } = await db
+      .from("smrtvoice_characters")
+      .select("id, resemble_voice_id")
+      .eq("org_id", req.org!.id)
+      .not("resemble_voice_id", "is", null);
+    const dangling = (linked ?? [])
+      .filter((c: { resemble_voice_id: string }) => !liveIds.has(c.resemble_voice_id))
+      .map((c: { id: string }) => c.id);
+    if (dangling.length > 0) {
+      await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+    }
+
     // Which voices already have a stored preview for this org.
     const { data: previews } = await db
       .from("smrtvoice_voice_previews")
       .select("resemble_voice_id")
       .eq("org_id", req.org!.id);
     const hasPreview = new Set((previews ?? []).map((p: { resemble_voice_id: string }) => p.resemble_voice_id));
+
+    // Custom per-org display names.
+    const { data: labels } = await db
+      .from("smrtvoice_voice_labels")
+      .select("resemble_voice_id, display_name")
+      .eq("org_id", req.org!.id);
+    const labelMap = new Map(
+      (labels ?? []).map((l: { resemble_voice_id: string; display_name: string }) => [l.resemble_voice_id, l.display_name]),
+    );
+
     res.json({
-      voices: (voices ?? []).map((v) => ({ ...v, has_preview: hasPreview.has(String(v.uuid)) })),
+      voices: (voices ?? []).map((v) => ({
+        ...v,
+        has_preview: hasPreview.has(String(v.uuid)),
+        display_name: labelMap.get(String(v.uuid)) ?? null,
+      })),
     });
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 
@@ -1481,8 +1650,31 @@ router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), asy
     await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
     res.json({ deleted: result.deleted });
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    res.status(502).json({ error: veMessage(err) });
   }
+});
+
+// PATCH /voice/resemble/voices/:uuid/label — set/clear a custom display name.
+router.patch("/voice/resemble/voices/:uuid/label", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const uuid = req.params.uuid;
+  const name = (req.body?.display_name ?? "").toString().trim();
+  if (!name) {
+    const { error } = await db
+      .from("smrtvoice_voice_labels")
+      .delete()
+      .eq("org_id", req.org!.id)
+      .eq("resemble_voice_id", uuid);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ display_name: null });
+  }
+  const { error } = await db
+    .from("smrtvoice_voice_labels")
+    .upsert(
+      { org_id: req.org!.id, resemble_voice_id: uuid, display_name: name },
+      { onConflict: "org_id,resemble_voice_id" },
+    );
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ display_name: name });
 });
 
 // POST /voice/resemble/voices/:uuid/sample — synthesize + store a preview.
@@ -1513,9 +1705,7 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
 
     res.json({ ok: true, cost: sample.cost });
   } catch (err) {
-    const message =
-      err instanceof VoiceEngineError ? `Voice Engine: ${err.message}` : err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ error: message });
+    res.status(502).json({ error: veMessage(err) });
   }
 });
 

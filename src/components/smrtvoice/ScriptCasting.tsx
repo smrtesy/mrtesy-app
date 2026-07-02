@@ -12,6 +12,8 @@ interface Speaker {
   speaker_name: string;
   character_id: string | null;
   resemble_voice_id: string | null;
+  skip?: boolean;
+  line_count?: number;
 }
 interface Character {
   id: string;
@@ -43,6 +45,7 @@ export function ScriptCasting({
   // speaker_name → encoded value ("" | char:<id> | voice:<uuid>)
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -55,7 +58,8 @@ export function ScriptCasting({
       setCharacters(characters);
       const initial: Record<string, string> = {};
       for (const s of speakers) {
-        if (s.character_id) initial[s.speaker_name] = `char:${s.character_id}`;
+        if (s.skip) initial[s.speaker_name] = "skip";
+        else if (s.character_id) initial[s.speaker_name] = `char:${s.character_id}`;
         else if (s.resemble_voice_id) initial[s.speaker_name] = `voice:${s.resemble_voice_id}`;
         else initial[s.speaker_name] = "";
       }
@@ -83,19 +87,23 @@ export function ScriptCasting({
     try {
       const payload = speakers.map((s) => {
         const v = choice[s.speaker_name] ?? "";
+        if (v === "skip") {
+          return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: null, skip: true };
+        }
         if (v.startsWith("char:")) {
-          return { speaker_name: s.speaker_name, character_id: v.slice(5), resemble_voice_id: null };
+          return { speaker_name: s.speaker_name, character_id: v.slice(5), resemble_voice_id: null, skip: false };
         }
         if (v.startsWith("voice:")) {
-          return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: v.slice(6) };
+          return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: v.slice(6), skip: false };
         }
-        return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: null };
+        return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: null, skip: false };
       });
       await api(`/api/voice/scripts/${scriptId}/speakers`, {
         method: "PATCH",
         body: { speakers: payload },
       });
       toast.success(t("saved"));
+      setSaved(true);
       onSaved?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
@@ -123,15 +131,22 @@ export function ScriptCasting({
         <div className="space-y-2">
           {speakers.map((s) => (
             <div key={s.speaker_name} className="flex items-center gap-3">
-              <div className="w-32 shrink-0 text-sm font-medium truncate" dir="rtl">
+              <div className="w-36 shrink-0 text-sm font-medium truncate" dir="rtl">
                 {s.speaker_name}
+                {typeof s.line_count === "number" && (
+                  <span className="text-muted-foreground font-normal"> ({s.line_count})</span>
+                )}
               </div>
               <select
                 className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
                 value={choice[s.speaker_name] ?? ""}
-                onChange={(e) => setChoice((c) => ({ ...c, [s.speaker_name]: e.target.value }))}
+                onChange={(e) => {
+                  setSaved(false);
+                  setChoice((c) => ({ ...c, [s.speaker_name]: e.target.value }));
+                }}
               >
                 <option value="">{t("none")}</option>
+                <option value="skip">{t("skip")}</option>
                 <optgroup label={t("myCharacters")}>
                   {characters.map((c) => (
                     <option key={c.id} value={`char:${c.id}`}>
@@ -154,8 +169,8 @@ export function ScriptCasting({
         </div>
 
         <div className="flex justify-end">
-          <Button onClick={onSave} disabled={busy} size="sm">
-            {busy ? t("saving") : t("save")}
+          <Button onClick={onSave} disabled={busy || saved} size="sm" variant={saved ? "outline" : "default"}>
+            {busy ? t("saving") : saved ? `✓ ${t("saved")}` : t("save")}
           </Button>
         </div>
       </CardContent>

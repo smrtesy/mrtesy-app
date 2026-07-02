@@ -1,9 +1,19 @@
 import type { Config } from "tailwindcss";
 import tailwindAnimate from "tailwindcss-animate";
+import plugin from "tailwindcss/plugin";
 import defaultTheme from "tailwindcss/defaultTheme";
 
 const config: Config = {
   darkMode: ["class"],
+  // Gate every `hover:` utility behind `@media (hover: hover)`. Without this,
+  // Tailwind emits a bare `:hover` selector that touch browsers apply with
+  // "sticky hover": the FIRST tap on a hover-styled control (every IconButton
+  // carries `hover:` classes) only applies the hover state and is swallowed,
+  // so the click needs a second tap to register. Confining hover styles to
+  // real pointer devices removes the swallowed first tap on phones/tablets.
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -66,6 +76,15 @@ const config: Config = {
       },
     },
   },
-  plugins: [tailwindAnimate],
+  plugins: [
+    tailwindAnimate,
+    // `touch:` — applies only on devices without a real hover pointer
+    // (phones/tablets). Pairs with `hoverOnlyWhenSupported`: controls that
+    // are revealed via `group-hover:` on the desktop stay reachable on touch
+    // with `touch:opacity-100` instead of being permanently invisible.
+    plugin(({ addVariant }) => {
+      addVariant("touch", "@media (hover: none)");
+    }),
+  ],
 };
 export default config;
