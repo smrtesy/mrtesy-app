@@ -2316,7 +2316,13 @@
       "generate": "Generate audio",
       "generating": "Generating…",
       "queuedBanner": "Queued — starting shortly…",
-      "generatingBanner": "Generating audio… {done}/{total} lines",
+      "stages": {
+        "fetching": "Fetching the script",
+        "parsing": "Parsing lines",
+        "preprocessing": "Processing text & emotion",
+        "generating": "Generating audio",
+        "regenerating": "Regenerating"
+      },
       "delete": "Delete script",
       "deleteConfirm": "Delete this script and its lines? This is irreversible.",
       "deleted": "Script deleted",

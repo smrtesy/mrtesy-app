@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ChevronRight, Trash2, Loader2 } from "lucide-react";
+import { ChevronRight, Trash2, Loader2, Check, Circle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +31,14 @@ interface Script {
   completed_lines: number;
   failed_lines: number;
   total_cost_usd: number;
+  stage: string | null;
+  stage_current: number;
+  stage_total: number;
 }
+
+// The generation pipeline, in order. The worker writes `stage` on the script
+// row as it advances, so the UI can show exactly where a run is.
+const STAGE_ORDER = ["fetching", "parsing", "preprocessing", "generating"] as const;
 
 export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const locale = useLocale();
@@ -111,10 +118,6 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
 
   const parsed = script.status !== "draft";
   const generating = script.status === "queued" || script.status === "processing";
-  const pct =
-    script.total_lines > 0
-      ? Math.min(100, Math.round((script.completed_lines / script.total_lines) * 100))
-      : 0;
 
   return (
     <div className="space-y-6">
@@ -154,20 +157,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
         </CardContent>
       </Card>
 
-      {/* Generation progress — live via the script realtime subscription. */}
-      {generating && (
-        <div className="rounded-md border p-3 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            {script.status === "queued"
-              ? t("queuedBanner")
-              : t("generatingBanner", { done: script.completed_lines, total: script.total_lines })}
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      )}
+      {/* Generation progress — live via the script realtime subscription.
+          The worker writes stage + counts directly to the script row, so this
+          reflects the real phase (fetch → parse → preprocess → generate) even
+          when webhooks aren't reaching us. */}
+      {generating && <GenerationProgress script={script} t={t} />}
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
@@ -214,6 +208,94 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="font-medium">{value}</div>
+    </div>
+  );
+}
+
+function GenerationProgress({
+  script,
+  t,
+}: {
+  script: Script;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  // A redo (regenerate a few lines) doesn't fetch/parse/preprocess, so it gets
+  // its own single-line indicator rather than the full pipeline stepper.
+  const isRegen = script.stage === "regenerating";
+  // Before the worker picks the job up (or between webhook-less state changes)
+  // the stage is null — treat that as "queued".
+  const queued = !isRegen && (script.status === "queued" || !script.stage);
+  const activeIndex = script.stage
+    ? STAGE_ORDER.indexOf(script.stage as (typeof STAGE_ORDER)[number])
+    : -1;
+  const hasCounts = script.stage_total > 0;
+  const pct = hasCounts
+    ? Math.min(100, Math.round((script.stage_current / script.stage_total) * 100))
+    : null;
+
+  return (
+    <div className="rounded-md border p-3 space-y-3">
+      {/* Stepper — full pipeline only (a redo shows just the line + bar below) */}
+      {!isRegen && (
+      <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {STAGE_ORDER.map((s, i) => {
+          const state = queued
+            ? "pending"
+            : i < activeIndex
+              ? "done"
+              : i === activeIndex
+                ? "active"
+                : "pending";
+          return (
+            <li key={s} className="flex items-center gap-1.5">
+              {state === "done" ? (
+                <Check className="h-3.5 w-3.5 text-primary" />
+              ) : state === "active" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              ) : (
+                <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />
+              )}
+              <span
+                className={
+                  state === "active"
+                    ? "font-medium text-foreground"
+                    : state === "done"
+                      ? "text-foreground"
+                      : "text-muted-foreground"
+                }
+              >
+                {t(`stages.${s}`)}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      )}
+
+      {/* Current line + count */}
+      <div className="flex items-center gap-2 text-sm">
+        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+        {queued ? (
+          <span className="font-medium">{t("queuedBanner")}</span>
+        ) : (
+          <>
+            <span className="font-medium">{t(`stages.${script.stage}`)}</span>
+            {hasCounts && (
+              <span className="text-muted-foreground">
+                {script.stage_current}/{script.stage_total}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Bar — determinate when we have counts, indeterminate otherwise */}
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full bg-primary transition-all ${pct === null ? "w-1/3 animate-pulse" : ""}`}
+          style={pct === null ? undefined : { width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }

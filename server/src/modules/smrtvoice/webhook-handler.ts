@@ -77,16 +77,6 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
   }
 });
 
-/** Resolve the script this voice-engine job belongs to (via the job row). */
-async function scriptIdForJob(jobId: string): Promise<string | null> {
-  const { data } = await db
-    .from("smrtvoice_jobs")
-    .select("script_id")
-    .eq("voice_engine_job_id", jobId)
-    .maybeSingle();
-  return (data?.script_id as string | undefined) ?? null;
-}
-
 async function handleJobStarted(jobId: string): Promise<void> {
   const { data: job } = await db
     .from("smrtvoice_jobs")
@@ -135,16 +125,12 @@ async function handleLineCompleted(
     } catch { /* ledger insert must not break webhook handling */ }
   }
 
-  // Increment per-script totals via RPC. The orchestrator sends script_id in
-  // the line payload; fall back to the job row if it's absent.
-  const scriptId = (data.script_id as string | undefined) ?? (await scriptIdForJob(jobId));
-  if (scriptId) {
-    await db.rpc("increment_script_progress", {
-      p_script_id: scriptId,
-      p_cost: cost,
-      p_duration: duration,
-    });
-  }
+  // NOTE: per-script progress counters (completed_lines, stage, cost, duration)
+  // are now written DIRECTLY by the voice-engine worker, keyed by script_id, as
+  // each line lands — see orchestrator._set_stage. That path is authoritative
+  // and webhook-independent (it works even when this callback URL is
+  // misconfigured). We deliberately do NOT increment here anymore: doing so
+  // would double-count the moment both paths are live.
 }
 
 async function handleJobCompleted(
