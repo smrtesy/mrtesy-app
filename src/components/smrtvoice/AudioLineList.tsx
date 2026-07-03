@@ -11,6 +11,7 @@ import {
   RotateCcw,
   X,
   FolderUp,
+  Download,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -121,6 +122,23 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     } finally {
       resolveRef.current = null;
       setPlayingId(null);
+    }
+  }
+
+  async function downloadOne(line: Line) {
+    if (!line.output_audio_path) return;
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/lines/${line.id}/audio-url`,
+      );
+      const a = document.createElement("a");
+      a.href = audio_url;
+      a.download = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
@@ -307,6 +325,14 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                       }}
                     >
                       <RotateCcw className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => downloadOne(line)}
+                      title={t("studio.download")}
+                    >
+                      <Download className="h-4 w-4" />
                     </Button>
                     <Button
                       size="icon"

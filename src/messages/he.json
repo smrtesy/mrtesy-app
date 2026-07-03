@@ -2542,6 +2542,7 @@
     },
     "studio": {
       "play": "השמע",
+      "download": "הורד קובץ",
       "playAll": "נגן הכל",
       "stop": "עצור",
       "playNew": "נגן חדשים ({count})",

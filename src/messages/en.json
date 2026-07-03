@@ -2543,6 +2543,7 @@
     },
     "studio": {
       "play": "Play",
+      "download": "Download file",
       "playAll": "Play all",
       "stop": "Stop",
       "playNew": "Play new ({count})",
