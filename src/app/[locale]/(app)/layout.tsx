@@ -79,13 +79,15 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
-      {/* When this page is loaded inside a tabs-workspace pane (?embed=1), flag
-          it before paint so globals.css strips the chrome (sidebar, floating
-          panels) and only the page content fills the pane. */}
+      {/* When this page is loaded inside a tabs-workspace pane, flag it before
+          paint so globals.css strips the chrome (sidebar, floating panels) and
+          only the page content fills the pane. We key off "am I framed?" — a
+          structural signal that survives in-pane reloads/navigations that drop
+          the `?embed=1` query — and keep the query as a first-paint fallback. */}
       <script
         dangerouslySetInnerHTML={{
           __html:
-            "try{if(new URLSearchParams(window.location.search).get('embed')==='1'){document.documentElement.setAttribute('data-embed','1')}}catch(e){}",
+            "try{if(window.self!==window.top||new URLSearchParams(window.location.search).get('embed')==='1'){document.documentElement.setAttribute('data-embed','1')}}catch(e){try{if(window.self!==window.top)document.documentElement.setAttribute('data-embed','1')}catch(_){}}",
         }}
       />
       {/* Reliable fallback for the inline script above (which doesn't always
