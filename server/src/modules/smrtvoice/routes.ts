@@ -1125,7 +1125,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
         description: ch.description,
       };
     } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
     }
   }
   if (Object.keys(speakerMap).length === 0) {
@@ -1388,6 +1388,7 @@ async function queueRegeneration(
     id: string;
     project_id: string;
     code: string;
+    language?: string | null;
     generation_mode?: "sts" | "tts";
     input_recording_path?: string | null;
   },
@@ -1422,7 +1423,7 @@ async function queueRegeneration(
       const ch = charMap.get(c.character_id)!;
       speakerMap[c.speaker_name] = { resemble_voice_id: ch.resemble_voice_id!, model: ch.resemble_model, language: ch.language, character_id: c.character_id, character_name: ch.name, description: ch.description };
     } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
     }
   }
 
@@ -1498,7 +1499,7 @@ async function loadScriptForLine(req: Request, lineId: string) {
   if (!line) return null;
   const { data: script } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path")
     .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1542,7 +1543,7 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
 router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1746,6 +1747,38 @@ router.get("/voice/settings", async (req: Request, res: Response) => {
     return res.json({ settings: created });
   }
   res.json({ settings: data });
+});
+
+// GET /voice/budget — this month's spend vs the org budget. Sums cost from
+// `smrtvoice_scripts` (v2 writes cost there, not to projects), matching the
+// authoritative check in the generate route.
+router.get("/voice/budget", async (req: Request, res: Response) => {
+  const { data: settings } = await db
+    .from("smrtvoice_settings")
+    .select("monthly_budget_usd, budget_warning_threshold, budget_block_threshold")
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const { data: monthCosts, error: costErr } = await db
+    .from("smrtvoice_scripts")
+    .select("total_cost_usd")
+    .eq("org_id", req.org!.id)
+    .gte("created_at", monthStart.toISOString());
+  if (costErr) return res.status(500).json({ error: costErr.message });
+
+  const used = (monthCosts ?? []).reduce(
+    (sum: number, s: { total_cost_usd: number | null }) => sum + (s.total_cost_usd ?? 0),
+    0,
+  );
+  res.json({
+    used,
+    budget: settings?.monthly_budget_usd ?? 0,
+    warning_threshold: settings?.budget_warning_threshold ?? 0.8,
+    block_threshold: settings?.budget_block_threshold ?? 1.0,
+  });
 });
 
 const SETTINGS_UPDATABLE = new Set([

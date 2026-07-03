@@ -134,6 +134,7 @@ export interface ScriptSpeaker {
   speaker_name: string;
   character_id: string | null;
   resemble_voice_id: string | null;
+  skip: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -148,7 +149,7 @@ export type LineStatus =
 export interface ScriptLine {
   id: string;
   org_id: string;
-  project_id: string;
+  script_id: string;
   line_number: number;
   scene_title: string | null;
   speaker_name: string;
@@ -192,6 +193,7 @@ export interface Job {
   id: string;
   org_id: string;
   project_id: string;
+  script_id: string | null;
   created_by: string;
   job_type:
     | "parse_script"
@@ -245,6 +247,7 @@ export interface Settings {
   notify_on_completion: boolean;
   notify_on_budget_warn: boolean;
   notify_via_whatsapp: boolean;
+  sample_text: string | null;
   created_at: string;
   updated_at: string;
 }
