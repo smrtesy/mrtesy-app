@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -48,6 +48,10 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const [script, setScript] = useState<Script | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Self-heal a script left stuck in queued/processing by a dropped completion
+  // webhook: poll the engine once per mount. The endpoint is a no-op if the
+  // job is genuinely still running.
+  const syncTriedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -73,6 +77,23 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
       supabase.removeChannel(channel);
     };
   }, [refresh, scriptId]);
+
+  useEffect(() => {
+    if (syncTriedRef.current || !script) return;
+    if (script.status !== "queued" && script.status !== "processing") return;
+    syncTriedRef.current = true;
+    (async () => {
+      try {
+        const { reconciled } = await api<{ reconciled: boolean }>(
+          `/api/voice/scripts/${scriptId}/sync`,
+          { method: "POST" },
+        );
+        if (reconciled) refresh();
+      } catch {
+        /* best-effort self-heal; realtime remains the primary path */
+      }
+    })();
+  }, [script, scriptId, refresh]);
 
   async function onParse() {
     setBusy(true);

@@ -4,46 +4,28 @@ export const manifest: AppManifest = {
   slug: "smrtvoice",
   name: "smrtVoice",
 
+  // Only events actually emitted via emitEvent() in this app. Kept in sync
+  // with the emitEvent() call sites in routes.ts / webhook-handler.ts.
   emits: [
     "character.created",
+    "character.deleted",
     "character.clone_created",
     "project.created",
-    "project.script_imported",
-    "project.completed",
-    "project.archived",
+    "project.deleted",
+    "script.created",
+    "script.archived",
     "job.queued",
-    "job.started",
-    "job.completed",
-    "job.failed",
     "audio.ready",
-    "line.completed",
-    "line.failed",
   ],
 
   subscribes: [],
 
-  notifications: {
-    "audio.ready": {
-      type: "success",
-      title: (p) => `האודיו מוכן: ${String(p.project_name ?? "פרויקט")}`,
-      body: (p) =>
-        `${String(p.lines_completed ?? 0)} שורות, עלות: $${Number(
-          p.total_cost_usd ?? 0,
-        ).toFixed(2)}`,
-      link: (p) => `/voice/projects/${String(p.project_id ?? "")}/audio`,
-    },
-    "job.failed": {
-      type: "warning",
-      title: (p) => `ייצור נכשל: ${String(p.project_name ?? "פרויקט")}`,
-      body: (p) => String(p.error ?? "בעיה בייצור הקול"),
-      link: (p) => `/voice/projects/${String(p.project_id ?? "")}`,
-    },
-    "project.completed": {
-      type: "info",
-      title: (p) => `הפרויקט הושלם: ${String(p.name ?? "")}`,
-      link: (p) => `/voice/projects/${String(p.project_id ?? "")}`,
-    },
-  },
+  // No manifest-driven notifications: smrtVoice sends its user-facing
+  // notifications directly (webhook-handler.ts) so they target the script's
+  // creator and link to the live /voice/scripts/:id studio. A manifest entry
+  // for "audio.ready" here previously double-notified the org owner with a
+  // dead /voice/projects/:id/audio link.
+  notifications: {},
 
   entities: {
     reads: [],

@@ -8,12 +8,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
+import { DriveFolderPicker } from "./DriveFolderPicker";
+
 interface Settings {
   monthly_budget_usd: number;
   default_adapter: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   default_resemble_model: string | null;
   default_llm_model: string | null;
   archive_after_days: number;
+  gdrive_archive_folder_id: string | null;
+  gdrive_archive_folder_url: string | null;
   postprocess_enabled: boolean;
   postprocess_compress: boolean;
   postprocess_speed: number;
@@ -54,6 +58,8 @@ export function SettingsForm() {
             default_resemble_model: settings.default_resemble_model,
             default_llm_model: settings.default_llm_model,
             archive_after_days: settings.archive_after_days,
+            gdrive_archive_folder_id: settings.gdrive_archive_folder_id,
+            gdrive_archive_folder_url: settings.gdrive_archive_folder_url,
             postprocess_enabled: settings.postprocess_enabled,
             postprocess_compress: settings.postprocess_compress,
             postprocess_speed: settings.postprocess_speed,
@@ -151,6 +157,50 @@ export function SettingsForm() {
             setSettings({ ...settings, archive_after_days: Number(e.target.value) })
           }
         />
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("archiveFolder")}</label>
+        <div className="flex flex-wrap items-center gap-2">
+          <DriveFolderPicker
+            onPicked={(f) =>
+              setSettings({
+                ...settings,
+                gdrive_archive_folder_id: f.id,
+                gdrive_archive_folder_url: f.url,
+              })
+            }
+          />
+          {settings.gdrive_archive_folder_id ? (
+            <>
+              <a
+                href={settings.gdrive_archive_folder_url ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-primary hover:underline break-all"
+              >
+                {settings.gdrive_archive_folder_url ?? settings.gdrive_archive_folder_id}
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setSettings({
+                    ...settings,
+                    gdrive_archive_folder_id: null,
+                    gdrive_archive_folder_url: null,
+                  })
+                }
+              >
+                {t("clearArchiveFolder")}
+              </Button>
+            </>
+          ) : (
+            <span className="text-sm text-muted-foreground">{t("noArchiveFolder")}</span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">{t("archiveFolderHelp")}</p>
       </div>
 
       <div className="space-y-2 rounded-md border p-3">

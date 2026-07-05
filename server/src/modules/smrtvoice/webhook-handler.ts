@@ -118,7 +118,7 @@ async function handleLineCompleted(
       await db.from("ai_usage").insert({
         provider: "resemble",
         component: "resemble.tts",
-        model: "resemble",
+        model: (data.model as string | undefined) ?? "resemble",
         cost_usd: cost,
         ref_id: lineId ?? null,
       });

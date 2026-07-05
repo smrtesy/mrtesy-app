@@ -43,6 +43,7 @@ export function CreateScriptForm({
   const [name, setName] = useState("");
   const [googleDocUrl, setGoogleDocUrl] = useState("");
   const [mode, setMode] = useState<"tts" | "sts">("tts");
+  const [language, setLanguage] = useState<"he" | "en">("he");
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [tabId, setTabId] = useState("");
   const [loadingTabs, setLoadingTabs] = useState(false);
@@ -57,6 +58,7 @@ export function CreateScriptForm({
     setName("");
     setGoogleDocUrl("");
     setMode("tts");
+    setLanguage("he");
     setTabs([]);
     setTabId("");
     setDriveDocs(null);
@@ -120,6 +122,7 @@ export function CreateScriptForm({
           google_doc_tab_id: tabId || undefined,
           google_doc_tab_title: selectedTab?.title || undefined,
           generation_mode: mode,
+          language,
         },
       });
       setOpen(false);
@@ -228,6 +231,18 @@ export function CreateScriptForm({
               <p className="text-xs text-muted-foreground">{t("tabHelp")}</p>
             </div>
           )}
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{t("language")}</label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as "he" | "en")}
+            >
+              <option value="he">{t("langHebrew")}</option>
+              <option value="en">{t("langEnglish")}</option>
+            </select>
+          </div>
 
           <div className="space-y-1">
             <label className="text-sm font-medium">{t("generationMode")}</label>

@@ -16,7 +16,7 @@ import type { Request, Response } from "express";
 
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
-import { emitEvent, notifyError } from "../../lib/platform";
+import { emitEvent, notify, notifyError } from "../../lib/platform";
 import { getOAuthClient } from "../../services/token-refresh";
 import { getDriveClient } from "../../services/drive";
 
@@ -1211,6 +1211,101 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   }
 });
 
+// POST /voice/scripts/:id/sync — reconcile a script that's stuck in
+// queued/processing because its job.completed / job.failed webhook never
+// arrived. The voice-engine worker writes counts/cost/stage directly to the
+// script row, so a dropped completion webhook leaves ONLY the terminal status
+// unset. We poll the engine for the job's real status and flip the script
+// (and fire the completion notification) accordingly. Counts/cost are left
+// untouched — the worker owns those.
+router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, org_id, project_id, created_by, code, name, status")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+
+  // Only queued/processing scripts can be stuck; anything terminal is left alone.
+  if (script.status !== "queued" && script.status !== "processing") {
+    return res.json({ script_status: script.status, reconciled: false });
+  }
+
+  // Only the full-generation job can leave a script stuck in queued/processing;
+  // a redo (regenerate_line) never changes the script status, so scope to it.
+  const { data: job } = await db
+    .from("smrtvoice_jobs")
+    .select("id, voice_engine_job_id, job_type")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .eq("job_type", "generate_audio")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!job?.voice_engine_job_id) {
+    return res.json({ script_status: script.status, reconciled: false });
+  }
+
+  let engine;
+  try {
+    engine = await getVoiceEngineClient().getJob(job.voice_engine_job_id);
+  } catch (err) {
+    return res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+
+  if (engine.status === "completed") {
+    await db
+      .from("smrtvoice_jobs")
+      .update({ status: "completed", progress: 100 })
+      .eq("id", job.id);
+    // Abort before notifying if the status flip fails — otherwise the row stays
+    // queued and the next mount re-syncs and double-notifies the user.
+    const { error: flipErr } = await db
+      .from("smrtvoice_scripts")
+      .update({ status: "audio_ready", audio_ready_at: new Date().toISOString() })
+      .eq("id", script.id);
+    if (flipErr) return res.status(500).json({ error: flipErr.message });
+    const label = script.name || script.code;
+    await notify(script.org_id, script.created_by, {
+      app_slug: "smrtvoice",
+      type: "success",
+      title: `הקול ל-${label} מוכן`,
+      body: `${engine.lines_completed ?? 0} שורות הסתיימו בהצלחה.`,
+      link: `/voice/scripts/${script.id}`,
+      entity_type: "script",
+      entity_id: script.id,
+    });
+    return res.json({ script_status: "audio_ready", reconciled: true });
+  }
+
+  if (engine.status === "failed") {
+    await db
+      .from("smrtvoice_jobs")
+      .update({
+        status: "failed",
+        error_message: engine.error_message ?? "Unknown error",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    const { error: flipErr } = await db
+      .from("smrtvoice_scripts")
+      .update({ status: "failed" })
+      .eq("id", script.id);
+    if (flipErr) return res.status(500).json({ error: flipErr.message });
+    await notifyError(script.org_id, "smrtvoice", {
+      title: `הייצור ל-${script.name || script.code} נכשל`,
+      body: engine.error_message ?? "Unknown error",
+      link: `/voice/scripts/${script.id}`,
+    });
+    return res.json({ script_status: "failed", reconciled: true });
+  }
+
+  // Still queued/running on the engine — nothing to reconcile yet.
+  res.json({ script_status: script.status, reconciled: false });
+});
+
 // STS input-recording upload URL for a script.
 router.post("/voice/scripts/:id/upload-url", async (req: Request, res: Response) => {
   const scriptId = req.params.id;
@@ -1798,6 +1893,8 @@ const SETTINGS_UPDATABLE = new Set([
   "postprocess_compress",
   "postprocess_speed",
   "sample_text",
+  "gdrive_archive_folder_id",
+  "gdrive_archive_folder_url",
   "notify_on_completion",
   "notify_on_budget_warn",
   "notify_via_whatsapp",
