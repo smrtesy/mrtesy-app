@@ -1494,7 +1494,23 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id)
     .order("line_number");
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ lines: data ?? [] });
+
+  // Attach each line's take count (how many renders it has in history) so the
+  // list can show a "N versions" badge without a per-line round trip.
+  const { data: takeRows } = await db
+    .from("smrtvoice_line_takes")
+    .select("line_id")
+    .eq("script_id", req.params.id)
+    .eq("org_id", req.org!.id);
+  const takeCounts = new Map<string, number>();
+  for (const t of takeRows ?? []) {
+    takeCounts.set(t.line_id, (takeCounts.get(t.line_id) ?? 0) + 1);
+  }
+  const lines = (data ?? []).map((l: { id: string }) => ({
+    ...l,
+    take_count: takeCounts.get(l.id) ?? 0,
+  }));
+  res.json({ lines });
 });
 
 const LINE_UPDATABLE = new Set([
@@ -1547,6 +1563,8 @@ async function queueRegeneration(
   // Verbatim per-line text edits ("send again with edited text"). Each is sent
   // to voice-engine as a line_override and synthesized exactly as given.
   lineOverrides: Array<{ line_number: number; text_for_tts: string }> = [],
+  // Line numbers to re-run through the LLM (fresh emotion + tone tags).
+  reprocessLineNumbers: number[] = [],
 ) {
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
 
@@ -1610,6 +1628,7 @@ async function queueRegeneration(
       line_numbers: lineNumbers,
       pronunciation: await loadPronunciation(req.org!.id),
       line_overrides: lineOverrides,
+      reprocess_line_numbers: reprocessLineNumbers,
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
@@ -1667,14 +1686,22 @@ router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) =
   if (!found) return res.status(404).json({ error: "Line not found" });
 
   // Optional "send again with edited text": the client passes the exact text
-  // to speak (prefilled from tts_body). Persist it so the row + transparency
-  // panel match the new take, and forward it as a verbatim line_override.
+  // to speak (prefilled from tts_body). `reprocess` re-runs the LLM for fresh
+  // emotion/tone tags instead of sending the text verbatim.
   const editedText =
     typeof req.body?.text_for_tts === "string" ? req.body.text_for_tts.trim() : "";
-  const overrides = editedText
-    ? [{ line_number: found.line.line_number, text_for_tts: editedText }]
-    : [];
-  if (editedText) {
+  const reprocess = req.body?.reprocess === true;
+  const lineNo = found.line.line_number;
+
+  // The edited text is always forwarded: verbatim when not reprocessing, or as
+  // the LLM's input when reprocessing.
+  const overrides = editedText ? [{ line_number: lineNo, text_for_tts: editedText }] : [];
+  const reprocessLineNumbers = reprocess ? [lineNo] : [];
+
+  // Only persist a verbatim edit when NOT reprocessing — if the LLM re-runs it
+  // will produce (and the engine will persist) fresh text/tags, so persisting
+  // a verbatim body + empty tags here would be wrong.
+  if (editedText && !reprocess) {
     // Mirror the engine's override behaviour: the edited text becomes the body
     // verbatim (tone tags are baked into it), so clear the separate tags.
     const { error: saveErr } = await db
@@ -1684,7 +1711,7 @@ router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) =
       .eq("org_id", req.org!.id);
     if (saveErr) return res.status(500).json({ error: saveErr.message });
   }
-  await queueRegeneration(req, res, found.script, [found.line.line_number], overrides);
+  await queueRegeneration(req, res, found.script, [lineNo], overrides, reprocessLineNumbers);
 });
 
 router.post("/voice/lines/:id/redo", async (req: Request, res: Response) => {

@@ -2604,7 +2604,11 @@
       "approved": "הקלטה טובה",
       "takes": "גרסאות",
       "noTakes": "אין גרסאות עדיין",
-      "takeLabel": "גרסה {n}"
+      "takeLabel": "גרסה {n}",
+      "recreating": "מקליט מחדש…",
+      "reanalyzeTone": "נתח טון מחדש",
+      "reanalyzeHint": "ה-LLM יבחר מחדש רגש ותגיות טון",
+      "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב"
     },
     "lexicon": {
       "title": "מילון הגייה",
