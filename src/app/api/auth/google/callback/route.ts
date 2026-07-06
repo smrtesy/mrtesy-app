@@ -250,7 +250,7 @@ export async function GET(request: Request) {
         )
       : prior;
 
-    await supabase
+    const { error: settingsUpdateErr } = await supabase
       .from("user_settings")
       .update({
         gmail_connected: true,
@@ -258,6 +258,9 @@ export async function GET(request: Request) {
         my_emails: merged,
       })
       .eq("user_id", user.id);
+    if (settingsUpdateErr) {
+      console.error("[google-callback] gmail_calendar user_settings update failed:", settingsUpdateErr);
+    }
 
     // If reconnecting from Settings/Account, return there instead of
     // restarting the onboarding flow.
@@ -288,10 +291,13 @@ export async function GET(request: Request) {
       console.error("Credential save error:", error);
     }
 
-    await supabase
+    const { error: driveSettingsErr } = await supabase
       .from("user_settings")
       .update({ drive_connected: true })
       .eq("user_id", user.id);
+    if (driveSettingsErr) {
+      console.error("[google-callback] drive user_settings update failed:", driveSettingsErr);
+    }
 
     if (redirectTo === "settings") {
       return NextResponse.redirect(`${origin}/${locale}/settings`);

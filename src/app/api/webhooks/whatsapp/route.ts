@@ -321,11 +321,14 @@ async function recordDebug(
   notes: string | null,
 ): Promise<void> {
   try {
-    await db.from("whatsapp_webhook_debug").insert({
+    const { error: debugInsertError } = await db.from("whatsapp_webhook_debug").insert({
       payload: payload as Record<string, unknown>,
       fields,
       notes,
     });
+    if (debugInsertError) {
+      console.error("[whatsapp-webhook] debug insert failed:", debugInsertError.message);
+    }
   } catch (e) {
     console.error("[whatsapp-webhook] debug insert failed:", e instanceof Error ? e.message : e);
   }
@@ -796,7 +799,7 @@ async function closeRunSession(
     ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000)
     : null;
 
-  await db
+  const { error: closeSessionError } = await db
     .from("run_sessions")
     .update({
       status,
@@ -807,6 +810,9 @@ async function closeRunSession(
       ...counts,
     })
     .eq("id", sessionId);
+  if (closeSessionError) {
+    console.error("[whatsapp-webhook] closeRunSession update failed:", closeSessionError.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1337,7 +1343,7 @@ async function callGemini(
   // Log usage to ai_usage ledger (best-effort).
   try {
     const usage = data.usageMetadata;
-    await db.from("ai_usage").insert({
+    const { error: usageInsertError } = await db.from("ai_usage").insert({
       provider: "google",
       component: "gemini.whatsapp",
       model,
@@ -1345,6 +1351,9 @@ async function callGemini(
       output_tokens: usage?.candidatesTokenCount ?? 0,
       cost_usd: estimateGeminiCostLocal(model, usage),
     });
+    if (usageInsertError) {
+      console.error("[whatsapp-webhook] ai_usage insert failed:", usageInsertError.message);
+    }
   } catch { /* never block the caller */ }
 
   const candidate = data.candidates?.[0];
