@@ -8,7 +8,7 @@
  *
  * Ported from botsite/src/modules/wa.js.
  */
-import { metaErrorSummary } from "./meta-errors";
+import { metaErrorSummary } from "../../lib/meta-errors";
 
 const META_API_VERSION = "v23.0";
 const MIN_GAP_MS = 500; // minimum gap between messages on the same number

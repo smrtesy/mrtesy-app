@@ -21,6 +21,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { simpleCall } from "../../../anthropic";
 import { transcribeAudio } from "../../../gemini";
+import { metaErrorSummary } from "../../../lib/meta-errors";
 
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask")];
@@ -723,8 +724,7 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   };
 
   if (!sendRes.ok) {
-    const msg = sendJson.error?.message ?? `meta_${sendRes.status}`;
-    return res.status(502).json({ error: msg });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
 
   const wamid = sendJson.messages?.[0]?.id ?? null;
@@ -871,7 +871,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     if (!uploadRes.ok || !uploadJson.id) {
       return res
         .status(502)
-        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+        .json({ error: metaErrorSummary(uploadRes.status, uploadJson) });
     }
     mediaId = uploadJson.id;
   } catch (e) {
@@ -899,7 +899,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
   const wamid = sendJson.messages?.[0]?.id ?? null;
   if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
@@ -1068,7 +1068,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     if (!uploadRes.ok || !uploadJson.id) {
       return res
         .status(502)
-        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+        .json({ error: metaErrorSummary(uploadRes.status, uploadJson) });
     }
     mediaId = uploadJson.id;
   } catch (e) {
@@ -1103,7 +1103,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
   const wamid = sendJson.messages?.[0]?.id ?? null;
   if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
@@ -1258,7 +1258,7 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
 
   const wamid = sendJson.messages?.[0]?.id ?? null;

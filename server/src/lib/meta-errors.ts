@@ -1,5 +1,8 @@
 /**
- * smrtBot — Meta Cloud API error decoder.
+ * Meta Cloud API error decoder (shared).
+ *
+ * Used by every module that talks to the WhatsApp Cloud API — smrtBot's send
+ * stack (wa.ts) and smrtTask's WhatsApp inbox view (whatsapp-view.ts).
  *
  * Meta returns failures as an HTTP status + a JSON body whose *actionable* code
  * lives in `error.code` (occasionally in `error.error_subcode`). Left raw, an
