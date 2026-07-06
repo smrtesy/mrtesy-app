@@ -20,10 +20,12 @@ BEGIN
     FROM pg_policies
     WHERE schemaname = 'public'
   LOOP
+    -- the ([^\w.]|^) left boundary keeps qualified names like
+    -- some_schema_auth.uid() or x.auth.uid() from being rewritten
     new_qual := CASE WHEN p.qual IS NULL THEN NULL ELSE
       regexp_replace(
         regexp_replace(p.qual,
-          'auth\.(uid|jwt|role)\(\)', '(SELECT auth.\1())', 'g'),
+          '([^\w.]|^)auth\.(uid|jwt|role)\(\)', '\1(SELECT auth.\2())', 'g'),
         -- collapse the double-wrap this produces on already-wrapped policies
         '\( SELECT \(SELECT auth\.(uid|jwt|role)\(\)\) AS (uid|jwt|role)\)',
         '( SELECT auth.\1() AS \2)', 'g')
@@ -31,7 +33,7 @@ BEGIN
     new_check := CASE WHEN p.with_check IS NULL THEN NULL ELSE
       regexp_replace(
         regexp_replace(p.with_check,
-          'auth\.(uid|jwt|role)\(\)', '(SELECT auth.\1())', 'g'),
+          '([^\w.]|^)auth\.(uid|jwt|role)\(\)', '\1(SELECT auth.\2())', 'g'),
         '\( SELECT \(SELECT auth\.(uid|jwt|role)\(\)\) AS (uid|jwt|role)\)',
         '( SELECT auth.\1() AS \2)', 'g')
     END;
