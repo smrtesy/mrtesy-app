@@ -186,6 +186,8 @@ export interface ScriptLine {
   redone_at: string | null;
   created_at: string;
   updated_at: string;
+  // Computed by the lines endpoint (not a column): how many takes this line has.
+  take_count?: number;
 }
 
 export interface LineTake {
@@ -305,6 +307,8 @@ export interface CreateJobRequest {
   pronunciation?: Array<{ word: string; replacement: string; language: string }>;
   // regenerate_line only: verbatim per-line text edits sent to voice-engine.
   line_overrides?: Array<{ line_number: number; text_for_tts: string }>;
+  // regenerate_line only: line numbers to re-run through the LLM (fresh tone).
+  reprocess_line_numbers?: number[];
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;

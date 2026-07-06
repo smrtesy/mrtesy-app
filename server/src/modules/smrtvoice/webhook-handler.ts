@@ -58,7 +58,7 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
         await handleJobStarted(job_id);
         break;
       case "smrtvoice.line.completed":
-        await handleLineCompleted(job_id, data ?? {}, req.body?.org_id);
+        await handleLineCompleted(job_id, data ?? {});
         break;
       case "smrtvoice.job.completed":
         await handleJobCompleted(job_id, data ?? {});
@@ -94,15 +94,12 @@ async function handleJobStarted(jobId: string): Promise<void> {
 async function handleLineCompleted(
   jobId: string,
   data: Record<string, unknown>,
-  orgId?: string,
 ): Promise<void> {
   const lineId = data.line_id as string | undefined;
   const audioPath = data.output_audio_path as string | undefined;
   const duration = (data.duration_seconds as number | undefined) ?? 0;
   const cost = (data.cost_usd as number | undefined) ?? 0;
   const model = (data.model as string | undefined) ?? null;
-  const textUsed = (data.text_used as string | undefined) ?? null;
-  const scriptId = (data.script_id as string | undefined) ?? null;
 
   if (lineId && audioPath) {
     await db
@@ -115,25 +112,11 @@ async function handleLineCompleted(
       })
       .eq("id", lineId);
 
-    // Keep every take as history instead of overwriting. The engine writes a
-    // UNIQUE per-take path, so this row points at audio that still exists.
-    // Best-effort + org-scoped (RLS requires org_id): skip if the envelope
-    // didn't carry one rather than failing the webhook.
-    if (orgId) {
-      const { error: takeErr } = await db.from("smrtvoice_line_takes").insert({
-        org_id: orgId,
-        line_id: lineId,
-        script_id: scriptId,
-        text_used: textUsed,
-        model,
-        output_audio_path: audioPath,
-        duration_seconds: duration,
-        cost_usd: cost,
-      });
-      if (takeErr) {
-        console.warn("[smrtvoice webhook] take insert failed:", takeErr.message);
-      }
-    }
+    // NOTE: take history (smrtvoice_line_takes) is written DIRECTLY by the
+    // voice-engine worker (db/takes.py) as each clip lands — webhook-independent,
+    // the same reliability pattern used for line status/progress. We deliberately
+    // do NOT insert takes here: this callback is best-effort and often never
+    // arrives, and doing so would double-record whenever it does.
   }
 
   // Unified cost ledger — Resemble TTS generation (best-effort).
