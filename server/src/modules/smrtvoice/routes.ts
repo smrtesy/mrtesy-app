@@ -621,7 +621,29 @@ router.get("/voice/projects", async (req: Request, res: Response) => {
     .order("created_at", { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ projects: data ?? [] });
+
+  const projects = data ?? [];
+
+  // Attach each folder's scripts so the list can render a direct-open button
+  // per script (one round trip instead of N-per-folder).
+  const { data: scripts, error: scriptsErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, project_id, seq, code, name, status")
+    .eq("org_id", req.org!.id)
+    .order("seq");
+
+  if (scriptsErr) return res.status(500).json({ error: scriptsErr.message });
+
+  const byProject = new Map<string, typeof scripts>();
+  for (const s of scripts ?? []) {
+    const list = byProject.get(s.project_id) ?? [];
+    list.push(s);
+    byProject.set(s.project_id, list);
+  }
+
+  res.json({
+    projects: projects.map((p) => ({ ...p, scripts: byProject.get(p.id) ?? [] })),
+  });
 });
 
 // Create a project (folder): { name, description?, code_prefix }.
