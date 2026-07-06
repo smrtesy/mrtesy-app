@@ -2608,7 +2608,8 @@
       "recreating": "מקליט מחדש…",
       "reanalyzeTone": "נתח טון מחדש",
       "reanalyzeHint": "ה-LLM יבחר מחדש רגש ותגיות טון",
-      "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב"
+      "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב",
+      "pause": "השהה"
     },
     "lexicon": {
       "title": "מילון הגייה",

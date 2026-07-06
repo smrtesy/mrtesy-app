@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   Play,
+  Pause,
   Square,
   RefreshCw,
   Settings2,
@@ -557,14 +558,22 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     >
                       <Download className="h-4 w-4" />
                     </Button>
-                    <Button
-                      size="icon"
-                      onClick={() => playOne(line)}
-                      disabled={playingId === line.id || playingAll}
-                      title={t("studio.play")}
-                    >
-                      <Play className="h-4 w-4" />
-                    </Button>
+                    {playingId === line.id ? (
+                      // Currently playing (single or as part of "play all") —
+                      // show a pause control so it's clear which line is live.
+                      <Button size="icon" onClick={stopPlayback} title={t("studio.pause")}>
+                        <Pause className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="icon"
+                        onClick={() => playOne(line)}
+                        disabled={playingAll}
+                        title={t("studio.play")}
+                      >
+                        <Play className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -671,15 +680,21 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
                               <Download className="h-4 w-4" />
                             </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => playTake(take)}
-                              disabled={playingId === take.id || playingAll}
-                              title={t("studio.play")}
-                            >
-                              <Play className="h-4 w-4" />
-                            </Button>
+                            {playingId === take.id ? (
+                              <Button size="icon" variant="ghost" onClick={stopPlayback} title={t("studio.pause")}>
+                                <Pause className="h-4 w-4" />
+                              </Button>
+                            ) : (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => playTake(take)}
+                                disabled={playingAll}
+                                title={t("studio.play")}
+                              >
+                                <Play className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))

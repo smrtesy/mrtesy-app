@@ -2609,7 +2609,8 @@
       "recreating": "Re-recording…",
       "reanalyzeTone": "Re-analyze tone",
       "reanalyzeHint": "the LLM re-picks emotion + tone tags",
-      "selectWordHint": "Select a word in the text to get spelling suggestions"
+      "selectWordHint": "Select a word in the text to get spelling suggestions",
+      "pause": "Pause"
     },
     "lexicon": {
       "title": "Pronunciation lexicon",
