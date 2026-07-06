@@ -8,6 +8,7 @@
  *
  * Ported from botsite/src/modules/wa.js.
  */
+import { metaErrorSummary } from "./meta-errors";
 
 const META_API_VERSION = "v23.0";
 const MIN_GAP_MS = 500; // minimum gap between messages on the same number
@@ -94,7 +95,7 @@ export async function listTemplates(wabaId: string, accessToken: string): Promis
   const resp = await fetch(url);
   if (!resp.ok) {
     const detail = await resp.text().catch(() => "");
-    throw new WhatsAppSendError(`Meta message_templates ${resp.status}`, resp.status, detail);
+    throw new WhatsAppSendError(metaErrorSummary(resp.status, detail), resp.status, detail);
   }
   const json = (await resp.json()) as {
     data?: { name: string; language: string; status: string; category: string; components?: { type: string; text?: string }[] }[];
@@ -162,7 +163,7 @@ async function send(
 
     const status = resp.status;
     const detail = await resp.text().catch(() => "");
-    lastErr = new WhatsAppSendError(`Meta API ${status}`, status, detail);
+    lastErr = new WhatsAppSendError(metaErrorSummary(status, detail), status, detail);
 
     // Retry on rate-limit (429), transient server errors (5xx), and the
     // transient Meta rate-limit codes that arrive as HTTP 400 (e.g. #131056

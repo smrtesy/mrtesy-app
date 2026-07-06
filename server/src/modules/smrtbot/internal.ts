@@ -20,7 +20,6 @@ import {
   resolveCreds,
   sendTemplate,
   sendText,
-  WhatsAppSendError,
   type BotEnv,
 } from "./wa";
 import { sendBaileysText, toJid } from "./baileys";
@@ -192,7 +191,8 @@ router.post("/api/bot/internal/send", async (req: Request, res: Response) => {
         wa_message_id: sent.wa_message_id,
       });
     } catch (e) {
-      const msg = e instanceof WhatsAppSendError ? `Meta ${e.status}` : e instanceof Error ? e.message : String(e);
+      // WhatsAppSendError.message is now Meta's decoded, human-readable reason.
+      const msg = e instanceof Error ? e.message : String(e);
       results.push({ phone: r.phone, contact_id: r.contact_id ?? null, status: "failed", error: msg });
     }
   }
