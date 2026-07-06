@@ -1244,6 +1244,8 @@
     "taskTrail": "Model verdicts (task write)",
     "searchPlaceholder": "Search the log…",
     "searchClear": "Clear search",
+    "searchAllHistory": "All history",
+    "searchAllHistoryHint": "Search everything stored, not just the last 48 hours",
     "searchNoResults": "No matching entries",
     "openTask": "Open task",
     "addCorrection": "Correction",
