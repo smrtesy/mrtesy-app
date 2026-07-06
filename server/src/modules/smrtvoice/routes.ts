@@ -17,6 +17,7 @@ import type { Request, Response } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
 import { emitEvent, notify, notifyError } from "../../lib/platform";
+import { simpleCall, parseJsonResponse } from "../../anthropic";
 import { getOAuthClient } from "../../services/token-refresh";
 import { getDriveClient } from "../../services/drive";
 
@@ -48,6 +49,37 @@ async function getGoogleAccessToken(userId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Load the org pronunciation lexicon shaped for the voice-engine payload:
+ * [{word, replacement, language}]. Notation-agnostic — `replacement` is a
+ * free-form phonetic string (Hebrew respelling or Latin) sent verbatim.
+ * Best-effort: on error we send [] and generation falls back to defaults.
+ */
+async function loadPronunciation(
+  orgId: string,
+): Promise<Array<{ word: string; replacement: string; language: string }>> {
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .select("original_word, pronounced_as, language")
+    .eq("org_id", orgId)
+    // Deterministic order so, if a word carries both a Hebrew and a Latin
+    // entry, the variant the engine falls back to is stable (the engine
+    // otherwise prefers the one matching each voice's language).
+    .order("original_word")
+    .order("language");
+  if (error) {
+    console.warn("[smrtvoice] loadPronunciation failed:", error.message);
+    return [];
+  }
+  return (data ?? [])
+    .filter((r: { original_word: string | null; pronounced_as: string | null }) => r.original_word && r.pronounced_as)
+    .map((r: { original_word: string; pronounced_as: string; language: string | null }) => ({
+      word: r.original_word,
+      replacement: r.pronounced_as,
+      language: r.language ?? "he",
+    }));
 }
 
 /**
@@ -1199,6 +1231,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
+      pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
@@ -1476,6 +1509,7 @@ const LINE_UPDATABLE = new Set([
   "final_pitch",
   "final_pace",
   "status",
+  "approved",
 ]);
 
 router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
@@ -1510,6 +1544,9 @@ async function queueRegeneration(
     input_recording_path?: string | null;
   },
   lineNumbers: number[],
+  // Verbatim per-line text edits ("send again with edited text"). Each is sent
+  // to voice-engine as a line_override and synthesized exactly as given.
+  lineOverrides: Array<{ line_number: number; text_for_tts: string }> = [],
 ) {
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
 
@@ -1571,6 +1608,8 @@ async function queueRegeneration(
       code: script.code,
       speaker_map: speakerMap,
       line_numbers: lineNumbers,
+      pronunciation: await loadPronunciation(req.org!.id),
+      line_overrides: lineOverrides,
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
@@ -1626,7 +1665,26 @@ async function loadScriptForLine(req: Request, lineId: string) {
 router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) => {
   const found = await loadScriptForLine(req, req.params.id);
   if (!found) return res.status(404).json({ error: "Line not found" });
-  await queueRegeneration(req, res, found.script, [found.line.line_number]);
+
+  // Optional "send again with edited text": the client passes the exact text
+  // to speak (prefilled from tts_body). Persist it so the row + transparency
+  // panel match the new take, and forward it as a verbatim line_override.
+  const editedText =
+    typeof req.body?.text_for_tts === "string" ? req.body.text_for_tts.trim() : "";
+  const overrides = editedText
+    ? [{ line_number: found.line.line_number, text_for_tts: editedText }]
+    : [];
+  if (editedText) {
+    // Mirror the engine's override behaviour: the edited text becomes the body
+    // verbatim (tone tags are baked into it), so clear the separate tags.
+    const { error: saveErr } = await db
+      .from("smrtvoice_lines")
+      .update({ text_for_tts: editedText, tts_body: editedText, tags: [] })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id);
+    if (saveErr) return res.status(500).json({ error: saveErr.message });
+  }
+  await queueRegeneration(req, res, found.script, [found.line.line_number], overrides);
 });
 
 router.post("/voice/lines/:id/redo", async (req: Request, res: Response) => {
@@ -1693,6 +1751,38 @@ router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => 
 
   const { data, error } = await db.storage.from("smrtvoice-audio").createSignedUrl(line.output_audio_path, 3600);
   if (error || !data) return res.status(500).json({ error: error?.message ?? "signing failed" });
+  res.json({ audio_url: data.signedUrl });
+});
+
+// ============================================================
+// LINE TAKES (render history — every take is kept, never overwritten)
+// ============================================================
+
+router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_line_takes")
+    .select("*")
+    .eq("line_id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ takes: data ?? [] });
+});
+
+router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => {
+  const { data: take, error } = await db
+    .from("smrtvoice_line_takes")
+    .select("output_audio_path")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!take || !take.output_audio_path) return res.status(404).json({ error: "Take not found" });
+
+  const { data, error: signErr } = await db.storage
+    .from("smrtvoice-audio")
+    .createSignedUrl(take.output_audio_path, 3600);
+  if (signErr || !data) return res.status(500).json({ error: signErr?.message ?? "signing failed" });
   res.json({ audio_url: data.signedUrl });
 });
 
@@ -1957,25 +2047,79 @@ router.get("/voice/lexicon", async (req: Request, res: Response) => {
   res.json({ entries: data ?? [] });
 });
 
+// `language` marks the notation of `pronounced_as`: 'he' (Hebrew respelling)
+// or 'en' (Latin transliteration). Same word can carry one entry per language.
+const LEXICON_LANGUAGES = new Set(["he", "en"]);
+
 router.post("/voice/lexicon", async (req: Request, res: Response) => {
   const { original_word, pronounced_as, category, notes } = req.body ?? {};
+  const language = (req.body?.language ?? "he").toString();
   if (!original_word || !pronounced_as) {
     return res.status(400).json({ error: "original_word and pronounced_as required" });
+  }
+  if (!LEXICON_LANGUAGES.has(language)) {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
   }
   const { data, error } = await db
     .from("smrtvoice_pronunciation_lexicon")
     .insert({
       org_id: req.org!.id,
       created_by: req.user!.id,
-      original_word,
-      pronounced_as,
+      original_word: String(original_word).trim(),
+      pronounced_as: String(pronounced_as).trim(),
+      language,
       category: category ?? "general",
       notes: notes ?? null,
     })
     .select()
     .single();
-  if (error || !data) return res.status(500).json({ error: error?.message ?? "create failed" });
+  if (error || !data) {
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "That word already has an entry for this language" });
+    }
+    return res.status(500).json({ error: error?.message ?? "create failed" });
+  }
   res.status(201).json({ entry: data });
+});
+
+const LEXICON_UPDATABLE = new Set([
+  "original_word",
+  "pronounced_as",
+  "language",
+  "category",
+  "notes",
+]);
+
+router.patch("/voice/lexicon/:id", async (req: Request, res: Response) => {
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (LEXICON_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+  if ("language" in updates && !LEXICON_LANGUAGES.has(String(updates.language))) {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
+  for (const k of ["original_word", "pronounced_as"] as const) {
+    if (k in updates) updates[k] = String(updates[k]).trim();
+  }
+
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .update(updates)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select()
+    .maybeSingle();
+  if (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "That word already has an entry for this language" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) return res.status(404).json({ error: "Not found" });
+  res.json({ entry: data });
 });
 
 router.delete("/voice/lexicon/:id", async (req: Request, res: Response) => {
@@ -1986,6 +2130,39 @@ router.delete("/voice/lexicon/:id", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id);
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).end();
+});
+
+// POST /voice/pronunciation/suggest — AI phonetic-respelling suggestions for a
+// word/phrase. Returns Hebrew respellings AND Latin transliterations as
+// separate chip lists; the UI drops a chosen chip into the edit/lexicon field.
+router.post("/voice/pronunciation/suggest", async (req: Request, res: Response) => {
+  const word = (req.body?.word ?? req.body?.text ?? "").toString().trim();
+  if (!word) return res.status(400).json({ error: "word is required" });
+  if (word.length > 200) return res.status(400).json({ error: "text too long (max 200 chars)" });
+
+  const system = `You help a Hebrew children's TV studio fix mispronunciations on Resemble "resemble-ultra" TTS. Ultra has NO working phoneme/IPA/<sub> support and niqqud HARMS it — the ONLY fix is respelling the text so it READS correctly.
+
+Given a Hebrew word or short phrase, propose respellings that steer the engine to the intended pronunciation:
+- "hebrew": up to 3 alternative HEBREW spellings using plain letters only (NO niqqud / vowel points) — e.g. double a letter, add a mater lectionis (א/ו/י), split a cluster.
+- "latin": up to 3 Latin/English transliterations that read correctly when spoken.
+Keep each suggestion short and directly speakable. Never add niqqud. Do not explain.
+Return ONLY JSON: {"hebrew": string[], "latin": string[]}`;
+
+  try {
+    const { content } = await simpleCall(
+      "haiku",
+      system,
+      `Word/phrase: ${word}`,
+      400,
+      { component: "smrtvoice.pronounce_suggest", userId: req.user!.id },
+    );
+    const parsed = parseJsonResponse<{ hebrew?: string[]; latin?: string[] }>(content);
+    const clean = (arr?: string[]) =>
+      Array.from(new Set((arr ?? []).map((s) => String(s).trim()).filter(Boolean))).slice(0, 3);
+    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin) });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
 });
 
 export default router;

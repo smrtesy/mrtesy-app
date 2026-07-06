@@ -179,12 +179,26 @@ export interface ScriptLine {
   attempt_count: number;
   error_message: string | null;
   generation_cost_usd: number | null;
+  approved: boolean;
   redo_requested: boolean;
   redo_reason: string | null;
   redo_instructions: string | null;
   redone_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface LineTake {
+  id: string;
+  org_id: string;
+  line_id: string;
+  script_id: string | null;
+  text_used: string | null;
+  model: string | null;
+  output_audio_path: string;
+  duration_seconds: number | null;
+  cost_usd: number | null;
+  created_at: string;
 }
 
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -219,7 +233,10 @@ export interface PronunciationEntry {
   org_id: string;
   created_by: string;
   original_word: string;
+  // A PHONETIC RESPELLING sent to Resemble verbatim — Hebrew respelling or a
+  // Latin transliteration, chosen per-word. Never niqqud.
   pronounced_as: string;
+  language: "he" | "en";
   category: "general" | "chabad" | "name" | "theophilic_name" | "place" | "foreign";
   notes: string | null;
   created_at: string;
@@ -283,6 +300,11 @@ export interface CreateJobRequest {
   llm_model?: string;
   code?: string;
   line_numbers?: number[];
+  // Notation-agnostic per-org pronunciation lexicon (Hebrew or Latin
+  // replacements, applied verbatim by voice-engine).
+  pronunciation?: Array<{ word: string; replacement: string; language: string }>;
+  // regenerate_line only: verbatim per-line text edits sent to voice-engine.
+  line_overrides?: Array<{ line_number: number; text_for_tts: string }>;
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
@@ -375,4 +397,5 @@ export interface UpdateLineRequest {
   final_pitch?: number;
   final_pace?: "slow" | "normal" | "fast";
   status?: LineStatus;
+  approved?: boolean;
 }

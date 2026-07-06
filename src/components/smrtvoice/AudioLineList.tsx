@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   Play,
@@ -12,10 +12,14 @@ import {
   X,
   FolderUp,
   Download,
+  Sparkles,
+  BadgeCheck,
+  History,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
@@ -42,25 +46,63 @@ interface Line {
   output_audio_path: string | null;
   output_duration_seconds: number | null;
   status: string;
+  approved: boolean;
   redo_requested: boolean;
   redo_reason: string | null;
   redo_instructions: string | null;
 }
 
+interface Take {
+  id: string;
+  text_used: string | null;
+  model: string | null;
+  output_audio_path: string;
+  duration_seconds: number | null;
+  cost_usd: number | null;
+  created_at: string;
+}
+
+interface Suggestions {
+  hebrew: string[];
+  latin: string[];
+}
+
+/** The exact body prefilled into the edit box: what was last sent to Resemble. */
+function prefillText(line: Line): string {
+  return (line.tts_body ?? line.text_for_tts ?? line.text_clean ?? "").trim();
+}
+
 export function AudioLineList({ scriptId }: { scriptId: string }) {
   const t = useTranslations("smrtVoice");
+  const locale = useLocale();
   const [lines, setLines] = useState<Line[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playingAll, setPlayingAll] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [redoOpenId, setRedoOpenId] = useState<string | null>(null);
-  const [redoReason, setRedoReason] = useState("");
-  const [redoInstructions, setRedoInstructions] = useState("");
   const [archiving, setArchiving] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
   const [newLineNumbers, setNewLineNumbers] = useState<number[]>([]);
+
+  // Edit / send-again panel state.
+  const [redoOpenId, setRedoOpenId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [regenLineId, setRegenLineId] = useState<string | null>(null);
+  const [suggestWord, setSuggestWord] = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const editRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Take history state (per-line, lazy-loaded on expand).
+  const [takesOpenId, setTakesOpenId] = useState<string | null>(null);
+  const [takes, setTakes] = useState<Record<string, Take[]>>({});
+  // Mirror the open take-list id into a ref so the realtime handler can refresh
+  // it without the subscription effect re-subscribing on every toggle.
+  const takesOpenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    takesOpenIdRef.current = takesOpenId;
+  }, [takesOpenId]);
 
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const cancelRef = useRef(false);
@@ -78,6 +120,15 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }, [scriptId]);
 
+  const loadTakes = useCallback(async (lineId: string) => {
+    try {
+      const { takes } = await api<{ takes: Take[] }>(`/api/voice/lines/${lineId}/takes`);
+      setTakes((prev) => ({ ...prev, [lineId]: takes }));
+    } catch {
+      /* takes are supplementary — a failure shouldn't break the list */
+    }
+  }, []);
+
   useEffect(() => {
     fetchLines();
     const supabase = createClient();
@@ -91,16 +142,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
           table: "smrtvoice_lines",
           filter: `script_id=eq.${scriptId}`,
         },
-        () => fetchLines(),
+        () => {
+          fetchLines();
+          // A completed re-render also inserts a take; refresh the open list.
+          const openId = takesOpenIdRef.current;
+          if (openId) loadTakes(openId);
+        },
       )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchLines, scriptId]);
+  }, [fetchLines, loadTakes, scriptId]);
 
   const rendered = (lines ?? []).filter((l) => l.output_audio_path);
   const redoCount = (lines ?? []).filter((l) => l.redo_requested).length;
+
+  async function playUrl(url: string, id: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      resolveRef.current = resolve;
+      const audio = new Audio(url);
+      currentAudioRef.current = audio;
+      setPlayingId(id);
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve();
+      audio.play().catch(() => resolve());
+    });
+  }
 
   async function playOne(line: Line): Promise<void> {
     if (!line.output_audio_path) return;
@@ -108,15 +176,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/lines/${line.id}/audio-url`,
       );
-      await new Promise<void>((resolve) => {
-        resolveRef.current = resolve;
-        const audio = new Audio(audio_url);
-        currentAudioRef.current = audio;
-        setPlayingId(line.id);
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
-        audio.play().catch(() => resolve());
-      });
+      await playUrl(audio_url, line.id);
     } catch {
       /* skip a failed line and continue */
     } finally {
@@ -125,26 +185,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
+  async function downloadBlob(url: string, filename: string) {
+    // The `download` attribute is ignored for cross-origin URLs, so a signed
+    // Supabase URL just opens inline. Fetch the bytes and download a local
+    // object URL instead — that forces a real download dialog.
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
+  }
+
   async function downloadOne(line: Line) {
     if (!line.output_audio_path) return;
     try {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/lines/${line.id}/audio-url`,
       );
-      // The `download` attribute is ignored for cross-origin URLs, so a signed
-      // Supabase URL just opens inline. Fetch the bytes and download a local
-      // object URL instead — that forces a real download dialog.
-      const res = await fetch(audio_url);
-      if (!res.ok) throw new Error(`Download failed (${res.status})`);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(objectUrl);
+      await downloadBlob(
+        audio_url,
+        `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -174,15 +241,46 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     setPlayingId(null);
   }
 
-  async function markRedo(lineId: string) {
+  function openEdit(line: Line) {
+    const next = redoOpenId === line.id ? null : line.id;
+    setRedoOpenId(next);
+    setEditText(next ? prefillText(line) : "");
+    setSuggestWord("");
+    setSuggestions(null);
+  }
+
+  // "Send again" — regenerate THIS line. If the text was edited from what was
+  // last sent, forward it as a verbatim override; otherwise a plain re-render.
+  async function regenerateNow(line: Line) {
+    setRegenLineId(line.id);
     try {
-      await api(`/api/voice/lines/${lineId}/redo`, {
-        method: "POST",
-        body: { reason: redoReason, instructions: redoInstructions },
-      });
+      const edited = editText.trim();
+      const body = edited && edited !== prefillText(line) ? { text_for_tts: edited } : {};
+      await api(`/api/voice/lines/${line.id}/regenerate`, { method: "POST", body });
+      setNewLineNumbers([line.line_number]);
       setRedoOpenId(null);
-      setRedoReason("");
-      setRedoInstructions("");
+      toast.success(t("studio.redoQueued", { count: 1 }));
+      fetchLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setRegenLineId(null);
+    }
+  }
+
+  // Flag for the batch "rerun redos". Persist any text edit first so the batch
+  // run synthesizes exactly what the user typed.
+  async function markRedo(line: Line) {
+    try {
+      const edited = editText.trim();
+      if (edited && edited !== prefillText(line)) {
+        await api(`/api/voice/lines/${line.id}`, {
+          method: "PATCH",
+          body: { text_for_tts: edited, tts_body: edited, tags: [] },
+        });
+      }
+      await api(`/api/voice/lines/${line.id}/redo`, { method: "POST" });
+      setRedoOpenId(null);
       fetchLines();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
@@ -196,6 +294,52 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
+  }
+
+  async function toggleApprove(line: Line) {
+    try {
+      await api(`/api/voice/lines/${line.id}`, {
+        method: "PATCH",
+        body: { approved: !line.approved },
+      });
+      fetchLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  async function suggestForLine() {
+    if (!suggestWord.trim()) return;
+    setSuggesting(true);
+    try {
+      const s = await api<Suggestions>("/api/voice/pronunciation/suggest", {
+        method: "POST",
+        body: { word: suggestWord.trim() },
+      });
+      setSuggestions(s);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  // Insert a chosen suggestion at the caret in the edit box (append if no caret).
+  function insertSuggestion(value: string) {
+    const el = editRef.current;
+    if (!el) {
+      setEditText((prev) => (prev ? `${prev} ${value}` : value));
+      return;
+    }
+    const start = el.selectionStart ?? editText.length;
+    const end = el.selectionEnd ?? editText.length;
+    const next = editText.slice(0, start) + value + editText.slice(end);
+    setEditText(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + value.length;
+      el.setSelectionRange(caret, caret);
+    });
   }
 
   async function rerunRedos() {
@@ -212,6 +356,42 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setRerunning(false);
+    }
+  }
+
+  function toggleTakes(lineId: string) {
+    const next = takesOpenId === lineId ? null : lineId;
+    setTakesOpenId(next);
+    if (next) loadTakes(next);
+  }
+
+  async function playTake(take: Take) {
+    stopPlayback();
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/takes/${take.id}/audio-url`,
+      );
+      await playUrl(audio_url, take.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      resolveRef.current = null;
+      setPlayingId(null);
+    }
+  }
+
+  // takeNo matches the on-screen label (newest-first list → "Take N" at top).
+  async function downloadTake(take: Take, lineNumber: number, takeNo: number) {
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/takes/${take.id}/audio-url`,
+      );
+      await downloadBlob(
+        audio_url,
+        `${String(lineNumber).padStart(3, "0")}_take${takeNo}.wav`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
@@ -289,8 +469,18 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
           const sentBody = (req.body as string | undefined) ?? line.tts_body ?? line.text_for_tts ?? "";
           const model = (req.model as string | undefined) ?? null;
           const expanded = expandedId === line.id;
+          const lineTakes = takes[line.id] ?? [];
           return (
-            <Card key={line.id} className={line.redo_requested ? "border-amber-400" : undefined}>
+            <Card
+              key={line.id}
+              className={
+                line.approved
+                  ? "border-emerald-400"
+                  : line.redo_requested
+                    ? "border-amber-400"
+                    : undefined
+              }
+            >
               <CardContent className="p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
@@ -305,6 +495,12 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                           <SourceBadge source={line.emotion_source} t={t} />
                         </span>
                       )}
+                      {line.approved && (
+                        <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
+                          <BadgeCheck className="h-3 w-3" />
+                          {t("studio.approved")}
+                        </span>
+                      )}
                       {line.redo_requested && (
                         <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">
                           {t("studio.needsRedo")}
@@ -317,6 +513,23 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     <Button
                       size="icon"
                       variant="ghost"
+                      title={line.approved ? t("studio.unapprove") : t("studio.approve")}
+                      className={line.approved ? "text-emerald-600" : undefined}
+                      onClick={() => toggleApprove(line)}
+                    >
+                      <BadgeCheck className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      title={t("studio.takes")}
+                      onClick={() => toggleTakes(line.id)}
+                    >
+                      <History className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
                       title={t("studio.settings")}
                       onClick={() => setExpandedId(expanded ? null : line.id)}
                     >
@@ -326,11 +539,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                       size="icon"
                       variant="ghost"
                       title={t("studio.markRedo")}
-                      onClick={() => {
-                        setRedoOpenId(redoOpenId === line.id ? null : line.id);
-                        setRedoReason(line.redo_reason ?? "");
-                        setRedoInstructions(line.redo_instructions ?? "");
-                      }}
+                      onClick={() => openEdit(line)}
                     >
                       <RotateCcw className="h-4 w-4" />
                     </Button>
@@ -379,24 +588,59 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                   </div>
                 )}
 
-                {/* Mark-for-redo form. */}
+                {/* Edit & send-again panel. */}
                 {redoOpenId === line.id && (
                   <div className="rounded-md border p-2 space-y-2" dir="rtl">
+                    <label className="text-xs font-medium">{t("studio.editText")}</label>
                     <Textarea
-                      value={redoReason}
-                      onChange={(e) => setRedoReason(e.target.value)}
-                      placeholder={t("studio.redoReasonPlaceholder")}
-                      rows={2}
+                      ref={editRef}
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      rows={3}
+                      dir="auto"
                     />
-                    <Textarea
-                      value={redoInstructions}
-                      onChange={(e) => setRedoInstructions(e.target.value)}
-                      placeholder={t("studio.redoInstructionsPlaceholder")}
-                      rows={2}
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={() => markRedo(line.id)}>
-                        {t("studio.redoSubmit")}
+                    <p className="text-xs text-muted-foreground">{t("studio.editHint")}</p>
+
+                    {/* Phonetic-spelling suggestions for a tricky word. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        value={suggestWord}
+                        onChange={(e) => setSuggestWord(e.target.value)}
+                        placeholder={t("studio.suggestWordPlaceholder")}
+                        className="h-8 max-w-[16rem]"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={suggestForLine}
+                        disabled={suggesting || !suggestWord.trim()}
+                      >
+                        <Sparkles className={`h-4 w-4 me-1 ${suggesting ? "animate-pulse" : ""}`} />
+                        {t("studio.suggest")}
+                      </Button>
+                    </div>
+                    {suggestions && (
+                      <div className="space-y-1.5 rounded-md bg-muted/40 p-2 text-xs">
+                        {suggestions.hebrew.length === 0 && suggestions.latin.length === 0 && (
+                          <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                        )}
+                        {suggestions.hebrew.length > 0 && (
+                          <SuggestChips label={t("studio.suggestHebrew")} items={suggestions.hebrew} onPick={insertSuggestion} />
+                        )}
+                        {suggestions.latin.length > 0 && (
+                          <SuggestChips label={t("studio.suggestLatin")} items={suggestions.latin} onPick={insertSuggestion} />
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" onClick={() => regenerateNow(line)} disabled={regenLineId === line.id}>
+                        <RefreshCw className={`h-4 w-4 me-1 ${regenLineId === line.id ? "animate-spin" : ""}`} />
+                        {regenLineId === line.id ? t("studio.regenerating") : t("studio.regenerateNow")}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => markRedo(line)}>
+                        {t("studio.markRedo")}
                       </Button>
                       {line.redo_requested && (
                         <Button size="sm" variant="ghost" onClick={() => clearRedo(line.id)}>
@@ -409,11 +653,77 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     </div>
                   </div>
                 )}
+
+                {/* Take history. */}
+                {takesOpenId === line.id && (
+                  <div className="rounded-md border p-2 space-y-1.5 text-xs" dir="rtl">
+                    {lineTakes.length === 0 ? (
+                      <span className="text-muted-foreground">{t("studio.noTakes")}</span>
+                    ) : (
+                      lineTakes.map((take, idx) => (
+                        <div key={take.id} className="flex items-center justify-between gap-2 rounded bg-muted/40 p-1.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-muted-foreground">
+                              {t("studio.takeLabel", { n: lineTakes.length - idx })}
+                              {" · "}
+                              {new Date(take.created_at).toLocaleString(locale)}
+                              {take.duration_seconds ? ` · ${take.duration_seconds.toFixed(1)}s` : ""}
+                            </div>
+                            {take.text_used && (
+                              <div className="truncate" dir="auto">{take.text_used}</div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
+                              <Download className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => playTake(take)}
+                              disabled={playingId === take.id || playingAll}
+                              title={t("studio.play")}
+                            >
+                              <Play className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
         })
       )}
+    </div>
+  );
+}
+
+function SuggestChips({
+  label,
+  items,
+  onPick,
+}: {
+  label: string;
+  items: string[];
+  onPick: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-muted-foreground">{label}:</span>
+      {items.map((s, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onPick(s)}
+          className="inline-flex items-center rounded-full border bg-background px-2 py-0.5 hover:bg-accent"
+          dir="auto"
+        >
+          {s}
+        </button>
+      ))}
     </div>
   );
 }

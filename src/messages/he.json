@@ -2587,7 +2587,37 @@
       "redoReasonPlaceholder": "סיבה (למה צריך הקלטה מחדש?)",
       "redoInstructionsPlaceholder": "מה התיקון הנדרש?",
       "redoSubmit": "סמן",
-      "cancel": "ביטול"
+      "cancel": "ביטול",
+      "editText": "טקסט להקראה",
+      "editHint": "ערוך את הטקסט המדויק שיישלח למנוע. אפשר כתיב פונטי בעברית או באנגלית — לא ניקוד.",
+      "regenerateNow": "שלח מחדש",
+      "regenerating": "שולח…",
+      "suggest": "הצע כתיב",
+      "suggestWordPlaceholder": "מילה לתיקון הגייה",
+      "suggestHebrew": "עברית",
+      "suggestLatin": "לטינית",
+      "noSuggestions": "לא נמצאו הצעות",
+      "approve": "סמן כהקלטה טובה",
+      "unapprove": "בטל סימון טוב",
+      "approved": "הקלטה טובה",
+      "takes": "גרסאות",
+      "noTakes": "אין גרסאות עדיין",
+      "takeLabel": "גרסה {n}"
+    },
+    "lexicon": {
+      "title": "מילון הגייה",
+      "hint": "כתיב פונטי (עברי או לטיני) שיוחלף בטקסט לפני ההקראה — לא ניקוד. איך המילה צריכה להישמע.",
+      "add": "הוסף",
+      "wordPlaceholder": "מילה מקורית",
+      "replacementPlaceholder": "כתיב להקראה",
+      "language": "שפת הכתיב",
+      "hebrew": "עברית",
+      "latin": "לטינית / אנגלית",
+      "suggest": "הצע כתיב",
+      "noSuggestions": "לא נמצאו הצעות",
+      "empty": "עדיין אין מילים במילון",
+      "delete": "מחק",
+      "deleteConfirm": "למחוק את המילה מהמילון?"
     }
   },
   "projectCombobox": {
