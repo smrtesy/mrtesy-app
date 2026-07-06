@@ -1244,6 +1244,8 @@
     "taskTrail": "הכרעת מודלים (כתיבת משימה)",
     "searchPlaceholder": "חיפוש בלוג…",
     "searchClear": "נקה חיפוש",
+    "searchAllHistory": "כל ההיסטוריה",
+    "searchAllHistoryHint": "חיפוש בכל מה שנשמר, לא רק ב-48 השעות האחרונות",
     "searchNoResults": "אין פריטים תואמים",
     "openTask": "פתח משימה",
     "addCorrection": "תיקון",

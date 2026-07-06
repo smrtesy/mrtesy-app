@@ -107,6 +107,11 @@ export function LogPageClient({ locale }: { locale: string }) {
   // refresh key that keeps the export button's "pending" badge in sync.
   const [correctionDraft, setCorrectionDraft] = useState<CorrectionDraft | null>(null);
   const [correctionsRefreshKey, setCorrectionsRefreshKey] = useState(0);
+  // "Search all history": when on (and a query is typed) the 48h window is
+  // dropped and the search runs server-side across the user's whole stored
+  // history. Debounced so we don't fire a query on every keystroke.
+  const [searchAllHistory, setSearchAllHistory] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   const dateFmtLocale = locale === "he" ? "he-IL" : "en-US";
   const dateFormatter = new Intl.DateTimeFormat(dateFmtLocale, {
@@ -127,21 +132,43 @@ export function LogPageClient({ locale }: { locale: string }) {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [reclassifyOpenId]);
 
+  // Debounce the query that drives the server-side "all history" search so a
+  // fresh DB round-trip only fires ~300ms after the user stops typing.
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
 
-    // Show every item from the last 48 hours — not just the newest 200.
-    // The window is defined on ingestion time (created_at); the high limit is
-    // only a safety net so a busy 48h window is never silently truncated.
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // Two modes:
+    //  • default — every item from the last 48 hours (window on ingestion
+    //    time created_at); the high limit is only a safety net so a busy 48h
+    //    window is never silently truncated.
+    //  • "search all history" — the 48h window is dropped and the query is
+    //    filtered server-side across the user's ENTIRE stored history, so an
+    //    email / WhatsApp / Drive item from weeks ago is findable. body_text
+    //    (message content) is filtered but not selected, so a content hit
+    //    still surfaces the row without shipping every body to the client.
+    const term = debouncedQuery.replace(/[,()*%\\]/g, " ").trim();
+    const historyMode = searchAllHistory && term.length >= 2;
+
     let query = supabase
       .from("source_messages")
       .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
-      .gte("created_at", cutoff)
       .order("created_at", { ascending: false })
       .limit(1000);
+
+    if (historyMode) {
+      const cols = ["subject", "sender", "sender_email", "recipient", "serial_display", "body_text"];
+      query = query.or(cols.map((c) => `${c}.ilike.*${term}*`).join(","));
+    } else {
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      query = query.gte("created_at", cutoff);
+    }
 
     if (sourceFilter !== "all") {
       if (sourceFilter === "whatsapp") {
@@ -252,7 +279,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
     setIsAdmin(adminEmails.includes(user.email?.toLowerCase() || ""));
-  }, [supabase, sourceFilter, statusFilter]);
+  }, [supabase, sourceFilter, statusFilter, searchAllHistory, debouncedQuery]);
 
   useEffect(() => {
     fetchLogs();
@@ -380,9 +407,11 @@ export function LogPageClient({ locale }: { locale: string }) {
 
   // Free-text search over the loaded entries — matches across every
   // human-meaningful field so the user can find an item by subject, sender,
-  // reason, task title, serial, etc.
+  // reason, task title, serial, etc. In "all history" mode the server already
+  // applied the filter across the full history (incl. message body), so the
+  // rows are rendered as-is rather than re-filtered against the 48h window.
   const q = searchQuery.trim().toLowerCase();
-  const displayedLogs = q
+  const displayedLogs = (!searchAllHistory && q)
     ? logs.filter((l) =>
         [
           l.subject, l.sender, l.sender_email, l.recipient,
@@ -420,6 +449,22 @@ export function LogPageClient({ locale }: { locale: string }) {
         </div>
         <CorrectionsExportButton refreshKey={correctionsRefreshKey} />
       </div>
+
+      {/* "Search all history" — quiet: only shown once the user is actually
+          searching. Ticking it drops the 48h window and runs the search
+          server-side across the whole stored history (incl. message body). */}
+      {searchQuery.trim().length > 0 && (
+        <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={searchAllHistory}
+            onChange={(e) => setSearchAllHistory(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-muted-foreground/40 accent-primary"
+          />
+          <span className="font-medium text-foreground/80">{tLog("searchAllHistory")}</span>
+          <span className="truncate">{tLog("searchAllHistoryHint")}</span>
+        </label>
+      )}
 
       {/* Source Filter Tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-1">
