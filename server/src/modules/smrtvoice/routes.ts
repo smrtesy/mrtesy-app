@@ -1278,15 +1278,48 @@ router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
   }
 
   if (engine.status === "completed") {
+    // The job.completed webhook (which normally stamps cost/duration/counts on
+    // the script) frequently never reaches us, so this sync path is in practice
+    // the primary completion path. It must therefore capture everything that
+    // webhook would have — otherwise total_cost_usd/duration stay 0 forever.
+    // The engine echoes those figures in getJob().result, same shape as the
+    // webhook `data` payload.
+    // engine.result mirrors the job.completed webhook `data` blob (handleJobCompleted
+    // persists it verbatim as `result`). Coerce via Number() — a JSON-string figure
+    // would otherwise pass `> 0` yet throw on `.toFixed()`.
+    const result = (engine.result ?? {}) as Record<string, unknown>;
+    const totalCost = Number(result.total_cost_usd) || 0;
+    const totalDuration = Number(result.total_duration_seconds) || 0;
+    const linesCompleted = engine.lines_completed ?? 0;
+
     await db
       .from("smrtvoice_jobs")
-      .update({ status: "completed", progress: 100 })
+      .update({
+        status: "completed",
+        progress: 100,
+        completed_at: new Date().toISOString(),
+        total_cost_usd: totalCost,
+        result: engine.result ?? null,
+      })
       .eq("id", job.id);
+
+    // Only stamp cost/duration when the engine reports a positive figure, so a
+    // result blob missing those keys never clobbers a real value with 0. Line
+    // counts are deliberately NOT touched here — the voice-engine worker writes
+    // completed_lines/failed_lines directly to the script row and owns them; a
+    // stale getJob() count could otherwise regress an accurate value.
+    const scriptUpdate: Record<string, unknown> = {
+      status: "audio_ready",
+      audio_ready_at: new Date().toISOString(),
+    };
+    if (totalCost > 0) scriptUpdate.total_cost_usd = totalCost;
+    if (totalDuration > 0) scriptUpdate.total_duration_seconds = totalDuration;
+
     // Abort before notifying if the status flip fails — otherwise the row stays
     // queued and the next mount re-syncs and double-notifies the user.
     const { error: flipErr } = await db
       .from("smrtvoice_scripts")
-      .update({ status: "audio_ready", audio_ready_at: new Date().toISOString() })
+      .update(scriptUpdate)
       .eq("id", script.id);
     if (flipErr) return res.status(500).json({ error: flipErr.message });
     const label = script.name || script.code;
@@ -1294,7 +1327,10 @@ router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
       app_slug: "smrtvoice",
       type: "success",
       title: `הקול ל-${label} מוכן`,
-      body: `${engine.lines_completed ?? 0} שורות הסתיימו בהצלחה.`,
+      body:
+        totalCost > 0
+          ? `${linesCompleted} שורות הסתיימו בהצלחה. עלות: $${totalCost.toFixed(2)}`
+          : `${linesCompleted} שורות הסתיימו בהצלחה.`,
       link: `/voice/scripts/${script.id}`,
       entity_type: "script",
       entity_id: script.id,
