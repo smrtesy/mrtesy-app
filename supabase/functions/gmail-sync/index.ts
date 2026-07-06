@@ -37,7 +37,7 @@ async function notifyDisconnect(userId: string, reason: string) {
       title: "Gmail מנותק",
       body: `חיבור Gmail נותק (${reason}). יש להתחבר מחדש בהגדרות → חיבורים.`,
       link: "/settings",
-    }).then(() => {}, () => {});
+    }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
   }
 }
 
@@ -92,7 +92,7 @@ async function notifySyncError(
     title,
     body: message.substring(0, 500),
     link: "/log",
-  }).then(() => {}, () => {});
+  }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
 }
 
 async function loadSkipRules(userId: string) {
@@ -149,7 +149,7 @@ async function refreshGoogleToken(userId: string): Promise<string> {
         .eq("source", "gmail")
         .maybeSingle();
       const failures = (Number(ss?.consecutive_failures) || 0) + 1;
-      await supabase
+      const { error: failureCountUpdateError } = await supabase
         .from("sync_state")
         .update({
           last_error: `Token refresh failed (${resp.status}), attempt ${failures}/${DISCONNECT_AFTER_FAILURES}: ${err.slice(0, 300)}`,
@@ -157,11 +157,13 @@ async function refreshGoogleToken(userId: string): Promise<string> {
         })
         .eq("user_id", userId)
         .eq("source", "gmail");
+      if (failureCountUpdateError) console.error("sync_state failure count update failed:", failureCountUpdateError);
       if (failures >= DISCONNECT_AFTER_FAILURES) {
-        await supabase
+        const { error: disconnectUpdateError } = await supabase
           .from("user_settings")
           .update({ gmail_connected: false })
           .eq("user_id", userId);
+        if (disconnectUpdateError) console.error("user_settings disconnect update failed:", disconnectUpdateError);
         await notifyDisconnect(userId, `token refresh failed ${failures}× (${resp.status})`);
       } else {
         await notifySyncError(
@@ -176,7 +178,7 @@ async function refreshGoogleToken(userId: string): Promise<string> {
   }
 
   const tokens = await resp.json();
-  await supabase
+  const { error: credUpdateError } = await supabase
     .from("user_credentials")
     .update({
       access_token: tokens.access_token,
@@ -184,16 +186,18 @@ async function refreshGoogleToken(userId: string): Promise<string> {
     })
     .eq("user_id", userId)
     .eq("service", "gmail");
+  if (credUpdateError) console.error("user_credentials update failed:", credUpdateError);
 
   // Clear any stale last_error and reset the failure streak now that the
   // token is healthy again — the disconnect threshold above counts
   // CONSECUTIVE failures only.
-  await supabase
+  const { error: failureResetError } = await supabase
     .from("sync_state")
     .update({ last_error: null, consecutive_failures: 0 })
     .eq("user_id", userId)
     .eq("source", "gmail")
     .or("last_error.not.is.null,consecutive_failures.gt.0");
+  if (failureResetError) console.error("sync_state failure reset failed:", failureResetError);
 
   return tokens.access_token;
 }
@@ -288,7 +292,7 @@ async function syncUserGmail(userId: string) {
     await supabase.from("sync_state").upsert(
       { user_id: userId, source: "gmail", last_error: errMsg, consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1 },
       { onConflict: "user_id,source" }
-    ).then(() => {}, () => {});
+    ).then(({ error }) => { if (error) console.error("sync_state upsert failed:", error); }, () => {});
     await supabase.from("log_entries").insert({
       user_id: userId, level: "error", category: "gmail_sync", status: "failed", error_message: errMsg,
     }).then(() => {}, () => {});
@@ -335,10 +339,11 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     }
 
     // Cooldown passed — auto-reset and attempt recovery instead of staying muted forever
-    await supabase.from("sync_state")
+    const { error: cooldownResetError } = await supabase.from("sync_state")
       .update({ consecutive_failures: 0, last_error: null })
       .eq("user_id", userId)
       .eq("source", "gmail");
+    if (cooldownResetError) console.error("sync_state cooldown reset failed:", cooldownResetError);
     await supabase.from("log_entries").insert({
       user_id: userId,
       level: "warning",
@@ -355,7 +360,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     token = await refreshGoogleToken(userId);
   } catch (e) {
     const errMsg = (e as Error).message;
-    await supabase.from("sync_state").upsert(
+    const { error: tokenFailUpsertError } = await supabase.from("sync_state").upsert(
       {
         user_id: userId,
         source: "gmail",
@@ -364,6 +369,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       },
       { onConflict: "user_id,source" }
     );
+    if (tokenFailUpsertError) console.error("sync_state upsert failed:", tokenFailUpsertError);
     return { error: errMsg };
   }
 
@@ -385,24 +391,27 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       // Force-invalidate it and retry once before counting as a failure.
       if (errMsg.includes(": 401")) {
         try {
-          await supabase.from("user_credentials")
+          const { error: tokenInvalidateError } = await supabase.from("user_credentials")
             .update({ expires_at: new Date(0).toISOString() })
             .eq("user_id", userId)
             .eq("service", "gmail");
+          if (tokenInvalidateError) console.error("user_credentials invalidate failed:", tokenInvalidateError);
           token = await refreshGoogleToken(userId);
           result = await gmailHistorySync(userId, token, checkpoint);
           // Retry succeeded — clear any stale error and continue
-          await supabase.from("sync_state")
+          const { error: retryClearError } = await supabase.from("sync_state")
             .update({ last_error: null })
             .eq("user_id", userId)
             .eq("source", "gmail")
             .not("last_error", "is", null);
+          if (retryClearError) console.error("sync_state error clear failed:", retryClearError);
         } catch (retryErr) {
           const retryMsg = (retryErr as Error).message;
-          await supabase.from("sync_state").upsert(
+          const { error: retryFailUpsertError } = await supabase.from("sync_state").upsert(
             { user_id: userId, source: "gmail", last_error: retryMsg, consecutive_failures: (syncState?.consecutive_failures ?? 0) + 1 },
             { onConflict: "user_id,source" }
           );
+          if (retryFailUpsertError) console.error("sync_state upsert failed:", retryFailUpsertError);
           await supabase.from("log_entries").insert({
             user_id: userId, level: "error", category: "gmail_sync", status: "failed",
             error_message: `gmailHistorySync 401 retry failed: ${retryMsg}`,
@@ -411,7 +420,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
           return { error: retryMsg };
         }
       } else {
-        await supabase.from("sync_state").upsert(
+        const { error: historyFailUpsertError } = await supabase.from("sync_state").upsert(
           {
             user_id: userId,
             source: "gmail",
@@ -420,6 +429,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
           },
           { onConflict: "user_id,source" }
         );
+        if (historyFailUpsertError) console.error("sync_state upsert failed:", historyFailUpsertError);
         await supabase.from("log_entries").insert({
           user_id: userId,
           level: "error",
@@ -435,11 +445,12 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       // Checkpoint unusable (Gmail returned 404/400). Clear it so the NEXT run
       // takes the no-checkpoint path: fresh fetch of unread + a new valid
       // historyId. Without this reset the bad checkpoint would 404/400 forever.
-      await supabase
+      const { error: checkpointResetError } = await supabase
         .from("sync_state")
         .update({ checkpoint: null })
         .eq("user_id", userId)
         .eq("source", "gmail");
+      if (checkpointResetError) console.error("sync_state checkpoint reset failed:", checkpointResetError);
       await supabase.from("log_entries").insert({
         user_id: userId,
         level: "warning",
@@ -632,7 +643,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       continue;
     }
 
-    await supabase.from("source_messages").upsert(
+    const { error: pendingUpsertError } = await supabase.from("source_messages").upsert(
       {
         ...baseRow,
         processing_status: "pending",
@@ -640,12 +651,13 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       },
       { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true }
     );
+    if (pendingUpsertError) console.error(`gmail-sync pending upsert failed (${msgId}):`, pendingUpsertError);
     synced++;
   }
 
   // Update sync state
   if (newCheckpoint) {
-    await supabase.from("sync_state").upsert(
+    const { error: checkpointUpsertError } = await supabase.from("sync_state").upsert(
       {
         user_id: userId,
         source: "gmail",
@@ -657,6 +669,7 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       },
       { onConflict: "user_id,source" }
     );
+    if (checkpointUpsertError) console.error("sync_state checkpoint upsert failed:", checkpointUpsertError);
   }
 
   return { synced, newCheckpoint };

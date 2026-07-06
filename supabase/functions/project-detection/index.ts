@@ -53,10 +53,11 @@ Deno.serve(async (req) => {
 
       if (candidates.length === 0) {
         // Reset flags
-        await supabase.from("source_messages")
+        const { error: earlyResetError } = await supabase.from("source_messages")
           .update({ needs_project_check: false })
           .eq("user_id", userId)
           .eq("needs_project_check", true);
+        if (earlyResetError) console.error("source_messages flag reset failed:", earlyResetError);
         results.push({ user_id: userId, checked: messages.length, suggestions: 0 });
         continue;
       }
@@ -112,7 +113,7 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           const inTok = data.usage?.input_tokens || 0;
           const outTok = data.usage?.output_tokens || 0;
           const r = model.includes("opus") ? { i: 15, o: 75 } : model.includes("sonnet") ? { i: 3, o: 15 } : { i: 0.8, o: 4 };
-          await supabase.from("ai_usage").insert({
+          const { error: usageInsertError } = await supabase.from("ai_usage").insert({
             user_id: userId,
             provider: "anthropic",
             component: "project_detection",
@@ -121,6 +122,7 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
             output_tokens: outTok,
             cost_usd: (inTok * r.i + outTok * r.o) / 1_000_000,
           });
+          if (usageInsertError) console.error("ai_usage insert failed:", usageInsertError);
         } catch (_e) { /* ledger insert must not break processing */ }
         try {
           const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -135,7 +137,7 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
 
       // Create suggestion tasks for each new project
       for (const suggestion of suggestions) {
-        await supabase.from("tasks").insert({
+        const { error: suggestionInsertError } = await supabase.from("tasks").insert({
           user_id: userId,
           title: `Project suggestion: ${suggestion.name}`,
           title_he: `הצעת פרויקט: ${suggestion.name_he || suggestion.name}`,
@@ -145,13 +147,15 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           status: "inbox",
           ai_model_used: model,
         });
+        if (suggestionInsertError) console.error("project suggestion task insert failed:", suggestionInsertError);
       }
 
       // Reset flags
-      await supabase.from("source_messages")
+      const { error: flagResetError } = await supabase.from("source_messages")
         .update({ needs_project_check: false })
         .eq("user_id", userId)
         .eq("needs_project_check", true);
+      if (flagResetError) console.error("source_messages flag reset failed:", flagResetError);
 
       results.push({
         user_id: userId,

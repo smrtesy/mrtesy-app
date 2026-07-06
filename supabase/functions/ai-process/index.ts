@@ -481,7 +481,7 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
   // Unified cost ledger — one row per paid call (best-effort; never blocks processing).
   if (meta) {
     try {
-      await supabase.from("ai_usage").insert({
+      const { error: aiUsageInsertError } = await supabase.from("ai_usage").insert({
         user_id: meta.userId ?? null,
         provider: "anthropic",
         component: meta.component,
@@ -493,6 +493,7 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
         cost_usd: estimateCost(usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, modelTypeFromName(model)),
         ref_id: meta.refId ?? null,
       });
+      if (aiUsageInsertError) console.error("ai_usage insert failed:", aiUsageInsertError);
     } catch (_e) { /* ledger insert must not break the pipeline */ }
   }
   return usage;
@@ -540,10 +541,11 @@ async function loadThreadMemory(userId: string, key: string): Promise<ThreadMemo
 }
 
 async function upsertThreadMemory(userId: string, key: string, fields: Partial<ThreadMemoryRow>) {
-  await supabase.from("thread_memory").upsert(
+  const { error: threadMemoryUpsertError } = await supabase.from("thread_memory").upsert(
     { user_id: userId, thread_key: key, ...fields, updated_at: new Date().toISOString() },
     { onConflict: "user_id,thread_key" },
   );
+  if (threadMemoryUpsertError) console.error("thread_memory upsert failed:", threadMemoryUpsertError);
 }
 
 interface ThreadAnalysis {
@@ -1174,14 +1176,16 @@ async function appendUpdateToTask(
     updateFields.snoozed_until = null;
   }
 
-  await supabase.from("tasks").update(updateFields).eq("id", taskId);
-  await supabase.from("task_activities").insert({
+  const { error: taskUpdateError } = await supabase.from("tasks").update(updateFields).eq("id", taskId);
+  if (taskUpdateError) console.error("tasks update failed:", taskUpdateError);
+  const { error: followupActivityError } = await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
     activity_type: opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
     note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
     actor: "system",
   });
+  if (followupActivityError) console.error("task_activities insert failed:", followupActivityError);
   // The occurrence the update actually landed on (may differ from the id the
   // caller passed when a recurring series was redirected above).
   return taskId;
@@ -1227,7 +1231,7 @@ Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that ma
 An [open] matter is the right home ONLY when the latest message is about the SAME specific topic/action that matter tracks — the same question, deal, document, payment, or event. A shared chat is NOT a shared matter: if the latest message raises a clearly DIFFERENT topic, return NEW even though the same contact has an open matter. Do not staple an unrelated new message onto an old suggestion just because they share a chat (the recurring "חיבר להצעה ישנה שלא קשורה להודעות החדשות" bug).
 Judge by the LAST message in the transcript. When the latest message is genuinely the next turn of an [open] matter, pick it; when it is a different topic, prefer NEW; when the only fit is a [DONE/closed], [SNOOZED], or [DISMISSED] matter, prefer NEW unless it unmistakably continues that exact matter.`;
   const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
-  const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(sys.classification_model, cachedSystem(system), user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
@@ -1590,7 +1594,7 @@ When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
 
 Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
-  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, cachedSystem(system), `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -1699,7 +1703,7 @@ async function refreshGmailToken(userId: string): Promise<string> {
   if (!resp.ok) throw new Error(`Token refresh failed: ${resp.status}`);
 
   const tokens = await resp.json();
-  await supabase
+  const { error: credUpdateError } = await supabase
     .from("user_credentials")
     .update({
       access_token: tokens.access_token,
@@ -1707,6 +1711,7 @@ async function refreshGmailToken(userId: string): Promise<string> {
     })
     .eq("user_id", userId)
     .eq("service", "gmail");
+  if (credUpdateError) console.error("user_credentials update failed:", credUpdateError);
   return tokens.access_token;
 }
 
@@ -1969,7 +1974,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `EMAIL:\nSubject: ${msg.subject || ""}\nBody:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ OPEN TASKS (last 90 days) ═══\n${taskList}`;
 
-    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2008,7 +2013,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `DRIVE DOCUMENT:\nTitle: ${msg.subject || ""}\nContent:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ PAST CONFIRMATION EMAILS (last 90 days) ═══\n${emailList}`;
 
-    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2280,7 +2285,7 @@ async function findDuplicateOpenTask(
 
   const userMessage = `NEW ITEM (about to become a task):\nTitle: ${probe.title}\nDate: ${probe.dueDate || "—"}\nContact emails: ${[...probe.emails].join(", ") || "—"}\nContact phones: ${[...probe.phones].join(", ") || "—"}\nBody:\n${probe.description.substring(0, 900)}\n\n═══ OPEN TASK CANDIDATES ═══\n${candList}`;
 
-  const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
+  const result = await callClaude(sys.classification_model, cachedSystem(DUPE_MATCH_PROMPT), userMessage, 300,
     { component: "ai_process.dupe_match", userId, refId });
 
   try {
@@ -2377,13 +2382,14 @@ async function linkAndEnrichDuplicate(
 // possible duplicate. Record an activity so the suggestion is auditable
 // alongside the suggested_duplicate_of pointer the UI reads.
 async function logDuplicateSuggestion(userId: string, newTaskId: string, suggestedOfTaskId: string) {
-  await supabase.from("task_activities").insert({
+  const { error: dupeActivityError } = await supabase.from("task_activities").insert({
     user_id: userId,
     task_id: newTaskId,
     activity_type: "duplicate_suggested",
     note: `Possible duplicate of task ${suggestedOfTaskId}`,
     actor: "system",
   });
+  if (dupeActivityError) console.error("task_activities insert failed:", dupeActivityError);
 }
 
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
@@ -2423,19 +2429,22 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
   // ── Early exits that don't need AI ─────────────────────────────────────────
   if (!userForceActionable && preResult.result === "defer") {
-    await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
+    const { error: deferUnlockError } = await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
+    if (deferUnlockError) console.error("source_messages defer unlock failed:", deferUnlockError);
     return "deferred";
   }
 
   if (!userForceActionable && preResult.result === "skip") {
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: skipUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (skipUpdateError) console.error("source_messages skip update failed:", skipUpdateError);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "skipped", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "skip", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "skip");
     return;
   }
 
   if (!userForceActionable && preResult.result === "informational") {
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: infoUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (infoUpdateError) console.error("source_messages informational update failed:", infoUpdateError);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "informational", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "informational");
     return;
@@ -2458,7 +2467,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     };
     if (!fu.isFollowup) {
       // Outgoing message that closes a loop / needs no chasing → informational.
-      await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      const { error: noFollowupUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      if (noFollowupUpdateError) console.error("source_messages no-followup update failed:", noFollowupUpdateError);
       await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "informational", classification_reason: `no follow-up needed: ${fu.reason}` });
       return;
     }
@@ -2479,7 +2489,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         recipient ? `נשלח אל: ${recipient}` : null,
         sourceUrl ? `קישור להודעה: ${sourceUrl}` : null,
       ].filter(Boolean).join("\n");
-      const { data: newTask } = await supabase.from("tasks").insert({
+      const { data: newTask, error: followupTaskInsertError } = await supabase.from("tasks").insert({
         user_id: msg.user_id, source_message_id: msg.id,
         title, title_he: title, description,
         task_type: "followup", priority: "medium",
@@ -2490,16 +2500,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         ai_actions: [], ai_confidence: 0.7, ai_model_used: sys.classification_model,
         updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
       }).select("id").single();
+      if (followupTaskInsertError) console.error("followup task insert failed:", followupTaskInsertError);
       if (newTask) {
-        await supabase.from("task_activities").insert({
+        const { error: followupCreatedActivityError } = await supabase.from("task_activities").insert({
           user_id: msg.user_id, task_id: newTask.id,
           activity_type: "created", new_value: "snoozed",
           note: `Follow-up scheduled for ${surfaceAt.toISOString()} (${FOLLOWUP_LEAD_HOURS} business hours after send)`,
           actor: "system",
         });
+        if (followupCreatedActivityError) console.error("task_activities insert failed:", followupCreatedActivityError);
       }
     }
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: followupMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (followupMsgUpdateError) console.error("source_messages followup update failed:", followupMsgUpdateError);
     await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "actionable_followup", classification_reason: `follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours: ${fu.reason}` });
     return;
   }
@@ -2591,11 +2604,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // and recoverable, never silently buried as "informational".
         const ageMs = msg.received_at ? Date.now() - new Date(msg.received_at).getTime() : 0;
         const tooOld = ageMs > 24 * 60 * 60 * 1000;
-        await supabase.from("source_messages").update(
+        const { error: transientUpdateError } = await supabase.from("source_messages").update(
           tooOld
             ? { processing_status: "processed", dead_letter: true, skip_reason: "ai_transient_failure_timeout", processing_lock_at: null }
             : { processing_status: "pending", processing_lock_at: null },
         ).eq("id", msg.id);
+        if (transientUpdateError) console.error("source_messages transient update failed:", transientUpdateError);
         await supabase.from("log_entries").insert({ user_id: msg.user_id, level: tooOld ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: `${tooOld ? "transient >24h — flagged dead_letter for review" : "transient — will auto-retry until provider recovers"}: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
         return;
       }
@@ -2610,7 +2624,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // failed-out row is indistinguishable from a genuine "informational"
       // classification — which is how 24 failure-path rows hid from the
       // damage query during the 2026-06-11 prefill outage.
-      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      const { error: retryUpdateError } = await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      if (retryUpdateError) console.error("source_messages retry update failed:", retryUpdateError);
       // Attempts 1-2 are the retry mechanism WORKING, not an incident: log
       // them as warning so the error-fanout trigger (level='error' →
       // action_required notification to super-admins) only pages on the
@@ -2625,7 +2640,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   if (preResult.result === "customer_inquiry") {
     classification = "actionable";
     classificationReason = `${classificationReason} | pre:customer_inquiry`;
-    await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+    const { error: inquiryUpdateError } = await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+    if (inquiryUpdateError) console.error("source_messages customer_inquiry update failed:", inquiryUpdateError);
   }
 
   // User override: user reclassified as actionable via the log UI
@@ -2997,7 +3013,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // meeting starts. The banner keys off reminder_at (a precise instant,
         // tz-rendered on the client), so we don't need a tz-correct due_time.
         const reminderAt = new Date(eventDate.getTime() - 60 * 60 * 1000);
-        const { data: newTask } = await supabase.from("tasks").insert({
+        const { data: newTask, error: calendarTaskInsertError } = await supabase.from("tasks").insert({
           user_id: msg.user_id, source_message_id: msg.id,
           title: eventTitle, title_he: eventTitle,
           description, task_type: "meeting", priority: "medium",
@@ -3008,15 +3024,17 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           suggested_duplicate_of: dupSuggestionTaskId,
           updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
         }).select("id").single();
+        if (calendarTaskInsertError) console.error("calendar task insert failed:", calendarTaskInsertError);
         if (newTask) {
           linkedTaskId = newTask.id as string;
           classificationReason = dupSuggestionTaskId ? classificationReason : "calendar event → direct task (no AI)";
-          await supabase.from("task_activities").insert({
+          const { error: calendarActivityError } = await supabase.from("task_activities").insert({
             user_id: msg.user_id, task_id: newTask.id,
             activity_type: "created", new_value: "inbox",
             note: `Created from google_calendar: ${eventTitle}`,
             actor: "system",
           });
+          if (calendarActivityError) console.error("task_activities insert failed:", calendarActivityError);
           if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
         }
       } else {
@@ -3105,12 +3123,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             } else {
               linkedTaskId = fbTask!.id as string;
               classificationReason = `builder returned no task for a HUMAN sender — minimal review suggestion created (${senderEmailLc})`;
-              await supabase.from("task_activities").insert({
+              const { error: fbActivityError } = await supabase.from("task_activities").insert({
                 user_id: msg.user_id, task_id: fbTask!.id,
                 activity_type: "created", new_value: "inbox",
                 note: `Human-sender fallback: classifier=actionable, builder=[] — ${subj}`,
                 actor: "system",
               });
+              if (fbActivityError) console.error("task_activities insert failed:", fbActivityError);
               if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, fbTask!.id as string, dupSuggestionTaskId);
             }
             aiModel = taskResult.model;
@@ -3191,7 +3210,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             const taggedDescription = (!firstTaskId && resendContext)
               ? `${resendContext}\n\n${task.description ?? ""}`
               : task.description;
-            const { data: newTask } = await supabase.from("tasks").insert({
+            const { data: newTask, error: taskInsertError } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
               description: taggedDescription, task_type: taskType, priority: task.priority || "medium",
@@ -3206,11 +3225,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               suggested_duplicate_of: firstTaskId ? null : dupSuggestionTaskId,
               updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: taggedDescription }],
             }).select("id").single();
+            if (taskInsertError) console.error("task insert failed:", taskInsertError);
             if (newTask) {
               const isFirst = !firstTaskId;
               if (isFirst) firstTaskId = newTask.id as string;
               createdTaskIds.push(newTask.id as string);
-              await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+              const { error: createdActivityError } = await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+              if (createdActivityError) console.error("task_activities insert failed:", createdActivityError);
               if (isFirst && dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
             }
           }
@@ -3255,7 +3276,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (${why})`;
             }
           }
-          if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+          if (!projectContext) {
+            const { error: projectCheckUpdateError } = await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+            if (projectCheckUpdateError) console.error("source_messages needs_project_check update failed:", projectCheckUpdateError);
+          }
         }
       }
     } catch (e) {
@@ -3343,7 +3367,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     }
   }
 
-  await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+  const { error: finalMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+  if (finalMsgUpdateError) console.error("source_messages final update failed:", finalMsgUpdateError);
   await tagGmailReview(msg, classification);
   const costType = modelTypeFromName(aiModel);
   await supabase.from("log_entries").insert({
@@ -3536,7 +3561,7 @@ async function notifyNewInboxItems(userId: string, sinceISO: string) {
     body: "הגיעו הצעות חדשות — לחץ כדי לעבור עליהן.",
     link: "/inbox",
     entity_type: "inbox_digest",
-  }).then(() => {}, () => {});
+  }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
 }
 
 Deno.serve(async (req) => {
@@ -3621,7 +3646,8 @@ Deno.serve(async (req) => {
     gmailTokenCache.clear();
     gmailLabelMapCache.clear();
 
-    await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
+    const { error: staleLockClearError } = await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
+    if (staleLockClearError) console.error("source_messages stale lock clear failed:", staleLockClearError);
 
     const { data: pendingUsers } = await supabase.from("source_messages").select("user_id").eq("processing_status", "pending").is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER).limit(100);
     const uniqueUserIds = [...new Set((pendingUsers || []).map((r) => r.user_id))];
@@ -3737,7 +3763,8 @@ Deno.serve(async (req) => {
           if (result === "deferred") totalDeferred++; else totalProcessed++;
         } catch (e) {
           const outerRetry = (msg.retry_count || 0) + 1;
-          await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: outerRetry }).eq("id", msg.id);
+          const { error: outerRetryUpdateError } = await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: outerRetry }).eq("id", msg.id);
+          if (outerRetryUpdateError) console.error("source_messages outer retry update failed:", outerRetryUpdateError);
           // Same retry-aware level as the inner classify catch: warning while
           // the row will be retried, error only once it has burned 3 attempts
           // (the fanout trigger pages super-admins on level='error').

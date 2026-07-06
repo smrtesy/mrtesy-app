@@ -54,19 +54,21 @@ Deno.serve(async (req) => {
       // want to fire reminders on suggestions the user has thrown away.
       const taskStatus = reminder.tasks?.status;
       if (taskStatus === "archived" || taskStatus === "completed" || taskStatus === "dismissed") {
-        await supabase.from("reminders").update({
+        const { error: deactivateError } = await supabase.from("reminders").update({
           is_active: false,
           is_sent: true,
           sent_at: now,
         }).eq("id", reminder.id);
+        if (deactivateError) console.error("reminders deactivate failed:", deactivateError);
         continue;
       }
 
       // Mark reminder as sent
-      await supabase.from("reminders").update({
+      const { error: markSentError } = await supabase.from("reminders").update({
         is_sent: true,
         sent_at: now,
       }).eq("id", reminder.id);
+      if (markSentError) console.error("reminders mark-sent update failed:", markSentError);
 
       // Add update to task
       if (reminder.task_id) {
@@ -85,11 +87,12 @@ Deno.serve(async (req) => {
           content: reminder.message_he || reminder.message || "תזכורת",
         });
 
-        await supabase.from("tasks").update({
+        const { error: taskUpdatesError } = await supabase.from("tasks").update({
           updates,
           last_updated_reason: "reminder",
           updated_at: now,
         }).eq("id", reminder.task_id);
+        if (taskUpdatesError) console.error("tasks reminder update failed:", taskUpdatesError);
       }
 
       // Handle recurrence
@@ -97,14 +100,16 @@ Deno.serve(async (req) => {
         try {
           // Simple recurrence: parse next occurrence
           // For now, just deactivate. Full RRULE support via npm:rrule in future.
-          await supabase.from("reminders").update({
+          const { error: recurrenceUpdateError } = await supabase.from("reminders").update({
             is_sent: false,
             is_active: true,
             remind_at: calculateNextOccurrence(reminder.remind_at, reminder.recurrence_rule),
           }).eq("id", reminder.id);
+          if (recurrenceUpdateError) console.error("reminders recurrence update failed:", recurrenceUpdateError);
         } catch (_e) {
           // Invalid rule — deactivate
-          await supabase.from("reminders").update({ is_active: false }).eq("id", reminder.id);
+          const { error: ruleDeactivateError } = await supabase.from("reminders").update({ is_active: false }).eq("id", reminder.id);
+          if (ruleDeactivateError) console.error("reminders deactivate failed:", ruleDeactivateError);
         }
       }
 
@@ -127,7 +132,7 @@ Deno.serve(async (req) => {
       // replied. If a reply has arrived on the same thread since we sent the
       // message, the loop closed itself — auto-dismiss instead of nagging.
       if (task.task_type === "followup" && (await replyArrived(task))) {
-        await supabase.from("tasks").update({
+        const { error: suppressError } = await supabase.from("tasks").update({
           snoozed_until: null,
           status: "dismissed",
           dismissal_reason_code: "reply_received",
@@ -136,10 +141,11 @@ Deno.serve(async (req) => {
           status_changed_at: now,
           updated_at: now,
         }).eq("id", task.id);
+        if (suppressError) console.error("tasks followup suppress failed:", suppressError);
         suppressed++;
         continue;
       }
-      await supabase.from("tasks").update({
+      const { error: wakeError } = await supabase.from("tasks").update({
         snoozed_until: null,
         status: "inbox",
         last_updated_reason: "snooze_expired",
@@ -148,6 +154,7 @@ Deno.serve(async (req) => {
         woke_from_snooze_at: now,
         updated_at: now,
       }).eq("id", task.id);
+      if (wakeError) console.error("tasks snooze wake failed:", wakeError);
     }
 
     // ── Recurring materialisation ──────────────────────────────────────────
