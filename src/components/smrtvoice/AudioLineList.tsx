@@ -386,12 +386,14 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
-  async function downloadTake(take: Take, lineNumber: number, idx: number) {
+  // `n` is the human take number shown on screen (newest = highest), so the
+  // downloaded filename matches the "Take N" label the user clicked.
+  async function downloadTake(take: Take, lineNumber: number, n: number) {
     try {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/takes/${take.id}/audio-url`,
       );
-      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${idx + 1}.wav`);
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -666,7 +668,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             )}
                           </div>
                           <div className="flex items-center gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, idx)} title={t("studio.download")}>
+                            <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
                               <Download className="h-4 w-4" />
                             </Button>
                             <Button

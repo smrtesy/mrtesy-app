@@ -1497,11 +1497,12 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
 
   // Attach each line's take count (how many renders it has in history) so the
   // list can show a "N versions" badge without a per-line round trip.
-  const { data: takeRows } = await db
+  const { data: takeRows, error: takeErr } = await db
     .from("smrtvoice_line_takes")
     .select("line_id")
     .eq("script_id", req.params.id)
     .eq("org_id", req.org!.id);
+  if (takeErr) console.warn("[smrtvoice] take_count query failed:", takeErr.message);
   const takeCounts = new Map<string, number>();
   for (const t of takeRows ?? []) {
     takeCounts.set(t.line_id, (takeCounts.get(t.line_id) ?? 0) + 1);

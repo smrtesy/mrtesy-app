@@ -105,14 +105,6 @@ async function handleLineCompleted(
   const scriptId = (data.script_id as string | undefined) ?? null;
 
   if (lineId && audioPath) {
-    // Read the CURRENT (about-to-be-replaced) audio first so we can preserve it
-    // as a take when needed — do this before the update overwrites the path.
-    const { data: prev } = await db
-      .from("smrtvoice_lines")
-      .select("output_audio_path, output_duration_seconds, generation_cost_usd, tts_body, text_for_tts, resemble_request")
-      .eq("id", lineId)
-      .maybeSingle();
-
     await db
       .from("smrtvoice_lines")
       .update({
@@ -129,27 +121,32 @@ async function handleLineCompleted(
     // didn't carry one rather than failing the webhook.
     if (orgId) {
       // Backfill: a line first rendered BEFORE take-history existed has no take
-      // row for its prior audio. On its first re-render, capture that prior clip
-      // as a take so the old version stays visible — but only if it still points
-      // at a different file and no takes are recorded yet.
-      const prevPath = prev?.output_audio_path as string | undefined;
-      if (prevPath && prevPath !== audioPath) {
-        const { data: existing } = await db
+      // row for its prior clip. On the first re-render the engine sends that
+      // clip (captured before it overwrote the row) as `previous_take`; record
+      // it so the old version stays visible — but only if no takes exist yet
+      // (otherwise the prior clip is already a recorded take).
+      const previousTake = data.previous_take as
+        | { output_audio_path?: string; duration_seconds?: number; cost_usd?: number; text_used?: string; model?: string }
+        | null
+        | undefined;
+      if (previousTake?.output_audio_path && previousTake.output_audio_path !== audioPath) {
+        const { data: existing, error: existErr } = await db
           .from("smrtvoice_line_takes")
           .select("id")
           .eq("line_id", lineId)
           .limit(1);
-        if (!existing || existing.length === 0) {
-          const prevReq = (prev?.resemble_request as { model?: string } | null) ?? null;
+        if (existErr) {
+          console.warn("[smrtvoice webhook] take existence check failed:", existErr.message);
+        } else if (!existing || existing.length === 0) {
           const { error: backfillErr } = await db.from("smrtvoice_line_takes").insert({
             org_id: orgId,
             line_id: lineId,
             script_id: scriptId,
-            text_used: (prev?.tts_body as string | null) ?? (prev?.text_for_tts as string | null) ?? null,
-            model: prevReq?.model ?? null,
-            output_audio_path: prevPath,
-            duration_seconds: (prev?.output_duration_seconds as number | null) ?? null,
-            cost_usd: (prev?.generation_cost_usd as number | null) ?? null,
+            text_used: previousTake.text_used ?? null,
+            model: previousTake.model ?? null,
+            output_audio_path: previousTake.output_audio_path,
+            duration_seconds: previousTake.duration_seconds ?? null,
+            cost_usd: previousTake.cost_usd ?? null,
           });
           if (backfillErr) {
             console.warn("[smrtvoice webhook] backfill take insert failed:", backfillErr.message);
