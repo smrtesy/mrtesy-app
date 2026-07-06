@@ -139,6 +139,16 @@ export function LogPageClient({ locale }: { locale: string }) {
     return () => clearTimeout(id);
   }, [searchQuery]);
 
+  // Effective search derived from the DEBOUNCED query — one source of truth
+  // shared by the fetch and the client-side filter. `historyMode` is true only
+  // once the box is ticked AND the term is long enough to be worth a full-
+  // history scan. `historySearchKey` collapses to "" whenever we are NOT doing
+  // a history search, so typing with the box off never changes fetchLogs' deps
+  // (no DB round-trip / skeleton flash on every keystroke).
+  const searchTerm = debouncedQuery.replace(/[,()*%\\"]/g, " ").trim();
+  const historyMode = searchAllHistory && searchTerm.length >= 2;
+  const historySearchKey = historyMode ? searchTerm : "";
+
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -150,12 +160,9 @@ export function LogPageClient({ locale }: { locale: string }) {
     //    window is never silently truncated.
     //  • "search all history" — the 48h window is dropped and the query is
     //    filtered server-side across the user's ENTIRE stored history, so an
-    //    email / WhatsApp / Drive item from weeks ago is findable. body_text
-    //    (message content) is filtered but not selected, so a content hit
-    //    still surfaces the row without shipping every body to the client.
-    const term = debouncedQuery.replace(/[,()*%\\]/g, " ").trim();
-    const historyMode = searchAllHistory && term.length >= 2;
-
+    //    email / WhatsApp / Drive item from weeks ago is findable. The match
+    //    covers the human-meaningful columns plus body_text (message content),
+    //    so a hit inside the body still surfaces the row.
     let query = supabase
       .from("source_messages")
       .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
@@ -164,7 +171,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     if (historyMode) {
       const cols = ["subject", "sender", "sender_email", "recipient", "serial_display", "body_text"];
-      query = query.or(cols.map((c) => `${c}.ilike.*${term}*`).join(","));
+      query = query.or(cols.map((c) => `${c}.ilike.*${historySearchKey}*`).join(","));
     } else {
       const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
       query = query.gte("created_at", cutoff);
@@ -279,7 +286,7 @@ export function LogPageClient({ locale }: { locale: string }) {
 
     const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
     setIsAdmin(adminEmails.includes(user.email?.toLowerCase() || ""));
-  }, [supabase, sourceFilter, statusFilter, searchAllHistory, debouncedQuery]);
+  }, [supabase, sourceFilter, statusFilter, historyMode, historySearchKey]);
 
   useEffect(() => {
     fetchLogs();
@@ -407,11 +414,12 @@ export function LogPageClient({ locale }: { locale: string }) {
 
   // Free-text search over the loaded entries — matches across every
   // human-meaningful field so the user can find an item by subject, sender,
-  // reason, task title, serial, etc. In "all history" mode the server already
-  // applied the filter across the full history (incl. message body), so the
-  // rows are rendered as-is rather than re-filtered against the 48h window.
+  // reason, task title, serial, etc. Skip it ONLY when a history search is
+  // actually running (box on AND term long enough) — then the server already
+  // filtered the full history, so render as-is. With the box on but the term
+  // still too short, we keep narrowing the 48h window client-side.
   const q = searchQuery.trim().toLowerCase();
-  const displayedLogs = (!searchAllHistory && q)
+  const displayedLogs = (q && !historyMode)
     ? logs.filter((l) =>
         [
           l.subject, l.sender, l.sender_email, l.recipient,
