@@ -710,14 +710,20 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   }
 
   const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
-  const sendRes = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error("[whatsapp-send] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string; code?: number };
@@ -734,7 +740,7 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   // When Meta's echo arrives via the webhook, the upsert on (user_id, wamid)
   // is a no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -753,6 +759,7 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately — the client renders the message optimistically and
   // only needs the wamid. The source_messages thread refresh (several DB
@@ -886,14 +893,20 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     type: "image",
     image: { id: mediaId, ...(captionText ? { caption: captionText } : {}) },
   };
-  const sendRes = await fetch(
-    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  } catch (e) {
+    console.error("[whatsapp-send-image] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
@@ -923,7 +936,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
   // Optimistically insert the outgoing image so the UI sees it immediately.
   // The webhook echo upserts on (user_id, wamid) → no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -946,6 +959,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send-image] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately; refresh the thread row in the background (see the
   // text-send route for the same rationale).
@@ -1090,14 +1104,20 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     type: "audio",
     audio: { id: mediaId, voice: true },
   };
-  const sendRes = await fetch(
-    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  } catch (e) {
+    console.error("[whatsapp-send-audio] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
@@ -1125,7 +1145,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
   // Optimistically insert the outgoing voice note so the UI sees it
   // immediately. The webhook echo upserts on (user_id, wamid) → no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -1148,6 +1168,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send-audio] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately; refresh the thread row in the background (see the
   // text-send route for the same rationale).
@@ -1248,11 +1269,17 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
   };
 
   const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
-  const sendRes = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error("[whatsapp-react] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
@@ -1272,7 +1299,7 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
   // Soft-delete prior outgoing reactions on the same target so the UI
   // doesn't render them alongside the new one. We can do this by setting
   // their reaction_emoji to "" — the ThreadView filters empties out.
-  await db
+  const { error: clearReactErr } = await db
     .from("whatsapp_messages")
     .update({ reaction_emoji: "" })
     .eq("user_id", req.user!.id)
@@ -1280,9 +1307,10 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
     .eq("is_reaction", true)
     .eq("reply_to_wamid", target_wamid)
     .neq("wamid", wamid);
+  if (clearReactErr) console.error("[whatsapp-react] prior reaction clear failed:", clearReactErr);
 
   if (emoji.trim()) {
-    await db.from("whatsapp_messages").upsert(
+    const { error: reactUpsertErr } = await db.from("whatsapp_messages").upsert(
       {
         user_id: req.user!.id,
         wamid,
@@ -1302,6 +1330,7 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
       },
       { onConflict: "user_id,wamid" },
     );
+    if (reactUpsertErr) console.error("[whatsapp-react] reaction upsert failed:", reactUpsertErr);
   }
 
   return res.json({ ok: true, wamid });

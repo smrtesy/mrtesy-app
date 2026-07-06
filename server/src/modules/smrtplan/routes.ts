@@ -407,8 +407,13 @@ router.get("/plans/holidays", async (req: Request, res: Response) => {
 });
 
 router.post("/plans/recompute", requireFull, async (req: Request, res: Response) => {
-  const summary = await computeOrgSchedule(req.org!.id);
-  res.json(summary);
+  try {
+    const summary = await computeOrgSchedule(req.org!.id);
+    res.json(summary);
+  } catch (e) {
+    console.error("[smrtplan] recompute failed:", e);
+    res.status(500).json({ error: e instanceof Error ? e.message : "recompute failed" });
+  }
 });
 
 router.get("/plans/repository", async (req: Request, res: Response) => {
@@ -488,13 +493,16 @@ router.delete("/plans/:id", requireFull, async (req: Request, res: Response) => 
     const ids = asRows(planTasks).map((r) => r.id as string);
     const refs = [...ids, req.params.id];
     if (refs.length) {
-      await db
+      const { error: depDelErr } = await db
         .from("smrtplan_dependencies")
         .delete()
         .eq("org_id", req.org!.id)
         .or(`from_id.in.(${refs.join(",")}),to_id.in.(${refs.join(",")})`);
+      if (depDelErr) console.error("[smrtplan] plan-delete dependency cascade failed:", depDelErr);
     }
-    await db.from("tasks").delete().eq("organization_id", req.org!.id).eq("plan_id", req.params.id);
+    const { error: taskDelErr } = await db
+      .from("tasks").delete().eq("organization_id", req.org!.id).eq("plan_id", req.params.id);
+    if (taskDelErr) console.error("[smrtplan] plan-delete task cascade failed:", taskDelErr);
   }
   const { error } = await db
     .from("smrtplan_plans")
@@ -1074,7 +1082,15 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
   const nowDone = typeof patch.status === "string" ? TASK_DONE_STATUSES.has(patch.status) : null;
   const becameDone = wasDone === false && nowDone === true;
   const reopened = wasDone === true && nowDone === false;
-  if (becameDone) await releaseDependents(req.org!.id, req.params.id); // unblock successors
+  if (becameDone) {
+    // Best-effort like autoRecompute: the status update already succeeded, so a
+    // release hiccup must not fail the request.
+    try {
+      await releaseDependents(req.org!.id, req.params.id); // unblock successors
+    } catch (e) {
+      console.error("[smrtplan] release-dependents failed:", e);
+    }
+  }
   if (becameDone || reopened || Object.keys(patch).some((k) => TASK_SCHED_FIELDS.has(k))) {
     await autoRecompute(req.org!.id);
   }
@@ -1143,7 +1159,15 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
     .select("id, status")
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  if (done) await releaseDependents(req.org!.id, req.params.id); // unblock successors
+  if (done) {
+    // Best-effort like autoRecompute: the status update already succeeded, so a
+    // release hiccup must not fail the request.
+    try {
+      await releaseDependents(req.org!.id, req.params.id); // unblock successors
+    } catch (e) {
+      console.error("[smrtplan] release-dependents failed:", e);
+    }
+  }
   await autoRecompute(req.org!.id);
   res.json({ task: data });
 });
@@ -1459,7 +1483,8 @@ router.post("/plan/roles/:id/members", requireFull, async (req: Request, res: Re
   if (!role) return res.status(404).json({ error: "role not found" });
   // Only one primary per role — clear the others first (partial-unique index).
   if (is_primary) {
-    await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", req.params.id);
+    const { error: clearPrimaryErr } = await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", req.params.id);
+    if (clearPrimaryErr) console.error("[smrtplan] clear prior primary role member failed:", clearPrimaryErr);
   }
   const { data, error } = await db
     .from("smrtplan_role_members")
@@ -1476,7 +1501,8 @@ router.patch("/plan/role-members/:id", requireFull, async (req: Request, res: Re
   const { data: row } = await db.from("smrtplan_role_members").select("id, role_id").eq("org_id", req.org!.id).eq("id", req.params.id).maybeSingle();
   if (!row) return res.status(404).json({ error: "member not found" });
   if (is_primary) {
-    await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", row.role_id as string);
+    const { error: clearPrimaryErr } = await db.from("smrtplan_role_members").update({ is_primary: false }).eq("org_id", req.org!.id).eq("role_id", row.role_id as string);
+    if (clearPrimaryErr) console.error("[smrtplan] clear prior primary role member failed:", clearPrimaryErr);
   }
   const { data, error } = await db
     .from("smrtplan_role_members").update({ is_primary }).eq("org_id", req.org!.id).eq("id", req.params.id)

@@ -84,7 +84,7 @@ export async function closeRunSession(
     ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000)
     : null;
 
-  await db
+  const { error } = await db
     .from("run_sessions")
     .update({
       status,
@@ -95,6 +95,7 @@ export async function closeRunSession(
       ...counts,
     })
     .eq("id", sessionId);
+  if (error) console.error("closeRunSession:", error);
 }
 
 // ── Helper: upsert sync_state checkpoint ─────────────────────────────────────
@@ -104,7 +105,7 @@ export async function updateSyncState(
   checkpoint: string | null,
   extra?: { last_error?: string; consecutive_failures?: number },
 ) {
-  await db.from("sync_state").upsert(
+  const { error } = await db.from("sync_state").upsert(
     {
       user_id: userId,
       source,
@@ -114,6 +115,7 @@ export async function updateSyncState(
     },
     { onConflict: "user_id,source" },
   );
+  if (error) console.error("updateSyncState:", error);
 }
 
 // ── Helper: read a platform-wide app secret/config value ────────────────────
