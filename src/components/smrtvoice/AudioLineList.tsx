@@ -131,12 +131,20 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/lines/${line.id}/audio-url`,
       );
+      // The `download` attribute is ignored for cross-origin URLs, so a signed
+      // Supabase URL just opens inline. Fetch the bytes and download a local
+      // object URL instead — that forces a real download dialog.
+      const res = await fetch(audio_url);
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = audio_url;
+      a.href = objectUrl;
       a.download = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
