@@ -200,6 +200,8 @@ export interface LineTake {
   output_audio_path: string;
   duration_seconds: number | null;
   cost_usd: number | null;
+  approved: boolean;
+  note: string | null;
   created_at: string;
 }
 

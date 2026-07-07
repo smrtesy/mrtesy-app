@@ -2634,7 +2634,8 @@
       "reanalyzeTone": "Re-analyze tone",
       "reanalyzeHint": "the LLM re-picks emotion + tone tags",
       "selectWordHint": "Select a word in the text to get spelling suggestions",
-      "pause": "Pause"
+      "pause": "Pause",
+      "takeNotePlaceholder": "Which word to keep from this take?"
     },
     "lexicon": {
       "title": "Pronunciation lexicon",

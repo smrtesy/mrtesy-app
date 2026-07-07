@@ -1806,6 +1806,30 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
   res.json({ takes: data ?? [] });
 });
 
+// PATCH /voice/takes/:id — mark a take good (✓) and/or jot a note ("use word X
+// from here"). Independent per take; multiple takes on a line may be approved.
+const TAKE_UPDATABLE = new Set(["approved", "note"]);
+
+router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (TAKE_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+  const { data, error } = await db
+    .from("smrtvoice_line_takes")
+    .update(updates)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select()
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Take not found" });
+  res.json({ take: data });
+});
+
 router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => {
   const { data: take, error } = await db
     .from("smrtvoice_line_takes")

@@ -2633,7 +2633,8 @@
       "reanalyzeTone": "נתח טון מחדש",
       "reanalyzeHint": "ה-LLM יבחר מחדש רגש ותגיות טון",
       "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב",
-      "pause": "השהה"
+      "pause": "השהה",
+      "takeNotePlaceholder": "איזו מילה לקחת מהגרסה הזו?"
     },
     "lexicon": {
       "title": "מילון הגייה",
