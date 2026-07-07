@@ -19,7 +19,7 @@
  * ignore headings/lists/blockquotes/tables.
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, memo, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -27,7 +27,11 @@ interface Props {
   className?: string;
 }
 
-export function RichMessageText({ text, className }: Props) {
+// Memoized: the inline parser below re-tokenizes the whole string on every
+// render, and a chat surface renders one of these per bubble. Props are just
+// strings, so the shallow compare is exact — a bubble whose text hasn't
+// changed never re-parses.
+export const RichMessageText = memo(function RichMessageText({ text, className }: Props) {
   if (!text) return null;
 
   // 1) Split on triple-backtick code blocks so their contents bypass all
@@ -51,7 +55,7 @@ export function RichMessageText({ text, className }: Props) {
       )}
     </div>
   );
-}
+});
 
 interface Segment { kind: "text" | "code"; content: string; }
 
