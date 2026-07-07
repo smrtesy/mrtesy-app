@@ -452,7 +452,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }
 
   function handleSizeToggle(taskId: string, size: "quick" | "regular") {
-    patchTask(taskId, { size }, (task) => ({ ...task, size }));
+    // Marking a task "quick" (⚡) means "do it now" — pin it onto the desk's
+    // מהיר – עכשיו section so it surfaces there by default instead of being
+    // left in ממתינות. (Switching back to regular only changes the size; the
+    // desk position, if any, is kept so it moves to רגיל – עכשיו.)
+    if (size === "quick") {
+      const maxPos = tasks.reduce((m, task) => Math.max(m, task.today_position ?? -1), -1);
+      const patch = { size, today_position: maxPos + 1 };
+      patchTask(taskId, patch, (task) => ({ ...task, ...patch }));
+    } else {
+      patchTask(taskId, { size }, (task) => ({ ...task, size }));
+    }
   }
 
   /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */

@@ -24,6 +24,7 @@ import {
   Trash2,
   ThumbsDown,
   ListPlus,
+  CalendarPlus,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -40,6 +41,7 @@ import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { effectiveDeadline } from "@/lib/workdays";
@@ -75,6 +77,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tActions = useTranslations("tasks.actions");
   const tMerge = useTranslations("merge");
   const tSuggestions = useTranslations("suggestions");
+  const tEvents = useTranslations("events");
   const blocked = useWorkCalendar();
 
   // Description edit
@@ -106,6 +109,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [addEventOpen, setAddEventOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [dismissingDup, setDismissingDup] = useState(false);
 
@@ -671,6 +675,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               assignedTo={editAssignedTo || null}
               onAssign={(uid) => setEditAssignedTo(uid ?? "")}
             />
+            <IconButton label={tEvents("addEvent")} color="primary" onClick={() => setAddEventOpen(true)}>
+              <CalendarPlus />
+            </IconButton>
             <ClaudeLauncher
               task={effectiveTask}
               locale={locale}
@@ -727,6 +734,16 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         onClose={() => setSnoozeOpen(false)}
         onConfirm={handleSnoozeConfirm}
       />
+
+      {addEventOpen && (
+        <AddEventModal
+          taskId={effectiveTask.id}
+          open={addEventOpen}
+          onClose={() => setAddEventOpen(false)}
+          onDone={() => { dirtyRef.current = true; onUpdate(); handleDialogClose(); }}
+          locale={locale}
+        />
+      )}
 
       {effectiveTask.suggested_duplicate && (
         <MergeModal
