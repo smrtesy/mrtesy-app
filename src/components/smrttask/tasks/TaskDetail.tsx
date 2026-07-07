@@ -354,7 +354,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <div className="flex items-center gap-2">
               <div dir="ltr" className="flex min-w-0 items-center gap-1.5">
                 <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
-                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
+                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation onNavigate={handleDialogClose} />}
                 <DueDateChip
                   deadline={effectiveDeadline(effectiveTask)}
                   blocked={blocked}
@@ -625,7 +625,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 meta:   ℹ️/📋 context · ⚡ size · 🏠 home · ⏰ snooze · 📄 info · 👤 assign
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
-            <ContextButton task={effectiveTask} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
+            <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
             <IconButton
               label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
               color="amber"
