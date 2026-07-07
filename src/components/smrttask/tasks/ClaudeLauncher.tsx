@@ -105,7 +105,12 @@ export function ClaudeLauncher({
           toast.success(t("dispatched"));
           onUpdate();
         })
-        .catch((e) => toast.error(e instanceof Error ? e.message : "Error"));
+        .catch((e) => {
+          // Roll back the optimistic flag so the open detail doesn't show a
+          // "waiting" state the DB never persisted.
+          onOptimistic?.({ claude_waiting_since: null });
+          toast.error(e instanceof Error ? e.message : "Error");
+        });
     }
   }
 
