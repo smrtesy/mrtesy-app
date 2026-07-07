@@ -34,12 +34,22 @@ export interface Message {
   media_ocr_text?: string | null;
   /** Verbatim audio transcript. Same separation treatment as media_ocr_text. */
   audio_transcript?: string | null;
+  /** Short-lived signed URL for media_url, batch-minted by the messages
+   *  endpoint (one Storage call per response). When present, the bubble uses
+   *  it directly instead of a per-bubble /api/whatsapp/media round-trip;
+   *  null/absent falls back to that endpoint (legacy rows, sign failures). */
+  media_signed_url?: string | null;
   reply_to_wamid: string | null;
   reaction_emoji: string | null;
   is_reaction: boolean;
   is_history: boolean;
   history_phase: number | null;
   received_at: string;
+  /** Last-modified time, bumped by a DB trigger on every update (status
+   *  flips, reaction clears, transcript/OCR fills). Drives the reader's
+   *  incremental poll cursor. Optional: absent on optimistic client rows
+   *  (and on servers deployed before the updated_at migration). */
+  updated_at?: string | null;
   // Read/delivery receipts — only populated for outgoing messages once
   // Meta sends us the corresponding `statuses` webhook event.
   status?: "sent" | "delivered" | "read" | "failed" | null;
@@ -1934,6 +1944,14 @@ const MessageBubble = memo(function MessageBubble({
 
   useEffect(() => {
     if ((!isImage && !isAudio) || !message.media_url) return;
+    // Prefer the batch-minted URL the messages payload already carries — no
+    // per-bubble round-trip. Rows without one (legacy full-URL media_url
+    // values, batch-sign failure) keep the original fetch as a fallback.
+    if (message.media_signed_url) {
+      setImageSignedUrl(message.media_signed_url);
+      setImageLoading(false);
+      return;
+    }
     let cancelled = false;
     setImageLoading(true);
     api<{ url: string }>(
@@ -1951,7 +1969,7 @@ const MessageBubble = memo(function MessageBubble({
     return () => {
       cancelled = true;
     };
-  }, [isImage, isAudio, message.media_url]);
+  }, [isImage, isAudio, message.media_url, message.media_signed_url]);
 
   async function openMedia() {
     if (!message.media_url) return;

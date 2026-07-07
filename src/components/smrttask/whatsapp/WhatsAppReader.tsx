@@ -94,8 +94,22 @@ export function WhatsAppReader({
   // ThreadView even when nothing changed. Comparing a cheap signature first
   // lets an unchanged poll be a true no-op — the visible win the user feels
   // as "faster". Reset on chat switch so the new chat always paints.
+  //
+  // On top of that, background polls are INCREMENTAL: we pass
+  // `after=<max updated_at seen>` so the server returns only rows that
+  // changed since the last poll (usually zero) instead of re-shipping the
+  // whole conversation with bodies/transcripts/OCR every 10s. Returned rows
+  // are merged into state by wamid (update-or-append); the signature check
+  // stays as the final "did anything actually change" gate for both paths.
   const messagesSigRef = useRef("");
   const tasksSigRef = useRef("");
+  // Newest updated_at across the rows committed to state — the incremental
+  // cursor. null = no full fetch landed yet (or the server predates the
+  // updated_at column), in which case background polls stay full fetches.
+  const messagesCursorRef = useRef<string | null>(null);
+  // Mirror of the committed messages array, so the merge can run against the
+  // current rows without threading state through the poll callback.
+  const messagesRef = useRef<Message[]>([]);
 
   const loadMessages = useCallback(
     async (chatId: string, opts: { background?: boolean } = {}) => {
@@ -103,15 +117,56 @@ export function WhatsAppReader({
       // only an explicit load (chat switch / send) shows the loading state.
       if (!opts.background) setLoadingMessages(true);
       try {
+        // Incremental only on background polls: explicit loads (chat switch /
+        // after send) always refetch in full so the window stays authoritative.
+        // The cursor is pulled back 10s to absorb clock skew / out-of-order
+        // commits around the poll boundary — the wamid merge is idempotent,
+        // so re-received rows are harmless.
+        const cursor = opts.background ? messagesCursorRef.current : null;
+        const afterParam = cursor
+          ? `&after=${encodeURIComponent(new Date(new Date(cursor).getTime() - 10_000).toISOString())}`
+          : "";
         const { messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
-          `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}`,
+          `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}${afterParam}`,
         );
-        const sig = m
-          .map((x) => `${x.id}:${x.status ?? ""}:${x.reaction_emoji ?? ""}:${x.body_text ?? ""}:${x.media_url ?? ""}`)
-          .join("|");
+        // Per-row change signature. updated_at is included so mutations the
+        // other fields can't see (late transcript/OCR fills) still repaint.
+        const rowSig = (x: Message) =>
+          `${x.id}:${x.status ?? ""}:${x.reaction_emoji ?? ""}:${x.body_text ?? ""}:${x.media_url ?? ""}:${x.updated_at ?? ""}`;
+        let next: Message[];
+        if (cursor) {
+          // Merge by wamid: replace changed rows, append new ones, keep the
+          // object identity of untouched rows (ThreadView's memoized bubbles
+          // skip re-rendering them), then restore chronological order.
+          const byWamid = new Map(messagesRef.current.map((x) => [x.wamid, x]));
+          let changed = false;
+          for (const row of m) {
+            const prev = byWamid.get(row.wamid);
+            if (!prev || rowSig(prev) !== rowSig(row)) {
+              byWamid.set(row.wamid, row);
+              changed = true;
+            }
+          }
+          next = changed
+            ? [...byWamid.values()].sort(
+                (a, b) => new Date(a.received_at).getTime() - new Date(b.received_at).getTime(),
+              )
+            : messagesRef.current;
+        } else {
+          next = m;
+        }
+        const sig = next.map(rowSig).join("|");
         if (sig !== messagesSigRef.current) {
           messagesSigRef.current = sig;
-          setMessages(m);
+          messagesRef.current = next;
+          setMessages(next);
+        }
+        // Advance the cursor past everything we've now seen. ISO-8601 strings
+        // from the same column compare correctly as strings.
+        for (const row of next) {
+          if (row.updated_at && (!messagesCursorRef.current || row.updated_at > messagesCursorRef.current)) {
+            messagesCursorRef.current = row.updated_at;
+          }
         }
         const tlist = tk ?? [];
         const tsig = tlist.map((x) => `${x.id}:${x.status ?? ""}:${x.manually_verified}`).join("|");
@@ -174,9 +229,12 @@ export function WhatsAppReader({
       setTasks([]);
       return;
     }
-    // New conversation → invalidate the dedup signatures so it always paints.
+    // New conversation → invalidate the dedup signatures so it always paints,
+    // and drop the incremental cursor/mirror so the first load is a full fetch.
     messagesSigRef.current = "";
     tasksSigRef.current = "";
+    messagesCursorRef.current = null;
+    messagesRef.current = [];
     loadMessages(selectedChatId);
     markChatRead(selectedChatId);
     const i = setInterval(() => {
