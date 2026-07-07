@@ -2499,7 +2499,8 @@
       "defaultLlmModelDefault": "Default (server)",
       "postprocess": "Post-production",
       "postprocessCompress": "Compressor (smooth volume jumps)",
-      "postprocessSpeed": "Speed (WSOLA, 1.0 = unchanged)"
+      "postprocessSpeed": "Speed (WSOLA, 1.0 = unchanged)",
+      "postprocessNormalize": "Even out volume across lines (normalize)"
     },
     "guide": {
       "title": "smrtVoice guide",
