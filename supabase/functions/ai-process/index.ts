@@ -3004,6 +3004,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // Calling Claude here would generate "לתאם" (to schedule) tasks even
       // though the appointment already exists in the calendar.
       if (calendarForceActionable) {
+        // Dedup: an event smrtesy itself pushed to Google Calendar already has a
+        // task (its calendar_event_id equals this event's id). Re-ingesting it
+        // must NOT spawn a second "meeting" task — link to the existing one.
+        const { data: selfCreatedTask, error: selfCreatedErr } = await supabase
+          .from("tasks").select("id")
+          .eq("user_id", msg.user_id)
+          .eq("calendar_event_id", msg.source_id)
+          .maybeSingle();
+        if (selfCreatedErr) console.error("calendar self-created lookup failed:", selfCreatedErr);
+        if (selfCreatedTask) {
+          linkedTaskId = selfCreatedTask.id as string;
+          classificationReason = "calendar event created by smrtesy — linked to existing task, no duplicate";
+        } else {
         const eventDate = new Date(msg.received_at);
         const dueDateStr = eventDate.toISOString().split("T")[0];
         const eventTitle = msg.subject || "ארוע ביומן";
@@ -3036,6 +3049,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           });
           if (calendarActivityError) console.error("task_activities insert failed:", calendarActivityError);
           if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
+        }
         }
       } else {
         let projectContext: { projectId: string; brief: string } | undefined;

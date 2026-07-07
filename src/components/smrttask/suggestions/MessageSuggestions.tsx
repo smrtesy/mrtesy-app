@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check, RotateCcw } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -20,12 +20,13 @@ import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { DismissDialog } from "./DismissDialog";
 import { PlanProposals } from "./PlanProposals";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { effectiveDeadline, autoSnoozeMoment } from "@/lib/workdays";
+import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
@@ -58,6 +59,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
+  const [addEventTaskId, setAddEventTaskId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
   const mergeJob = useMergeJob();
@@ -199,9 +201,15 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   function handleApprove(taskId: string) {
+    // An event's whole purpose is the reminder, so "approve" CLOSES it
+    // (status=completed) rather than promoting it to a verified task.
+    const isEvent = suggestions.find((s) => s.id === taskId)?.task_type === "meeting";
     removeLocal([taskId]);
-    toast.success(t("approve"));
-    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } })
+    toast.success(isEvent ? t("reminderClosed") : t("approve"));
+    api(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: isEvent ? { status: "completed" } : { manually_verified: true },
+    })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -223,20 +231,25 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleDueChange(taskId: string, date: string | null) {
-    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, due_date: date } : s)));
+  async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
+    // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
+    // reminder one working day before, instead of the regular two-day auto-snooze.
+    const isEvent = !!date && !!time;
+    const patch = { due_date: date, due_time: time, ...(isEvent ? { task_type: "meeting" } : {}) };
+    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, ...patch } as Task : s)));
     try {
-      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { due_date: date } });
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch });
     } catch (e) {
       toast.error((e as Error).message);
       fetchSuggestions();
       return;
     }
-    // Setting a due date auto-snoozes the suggestion until two working days
-    // before it — it leaves the inbox now and resurfaces in time. Skipped when
-    // there isn't enough lead time (autoSnoozeMoment → null).
+    // Setting a due date auto-snoozes the suggestion until it needs attention
+    // (two working days before for a task, one for an event) — it leaves the
+    // inbox now and resurfaces in time. Skipped when there isn't enough lead
+    // time (moment → null).
     if (!date) return;
-    const moment = autoSnoozeMoment(date, blocked);
+    const moment = isEvent ? eventReminderMoment(date, blocked) : autoSnoozeMoment(date, blocked);
     if (!moment) return;
     removeLocal([taskId]);
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
@@ -376,6 +389,9 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
           {suggestions.map((task) => {
             const source = task.source_messages ?? null;
             const title = locale === "he" && task.title_he ? task.title_he : task.title;
+            // An event surfaces as a reminder — frame the shown title as such
+            // (the stored title stays clean for the agenda / info-board).
+            const displayTitle = task.task_type === "meeting" ? t("reminderPrefix", { title }) : title;
             const isSelected = selected.has(task.id);
             const isFocused = task.id === focusId;
 
@@ -407,15 +423,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       dir="auto"
                       onClick={() => setEditTask(task)}
                     >
-                      {title}
+                      {displayTitle}
                     </h4>
                     <div dir="ltr" className="flex shrink-0 items-center gap-1">
                       {source && <SourceLink source={source} stopPropagation />}
                       <DueDateChip
                         deadline={effectiveDeadline(task)}
+                        time={task.due_date ? task.due_time : null}
                         locale={locale}
                         blocked={blocked}
-                        onChange={(d) => handleDueChange(task.id, d)}
+                        onChange={(d, tm) => handleDueChange(task.id, d, tm)}
                       />
                     </div>
                   </div>
@@ -458,6 +475,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
+                    onAddEvent={() => setAddEventTaskId(task.id)}
                   />
                 </CardContent>
               </Card>
@@ -511,6 +529,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         onConfirm={handleSnoozeConfirm}
       />
 
+      {addEventTaskId && (
+        <AddEventModal
+          taskId={addEventTaskId}
+          open={!!addEventTaskId}
+          onClose={() => setAddEventTaskId(null)}
+          onDone={() => { removeLocal([addEventTaskId]); fetchSuggestions(); onUpdate?.(); }}
+          locale={locale}
+        />
+      )}
+
       <MergeModal
         open={mergeOpen}
         onClose={() => setMergeOpen(false)}
@@ -563,6 +591,7 @@ function SuggestionActions({
   onDismissWithReason,
   onApprove,
   onSnooze,
+  onAddEvent,
 }: {
   task: Task;
   locale: string;
@@ -576,11 +605,15 @@ function SuggestionActions({
   onDismissWithReason: () => void;
   onApprove: () => void;
   onSnooze: () => void;
+  onAddEvent: () => void;
 }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
+  const tEvents = useTranslations("events");
   const isQuick = task.size === "quick";
   const isHome = task.context === "home";
+  // An event reminder: "approve" reads as "close the reminder" (a ✓), not "add".
+  const isEvent = task.task_type === "meeting";
 
   return (
     <div className="flex gap-0.5 mt-3 items-center flex-wrap [&>button]:h-8 [&>button]:w-8">
@@ -606,6 +639,9 @@ function SuggestionActions({
       <IconButton label={tTasks("actions.snooze")} color="amber" onClick={onSnooze}>
         <Clock />
       </IconButton>
+      <IconButton label={tEvents("addEvent")} color="primary" onClick={onAddEvent}>
+        <CalendarPlus />
+      </IconButton>
       <SaveAsInfoButton
         defaultProjectId={infoProjectId}
         defaultTitle={infoTitle}
@@ -628,8 +664,8 @@ function SuggestionActions({
           and read as approve, silently archiving suggestions one tap at a
           time (the June-2026 "suggestions vanished" incident). Completing
           belongs to the task list, after approval. */}
-      <IconButton label={t("approve")} color="blue" onClick={onApprove}>
-        <ListPlus />
+      <IconButton label={isEvent ? t("closeReminder") : t("approve")} color="blue" onClick={onApprove}>
+        {isEvent ? <Check /> : <ListPlus />}
       </IconButton>
     </div>
   );

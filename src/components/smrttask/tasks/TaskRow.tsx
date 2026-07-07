@@ -48,7 +48,7 @@ export function TaskRow({
   /** Move between desk and waiting (manual pin / unpin). */
   onMove?: (taskId: string, toDesk: boolean) => void;
   onSizeToggle?: (taskId: string, size: "quick" | "regular") => void;
-  onDueChange?: (taskId: string, date: string | null) => void;
+  onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
 }) {
   const t = useTranslations("tasks");
   const tClaude = useTranslations("claude");
@@ -174,11 +174,12 @@ export function TaskRow({
           {/* Deadline chip */}
           <DueDateChip
             deadline={deadline}
+            time={task.due_date ? task.due_time : null}
             locale={locale}
             blocked={blocked}
             locked={isPlan}
             constrained={constrained}
-            onChange={onDueChange ? (d) => onDueChange(task.id, d) : undefined}
+            onChange={onDueChange ? (d, tm) => onDueChange(task.id, d, tm) : undefined}
           />
 
           <div className="flex-1" />

@@ -1,4 +1,23 @@
 {
+  "events": {
+    "addEvent": "הוסף אירוע",
+    "dialogTitle": "הוספת אירוע ליומן",
+    "extracting": "מחלץ פרטי אירוע...",
+    "titleLabel": "כותרת",
+    "dateLabel": "תאריך",
+    "timeLabel": "שעה",
+    "descriptionLabel": "תיאור",
+    "save": "שמור ליומן",
+    "saved": "האירוע נוסף ליומן",
+    "openInCalendar": "פתח ביומן",
+    "needDateTime": "צריך לבחור תאריך ושעה",
+    "button": "אירועים",
+    "weekTitle": "אירועים בשבוע הקרוב",
+    "empty": "אין אירועים בשבוע הקרוב",
+    "loading": "טוען אירועים...",
+    "today": "היום",
+    "allDay": "כל היום"
+  },
   "manualTask": {
     "title": "משימה חדשה",
     "description": "צור משימה ידנית — מלא את הפרטים בעצמך, בלי AI.",
@@ -542,7 +561,10 @@
       "dialogTitle": "תאריך יעד",
       "clear": "הסר תאריך",
       "save": "שמירה",
-      "noDateHint": "הוסף תאריך יעד"
+      "noDateHint": "הוסף תאריך יעד",
+      "timeLabel": "שעה",
+      "timeHint": "הוספת שעה הופכת את זה לארוע — תזכורת שתופיע יום עסקים לפני",
+      "clearTime": "הסר שעה"
     },
     "row": {
       "blockedHint": "ממתין ל: {titles}",
@@ -647,6 +669,9 @@
       "dismissed": "נדחה"
     },
     "approve": "אשר",
+    "reminderPrefix": "תזכורת: {title}",
+    "reminderClosed": "התזכורת נסגרה",
+    "closeReminder": "סגור תזכורת",
     "dismiss": "דחה",
     "dismissing": "דוחה...",
     "cancel": "ביטול",

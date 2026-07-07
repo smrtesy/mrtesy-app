@@ -47,21 +47,33 @@ export async function listEvents(
   return res.data.items ?? [];
 }
 
+export interface CreateEventOptions {
+  timeZone?: string;
+  location?: string;
+  /** Google extended properties — used to tag events smrtesy itself created so
+   *  the calendar sync can skip re-ingesting them as duplicate tasks. */
+  extendedProperties?: { private?: Record<string, string>; shared?: Record<string, string> };
+}
+
 export async function createCalendarEvent(
   userId: string,
   summary: string,
   startDateTime: string,
   endDateTime: string,
   description?: string,
+  opts?: CreateEventOptions,
 ) {
   const cal = await getCalendarClient(userId);
+  const tz = opts?.timeZone ?? "Asia/Jerusalem";
   const res = await cal.events.insert({
     calendarId: "primary",
     requestBody: {
       summary,
       description,
-      start: { dateTime: startDateTime, timeZone: "Asia/Jerusalem" },
-      end: { dateTime: endDateTime, timeZone: "Asia/Jerusalem" },
+      ...(opts?.location ? { location: opts.location } : {}),
+      start: { dateTime: startDateTime, timeZone: tz },
+      end: { dateTime: endDateTime, timeZone: tz },
+      ...(opts?.extendedProperties ? { extendedProperties: opts.extendedProperties } : {}),
     },
   });
   return res.data;

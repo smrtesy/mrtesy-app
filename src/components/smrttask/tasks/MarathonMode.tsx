@@ -365,9 +365,12 @@ export function MarathonMode({
               />
               <DueDateChip
                 deadline={effectiveDeadline(view)}
+                time={view.due_date ? view.due_time : null}
                 blocked={blocked}
                 locked={!!view.plan_id}
-                onChange={view.plan_id ? undefined : (d) => patchCurrent({ due_date: d })}
+                onChange={view.plan_id ? undefined : (d, tm) =>
+                  patchCurrent({ due_date: d, due_time: tm, ...(d && tm ? { task_type: "meeting" } : {}) })
+                }
               />
               <IconButton label={tTasks("actions.delete")} color="red" onClick={handleDeleteCurrent}>
                 <Trash2 />

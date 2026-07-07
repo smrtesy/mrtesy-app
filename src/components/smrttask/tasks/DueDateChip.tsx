@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { HebrewCalendar } from "@/components/ui/hebrew-calendar";
-import { CalendarPlus } from "lucide-react";
+import { CalendarPlus, CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dueUrgency, type BlockedDays, type DueUrgency } from "@/lib/workdays";
 import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
@@ -39,6 +40,7 @@ const urgencyClasses: Record<DueUrgency, string> = {
  */
 export function DueDateChip({
   deadline,
+  time,
   blocked,
   locked,
   constrained,
@@ -46,31 +48,40 @@ export function DueDateChip({
   className,
 }: {
   deadline: string | null;
+  /** The task's due_time (HH:MM[:SS]) when set — a due date WITH a time is an
+   *  event, and the chip renders + edits the clock alongside the date. */
+  time?: string | null;
   /** Accepted for call-site symmetry; the label format is locale-independent. */
   locale?: string;
   blocked: BlockedDays;
   locked?: boolean;
   constrained?: boolean;
-  onChange?: (date: string | null) => void;
+  onChange?: (date: string | null, time: string | null) => void;
   className?: string;
 }) {
   const t = useTranslations("tasks.dueChip");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftTime, setDraftTime] = useState("");
 
   const urgency = deadline ? dueUrgency(deadline, blocked) : null;
   const editable = !!onChange && !locked;
+  // A due date WITH a time reads as an event: show the clock next to the date.
+  const timeShort = time ? time.slice(0, 5) : "";
+  const isEvent = !!deadline && !!timeShort;
 
   function open(e: React.MouseEvent) {
     e.stopPropagation();
     if (!editable) return;
     setDraft(deadline ?? "");
+    setDraftTime(timeShort);
     setEditing(true);
   }
 
   function commit(value: string | null) {
     setEditing(false);
-    onChange?.(value);
+    // A time only makes sense with a date; drop it when the date is cleared.
+    onChange?.(value, value ? (draftTime || null) : null);
   }
 
   return (
@@ -89,7 +100,9 @@ export function DueDateChip({
             className,
           )}
         >
+          {isEvent && <CalendarClock className="me-0.5 inline h-3 w-3 align-[-2px]" />}
           {dueLabel(deadline)}
+          {timeShort && <span dir="ltr" className="ms-1 font-bold">{timeShort}</span>}
           {constrained && (
             <span className="ms-1 text-status-late" title={t("constrainedHint")}>⚠</span>
           )}
@@ -121,6 +134,30 @@ export function DueDateChip({
           <div className="flex justify-center">
             <HebrewCalendar value={draft || null} onSelect={setDraft} />
           </div>
+          {/* Optional time — adding one turns the item into an event (a
+              reminder that surfaces one working day before). */}
+          <div className="flex items-center justify-center gap-2">
+            <label className="text-xs font-medium text-muted-foreground">{t("timeLabel")}</label>
+            <Input
+              type="time"
+              value={draftTime}
+              onChange={(e) => setDraftTime(e.target.value)}
+              disabled={!draft}
+              className="w-32"
+            />
+            {draftTime && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => setDraftTime("")}
+              >
+                {t("clearTime")}
+              </Button>
+            )}
+          </div>
+          <p className="text-center text-[11px] text-muted-foreground">{t("timeHint")}</p>
           <DialogFooter className="gap-2">
             {deadline && (
               <Button variant="ghost" className="text-status-late" onClick={() => commit(null)}>

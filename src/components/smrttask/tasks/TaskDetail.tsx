@@ -357,11 +357,14 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
                 <DueDateChip
                   deadline={effectiveDeadline(effectiveTask)}
+                  time={effectiveTask.due_date ? effectiveTask.due_time : null}
                   blocked={blocked}
                   locked={!!effectiveTask.plan_id}
-                  onChange={effectiveTask.plan_id ? undefined : (d) => {
-                    api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: d } })
-                      .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, due_date: d } : p); })
+                  onChange={effectiveTask.plan_id ? undefined : (d, tm) => {
+                    // A due date with a time is an event (task_type=meeting).
+                    const body = { due_date: d, due_time: tm, ...(d && tm ? { task_type: "meeting" as const } : {}) };
+                    api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body })
+                      .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, ...body } as Task : p); })
                       .catch((e) => toast.error((e as Error).message));
                   }}
                 />

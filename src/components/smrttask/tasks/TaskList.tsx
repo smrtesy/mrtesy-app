@@ -41,6 +41,7 @@ import {
   dueUrgency,
   sittingWorkdays,
   autoSnoozeMoment,
+  eventReminderMoment,
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
@@ -459,16 +460,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
   }, [fetchTasks]);
 
-  async function handleDueChange(taskId: string, date: string | null) {
+  async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
+    // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
+    // reminder one working day before, instead of the regular two-day auto-snooze.
+    const isEvent = !!date && !!time;
+    const patch = { due_date: date, due_time: time, ...(isEvent ? { task_type: "meeting" } : {}) };
     // Persist the due date FIRST and wait for it: the snooze route below reads
     // due_date from the DB to clamp the wake moment to the deadline, so it must
     // see the value we just set (and we must not snooze if the date write failed).
-    const ok = await patchTask(taskId, { due_date: date }, (task) => ({ ...task, due_date: date }));
-    // Setting a due date auto-snoozes the item until two working days before it,
-    // so it disappears from the desk/waiting lists now and resurfaces in time.
-    // Skipped when there isn't enough lead time (autoSnoozeMoment → null).
+    const ok = await patchTask(taskId, patch, (task) => ({ ...task, ...patch } as Task));
+    // Setting a due date auto-snoozes the item until it needs attention (two
+    // working days before for a task, one for an event), so it disappears from
+    // the desk/waiting lists now and resurfaces in time. Skipped when there
+    // isn't enough lead time (moment → null).
     if (!ok || !date) return;
-    const moment = autoSnoozeMoment(date, blocked);
+    const moment = isEvent ? eventReminderMoment(date, blocked) : autoSnoozeMoment(date, blocked);
     if (!moment) return;
     optimisticRemove(taskId); // optimistic hide until it resurfaces near the deadline
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
