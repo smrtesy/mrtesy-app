@@ -56,6 +56,63 @@ function safeEqual(a: string, b: string): boolean {
   return r === 0;
 }
 
+const CALENDAR_EVENTS_URL =
+  "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+// Safety valve for both the incremental sync loop and token capture.
+const MAX_SYNC_PAGES = 20;
+// timeMax bound for the token-capture listing: with singleEvents=true a
+// never-ending weekly recurrence otherwise expands into unbounded future
+// instances, the page cap is hit on every run, and the token is never
+// captured (permanent bootstrap mode).
+const SYNC_TOKEN_TIME_MAX_MS = 365 * 24 * 60 * 60 * 1000; // now + 1 year
+
+// Capture a fresh Calendar sync token, returning the events fetched along the
+// way so the bootstrap path can process the SAME window it stamps a token
+// over (a separate scan would miss changes landing between scan and capture).
+// nextSyncToken only appears on the LAST page of an events.list response, so
+// page through to the end. singleEvents=true must match what the incremental
+// path sends alongside the token; the 24h timeMin window keeps the page count
+// small and gets encoded into the token (it must NOT be re-sent with
+// syncToken later). No orderBy — it is incompatible with sync tokens and
+// suppresses nextSyncToken.
+// Trade-off of timeMax: the constraint is baked into the sync token, so
+// events further than a year out won't appear in incremental syncs until the
+// next re-bootstrap (410 resets rebuild the window) — acceptable for a task
+// app.
+async function captureCalendarSyncToken(
+  accessToken: string,
+  userId: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<{ token: string | null; events: any[] }> {
+  const timeMin = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const timeMax = new Date(Date.now() + SYNC_TOKEN_TIME_MAX_MS).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const events: any[] = [];
+  let pageToken = "";
+  for (let page = 0; page < MAX_SYNC_PAGES; page++) {
+    const params = new URLSearchParams({
+      maxResults: "250",
+      singleEvents: "true",
+      timeMin,
+      timeMax,
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const resp = await fetch(`${CALENDAR_EVENTS_URL}?${params}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!resp.ok) {
+      console.warn(`[calendar-webhook] sync token capture failed for ${userId}: ${resp.status}`);
+      return { token: null, events };
+    }
+    const data = await resp.json();
+    events.push(...(data.items || []));
+    pageToken = data.nextPageToken || "";
+    if (!pageToken) return { token: data.nextSyncToken || null, events };
+  }
+  console.warn(`[calendar-webhook] sync token capture hit ${MAX_SYNC_PAGES}-page cap for ${userId} — skipping capture this run`);
+  return { token: null, events };
+}
+
 Deno.serve(async (req) => {
   // Google sends a POST with X-Goog-Channel-ID and X-Goog-Resource-State headers
   if (req.method === "POST") {
@@ -92,40 +149,74 @@ Deno.serve(async (req) => {
     try {
       const token = await refreshGoogleToken(userId);
 
-      // Fetch recent events
-      const params = new URLSearchParams({
-        maxResults: "50",
-        singleEvents: "true",
-        orderBy: "updated",
-      });
-      if (syncState?.checkpoint) {
-        params.set("syncToken", syncState.checkpoint);
-      } else {
-        // No sync token — get events from last 24h
-        params.set("timeMin", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-      }
+      let events: any[] = [];
+      let newSyncToken: string | null = null;
+      let checkpoint: string | null = syncState?.checkpoint || null;
 
-      const resp = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      if (checkpoint) {
+        // Incremental sync. syncToken is incompatible with orderBy/timeMin/q
+        // (Google returns 400), so send ONLY syncToken + paging params.
+        // nextSyncToken appears on the LAST page only — follow nextPageToken
+        // to the end before storing it.
+        let pageToken = "";
+        for (let page = 0; page < MAX_SYNC_PAGES; page++) {
+          const params = new URLSearchParams({
+            maxResults: "250",
+            // Must match the singleEvents value used when the token was
+            // captured (initial-scan / the bootstrap path below).
+            singleEvents: "true",
+            syncToken: checkpoint,
+          });
+          if (pageToken) params.set("pageToken", pageToken);
 
-      if (!resp.ok) {
-        // If sync token is invalid, clear it and try again next time
-        if (resp.status === 410) {
-          await supabase.from("sync_state").upsert({
-            user_id: userId,
-            source: "google_calendar",
-            checkpoint: null,
-            last_error: "Sync token expired, will resync",
-          }, { onConflict: "user_id,source" });
-          return new Response("OK", { status: 200 });
+          const resp = await fetch(`${CALENDAR_EVENTS_URL}?${params}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (resp.status === 410) {
+            // Sync token expired — clear it and fall through to the
+            // bootstrap path below to rescan and capture a fresh token.
+            const { error } = await supabase.from("sync_state").upsert({
+              user_id: userId,
+              source: "google_calendar",
+              checkpoint: null,
+              last_error: "Sync token expired, resyncing",
+            }, { onConflict: "user_id,source" });
+            if (error) {
+              console.error(`[calendar-webhook] failed to clear expired sync token: ${error.message}`);
+            }
+            checkpoint = null;
+            events = [];
+            break;
+          }
+          if (!resp.ok) throw new Error(`Calendar API: ${resp.status}`);
+
+          const data = await resp.json();
+          events = events.concat(data.items || []);
+          pageToken = data.nextPageToken || "";
+          if (!pageToken) {
+            newSyncToken = data.nextSyncToken || null;
+            break;
+          }
+          if (page === MAX_SYNC_PAGES - 1) {
+            // Page cap hit before the last page — process what we have; the
+            // stored checkpoint stays put, so the next webhook re-fetches
+            // the same changes (upserts below are idempotent).
+            console.warn(`[calendar-webhook] incremental sync hit ${MAX_SYNC_PAGES}-page cap for ${userId} — checkpoint not advanced`);
+          }
         }
-        throw new Error(`Calendar API: ${resp.status}`);
       }
 
-      const data = await resp.json();
-      const events = data.items || [];
+      if (!checkpoint) {
+        // Bootstrap — no sync token yet (or it just expired above). One paged
+        // pass both captures a fresh sync token AND returns the events it
+        // fetched, so we process exactly the window the token stamps over —
+        // no separate maxResults-capped scan whose cut (or the gap between
+        // scan and capture) could permanently skip recent changes.
+        const capture = await captureCalendarSyncToken(token, userId);
+        events = capture.events;
+        newSyncToken = capture.token;
+      }
 
       for (const event of events) {
         if (event.status === "cancelled") continue;
@@ -153,16 +244,23 @@ Deno.serve(async (req) => {
         }, { onConflict: "user_id,source_type,source_id", ignoreDuplicates: false });
       }
 
-      // Save new sync token
-      if (data.nextSyncToken) {
-        await supabase.from("sync_state").upsert({
-          user_id: userId,
-          source: "google_calendar",
-          checkpoint: data.nextSyncToken,
-          last_synced_at: new Date().toISOString(),
-          last_error: null,
-          consecutive_failures: 0,
-        }, { onConflict: "user_id,source" });
+      // Save new sync token / mark the sync as successful. When no token was
+      // obtained this run (page cap or capture failure), still update
+      // last_synced_at — omitting `checkpoint` from the payload leaves the
+      // stored one untouched.
+      const syncStateRow: Record<string, unknown> = {
+        user_id: userId,
+        source: "google_calendar",
+        last_synced_at: new Date().toISOString(),
+        last_error: null,
+        consecutive_failures: 0,
+      };
+      if (newSyncToken) syncStateRow.checkpoint = newSyncToken;
+      const { error: syncStateError } = await supabase
+        .from("sync_state")
+        .upsert(syncStateRow, { onConflict: "user_id,source" });
+      if (syncStateError) {
+        console.error(`[calendar-webhook] sync_state upsert failed for ${userId}: ${syncStateError.message}`);
       }
     } catch (e) {
       await supabase.from("log_entries").insert({

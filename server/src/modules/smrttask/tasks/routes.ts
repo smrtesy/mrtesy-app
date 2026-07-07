@@ -76,6 +76,9 @@ const UPDATABLE_FIELDS = new Set([
   "size", "context",
   // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
   "woke_from_snooze_at",
+  // "Waiting on Claude" chip — UI sets it (→ now) when a task is handed off to
+  // claude.ai/code, and clears it (→ null) when the user marks Claude finished.
+  "claude_waiting_since",
   // Undo of a snooze: the UI PATCHes { status: "inbox", snoozed_until: null }
   // to pull a task back out of snooze (the auto-snooze undo window, and the
   // "wake up now" action). snooze_count is intentionally NOT touched here.
@@ -560,15 +563,22 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
 
 /** POST /tasks/:id/snooze */
 router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
-  // Default: tomorrow at 9am. Body can pass { until: ISO } to override.
+  // Default: tomorrow at 9am in the USER's timezone (not server time — Railway
+  // runs UTC, so setHours(9) would wake the task at 12:00 Israel). Body can
+  // pass { until: ISO } to override.
   let until: string;
   if (req.body?.until && typeof req.body.until === "string") {
     until = req.body.until;
   } else {
-    const t = new Date();
-    t.setDate(t.getDate() + 1);
-    t.setHours(9, 0, 0, 0);
-    until = t.toISOString();
+    const { data: us } = await db
+      .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
+    const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+    // Today's calendar date in the user's tz (en-CA formats as YYYY-MM-DD),
+    // then +1 day in date space — safe across month/year boundaries.
+    const todayLocal = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+    const tomorrow = new Date(Date.parse(`${todayLocal}T00:00:00.000Z`) + 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10);
+    until = utcInstantForLocalHour(tomorrow, 9, tz).toISOString();
   }
 
   // Bump snooze_count atomically via a fresh read+write — Postgres has no `+1` shorthand here.

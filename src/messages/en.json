@@ -191,7 +191,12 @@
     "identity": "Identity",
     "name": "Name",
     "email": "Email",
-    "organization": "Organization"
+    "organization": "Organization",
+    "timezone": "Time zone",
+    "timezoneSaved": "Time zone saved",
+    "timezoneSaveFailed": "Failed to save time zone",
+    "timezoneUseBrowser": "Use browser time zone ({tz})",
+    "connectionSaveFailed": "Saving the connection failed — please reconnect"
   },
   "settingsTabs": {
     "apps": "Apps",
@@ -1094,6 +1099,22 @@
     "assignLabel": "Assign to a teammate",
     "assignedTo": "Assigned to {name}"
   },
+  "claude": {
+    "launcherLabel": "Work with Claude",
+    "title": "Work with Claude",
+    "open": "Open Claude",
+    "openAgain": "Back to Claude window",
+    "openHint": "Opens in a separate window beside the app — claude.ai blocks in-page embedding for security.",
+    "copyContext": "Copy context for Claude",
+    "contextCopied": "Context copied — paste it into Claude",
+    "copyFailed": "Copy failed — try again",
+    "dispatched": "Task marked as waiting on Claude",
+    "waitingSince": "Waiting on Claude since {time}",
+    "markDone": "Claude finished — clear flag",
+    "markedDone": "Flag cleared",
+    "notifyHint": "Tip: allow browser notifications on claude.ai to be alerted when Claude finishes — so you can switch to other tasks without missing it.",
+    "chipLabel": "Waiting on Claude"
+  },
   "orgSwitcher": {
     "orgCreated": "Organization created",
     "selectOrg": "Select org",
@@ -1247,6 +1268,8 @@
     "searchAllHistory": "All history",
     "searchAllHistoryHint": "Search everything stored, not just the last 48 hours",
     "searchNoResults": "No matching entries",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
     "openTask": "Open task",
     "addCorrection": "Correction",
     "addCorrectionTitle": "Record a correction with an explanation"

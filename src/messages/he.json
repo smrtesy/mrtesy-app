@@ -191,7 +191,12 @@
     "identity": "פרטים אישיים",
     "name": "שם",
     "email": "אימייל",
-    "organization": "ארגון"
+    "organization": "ארגון",
+    "timezone": "אזור זמן",
+    "timezoneSaved": "אזור הזמן נשמר",
+    "timezoneSaveFailed": "שמירת אזור הזמן נכשלה",
+    "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})",
+    "connectionSaveFailed": "שמירת החיבור נכשלה — נסה להתחבר שוב"
   },
   "settingsTabs": {
     "apps": "אפליקציות",
@@ -1094,6 +1099,22 @@
     "assignLabel": "שייך לעובד",
     "assignedTo": "משויך ל-{name}"
   },
+  "claude": {
+    "launcherLabel": "עבודה עם קלוד",
+    "title": "עבודה עם קלוד",
+    "open": "פתח את קלוד",
+    "openAgain": "חזור לחלון קלוד",
+    "openHint": "נפתח בחלון נפרד לצד המערכת — claude.ai חוסם הטמעה בתוך העמוד מטעמי אבטחה.",
+    "copyContext": "העתק הקשר לקלוד",
+    "contextCopied": "ההקשר הועתק — הדבק אותו בקלוד",
+    "copyFailed": "העתקה נכשלה — נסה שוב",
+    "dispatched": "המשימה סומנה כממתינה לקלוד",
+    "waitingSince": "ממתין לקלוד מאז {time}",
+    "markDone": "קלוד סיים — נקה סימון",
+    "markedDone": "הסימון נוקה",
+    "notifyHint": "טיפ: אשר התראות דפדפן ב-claude.ai כדי לקבל התראה כשקלוד מסיים — כך תוכל לעבור בינתיים למשימות אחרות בלי לפספס.",
+    "chipLabel": "ממתין לקלוד"
+  },
   "orgSwitcher": {
     "orgCreated": "ארגון נוצר",
     "selectOrg": "בחר ארגון",
@@ -1247,6 +1268,8 @@
     "searchAllHistory": "כל ההיסטוריה",
     "searchAllHistoryHint": "חיפוש בכל מה שנשמר, לא רק ב-48 השעות האחרונות",
     "searchNoResults": "אין פריטים תואמים",
+    "loadMore": "טען עוד",
+    "loadingMore": "טוען…",
     "openTask": "פתח משימה",
     "addCorrection": "תיקון",
     "addCorrectionTitle": "רישום תיקון עם הסבר"

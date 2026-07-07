@@ -57,6 +57,57 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   return tokens.access_token;
 }
 
+// Safety valve for calendar sync token capture pagination.
+const MAX_SYNC_TOKEN_PAGES = 20;
+// timeMax bound for the token-capture listing: with singleEvents=true a
+// never-ending weekly recurrence otherwise expands into unbounded future
+// instances, the page cap is hit on every run, and the token is never
+// captured (permanent bootstrap mode).
+const SYNC_TOKEN_TIME_MAX_MS = 365 * 24 * 60 * 60 * 1000; // now + 1 year
+
+// Capture a fresh Calendar sync token for calendar-webhook's incremental
+// sync. nextSyncToken only appears on the LAST page of an events.list
+// response (a single call just returns nextPageToken), so page through to
+// the end. singleEvents=true must match what calendar-webhook sends with the
+// token; the 24h timeMin window matches its bootstrap path, keeps the page
+// count small, and gets encoded into the token (it must NOT be re-sent with
+// syncToken later). No orderBy — it is incompatible with sync tokens and
+// suppresses nextSyncToken.
+// Trade-off of timeMax: the constraint is baked into the sync token, so
+// events further than a year out won't appear in incremental syncs until the
+// next re-bootstrap (410 resets rebuild the window) — acceptable for a task
+// app.
+async function captureCalendarSyncToken(
+  accessToken: string,
+  userId: string
+): Promise<string | null> {
+  const timeMin = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const timeMax = new Date(Date.now() + SYNC_TOKEN_TIME_MAX_MS).toISOString();
+  let pageToken = "";
+  for (let page = 0; page < MAX_SYNC_TOKEN_PAGES; page++) {
+    const params = new URLSearchParams({
+      maxResults: "250",
+      singleEvents: "true",
+      timeMin,
+      timeMax,
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const resp = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!resp.ok) {
+      console.warn(`[initial-scan] calendar sync token capture failed for ${userId}: ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    pageToken = data.nextPageToken || "";
+    if (!pageToken) return data.nextSyncToken || null;
+  }
+  console.warn(`[initial-scan] calendar sync token capture hit ${MAX_SYNC_TOKEN_PAGES}-page cap for ${userId} — skipping capture`);
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -207,18 +258,17 @@ Deno.serve(async (req) => {
           pageToken = data.nextPageToken || "";
         } while (pageToken);
 
-        const syncResp = await fetch(
-          `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (syncResp.ok) {
-          const syncData = await syncResp.json();
-          if (syncData.nextSyncToken) {
-            await supabase.from("sync_state").upsert({
-              user_id: userId, source: "google_calendar",
-              checkpoint: syncData.nextSyncToken,
-              last_synced_at: new Date().toISOString(),
-            }, { onConflict: "user_id,source" });
+        // Non-fatal if capture fails — calendar-webhook bootstraps its own
+        // token when the stored checkpoint is missing.
+        const nextSyncToken = await captureCalendarSyncToken(token, userId);
+        if (nextSyncToken) {
+          const { error: syncStateError } = await supabase.from("sync_state").upsert({
+            user_id: userId, source: "google_calendar",
+            checkpoint: nextSyncToken,
+            last_synced_at: new Date().toISOString(),
+          }, { onConflict: "user_id,source" });
+          if (syncStateError) {
+            console.error(`[initial-scan] calendar sync_state upsert failed for ${userId}: ${syncStateError.message}`);
           }
         }
       } catch (e) {

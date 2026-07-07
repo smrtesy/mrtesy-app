@@ -1255,7 +1255,8 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       .single();
     if (jobErr || !job) return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
 
-    await db.from("smrtvoice_scripts").update({ status: "queued" }).eq("id", script.id);
+    const { error: queueFlipErr } = await db.from("smrtvoice_scripts").update({ status: "queued" }).eq("id", script.id);
+    if (queueFlipErr) console.error("[smrtvoice] script queued-status update failed:", queueFlipErr);
     await emitEvent(req.org!.id, "smrtvoice", "job.queued", "job", job.id, {
       script_id: script.id,
       estimated_seconds: engineJob.estimated_seconds,
@@ -1313,10 +1314,11 @@ router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
   }
 
   if (engine.status === "completed") {
-    await db
+    const { error: jobDoneErr } = await db
       .from("smrtvoice_jobs")
       .update({ status: "completed", progress: 100 })
       .eq("id", job.id);
+    if (jobDoneErr) console.error("[smrtvoice] sync job completed-status update failed:", jobDoneErr);
     // Abort before notifying if the status flip fails — otherwise the row stays
     // queued and the next mount re-syncs and double-notifies the user.
     const { error: flipErr } = await db
@@ -1338,7 +1340,7 @@ router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
   }
 
   if (engine.status === "failed") {
-    await db
+    const { error: jobFailErr } = await db
       .from("smrtvoice_jobs")
       .update({
         status: "failed",
@@ -1346,6 +1348,7 @@ router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
         completed_at: new Date().toISOString(),
       })
       .eq("id", job.id);
+    if (jobFailErr) console.error("[smrtvoice] sync job failed-status update failed:", jobFailErr);
     const { error: flipErr } = await db
       .from("smrtvoice_scripts")
       .update({ status: "failed" })
@@ -1435,7 +1438,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     }
     if (!folderId) return res.status(502).json({ error: "Failed to create Drive folder" });
 
-    await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
+    const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
+    if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
 
     let uploaded = 0;
     let skipped = 0;
@@ -1457,7 +1461,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     }
 
     if (uploaded === 0) {
-      await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+      const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+      if (revertErr) console.error("[smrtvoice] script status revert after failed archive failed:", revertErr);
       return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
@@ -1849,7 +1854,8 @@ router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: 
       .filter((c: { resemble_voice_id: string }) => !liveIds.has(c.resemble_voice_id))
       .map((c: { id: string }) => c.id);
     if (dangling.length > 0) {
-      await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+      const { error: unlinkErr } = await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+      if (unlinkErr) console.error("[smrtvoice] dangling voice unlink failed:", unlinkErr);
     }
 
     // Which voices already have a stored preview for this org.
@@ -1886,8 +1892,10 @@ router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), asy
     const client = getVoiceEngineClient();
     const result = await client.deleteVoice(uuid);
     // Unlink any characters + drop the stored preview.
-    await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
-    await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    const { error: unlinkErr } = await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    if (unlinkErr) console.error("[smrtvoice] character unlink on voice delete failed:", unlinkErr);
+    const { error: previewDelErr } = await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    if (previewDelErr) console.error("[smrtvoice] preview delete on voice delete failed:", previewDelErr);
     res.json({ deleted: result.deleted });
   } catch (err) {
     res.status(502).json({ error: veMessage(err) });

@@ -14,33 +14,20 @@
  */
 
 import { Router, Request, Response } from "express";
-import { db } from "../db";
 import { simpleCall, type ModelKey } from "../anthropic";
-import { rateLimit } from "../middleware";
+import { rateLimit, requireAuth, requireOrg, requireApp } from "../middleware";
 
 const router = Router();
 
-// Cap free-form LLM calls per caller. This route authenticates inline (no
-// requireAuth middleware sets req.user), so the limiter keys by the bearer
-// token — still one bucket per caller. Generous enough for normal UI use.
+// Cap free-form LLM calls per caller. Runs before requireAuth, so the limiter
+// keys by the bearer token — still one bucket per caller.
 const quickActionLimit = rateLimit({
   windowMs: 60_000,
   max: 20,
   message: "Too many requests — please wait a moment before trying again.",
 });
 
-async function getUserId(req: Request): Promise<string | null> {
-  const token = req.headers.authorization?.replace("Bearer ", "") ?? "";
-  if (!token) return null;
-  const { data, error } = await db.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user.id;
-}
-
-router.post("/", quickActionLimit, async (req: Request, res: Response) => {
-  const userId = await getUserId(req);
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-
+router.post("/", quickActionLimit, requireAuth, requireOrg, requireApp("smrttask"), async (req: Request, res: Response) => {
   const { prompt, max_tokens, model } = (req.body ?? {}) as {
     prompt?: unknown;
     max_tokens?: unknown;
@@ -51,7 +38,8 @@ router.post("/", quickActionLimit, async (req: Request, res: Response) => {
     return res.status(400).json({ error: "prompt is required" });
   }
 
-  const allowedModels: ModelKey[] = ["haiku", "sonnet", "opus"];
+  // Caller-chosen Opus was a cost-abuse surface; the only UI caller uses haiku.
+  const allowedModels: ModelKey[] = ["haiku", "sonnet"];
   const chosenModel: ModelKey = allowedModels.includes(model as ModelKey)
     ? (model as ModelKey)
     : "sonnet";

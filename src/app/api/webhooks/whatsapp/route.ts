@@ -42,6 +42,10 @@ import { runAutoReplies, type IncomingForReply } from "./autoreply";
 export const runtime = "nodejs";
 // Make sure Next never tries to cache or pre-render this route.
 export const dynamic = "force-dynamic";
+// A voice-note batch (download + Gemini transcription) easily exceeds the
+// default serverless timeout (~10-15s), after which Meta redelivers the
+// whole payload. 60s is the safe cross-plan maximum on Vercel.
+export const maxDuration = 60;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types — minimal shape of the Meta Cloud API webhook payload we read
@@ -277,9 +281,18 @@ export async function POST(request: NextRequest): Promise<Response> {
     const expected =
       "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
     if (!sig || !timingSafeEqual(sig, expected)) {
-      console.warn("[whatsapp-webhook] signature mismatch — rejecting");
+      console.warn(
+        `[whatsapp-webhook] signature ${sig ? "mismatch" : "missing"} for phone_number_id ${String(firstPhoneNumberId)} — rejecting`,
+      );
       return NextResponse.json({ ok: false, error: "signature_mismatch" }, { status: 200 });
     }
+  } else {
+    // No Vault secret for this connection and no META_APP_SECRET env — the
+    // payload is processed WITHOUT HMAC verification. Deliberately log-only
+    // for now (enforcement is a later, separate step), but loudly.
+    console.error(
+      `[whatsapp-webhook] UNVERIFIED payload processed — no app secret resolved for phone_number_id ${String(firstPhoneNumberId)}`,
+    );
   }
 
   try {
@@ -321,11 +334,14 @@ async function recordDebug(
   notes: string | null,
 ): Promise<void> {
   try {
-    await db.from("whatsapp_webhook_debug").insert({
+    const { error: debugInsertError } = await db.from("whatsapp_webhook_debug").insert({
       payload: payload as Record<string, unknown>,
       fields,
       notes,
     });
+    if (debugInsertError) {
+      console.error("[whatsapp-webhook] debug insert failed:", debugInsertError.message);
+    }
   } catch (e) {
     console.error("[whatsapp-webhook] debug insert failed:", e instanceof Error ? e.message : e);
   }
@@ -657,6 +673,53 @@ async function processUserBatch(
       .map((r) => String(r.trigger).replace(/^WhatsApp sender = /, "").trim()),
   );
 
+  // Redelivery guard for auto-replies: the (user_id, wamid) upsert dedupes
+  // STORAGE, but runAutoReplies would still fire on every Meta redelivery of
+  // the same message — the customer gets the same auto-reply twice and Haiku
+  // is billed twice. Snapshot which rows ALREADY existed before this batch
+  // writes anything (same pre-existence idea as existingTranscript below),
+  // along with the explicit autoreply_sent_at marker: mere existence is NOT
+  // proof a reply went out — the previous invocation may have died between
+  // storing the row and sending the reply.
+  const batchWamids = messages
+    .map((m) => m.meta.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const preexisting = new Map<string, { autoreplySentAt: string | null; createdAt: string | null }>();
+  if (batchWamids.length > 0) {
+    const { data: existingRows, error: preexistingErr } = await db
+      .from("whatsapp_messages")
+      .select("wamid, autoreply_sent_at, created_at")
+      .eq("user_id", userId)
+      .in("wamid", batchWamids);
+    if (preexistingErr) {
+      // Best-effort: on lookup failure treat everything as new (current behavior).
+      console.warn("[whatsapp-webhook] pre-existence lookup failed:", preexistingErr.message);
+    } else {
+      for (const r of existingRows ?? []) {
+        preexisting.set(String(r.wamid), {
+          autoreplySentAt: (r.autoreply_sent_at as string | null) ?? null,
+          createdAt: (r.created_at as string | null) ?? null,
+        });
+      }
+    }
+  }
+
+  // Auto-reply eligibility: a NEW wamid always qualifies. A preexisting row
+  // qualifies only if no reply was ever marked sent for it AND it was stored
+  // within the last 10 minutes — the crash-recovery case, where a previous
+  // invocation stored the message, died before replying, and Meta redelivered.
+  // Preexisting unmarked rows OLDER than 10 minutes predate the marker column
+  // (legacy rows); re-replying to those would resurrect the duplicate-reply
+  // bug for redeliveries in flight at deploy time, so they stay skipped.
+  const AUTOREPLY_REDELIVERY_WINDOW_MS = 10 * 60 * 1000;
+  const autoReplyEligible = (wamid: string): boolean => {
+    const prior = preexisting.get(wamid);
+    if (!prior) return true; // brand-new message
+    if (prior.autoreplySentAt) return false; // already replied
+    if (!prior.createdAt) return false;
+    return Date.now() - new Date(prior.createdAt).getTime() <= AUTOREPLY_REDELIVERY_WINDOW_MS;
+  };
+
   const touchedChats = new Set<string>();
   let inserted = 0;
   let skipped = 0;
@@ -695,11 +758,13 @@ async function processUserBatch(
 
   // Selective auto-reply (opt-in, allowlist-only, gated by a master switch).
   // Live incoming messages only — never during history backfill, never groups,
-  // never bot-flagged senders (already skipped above).
+  // never bot-flagged senders (already skipped above), and never messages
+  // whose autoreply_sent_at marker (or age — see autoReplyEligible above)
+  // says a reply already went out (Meta redeliveries must not re-reply).
   if (!isHistoryBatch) {
     const incoming: IncomingForReply[] = messages
-      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone))
-      .map((m) => ({ sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
+      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone) && autoReplyEligible(m.meta.id))
+      .map((m) => ({ wamid: m.meta.id!, sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
     const phoneNumberId = String(messages[0]?.metadata.phone_number_id ?? "");
     if (incoming.length > 0 && phoneNumberId) {
       try {
@@ -796,7 +861,7 @@ async function closeRunSession(
     ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000)
     : null;
 
-  await db
+  const { error: closeSessionError } = await db
     .from("run_sessions")
     .update({
       status,
@@ -807,6 +872,9 @@ async function closeRunSession(
       ...counts,
     })
     .eq("id", sessionId);
+  if (closeSessionError) {
+    console.error("[whatsapp-webhook] closeRunSession update failed:", closeSessionError.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -821,22 +889,81 @@ const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
 
 // Has this exact wamid already been stored with a REAL transcript (not a
 // placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
+// Returns the stored media fields too — the caller's upsert overwrites the
+// whole row, so reusing only the body would null out the stored audio link.
 async function existingTranscript(
   db: SupabaseAdmin,
   userId: string,
   wamid: string,
-): Promise<string | null> {
+): Promise<ExistingMediaRow | null> {
   if (!wamid) return null;
-  const { data } = await db
+  const { data, error } = await db
     .from("whatsapp_messages")
-    .select("body_text")
+    .select("body_text, media_url, media_filename, media_size")
     .eq("user_id", userId)
     .eq("wamid", wamid)
     .maybeSingle();
+  if (error) console.error("[whatsapp-webhook] existingTranscript lookup failed:", error.message);
   const body = String(data?.body_text ?? "").trim();
   // Placeholders all start with "[" (e.g. "[אודיו - לא ניתן לתמלל כרגע]",
   // "[הקלטה ארוכה …]"). A real transcript never does — reuse only those.
-  if (body.length > 0 && !body.startsWith("[")) return body;
+  if (body.length > 0 && !body.startsWith("[")) {
+    return {
+      body,
+      mediaUrl: (data?.media_url as string | null) ?? null,
+      mediaFilename: (data?.media_filename as string | null) ?? null,
+      mediaSize: (data?.media_size as number | null) ?? null,
+    };
+  }
+  return null;
+}
+
+// Same redelivery guard for images: has this exact wamid already been stored
+// with a COMPLETED OCR? If so, reuse the stored body + media fields instead of
+// re-downloading and re-running Gemini OCR on every Meta redelivery.
+interface ExistingMediaRow {
+  body: string;
+  mediaUrl: string | null;
+  mediaFilename: string | null;
+  mediaSize: number | null;
+}
+
+async function existingOcr(
+  db: SupabaseAdmin,
+  userId: string,
+  wamid: string,
+): Promise<ExistingMediaRow | null> {
+  if (!wamid) return null;
+  const { data, error } = await db
+    .from("whatsapp_messages")
+    .select("body_text, media_ocr_text, media_url, media_filename, media_size")
+    .eq("user_id", userId)
+    .eq("wamid", wamid)
+    .maybeSingle();
+  if (error) console.error("[whatsapp-webhook] existingOcr lookup failed:", error.message);
+  if (!data) return null;
+  const body = String(data.body_text ?? "").trim();
+  const legacyOcr = String(data.media_ocr_text ?? "").trim();
+  // A completed OCR body always carries the "[OCR]" marker (optionally after a
+  // "כיתוב: …" caption prefix); failure placeholders ("[תמונה]", download
+  // errors) never do. Legacy rows split by migration 20260520180000 hold the
+  // OCR in media_ocr_text with only the caption left in body_text.
+  if (body.includes("[OCR]")) {
+    return {
+      body,
+      mediaUrl: (data.media_url as string | null) ?? null,
+      mediaFilename: (data.media_filename as string | null) ?? null,
+      mediaSize: (data.media_size as number | null) ?? null,
+    };
+  }
+  if (legacyOcr.length > 0) {
+    return {
+      body: (body ? "כיתוב: " + body + "\n\n" : "") + "[OCR]\n" + legacyOcr,
+      mediaUrl: (data.media_url as string | null) ?? null,
+      mediaFilename: (data.media_filename as string | null) ?? null,
+      mediaSize: (data.media_size as number | null) ?? null,
+    };
+  }
   return null;
 }
 
@@ -880,7 +1007,10 @@ async function buildMessageRow(
         // already produced a real transcript for this wamid, reuse it.
         const prior = await existingTranscript(db, userId, m.id!);
         if (prior) {
-          body = prior;
+          body = prior.body;
+          mediaUrl = prior.mediaUrl;
+          mediaFilename = prior.mediaFilename;
+          mediaSize = prior.mediaSize;
           break;
         }
         try {
@@ -940,6 +1070,17 @@ async function buildMessageRow(
       if (nm.isHistory) {
         body = caption || "[תמונה מהיסטוריה - לא בוצע OCR]";
       } else if (mediaId && accessToken) {
+        // Redelivery guard (same as the audio transcript above): if a prior
+        // delivery already produced a real OCR for this wamid, reuse the
+        // stored body + media fields and skip the download + Gemini call.
+        const prior = await existingOcr(db, userId, m.id!);
+        if (prior) {
+          body = prior.body;
+          mediaUrl = prior.mediaUrl;
+          mediaFilename = prior.mediaFilename;
+          mediaSize = prior.mediaSize;
+          break;
+        }
         let blob: MetaMediaBlob | null = null;
         try {
           blob = await downloadMetaMedia(db, mediaId, accessToken);
@@ -1337,7 +1478,7 @@ async function callGemini(
   // Log usage to ai_usage ledger (best-effort).
   try {
     const usage = data.usageMetadata;
-    await db.from("ai_usage").insert({
+    const { error: usageInsertError } = await db.from("ai_usage").insert({
       provider: "google",
       component: "gemini.whatsapp",
       model,
@@ -1345,6 +1486,9 @@ async function callGemini(
       output_tokens: usage?.candidatesTokenCount ?? 0,
       cost_usd: estimateGeminiCostLocal(model, usage),
     });
+    if (usageInsertError) {
+      console.error("[whatsapp-webhook] ai_usage insert failed:", usageInsertError.message);
+    }
   } catch { /* never block the caller */ }
 
   const candidate = data.candidates?.[0];

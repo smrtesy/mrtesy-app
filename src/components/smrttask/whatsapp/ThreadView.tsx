@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -99,6 +99,12 @@ interface Props {
 }
 
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Stable empty fallbacks for per-bubble props. Inline `?? []` would hand the
+// memoized MessageBubble a fresh array identity on every render, defeating
+// React.memo for the (common) bubbles with no reactions / no linked tasks.
+const EMPTY_REACTIONS: Array<{ emoji: string; direction: string }> = [];
+const EMPTY_TASKS: ChatTask[] = [];
 
 // Outgoing-image limits, mirroring the backend (Meta accepts JPEG/PNG up to
 // 5 MB for the `image` message type). We validate client-side too so a bad
@@ -424,6 +430,34 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
     setReplyTo(null);
   }, [chatId]);
 
+  // Stable per-bubble action handlers. MessageBubble is memoized, so these
+  // take the target message/wamid as an argument instead of closing over a
+  // per-message value — one function identity shared by every bubble, instead
+  // of 200 fresh closures per render.
+  const handleReply = useCallback((m: Message) => setReplyTo(m), []);
+  const handleReact = useCallback(
+    async (wamid: string, emoji: string) => {
+      // Optimistic: paint the emoji (or its removal) immediately,
+      // then confirm with Meta and revert only if the call fails.
+      setOptimisticReactions((prev) => ({ ...prev, [wamid]: emoji }));
+      try {
+        await api("/api/whatsapp/messages/react", {
+          method: "POST",
+          body: { target_wamid: wamid, emoji },
+        });
+        onMessageSent?.();
+      } catch (e) {
+        setOptimisticReactions((prev) => {
+          const next = { ...prev };
+          delete next[wamid];
+          return next;
+        });
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [onMessageSent],
+  );
+
   // Staged outgoing images (paste / drag-drop / attach button). Lives here
   // rather than in ComposeBox because the drag-drop target is the whole chat
   // surface (WhatsApp Desktop drops anywhere over the conversation), while the
@@ -553,7 +587,24 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
     return map;
   }, [messages, optimisticReactions]);
 
-  const visibleMessages = mergedMessages.filter((m) => !m.is_reaction);
+  const visibleMessages = useMemo(
+    () => mergedMessages.filter((m) => !m.is_reaction),
+    [mergedMessages],
+  );
+
+  // Per-message day-separator labels, precomputed once per message-list
+  // change. Doing this inline in the render loop meant 2×N Date allocations
+  // plus a toLocaleDateString (fresh Intl formatter) per day group on every
+  // keystroke/render. Labels refresh whenever the list changes (every poll),
+  // so the relative "today"/"yesterday" wording stays current.
+  const dayLabels = useMemo(() => {
+    return visibleMessages.map((m, i) => {
+      const prev = i > 0 ? visibleMessages[i - 1] : null;
+      const showDay =
+        !prev || !isSameDay(new Date(prev.received_at), new Date(m.received_at));
+      return showDay ? formatDaySeparator(new Date(m.received_at), locale, t) : null;
+    });
+  }, [visibleMessages, locale, t]);
 
   // ── In-chat search ────────────────────────────────────────────────────────
   // Collapsed behind an icon in the header (compact-UI principle). When open,
@@ -953,43 +1004,22 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
           // WhatsApp-style day separators: a centered date pill before the
           // first message of each new calendar day. Per-message dates live in
           // the timestamp tooltip below, so the stream stays uncluttered.
-          const prev = i > 0 ? visibleMessages[i - 1] : null;
-          const showDay =
-            !prev || !isSameDay(new Date(prev.received_at), new Date(m.received_at));
+          // Labels are precomputed in the `dayLabels` memo above.
+          const dayLabel = dayLabels[i] ?? null;
           return (
             <Fragment key={m.id}>
-              {showDay && (
-                <DaySeparator label={formatDaySeparator(new Date(m.received_at), locale, t)} />
-              )}
+              {dayLabel !== null && <DaySeparator label={dayLabel} />}
               <MessageBubble
                 message={m}
                 highlighted={highlightWamid === m.wamid || currentMatchWamid === m.wamid}
                 searchHit={searchOpen && matchSet.has(m.wamid) && currentMatchWamid !== m.wamid}
-                reactions={reactionsByTarget.get(m.wamid) ?? []}
+                reactions={reactionsByTarget.get(m.wamid) ?? EMPTY_REACTIONS}
                 quotedMessage={m.reply_to_wamid ? messagesByWamid.get(m.reply_to_wamid) : undefined}
-                relatedTasks={tasksByMessageId.get(m.id) ?? []}
+                relatedTasks={tasksByMessageId.get(m.id) ?? EMPTY_TASKS}
                 locale={locale}
                 canReact={withinWindow}
-                onReply={() => setReplyTo(m)}
-                onReact={async (emoji) => {
-                  // Optimistic: paint the emoji (or its removal) immediately,
-                  // then confirm with Meta and revert only if the call fails.
-                  setOptimisticReactions((prev) => ({ ...prev, [m.wamid]: emoji }));
-                  try {
-                    await api("/api/whatsapp/messages/react", {
-                      method: "POST",
-                      body: { target_wamid: m.wamid, emoji },
-                    });
-                    onMessageSent?.();
-                  } catch (e) {
-                    setOptimisticReactions((prev) => {
-                      const next = { ...prev };
-                      delete next[m.wamid];
-                      return next;
-                    });
-                    toast.error(e instanceof Error ? e.message : String(e));
-                  }
-                }}
+                onReply={handleReply}
+                onReact={handleReact}
               />
             </Fragment>
           );
@@ -1830,7 +1860,12 @@ function ComposeBox({
 /** Quick-react palette — the same six emojis WhatsApp Web shows by default. */
 const QUICK_EMOJIS = ["❤️", "👍", "😂", "😮", "😢", "🙏"] as const;
 
-function MessageBubble({
+// Memoized: the chat surface re-renders on every search keystroke and every
+// background poll, but a bubble whose props are unchanged (the vast majority)
+// must not re-render — every prop passed from ThreadView is kept referentially
+// stable across unrelated renders (stable handlers, memoized lookups, hoisted
+// empty fallbacks).
+const MessageBubble = memo(function MessageBubble({
   message,
   highlighted,
   searchHit,
@@ -1857,10 +1892,13 @@ function MessageBubble({
   locale: string;
   /** When false, the react + reply buttons are hidden (24h window closed). */
   canReact: boolean;
-  /** Called with the selected emoji (or "" to remove). */
-  onReact: (emoji: string) => void;
-  /** Start a reply quoting this message (WhatsApp Desktop UX). */
-  onReply: () => void;
+  /** Called with this message's wamid and the selected emoji (or "" to
+   *  remove). Takes the wamid as an argument so ThreadView can pass one
+   *  stable handler to every bubble. */
+  onReact: (wamid: string, emoji: string) => void;
+  /** Start a reply quoting this message (WhatsApp Desktop UX). Takes the
+   *  message as an argument for the same stable-handler reason. */
+  onReply: (message: Message) => void;
 }) {
   const t = useTranslations("whatsappPage");
   const isOutgoing = message.direction === "outgoing";
@@ -1947,7 +1985,7 @@ function MessageBubble({
             the content side. */}
         {canReact && msgDir === "rtl" && (
           <div className="flex shrink-0 items-center gap-0.5">
-            <ReplyButton onReply={onReply} label={t("reply")} />
+            <ReplyButton onReply={() => onReply(message)} label={t("reply")} />
             <ReactionButton
               myReaction={myReaction}
               pickerOpen={pickerOpen}
@@ -1955,7 +1993,7 @@ function MessageBubble({
               onTogglePicker={() => setPickerOpen((v) => !v)}
               onPick={(emoji) => {
                 setPickerOpen(false);
-                onReact(emoji);
+                onReact(message.wamid, emoji);
               }}
             />
           </div>
@@ -2160,10 +2198,10 @@ function MessageBubble({
               onTogglePicker={() => setPickerOpen((v) => !v)}
               onPick={(emoji) => {
                 setPickerOpen(false);
-                onReact(emoji);
+                onReact(message.wamid, emoji);
               }}
             />
-            <ReplyButton onReply={onReply} label={t("reply")} />
+            <ReplyButton onReply={() => onReply(message)} label={t("reply")} />
           </div>
         )}
       </div>
@@ -2180,8 +2218,8 @@ function MessageBubble({
                 onClick={() => {
                   // Tapping your own reaction removes it; tapping a peer's
                   // emoji applies the same emoji as YOUR reaction.
-                  if (emoji === myReaction) onReact("");
-                  else onReact(emoji);
+                  if (emoji === myReaction) onReact(message.wamid, "");
+                  else onReact(message.wamid, emoji);
                 }}
                 className="inline-flex items-center gap-0.5 hover:bg-muted/60 rounded px-1 transition"
                 title={t("reactWith", { emoji })}
@@ -2196,7 +2234,7 @@ function MessageBubble({
 
     </div>
   );
-}
+});
 
 /**
  * Visual frame around AI-extracted content (image OCR or audio transcript).
