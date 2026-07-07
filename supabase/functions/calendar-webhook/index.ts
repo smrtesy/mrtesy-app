@@ -74,27 +74,41 @@ async function refreshGoogleToken(userId: string): Promise<string> {
       const DISCONNECT_AFTER_FAILURES = 3;
       const { data: ss } = await supabase
         .from("sync_state")
-        .select("consecutive_failures")
+        .select("consecutive_failures, last_error")
         .eq("user_id", userId)
         .eq("source", "google_calendar")
         .maybeSingle();
-      const failures = (Number(ss?.consecutive_failures) || 0) + 1;
-      const { error: failureCountUpsertError } = await supabase
-        .from("sync_state")
-        .upsert({
-          user_id: userId,
-          source: "google_calendar",
-          last_error: `Token refresh failed (${resp.status}), attempt ${failures}/${DISCONNECT_AFTER_FAILURES}: ${err.slice(0, 300)}`,
-          consecutive_failures: failures,
-        }, { onConflict: "user_id,source" });
-      if (failureCountUpsertError) console.error("sync_state failure count upsert failed:", failureCountUpsertError);
-      if (failures >= DISCONNECT_AFTER_FAILURES) {
-        const { error: disconnectUpdateError } = await supabase
-          .from("user_settings")
-          .update({ calendar_connected: false })
-          .eq("user_id", userId);
-        if (disconnectUpdateError) console.error("user_settings disconnect update failed:", disconnectUpdateError);
-        await notifyDisconnect(userId, `token refresh failed ${failures}× (${resp.status})`);
+      // Google delivers webhook notifications in bursts (several within the
+      // same second), so one transient token blip could burn all 3 strikes in
+      // seconds. Rate-limit the counter: each stored last_error embeds the
+      // failure time as a trailing "@<ISO>" stamp; if the previous strike was
+      // under 60s ago, skip the increment (the refresh still fails below —
+      // only the strike is not double-counted within the burst window).
+      const prevTsMatch =
+        typeof ss?.last_error === "string"
+          ? ss.last_error.match(/@(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/)
+          : null;
+      const prevMs = prevTsMatch ? Date.parse(prevTsMatch[1]) : NaN;
+      const withinBurst = Number.isFinite(prevMs) && Date.now() - prevMs < 60_000;
+      if (!withinBurst) {
+        const failures = (Number(ss?.consecutive_failures) || 0) + 1;
+        const { error: failureCountUpsertError } = await supabase
+          .from("sync_state")
+          .upsert({
+            user_id: userId,
+            source: "google_calendar",
+            last_error: `Token refresh failed (${resp.status}), attempt ${failures}/${DISCONNECT_AFTER_FAILURES}: ${err.slice(0, 300)} @${new Date().toISOString()}`,
+            consecutive_failures: failures,
+          }, { onConflict: "user_id,source" });
+        if (failureCountUpsertError) console.error("sync_state failure count upsert failed:", failureCountUpsertError);
+        if (failures >= DISCONNECT_AFTER_FAILURES) {
+          const { error: disconnectUpdateError } = await supabase
+            .from("user_settings")
+            .update({ calendar_connected: false })
+            .eq("user_id", userId);
+          if (disconnectUpdateError) console.error("user_settings disconnect update failed:", disconnectUpdateError);
+          await notifyDisconnect(userId, `token refresh failed ${failures}× (${resp.status})`);
+        }
       }
     }
     throw new Error(`Token refresh failed: ${resp.status}`);

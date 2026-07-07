@@ -8,6 +8,15 @@ import { api } from "@/lib/api/client";
 import { ThreadList, type Thread } from "./ThreadList";
 import { ThreadView, type Message, type ChatTask } from "./ThreadView";
 
+// Mirrors the server's default page size for GET /whatsapp/messages
+// (server/src/modules/smrttask/routes/whatsapp-view.ts, `limit` default 200).
+// When an incremental poll comes back with a FULL page, the window was capped:
+// more than this many rows changed since the cursor, the server kept only the
+// 200 newest by received_at, and the older changed rows would never reach us
+// (the cursor advances past them). In that case we discard the merge and
+// refetch the conversation in full instead.
+const WHATSAPP_MESSAGES_PAGE_LIMIT = 200;
+
 interface WhatsAppReaderProps {
   /** Conversation to open on mount (null = show the chat list). */
   initialChatId?: string | null;
@@ -110,6 +119,12 @@ export function WhatsAppReader({
   // Mirror of the committed messages array, so the merge can run against the
   // current rows without threading state through the poll callback.
   const messagesRef = useRef<Message[]>([]);
+  // Currently-selected chat, readable from inside async closures. A background
+  // poll for chat A that resolves AFTER the user switched to chat B must be
+  // dropped on the floor — merging A's rows into B's state corrupts both the
+  // visible conversation and the incremental cursor, and incremental polls
+  // never self-heal from that. Every await in loadMessages re-checks this ref.
+  const selectedChatIdRef = useRef<string | null>(initialChatId);
 
   const loadMessages = useCallback(
     async (chatId: string, opts: { background?: boolean } = {}) => {
@@ -122,13 +137,30 @@ export function WhatsAppReader({
         // The cursor is pulled back 10s to absorb clock skew / out-of-order
         // commits around the poll boundary — the wamid merge is idempotent,
         // so re-received rows are harmless.
-        const cursor = opts.background ? messagesCursorRef.current : null;
+        let cursor = opts.background ? messagesCursorRef.current : null;
         const afterParam = cursor
           ? `&after=${encodeURIComponent(new Date(new Date(cursor).getTime() - 10_000).toISOString())}`
           : "";
-        const { messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
+        let { messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
           `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}${afterParam}`,
         );
+        // Stale-response guard: the user switched chats while this request was
+        // in flight — these rows belong to another conversation now.
+        if (selectedChatIdRef.current !== chatId) return;
+        if (cursor && m.length >= WHATSAPP_MESSAGES_PAGE_LIMIT) {
+          // The incremental window overflowed the server's page cap: only the
+          // 200 newest changed rows came back, and the older changed rows
+          // would be silently skipped forever (bulk upserts stamp identical
+          // updated_at values, so no later poll re-surfaces them). Discard the
+          // merge and refetch the whole conversation, resetting the cursor
+          // from the full result exactly like a chat-open load does.
+          messagesCursorRef.current = null;
+          ({ messages: m, tasks: tk } = await api<{ messages: Message[]; tasks: ChatTask[] }>(
+            `/api/whatsapp/messages?chat_id=${encodeURIComponent(chatId)}`,
+          ));
+          if (selectedChatIdRef.current !== chatId) return;
+          cursor = null;
+        }
         // Per-row change signature. updated_at is included so mutations the
         // other fields can't see (late transcript/OCR fills) still repaint.
         const rowSig = (x: Message) =>
@@ -178,10 +210,14 @@ export function WhatsAppReader({
       } catch (e) {
         // Same as loadThreads: don't surface a transient background-poll
         // failure — keep the messages already on screen. Explicit loads
-        // (chat open / after send) still report the error.
+        // (chat open / after send) still report the error — but never for a
+        // chat the user has already navigated away from.
+        if (selectedChatIdRef.current !== chatId) return;
         if (!opts.background) setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (!opts.background) setLoadingMessages(false);
+        // The stale-chat case leaves the spinner alone: the switch already
+        // kicked off its own explicit load, which owns the loading state now.
+        if (!opts.background && selectedChatIdRef.current === chatId) setLoadingMessages(false);
       }
     },
     [],
@@ -224,6 +260,9 @@ export function WhatsAppReader({
   }, [loadThreads]);
 
   useEffect(() => {
+    // Keep the async-closure guard in sync BEFORE any load fires, so in-flight
+    // responses for the previous chat are rejected from this point on.
+    selectedChatIdRef.current = selectedChatId;
     if (!selectedChatId) {
       setMessages([]);
       setTasks([]);

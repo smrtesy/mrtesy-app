@@ -18,20 +18,31 @@ export interface OrgMember {
 // buttons) need it simultaneously — fetch once, share.
 let cached: OrgMember[] | null = null;
 let inflight: Promise<OrgMember[]> | null = null;
+// Cache generation, bumped on every invalidation (org switch). A fetch
+// captures the generation it started under and only writes the module cache
+// (or hook state — see the effect below) if it still matches when it lands.
+// Without this, a roster request in flight when the org changes resolves late
+// and poisons the cache with the OLD org's members permanently.
+let generation = 0;
 
 async function fetchMembers(): Promise<OrgMember[]> {
   if (cached) return cached;
   if (!inflight) {
+    const startedGen = generation;
     inflight = api<{ members: OrgMember[] }>("/api/org/members")
       .then((res) => {
-        cached = res.members ?? [];
-        return cached;
+        const members = res.members ?? [];
+        // Stale-generation responses are returned to their callers (which
+        // apply the same check) but never cached.
+        if (startedGen === generation) cached = members;
+        return members;
       })
       .catch(() => {
         // Member names are a display refinement — a failed fetch must never
         // break the surrounding screen. Fall back to an empty roster (ids
-        // render abbreviated) and allow a retry on the next mount.
-        inflight = null;
+        // render abbreviated) and allow a retry on the next mount. Only clear
+        // OUR inflight slot — a stale failure must not wipe a newer fetch.
+        if (startedGen === generation) inflight = null;
         return [];
       });
   }
@@ -46,6 +57,7 @@ function bindInvalidation() {
   if (invalidationBound || typeof window === "undefined") return;
   invalidationBound = true;
   window.addEventListener("smrtesy:active-org-changed", () => {
+    generation++;
     cached = null;
     inflight = null;
   });
@@ -68,15 +80,22 @@ export function useOrgMembers(enabled = true): { members: OrgMember[]; loading: 
     }
     bindInvalidation();
     let alive = true;
+    // Same stale-generation guard as the module cache: an org switch while
+    // this fetch is in flight makes the result garbage for the current org —
+    // don't write it into state (the org-changed refetch below re-runs with
+    // the new generation and supplies the fresh roster). loading is still
+    // cleared so the surface never hangs on a spinner.
+    const startedGen = generation;
     fetchMembers().then((m) => {
       if (alive) {
-        setMembers(m);
+        if (startedGen === generation) setMembers(m);
         setLoading(false);
       }
     });
     const refetch = () => {
+      const refetchGen = generation;
       fetchMembers().then((m) => {
-        if (alive) setMembers(m);
+        if (alive && refetchGen === generation) setMembers(m);
       });
     };
     window.addEventListener("smrtesy:active-org-changed", refetch);

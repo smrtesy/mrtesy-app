@@ -43,7 +43,7 @@ async function notifyDisconnect(userId: string, reason: string) {
 // account drops out of the cron loop until the user re-OAuths, records the
 // failure, and notifies the user — but ONLY on the true→false transition, so a
 // dead connection never pages the user every cron tick.
-async function markDriveDisconnected(userId: string, reason: string, prevFailures: number) {
+async function markDriveDisconnected(userId: string, reason: string) {
   const { data: prev } = await supabase
     .from("user_settings")
     .select("drive_connected")
@@ -57,7 +57,10 @@ async function markDriveDisconnected(userId: string, reason: string, prevFailure
     user_id: userId,
     source: "google_drive",
     last_error: reason,
-    consecutive_failures: prevFailures + 1,
+    // Reset the streak on disconnect: the counter has done its job. Leaving
+    // it >=3 meant one fresh auth blip after the user re-OAuthed immediately
+    // re-disconnected them (prevFailures + 1 >= 3 on the very first strike).
+    consecutive_failures: 0,
   }, { onConflict: "user_id,source" });
   if (disconnectStateUpsertError) console.error("sync_state upsert failed:", disconnectStateUpsertError);
 
@@ -367,10 +370,18 @@ async function syncUserDrive(userId: string) {
       // only disconnect + notify after DISCONNECT_AFTER_FAILURES in a row;
       // any successful run resets the counter (below and at the end of sync).
       const DISCONNECT_AFTER_FAILURES = 3;
-      const prevFailures = syncState?.consecutive_failures ?? 0;
+      // consecutive_failures is shared with the transient paths (network /
+      // 5xx also increment it), so treat the stored count as AUTH strikes
+      // only when the previous failure was itself an auth failure — i.e. the
+      // stored last_error carries the "AUTH:" prefix. Otherwise 2 network
+      // blips + 1 auth blip would disconnect instantly.
+      const prevFailures =
+        typeof syncState?.last_error === "string" && syncState.last_error.startsWith("AUTH:")
+          ? (syncState?.consecutive_failures ?? 0)
+          : 0;
       if (prevFailures + 1 >= DISCONNECT_AFTER_FAILURES) {
         // Unrecoverable auth failure → disconnect + notify once, then drop out.
-        await markDriveDisconnected(userId, errMsg.slice(5).trim(), prevFailures);
+        await markDriveDisconnected(userId, errMsg.slice(5).trim());
       } else {
         const { error: authFailUpsertError } = await supabase.from("sync_state").upsert(
           {
