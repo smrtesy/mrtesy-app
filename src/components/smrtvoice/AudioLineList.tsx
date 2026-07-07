@@ -400,18 +400,22 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
-  // Choose this take as the line's audio (single-select): mark it, clear the
-  // others, and repoint the line so play/download/archive use it.
+  // Toggle this take as the line's audio (single-select). Clicking an
+  // unchosen take marks it and repoints the line; clicking the already-chosen
+  // take un-chooses it, and once no take is chosen the line's ✓ disappears.
   async function chooseTake(take: Take) {
-    if (take.approved) return; // already the line's audio
+    const next = !take.approved;
     setTakes((prev) => {
       const key = takesOpenId ?? "";
-      const list = (prev[key] ?? []).map((tk) => ({ ...tk, approved: tk.id === take.id }));
+      const list = (prev[key] ?? []).map((tk) => ({
+        ...tk,
+        approved: next ? tk.id === take.id : tk.id === take.id ? false : tk.approved,
+      }));
       return takesOpenId ? { ...prev, [key]: list } : prev;
     });
     try {
-      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: true } });
-      fetchLines(); // the line's audio now points at this take
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: next } });
+      fetchLines(); // the line's audio / ✓ indicator now reflects the choice
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
       if (takesOpenId) loadTakes(takesOpenId);

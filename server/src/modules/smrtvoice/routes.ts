@@ -1864,12 +1864,31 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
       .eq("org_id", req.org!.id);
     if (lineErr) return res.status(500).json({ error: lineErr.message });
   } else if (hasApproved && body.approved === false) {
+    // Un-choose this take. Keep the line's last audio, but if no take remains
+    // chosen for the line, clear its approved indicator (the outer ✓).
     const { error } = await db
       .from("smrtvoice_line_takes")
       .update({ approved: false })
       .eq("id", take.id)
       .eq("org_id", req.org!.id);
     if (error) return res.status(500).json({ error: error.message });
+
+    const { count, error: countErr } = await db
+      .from("smrtvoice_line_takes")
+      .select("id", { count: "exact", head: true })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id)
+      .eq("approved", true);
+    if (countErr) return res.status(500).json({ error: countErr.message });
+
+    if (!count) {
+      const { error: lineErr } = await db
+        .from("smrtvoice_lines")
+        .update({ approved: false })
+        .eq("id", take.line_id)
+        .eq("org_id", req.org!.id);
+      if (lineErr) return res.status(500).json({ error: lineErr.message });
+    }
   }
 
   const { data: updated, error: readErr } = await db
