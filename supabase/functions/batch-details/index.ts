@@ -184,6 +184,7 @@ Deno.serve(async (req) => {
                 .update({
                   processing_lock_at: null,
                   dead_letter: true,
+                  processing_status: "processed",
                   skip_reason: "Message not found in Gmail",
                 })
                 .eq("id", msg.id);
@@ -202,6 +203,7 @@ Deno.serve(async (req) => {
                 .update({
                   processing_lock_at: null,
                   dead_letter: true,
+                  processing_status: "processed",
                   skip_reason: "Draft message",
                 })
                 .eq("id", msg.id);
@@ -246,7 +248,7 @@ Deno.serve(async (req) => {
                   processing_lock_at: null,
                   retry_count: retries,
                   ...(retries >= MAX_DETAIL_RETRIES
-                    ? { dead_letter: true, skip_reason: `details_failed_${retries}x: ${(e as Error).message}`.slice(0, 300) }
+                    ? { dead_letter: true, processing_status: "processed", skip_reason: `details_failed_${retries}x: ${(e as Error).message}`.slice(0, 300) }
                     : {}),
                 })
                 .eq("id", msg.id);
