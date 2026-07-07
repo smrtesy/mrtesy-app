@@ -102,17 +102,16 @@ function DroppableList({ id, items, children }: { id: string; items: string[]; c
 }
 
 /**
- * The desk page — four lists, assigned in priority order (active = not blocked,
- * not snoozed; snoozed rows aren't fetched):
- *   מהיר – עכשיו / רגיל – עכשיו — manually pinned (today_position) tasks, split
- *               by size. Pinning wins: a task you put on the desk lives here
- *               even if its deadline is near.
- *   חשוב       — the radar: anything with an effective deadline within 3 working
- *               days, plus any regular task you haven't pinned and didn't give a
- *               far-off deadline (e.g. a regular task you just created).
- *   ממתינות   — the rest: unpinned quick tasks with no near deadline, regular
- *               tasks parked behind a far deadline, and blocked tasks.
- *   הושלמו    — collapsed, with reopen.
+ * The desk page — every active task is on the desk (active = not snoozed;
+ * snoozed rows aren't fetched). A task leaves only by being completed or
+ * dismissed — there is no ממתינות holding pile. Three lists by nature:
+ *   מהיר – עכשיו — every quick task (size==="quick").
+ *   רגיל – עכשיו — every regular task, except those a near deadline pulls into חשוב.
+ *   חשוב         — the deadline radar: regular tasks with an effective deadline
+ *                  within 3 working days.
+ *   הושלמו       — collapsed, with reopen.
+ * (today_position now only orders rows within מהיר / רגיל; snooze is the
+ * deliberate "not now" path that hides a task until it should resurface.)
  */
 export function TaskList({ locale, title }: { locale: string; title?: string }) {
   const t = useTranslations("tasks");
@@ -267,7 +266,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
   }, [fetchTasks, supabase]);
 
-  // ── partition: desk / waiting ───────────────────────────────────────────────
+  // ── partition: desk lists (מהיר / רגיל / חשוב) ───────────────────────────────
 
   const unsatisfiedOf = useCallback((task: Task): TaskNeed[] => {
     const needs = planMeta.get(task.id)?.needs ?? task.needs ?? [];
@@ -474,9 +473,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     // see the value we just set (and we must not snooze if the date write failed).
     const ok = await patchTask(taskId, patch, (task) => ({ ...task, ...patch } as Task));
     // Setting a due date auto-snoozes the item until it needs attention (two
-    // working days before for a task, one for an event), so it disappears from
-    // the desk/waiting lists now and resurfaces in time. Skipped when there
-    // isn't enough lead time (moment → null).
+    // working days before for a task, one for an event), so it leaves the desk
+    // now and resurfaces in time. Skipped when there isn't enough lead time
+    // (moment → null).
     if (!ok || !date) return;
     const moment = isEvent ? eventReminderMoment(date, blocked) : autoSnoozeMoment(date, blocked);
     if (!moment) return;
@@ -625,14 +624,20 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return;
     }
 
-    // Cross-list move. A blocked task is forced to ממתינות by the partition, so
-    // moving it elsewhere would just snap back — ignore the drop.
+    // Cross-list move. A blocked task can't be started (it's pending a
+    // dependency), so re-filing it between desk columns is a no-op — ignore.
     const task = tasks.find((row) => row.id === activeId);
     if (!task || unsatisfiedOf(task).length > 0) return;
 
     if (isDesk(to)) {
-      // Pinning wins over the deadline radar, so a desk drop always sticks.
+      // מהיר sets size=quick (always sticks — quick always lives in מהיר); רגיל
+      // sets size=regular, which only sticks when no near deadline pulls the
+      // task into חשוב. If the drop wouldn't stick, say so instead of bouncing.
       const size = to === LIST_QUICK ? "quick" : "regular";
+      if (bucketOf({ ...task, size }) !== to) {
+        toast.error(t("dndDeadlineLocked"));
+        return;
+      }
       const column = lists[to];
       const overIdx = column.findIndex((row) => row.id === String(over.id));
       const insertAt = overIdx >= 0 ? overIdx : column.length;

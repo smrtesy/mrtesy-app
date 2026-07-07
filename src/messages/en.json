@@ -594,9 +594,9 @@
       "waiting": "Waiting",
       "completed": "Completed",
       "startRun": "Start run",
-      "emptyQuick": "No quick tasks on the desk — pull from waiting or create one",
+      "emptyQuick": "No quick tasks on the desk — mark a task quick or create one",
       "emptyRegular": "No regular tasks on the desk",
-      "emptyImportant": "Nothing important — tasks due soon or unpinned regular tasks show up here"
+      "emptyImportant": "Nothing important — tasks with a near deadline show up here"
     },
     "contextFilter": {
       "all": "All",
