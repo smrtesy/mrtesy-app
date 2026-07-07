@@ -39,6 +39,22 @@ type Intent =
   | "save_info"
   | "unknown";
 
+// Must stay in sync with the router_decisions.intent CHECK constraint
+// (migration 20260529120000_router_decisions_add_save_info_intent.sql).
+// The classifier's output is inserted into that column — an intent outside
+// this list would fail the insert with a constraint violation, so classify()
+// coerces anything else to "unknown".
+const VALID_INTENTS = new Set<string>([
+  "create_task",
+  "update_task",
+  "add_subtask",
+  "add_update",
+  "complete_task",
+  "dismiss_task",
+  "save_info",
+  "unknown",
+]);
+
 interface DecisionPayload {
   // create_task / update_task fields
   title_he?: string;
@@ -272,6 +288,13 @@ async function classify(input: string, openTasks: OpenTaskRow[], projects: Proje
       costUsd,
       raw: content,
     };
+  }
+  if (!VALID_INTENTS.has(parsed.intent)) {
+    // The model returned an intent outside the DB's allowed list — inserting
+    // it raw would violate router_decisions_intent_check. Log + fall back to
+    // "unknown", the same default classify() uses when parsing fails.
+    console.warn(`[router] classifier returned invalid intent "${parsed.intent}" — coercing to "unknown"`);
+    parsed.intent = "unknown";
   }
   return { output: parsed, modelUsed: MODELS.sonnet, costUsd, raw: content };
 }

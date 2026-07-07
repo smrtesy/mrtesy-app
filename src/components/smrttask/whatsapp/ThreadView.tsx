@@ -34,12 +34,22 @@ export interface Message {
   media_ocr_text?: string | null;
   /** Verbatim audio transcript. Same separation treatment as media_ocr_text. */
   audio_transcript?: string | null;
+  /** Short-lived signed URL for media_url, batch-minted by the messages
+   *  endpoint (one Storage call per response). When present, the bubble uses
+   *  it directly instead of a per-bubble /api/whatsapp/media round-trip;
+   *  null/absent falls back to that endpoint (legacy rows, sign failures). */
+  media_signed_url?: string | null;
   reply_to_wamid: string | null;
   reaction_emoji: string | null;
   is_reaction: boolean;
   is_history: boolean;
   history_phase: number | null;
   received_at: string;
+  /** Last-modified time, bumped by a DB trigger on every update (status
+   *  flips, reaction clears, transcript/OCR fills). Drives the reader's
+   *  incremental poll cursor. Optional: absent on optimistic client rows
+   *  (and on servers deployed before the updated_at migration). */
+  updated_at?: string | null;
   // Read/delivery receipts — only populated for outgoing messages once
   // Meta sends us the corresponding `statuses` webhook event.
   status?: "sent" | "delivered" | "read" | "failed" | null;
@@ -1860,6 +1870,11 @@ function ComposeBox({
 /** Quick-react palette — the same six emojis WhatsApp Web shows by default. */
 const QUICK_EMOJIS = ["❤️", "👍", "😂", "😮", "😢", "🙏"] as const;
 
+/** Cap on expired-signed-URL refetches per bubble (see onMediaError): stops a
+ *  pathological loop where every freshly-minted URL errors again (e.g. the
+ *  media object was deleted from Storage). */
+const MEDIA_ERROR_RETRY_CAP = 3;
+
 // Memoized: the chat surface re-renders on every search keystroke and every
 // background poll, but a bubble whose props are unchanged (the vast majority)
 // must not re-render — every prop passed from ThreadView is kept referentially
@@ -1932,8 +1947,42 @@ const MessageBubble = memo(function MessageBubble({
   const isAudio = (message.message_type === "audio" || message.message_type === "voice")
     && Boolean(message.media_url);
 
+  // Signed URLs carry a ~1h TTL. In a chat left open longer than that, the
+  // <img>/<audio> element errors on remount or first playback with no
+  // refetch — silently dead media. On the element's error event we record the
+  // dead URL and bump a nonce so the effect below skips it and mints a fresh
+  // one via the /api/whatsapp/media fallback. The Set guards against error
+  // loops: each distinct URL triggers at most one refetch, and the counter
+  // caps total refetches per bubble (e.g. media object deleted from Storage,
+  // where every freshly-minted URL would error again).
+  const erroredUrlsRef = useRef<Set<string>>(new Set());
+  const mediaErrorRetriesRef = useRef(0);
+  const [mediaRetryNonce, setMediaRetryNonce] = useState(0);
+  const onMediaError = useCallback(() => {
+    if (
+      !imageSignedUrl ||
+      erroredUrlsRef.current.has(imageSignedUrl) ||
+      mediaErrorRetriesRef.current >= MEDIA_ERROR_RETRY_CAP
+    ) {
+      return;
+    }
+    erroredUrlsRef.current.add(imageSignedUrl);
+    mediaErrorRetriesRef.current += 1;
+    setImageSignedUrl(null);
+    setMediaRetryNonce((n) => n + 1);
+  }, [imageSignedUrl]);
+
   useEffect(() => {
     if ((!isImage && !isAudio) || !message.media_url) return;
+    // Prefer the batch-minted URL the messages payload already carries — no
+    // per-bubble round-trip. Rows without one (legacy full-URL media_url
+    // values, batch-sign failure) — or whose batch URL already errored
+    // (expired TTL) — fall back to the per-path fetch below.
+    if (message.media_signed_url && !erroredUrlsRef.current.has(message.media_signed_url)) {
+      setImageSignedUrl(message.media_signed_url);
+      setImageLoading(false);
+      return;
+    }
     let cancelled = false;
     setImageLoading(true);
     api<{ url: string }>(
@@ -1951,7 +2000,7 @@ const MessageBubble = memo(function MessageBubble({
     return () => {
       cancelled = true;
     };
-  }, [isImage, isAudio, message.media_url]);
+  }, [isImage, isAudio, message.media_url, message.media_signed_url, mediaRetryNonce]);
 
   async function openMedia() {
     if (!message.media_url) return;
@@ -2054,6 +2103,7 @@ const MessageBubble = memo(function MessageBubble({
                 <img
                   src={imageSignedUrl}
                   alt=""
+                  onError={onMediaError}
                   className="max-h-[280px] max-w-full rounded-md object-contain bg-muted"
                 />
               </button>
@@ -2077,6 +2127,7 @@ const MessageBubble = memo(function MessageBubble({
                 controls
                 preload="none"
                 src={imageSignedUrl}
+                onError={onMediaError}
                 className="w-full max-w-xs"
               />
             ) : imageLoading ? (

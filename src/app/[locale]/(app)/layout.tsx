@@ -2,7 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { Sidebar } from "@/components/platform/layout/Sidebar";
-import { getEnabledAppsForUserInOrg } from "@/lib/apps/server";
+import {
+  getEnabledAppsForUserInOrg,
+  resolveEnabledApps,
+  startEnabledAppsQueries,
+} from "@/lib/apps/server";
 import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
@@ -29,15 +33,39 @@ export default async function AppLayout({
     redirect(`/${locale}/login`);
   }
 
-  // Fetch super-admin status and onboarding flag in parallel to avoid two
-  // sequential round-trips on every page load. super-admins bypass onboarding.
+  // The active-org cookie is part of the incoming request — reading it costs
+  // no network round-trip, so resolve it up front to unlock the apps queries.
+  const cookieStore = await cookies();
+  const cookieOrgId = user ? cookieStore.get("smrt_org_id")?.value : undefined;
+
+  // After getUser() every remaining query depends only on user.id (+ the
+  // cookie org id), so fire them all concurrently — one round-trip instead of
+  // three/four sequential ones on every navigation:
+  //   • super_admins  → isAdmin
+  //   • user_settings → onboarding gate
+  //   • org_members fallback (only when there is no org cookie) → orgId
+  //   • the enabled-apps queries (only when the cookie names the org) — they
+  //     don't need isAdmin to *run*; resolveEnabledApps applies the flag to
+  //     the results afterwards. `Promise.resolve()` forces the lazy
+  //     PostgrestBuilder to start executing now instead of at `await`.
+  const superAdminPromise = user
+    ? supabase.from("super_admins").select("user_id").eq("user_id", user.id).maybeSingle()
+    : Promise.resolve({ data: null });
+  const settingsPromise = user && !devBypass
+    ? supabase.from("user_settings").select("onboarding_completed").eq("user_id", user.id).single()
+    : Promise.resolve({ data: null });
+  const orgFallbackPromise = user && !cookieOrgId
+    ? Promise.resolve(
+        supabase.from("org_members").select("org_id").eq("user_id", user.id).limit(1),
+      )
+    : null;
+  const appsQueries = user && cookieOrgId
+    ? startEnabledAppsQueries(supabase, user.id, cookieOrgId)
+    : null;
+
   const [superAdminResult, settingsResult] = await Promise.all([
-    user
-      ? supabase.from("super_admins").select("user_id").eq("user_id", user.id).maybeSingle()
-      : Promise.resolve({ data: null }),
-    user && !devBypass
-      ? supabase.from("user_settings").select("onboarding_completed").eq("user_id", user.id).single()
-      : Promise.resolve({ data: null }),
+    superAdminPromise,
+    settingsPromise,
   ]);
 
   let isAdmin = devBypass || !!superAdminResult.data;
@@ -48,7 +76,9 @@ export default async function AppLayout({
   }
 
   // Onboarding gate — skipped for super-admins (platform operators) and in
-  // dev bypass. Regular users get pushed through onboarding once.
+  // dev bypass. Regular users get pushed through onboarding once. (Any apps
+  // queries already in flight are simply abandoned on redirect — supabase-js
+  // resolves errors into `{ error }` rather than rejecting, so nothing leaks.)
   if (user && !devBypass && !isAdmin) {
     if (!settingsResult.data?.onboarding_completed) {
       redirect(`/${locale}/onboarding`);
@@ -59,19 +89,20 @@ export default async function AppLayout({
   // the org has enabled; regular members see only the apps granted to them.
   let enabledApps: string[] = [];
   if (user) {
-    const cookieStore = await cookies();
-    let orgId = cookieStore.get("smrt_org_id")?.value;
-    if (!orgId) {
-      // No active org (e.g. super-admin on app.smrtesy.com) — fall back to first org
-      const { data: memberships } = await supabase
-        .from("org_members")
-        .select("org_id")
-        .eq("user_id", user.id)
-        .limit(1);
-      orgId = memberships?.[0]?.org_id;
-    }
-    if (orgId) {
-      enabledApps = await getEnabledAppsForUserInOrg(supabase, user.id, orgId, isAdmin);
+    if (appsQueries) {
+      // Org known from the cookie — the queries have been running since before
+      // the super-admin check; just apply the (now known) isAdmin flag.
+      enabledApps = await resolveEnabledApps(appsQueries, isAdmin);
+    } else if (orgFallbackPromise) {
+      // No active org (e.g. super-admin on app.smrtesy.com) — fall back to the
+      // first org. The membership lookup ran concurrently with the queries
+      // above; the apps fetch itself genuinely can't start until the org id
+      // is known, so this branch keeps one extra round-trip.
+      const { data: memberships } = await orgFallbackPromise;
+      const orgId = memberships?.[0]?.org_id;
+      if (orgId) {
+        enabledApps = await getEnabledAppsForUserInOrg(supabase, user.id, orgId, isAdmin);
+      }
     }
   }
 

@@ -1,19 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Check } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 interface Capacity {
   user_id: string;
   work_days: number[];
@@ -32,39 +28,42 @@ function memberName(m: Member) {
 export function CapacitySection() {
   const t = useTranslations("smrtPlan.capacity");
   const days = (t.raw("days") as string[]) ?? ["0", "1", "2", "3", "4", "5", "6"];
-  const [members, setMembers] = useState<Member[]>([]);
+  const { members, loading: membersLoading } = useOrgMembers();
+  const [capacity, setCapacity] = useState<Capacity[] | null>(null);
   const [rows, setRows] = useState<Record<string, Capacity>>({});
-  const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      try {
-        const [{ members }, { capacity }] = await Promise.all([
-          api<{ members: Member[] }>("/api/org/members"),
-          api<{ capacity: Capacity[] }>("/api/plan/capacity"),
-        ]);
+    api<{ capacity: Capacity[] }>("/api/plan/capacity")
+      .then((r) => { if (alive) setCapacity(r.capacity ?? []); })
+      .catch((e) => {
         if (!alive) return;
-        const byUser: Record<string, Capacity> = {};
-        for (const m of members ?? []) {
-          byUser[m.user_id] = { user_id: m.user_id, work_days: DEFAULT_DAYS, hours_per_day: DEFAULT_HOURS };
-        }
-        for (const c of capacity ?? []) {
-          byUser[c.user_id] = { user_id: c.user_id, work_days: c.work_days ?? DEFAULT_DAYS, hours_per_day: c.hours_per_day ?? DEFAULT_HOURS };
-        }
-        setMembers(members ?? []);
-        setRows(byUser);
-      } catch (e) {
-        if (alive) toast.error(e instanceof Error ? e.message : "Error");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
+        toast.error(e instanceof Error ? e.message : "Error");
+        setCapacity([]);
+      });
     return () => {
       alive = false;
     };
   }, []);
+
+  const loading = membersLoading || capacity === null;
+
+  // Seed the editable rows once both the roster and saved capacity are in —
+  // never re-seed afterwards, or in-progress edits would be wiped.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || loading || capacity === null) return;
+    seeded.current = true;
+    const byUser: Record<string, Capacity> = {};
+    for (const m of members) {
+      byUser[m.user_id] = { user_id: m.user_id, work_days: DEFAULT_DAYS, hours_per_day: DEFAULT_HOURS };
+    }
+    for (const c of capacity) {
+      byUser[c.user_id] = { user_id: c.user_id, work_days: c.work_days ?? DEFAULT_DAYS, hours_per_day: c.hours_per_day ?? DEFAULT_HOURS };
+    }
+    setRows(byUser);
+  }, [loading, members, capacity]);
 
   function toggleDay(userId: string, day: number) {
     setRows((r) => {

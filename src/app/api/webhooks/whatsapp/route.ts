@@ -505,7 +505,7 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
         // the UI's checkmarks update without waiting for an unrelated
         // event to wake the thread.
         for (const s of value.statuses ?? []) {
-          await applyStatusUpdate(db, s);
+          await applyStatusUpdate(db, userId, s);
         }
         continue;
       } else {
@@ -536,7 +536,7 @@ const STATUS_RANK: Record<string, number> = {
   failed: 4, // terminal; never downgraded
 };
 
-async function applyStatusUpdate(db: SupabaseAdmin, s: MetaStatus): Promise<void> {
+async function applyStatusUpdate(db: SupabaseAdmin, userId: string, s: MetaStatus): Promise<void> {
   const wamid = s.id;
   const newStatus = s.status;
   if (!wamid || !newStatus || !(newStatus in STATUS_RANK)) return;
@@ -544,10 +544,14 @@ async function applyStatusUpdate(db: SupabaseAdmin, s: MetaStatus): Promise<void
   const ts = s.timestamp ? new Date(parseInt(s.timestamp, 10) * 1000).toISOString() : null;
 
   // Look up the current status to decide whether this event is a real
-  // forward-tick. We also need user_id for the .eq filter scope.
+  // forward-tick. Scope by user_id (resolved from the connection's
+  // phone_number_id, same as message ingestion) — the table's uniqueness is
+  // (user_id, wamid), so a bare wamid filter could read/write another
+  // tenant's row.
   const { data: existing } = await db
     .from("whatsapp_messages")
     .select("id, status, sent_at, delivered_at, read_at")
+    .eq("user_id", userId)
     .eq("wamid", wamid)
     .maybeSingle();
   if (!existing) {
@@ -583,6 +587,7 @@ async function applyStatusUpdate(db: SupabaseAdmin, s: MetaStatus): Promise<void
   const { error } = await db
     .from("whatsapp_messages")
     .update(update)
+    .eq("user_id", userId)
     .eq("wamid", wamid);
   if (error) console.warn("[whatsapp-webhook] status update failed:", error.message);
 }

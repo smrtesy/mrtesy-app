@@ -5,6 +5,7 @@
  *   GET    /tasks                       list (with filters)
  *   GET    /tasks/:id                   single (with project + source_message joins)
  *   POST   /tasks                       create (manual task)
+ *   PATCH  /tasks/reorder               batch write of today_position (desk drag)
  *   PATCH  /tasks/:id                   update fields
  *   DELETE /tasks/:id                   delete
  *   POST   /tasks/:id/complete          set status=archived, completed_at=now
@@ -87,6 +88,10 @@ const UPDATABLE_FIELDS = new Set([
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
 const SIZES = ["quick", "regular"];
+// rules_memory.rule_type CHECK constraint — must stay in sync with migration
+// 20260424000001_backend_pipeline.sql. Any insert with a value outside this
+// set fails at the DB level, so validate BEFORE inserting AI-parsed values.
+const RULE_MEMORY_RULE_TYPES = new Set(["skip", "skip_spam", "action", "style", "bot", "preference", "financial"]);
 const CONTEXTS = ["home", "work"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 const TASK_TYPES = ["action", "project_suggestion", "brief_review", "followup", "meeting"];
@@ -375,6 +380,70 @@ router.post("/tasks", async (req: Request, res: Response) => {
   });
 
   res.status(201).json({ task: data });
+});
+
+/** PATCH /tasks/reorder — batch write of a desk column's order.
+ *  Body: { items: [{ id, today_position, size? }] }. One HTTP round-trip for
+ *  the whole column after a drag; previously the UI PATCHed each row
+ *  individually (15 rows = 15 requests). `size` is only sent for a row
+ *  crossing between desk columns (quick ↔ regular).
+ *  NOTE: registered BEFORE PATCH /tasks/:id — Express matches routes in
+ *  registration order, so this must come first or "reorder" is captured
+ *  as an :id. */
+router.patch("/tasks/reorder", async (req: Request, res: Response) => {
+  const items = req.body?.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "items must be a non-empty array" });
+  }
+  if (items.length > 100) {
+    return res.status(400).json({ error: "items is limited to 100 entries" });
+  }
+  for (const item of items) {
+    if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id) {
+      return res.status(400).json({ error: "each item requires a string id" });
+    }
+    if (typeof item.today_position !== "number" || !Number.isFinite(item.today_position)) {
+      return res.status(400).json({ error: "each item requires a finite today_position" });
+    }
+    if (item.size !== undefined && !SIZES.includes(item.size)) {
+      return res.status(400).json({ error: `size must be one of: ${SIZES.join(", ")}` });
+    }
+  }
+
+  const now = new Date().toISOString();
+  const results = await Promise.all(
+    (items as { id: string; today_position: number; size?: string }[]).map(async (item) => {
+      // Mirror PATCH /tasks/:id semantics: a position-only patch is NOT the
+      // user touching the task — it must not reset the aging clock or clear
+      // the snooze-return chip. A size change (row crossing desk columns) IS
+      // a user interaction, exactly like the per-row PATCH's positionOnly rule.
+      const updates: Record<string, unknown> = {
+        today_position: item.today_position,
+        updated_at: now,
+      };
+      if (item.size !== undefined) {
+        updates.size = item.size;
+        updates.last_interaction_at = now;
+        updates.woke_from_snooze_at = null;
+      }
+      const { data, error } = await db
+        .from("tasks")
+        .update(updates)
+        .eq("organization_id", req.org!.id)
+        .eq("id", item.id)
+        .select("id, updated_at")
+        .maybeSingle();
+      if (error) console.error("[tasks reorder] update failed for", item.id, "—", error.message);
+      // data === null with no error → task not found in this org: also a failure.
+      return { id: item.id, task: data ?? null, failed: !!error || !data };
+    }),
+  );
+
+  const failedIds = results.filter((r) => r.failed).map((r) => r.id);
+  if (failedIds.length > 0) {
+    return res.status(500).json({ error: "some tasks failed to reorder", failed_ids: failedIds });
+  }
+  res.json({ tasks: results.map((r) => r.task) });
 });
 
 /** PATCH /tasks/:id */
@@ -1373,6 +1442,16 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
 
       const proposal = await proposeRuleFromCustomDismiss(reasonText, taskDesc);
       if (proposal && proposal.trigger && proposal.rule_type) {
+        // Belt-and-suspenders: the proposer already filters rule_type, but the
+        // value is AI-parsed — an out-of-set value would fail the rules_memory
+        // CHECK constraint at insert time. Fall back to 'skip' (the default
+        // rule_type this flow writes for dismissals; the row is a pending
+        // suggestion the user reviews before it activates).
+        let ruleType = proposal.rule_type;
+        if (!RULE_MEMORY_RULE_TYPES.has(ruleType)) {
+          console.error(`[dismiss/custom] AI proposed invalid rule_type '${ruleType}' — falling back to 'skip'`);
+          ruleType = "skip";
+        }
         const conf = typeof proposal.confidence === "number"
           ? Math.max(0, Math.min(1, proposal.confidence))
           : 0.6;
@@ -1382,8 +1461,8 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
             user_id: task.user_id,
             app_slug: "smrttask",
             trigger:    proposal.trigger,
-            rule_type:  proposal.rule_type,
-            action:     proposal.rule_type === "skip" || proposal.rule_type === "skip_spam" ? "skip" : null,
+            rule_type:  ruleType,
+            action:     ruleType === "skip" || ruleType === "skip_spam" ? "skip" : null,
             reason:     proposal.reason || `Proposed from user dismissal: "${reasonText}"`,
             is_active:  false,
             created_by: "claude",
@@ -1602,12 +1681,16 @@ Only return a rule if you can extract something concrete from the user's reason.
   const parsed = parseJsonResponse<{ trigger: string; rule_type: string; reason: string; confidence?: number }>(content);
   if (!parsed || !parsed.trigger || !parsed.trigger.trim()) return null;
 
-  // Must match rules_memory.rule_type CHECK constraint:
-  // ('skip','skip_spam','action','style','bot','preference','financial')
-  // We expose a narrower subset to the model because the others don't make sense
-  // for "user dismissed a suggestion".
+  // Must be a subset of RULE_MEMORY_RULE_TYPES (the rules_memory.rule_type
+  // CHECK constraint, migration 20260424000001). We expose a narrower subset
+  // to the model because the others ('action','style','financial') don't make
+  // sense for "user dismissed a suggestion". An out-of-set value from the
+  // model is discarded here — inserting it raw would fail the CHECK at runtime.
   const allowedTypes = new Set(["skip", "skip_spam", "bot", "preference"]);
-  if (!allowedTypes.has(parsed.rule_type)) return null;
+  if (!allowedTypes.has(parsed.rule_type)) {
+    console.error(`[proposeRuleFromCustomDismiss] model returned rule_type '${parsed.rule_type}' outside allowed subset — discarding proposal`);
+    return null;
+  }
 
   return {
     trigger: parsed.trigger.trim(),

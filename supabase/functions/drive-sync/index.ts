@@ -43,7 +43,7 @@ async function notifyDisconnect(userId: string, reason: string) {
 // account drops out of the cron loop until the user re-OAuths, records the
 // failure, and notifies the user — but ONLY on the true→false transition, so a
 // dead connection never pages the user every cron tick.
-async function markDriveDisconnected(userId: string, reason: string, prevFailures: number) {
+async function markDriveDisconnected(userId: string, reason: string) {
   const { data: prev } = await supabase
     .from("user_settings")
     .select("drive_connected")
@@ -57,7 +57,10 @@ async function markDriveDisconnected(userId: string, reason: string, prevFailure
     user_id: userId,
     source: "google_drive",
     last_error: reason,
-    consecutive_failures: prevFailures + 1,
+    // Reset the streak on disconnect: the counter has done its job. Leaving
+    // it >=3 meant one fresh auth blip after the user re-OAuthed immediately
+    // re-disconnected them (prevFailures + 1 >= 3 on the very first strike).
+    consecutive_failures: 0,
   }, { onConflict: "user_id,source" });
   if (disconnectStateUpsertError) console.error("sync_state upsert failed:", disconnectStateUpsertError);
 
@@ -72,9 +75,10 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
     .eq("service", service)
     .single();
 
-  // "AUTH:" prefix marks an unrecoverable auth failure that the caller turns
-  // into a disconnect (drive_connected=false + one notification). Transient
-  // errors throw without the prefix and are retried on the next cron run.
+  // "AUTH:" prefix marks an auth failure that the caller turns into a
+  // disconnect (drive_connected=false + one notification) once it repeats
+  // 3 ticks in a row. Transient errors throw without the prefix and are
+  // retried on the next cron run.
   if (!cred) throw new Error("AUTH: no google_drive credentials found");
 
   if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
@@ -350,17 +354,46 @@ async function syncUserDrive(userId: string) {
 
   // No permanent circuit-breaker here: a brief failure streak (e.g. a
   // transient missing-credentials window) must never brick Drive sync forever.
-  // Auth failures flip drive_connected=false (so the account leaves the loop
-  // until the user re-OAuths) and transient failures simply retry next tick —
-  // either way a reconnected user recovers automatically.
+  // Repeated auth failures flip drive_connected=false (so the account leaves
+  // the loop until the user re-OAuths) and transient failures simply retry
+  // next tick — either way a reconnected user recovers automatically.
   let token: string;
   try {
     token = await refreshGoogleToken(userId, "google_drive");
   } catch (e) {
     const errMsg = (e as Error).message;
     if (errMsg.startsWith("AUTH:")) {
-      // Unrecoverable auth failure → disconnect + notify once, then drop out.
-      await markDriveDisconnected(userId, errMsg.slice(5).trim(), syncState?.consecutive_failures ?? 0);
+      // Auth failure — but do NOT disconnect on the first one. Google returns
+      // transient 400/401s from the token endpoint, and a single blip used to
+      // flip drive_connected=false and silently kill Drive sync. Same 3-strike
+      // policy as gmail-sync: count consecutive failures in sync_state and
+      // only disconnect + notify after DISCONNECT_AFTER_FAILURES in a row;
+      // any successful run resets the counter (below and at the end of sync).
+      const DISCONNECT_AFTER_FAILURES = 3;
+      // consecutive_failures is shared with the transient paths (network /
+      // 5xx also increment it), so treat the stored count as AUTH strikes
+      // only when the previous failure was itself an auth failure — i.e. the
+      // stored last_error carries the "AUTH:" prefix. Otherwise 2 network
+      // blips + 1 auth blip would disconnect instantly.
+      const prevFailures =
+        typeof syncState?.last_error === "string" && syncState.last_error.startsWith("AUTH:")
+          ? (syncState?.consecutive_failures ?? 0)
+          : 0;
+      if (prevFailures + 1 >= DISCONNECT_AFTER_FAILURES) {
+        // Unrecoverable auth failure → disconnect + notify once, then drop out.
+        await markDriveDisconnected(userId, errMsg.slice(5).trim());
+      } else {
+        const { error: authFailUpsertError } = await supabase.from("sync_state").upsert(
+          {
+            user_id: userId,
+            source: "google_drive",
+            last_error: `${errMsg} — attempt ${prevFailures + 1}/${DISCONNECT_AFTER_FAILURES} before disconnect`,
+            consecutive_failures: prevFailures + 1,
+          },
+          { onConflict: "user_id,source" }
+        );
+        if (authFailUpsertError) console.error("sync_state upsert failed:", authFailUpsertError);
+      }
     } else {
       // Transient (network / 5xx / rate limit) → record and retry next run.
       const { error: tokenFailUpsertError } = await supabase.from("sync_state").upsert(

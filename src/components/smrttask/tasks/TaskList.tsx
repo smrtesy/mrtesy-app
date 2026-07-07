@@ -573,10 +573,12 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     const now = Date.now();
     for (const id of ids) pendingEditsRef.current.set(id, { patch: bodyFor(id), confirmedAt: null, at: now });
     try {
-      const results = await Promise.all(
-        ids.map((id) => api<{ task: Task }>(`/api/tasks/${id}`, { method: "PATCH", body: bodyFor(id) })),
+      // One batch request for the whole column (previously one PATCH per row).
+      const { tasks: saved } = await api<{ tasks: { id: string; updated_at: string | null }[] }>(
+        "/api/tasks/reorder",
+        { method: "PATCH", body: { items: ids.map((id) => ({ id, ...bodyFor(id) })) } },
       );
-      for (const { task } of results) {
+      for (const task of saved ?? []) {
         const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
         if (pend && task?.updated_at) {
           pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });

@@ -12,13 +12,17 @@
  *
  * Setup (one-time):
  *   1. Railway → Project → Settings → Webhooks → add
- *        https://<domain>/api/webhooks/railway?secret=<RAILWAY_WEBHOOK_SECRET>
+ *        https://<domain>/api/webhooks/railway
+ *      with header x-railway-secret: <RAILWAY_WEBHOOK_SECRET>.
+ *      (Legacy ?secret=<...> query param still works but is deprecated —
+ *      secrets in URLs end up in access logs.)
  *   2. Vercel env: RAILWAY_WEBHOOK_SECRET (any random string) and
  *      RAILWAY_API_TOKEN (Railway → Settings → Tokens).
  *
  * Manual pull (to report an already-failed deploy without waiting for a new
  * one): GET .../api/webhooks/railway?secret=<S>&deploymentId=<ID>
  */
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { fetchDeploymentLogs } from "@/lib/railway";
@@ -34,12 +38,35 @@ function isFailureStatus(status: string): boolean {
   return FAILURE_STATUSES.has(status) || /FAIL|CRASH|ERROR/.test(status);
 }
 
+// Constant-time secret comparison. `===` short-circuits on the first differing
+// character, which leaks how much of the secret an attacker has guessed.
+// timingSafeEqual requires equal-length buffers, so compare HMACs of both
+// values (fixed 32-byte digests) under an ephemeral per-process key — the
+// standard length-safe pattern.
+const HMAC_KEY = randomBytes(32);
+function secretsEqual(provided: string, expected: string): boolean {
+  const a = createHmac("sha256", HMAC_KEY).update(provided).digest();
+  const b = createHmac("sha256", HMAC_KEY).update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 function secretOk(request: NextRequest): boolean {
   const expected = process.env.RAILWAY_WEBHOOK_SECRET;
   if (!expected) return false;
-  const url = new URL(request.url);
-  const provided = url.searchParams.get("secret") ?? request.headers.get("x-railway-secret") ?? "";
-  return provided === expected;
+  // Preferred: x-railway-secret header (keeps the secret out of URLs, which
+  // land in access logs and browser history).
+  const fromHeader = request.headers.get("x-railway-secret");
+  if (fromHeader !== null) return secretsEqual(fromHeader, expected);
+  // Deprecated fallback: ?secret= query param, kept for webhooks configured
+  // before the header was supported.
+  const fromQuery = new URL(request.url).searchParams.get("secret");
+  if (fromQuery !== null) {
+    console.warn(
+      "[railway-webhook] secret received via ?secret= query param — deprecated; move it to the x-railway-secret header"
+    );
+    return secretsEqual(fromQuery, expected);
+  }
+  return false;
 }
 
 interface RailwayPayload {

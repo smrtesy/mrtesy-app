@@ -8,6 +8,7 @@ import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
 import { createClient } from "@/lib/supabase/client";
 import { useSuperAdmin } from "@/lib/api/use-super-admin";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { cn } from "@/lib/utils";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -20,12 +21,7 @@ type PlanTask = Pick<
   "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 interface Stage {
   id: string;
   name_he: string;
@@ -63,6 +59,7 @@ export function PlanEffortDetail({
   today,
   canEdit = false,
   stages = [],
+  holidays: holidayRows = [],
   onChanged,
 }: {
   plan: Plan;
@@ -70,13 +67,14 @@ export function PlanEffortDetail({
   today: Date;
   canEdit?: boolean;
   stages?: Stage[];
+  /** Org holiday calendar, passed down from the board (which already loads it). */
+  holidays?: { blocked_date: string }[];
   onChanged?: () => void;
 }) {
   const t = useTranslations("smrtPlan");
   const te = useTranslations("smrtPlan.edit");
   const [tasks, setTasks] = useState<PlanTask[]>([]);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [holidays, setHolidays] = useState<Set<string>>(new Set());
+  const { members, loading: membersLoading } = useOrgMembers();
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   // `adding` carries the stage the new task belongs to (null = no stage).
@@ -117,13 +115,9 @@ export function PlanEffortDetail({
     setLoading(true);
     (async () => {
       try {
-        const [data, mem] = await Promise.all([
-          api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`),
-          api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
-        ]);
+        const data = await api<{ tasks: PlanTask[] }>(`/api/plans/${plan.id}/tasks`);
         if (!alive) return;
         setTasks(data.tasks ?? []);
-        setMembers(mem.members ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -135,15 +129,9 @@ export function PlanEffortDetail({
     };
   }, [plan.id]);
 
-  // Roster "load": holidays power the available-work-days denominator.
-  useEffect(() => {
-    if (plan.kind !== "roster") return;
-    let alive = true;
-    api<{ holidays: { blocked_date: string }[] }>("/api/plans/holidays")
-      .then((d) => { if (alive) setHolidays(new Set((d.holidays ?? []).map((h) => h.blocked_date))); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [plan.kind]);
+  // Roster "load": holidays power the available-work-days denominator. The
+  // board already fetched the calendar — it arrives as a prop.
+  const holidays = useMemo(() => new Set(holidayRows.map((h) => h.blocked_date)), [holidayRows]);
 
   // Load gauge: sum of the person's open task-days vs working days available in
   // the window (today → their last due/finish), minus weekends + holidays.
@@ -230,7 +218,7 @@ export function PlanEffortDetail({
   const title = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
   const progress = plan.effective_progress ?? plan.progress ?? 0;
 
-  if (loading) return <div className="h-24 animate-pulse rounded-lg bg-muted" />;
+  if (loading || membersLoading) return <div className="h-24 animate-pulse rounded-lg bg-muted" />;
 
   // Group the list by stage only for a real (non-roster) plan that has stages —
   // a roster aggregates tasks across plans, so its tasks' stages aren't this
