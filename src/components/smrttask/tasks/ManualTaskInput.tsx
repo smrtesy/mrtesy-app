@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Home, AlignLeft, ListChecks, Paperclip } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // ── task tab state ──────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
   const [size, setSize] = useState<"quick" | "regular">("quick");
-  const [isHome, setIsHome] = useState(false);
+  // "" = משרד/office (default), "home" = בית, "outside" = בחוץ.
+  const [taskContext, setTaskContext] = useState<"" | "home" | "outside">("");
   const [dueDate, setDueDate] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [recurrence, setRecurrence] = useState<RecurrenceModel>({ rule: null, until: null });
@@ -98,7 +99,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setTab("task");
     setTitle("");
     setSize("quick");
-    setIsHome(false);
+    setTaskContext("");
     setDueDate("");
     setDueTime("");
     setRecurrence({ rule: null, until: null });
@@ -127,7 +128,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         const d = JSON.parse(raw) as Partial<{
           title: string; showDescription: boolean; description: string;
           showSubtasks: boolean; subtasks: DraftSubtask[];
-          size: "quick" | "regular"; isHome: boolean; dueDate: string; dueTime: string;
+          size: "quick" | "regular"; isHome?: boolean;
+          context?: "" | "home" | "outside"; dueDate: string; dueTime: string;
         }>;
         setTitle(d.title ?? "");
         setShowDescription(!!d.showDescription);
@@ -135,7 +137,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         setShowSubtasks(!!d.showSubtasks);
         setSubtasks(Array.isArray(d.subtasks) ? d.subtasks : []);
         setSize(d.size === "regular" ? "regular" : "quick");
-        setIsHome(!!d.isHome);
+        // Back-compat: older drafts stored a boolean `isHome`.
+        setTaskContext(d.context ?? (d.isHome ? "home" : ""));
         setDueDate(d.dueDate ?? "");
         setDueTime(d.dueTime ?? "");
       }
@@ -146,9 +149,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // Auto-save the task draft as the user types (after hydration, while open).
   useEffect(() => {
     if (!open || !hydrated.current) return;
-    const draft = { title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime };
+    const draft = { title, showDescription, description, showSubtasks, subtasks, size, context: taskContext, dueDate, dueTime };
     try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* ignore quota */ }
-  }, [open, title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime]);
+  }, [open, title, showDescription, description, showSubtasks, subtasks, size, taskContext, dueDate, dueTime]);
 
   // Load projects when the info tab is first needed; remember the last target.
   useEffect(() => {
@@ -253,7 +256,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         title_he: trimmedTitle,
         size,
       };
-      if (isHome) body.context = "home";
+      if (taskContext) body.context = taskContext;
       if (showDescription && description.trim()) body.description = description.trim();
       if (dueDate) body.due_date = dueDate;
       if (dueTime) body.due_time = dueTime;
@@ -511,15 +514,28 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
 
               <button
                 type="button"
-                onClick={() => setIsHome((v) => !v)}
+                onClick={() => setTaskContext((v) => (v === "home" ? "" : "home"))}
                 className={cn(
                   "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
-                  isHome ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
+                  taskContext === "home" ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
                 )}
-                aria-pressed={isHome}
+                aria-pressed={taskContext === "home"}
               >
                 <Home className="h-3.5 w-3.5" />
                 {t("contextHome")}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTaskContext((v) => (v === "outside" ? "" : "outside"))}
+                className={cn(
+                  "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
+                  taskContext === "outside" ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
+                )}
+                aria-pressed={taskContext === "outside"}
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                {t("contextOutside")}
               </button>
 
               {/* Attach a file — click to pick, or drag a file onto the button. */}

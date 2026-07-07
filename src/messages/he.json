@@ -52,6 +52,7 @@
     "sizeQuick": "מהיר",
     "sizeRegular": "רגיל",
     "contextHome": "בית",
+    "contextOutside": "בחוץ",
     "moreOptions": "עוד אפשרויות",
     "addDescription": "הוסף תיאור",
     "addSubtask": "הוסף תת-משימה",
@@ -550,6 +551,7 @@
       "reopened": "המשימה נפתחה מחדש",
       "undo": "ביטול",
       "contextHome": "בית",
+      "contextOutside": "בחוץ",
       "recurring": "משימה חוזרת",
       "critical": "קריטי",
       "wokeChip": "חזר מנדנוד",
@@ -577,7 +579,8 @@
     "contextFilter": {
       "all": "הכל",
       "home": "בית",
-      "work": "עבודה"
+      "office": "משרד",
+      "outside": "בחוץ"
     },
     "review": {
       "banner": "{count} משימות ישנות מחכות לביקורת — עדיין רלוונטיות?",
@@ -1093,7 +1096,8 @@
     "contextLabel": "הקשר",
     "contextNone": "ללא",
     "contextHome": "בית",
-    "contextWork": "עבודה",
+    "contextWork": "משרד",
+    "contextOutside": "בחוץ",
     "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון",
     "savedFlash": "נשמר ✓",
     "assignLabel": "שייך לעובד",

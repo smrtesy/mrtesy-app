@@ -46,13 +46,13 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical, ExternalLink } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
-type ContextFilter = "all" | "home" | "work";
+type ContextFilter = "all" | "home" | "office" | "outside";
 
 /** Plan metadata (needs/blocked state) for MY plan tasks, keyed by task id. */
 interface PlanMeta {
@@ -134,7 +134,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [contextFilter, setContextFilter] = useState<ContextFilter>("work");
+  const [contextFilter, setContextFilter] = useState<ContextFilter>("office");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
@@ -290,7 +290,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
-      if (contextFilter === "work") return task.context !== "home";
+      if (contextFilter === "outside") return task.context === "outside";
+      // Office is the quiet default: everything that isn't explicitly home/outside
+      // (null or the legacy 'work' value).
+      if (contextFilter === "office") return task.context !== "home" && task.context !== "outside";
       return true;
     });
 
@@ -534,7 +537,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const contextChips: { key: ContextFilter; label: string; icon?: typeof Home }[] = [
     { key: "all", label: t("contextFilter.all") },
     { key: "home", label: t("contextFilter.home"), icon: Home },
-    { key: "work", label: t("contextFilter.work"), icon: Briefcase },
+    { key: "office", label: t("contextFilter.office"), icon: Briefcase },
+    { key: "outside", label: t("contextFilter.outside"), icon: MapPin },
   ];
 
   function renderRow(task: Task, zone: RowZone) {

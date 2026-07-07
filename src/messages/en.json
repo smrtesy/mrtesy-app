@@ -52,6 +52,7 @@
     "sizeQuick": "Quick",
     "sizeRegular": "Regular",
     "contextHome": "Home",
+    "contextOutside": "Outside",
     "moreOptions": "More options",
     "addDescription": "Add description",
     "addSubtask": "Add subtask",
@@ -550,6 +551,7 @@
       "reopened": "Task reopened",
       "undo": "Undo",
       "contextHome": "Home",
+      "contextOutside": "Outside",
       "recurring": "Recurring task",
       "critical": "Critical",
       "wokeChip": "Back from snooze",
@@ -577,7 +579,8 @@
     "contextFilter": {
       "all": "All",
       "home": "Home",
-      "work": "Work"
+      "office": "Office",
+      "outside": "Outside"
     },
     "review": {
       "banner": "{count} stale tasks await review — still relevant?",
@@ -1093,7 +1096,8 @@
     "contextLabel": "Context",
     "contextNone": "None",
     "contextHome": "Home",
-    "contextWork": "Work",
+    "contextWork": "Office",
+    "contextOutside": "Outside",
     "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board",
     "savedFlash": "Saved ✓",
     "assignLabel": "Assign to a teammate",

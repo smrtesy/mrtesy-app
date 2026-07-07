@@ -20,6 +20,7 @@ import {
   ExternalLink,
   X,
   Home,
+  MapPin,
   Trash2,
   ThumbsDown,
   ListPlus,
@@ -84,7 +85,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
-  const [editContext, setEditContext] = useState<"" | "home">("");
+  const [editContext, setEditContext] = useState<"" | "home" | "outside">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
   /** Tiny "saved ✓" flash after an autosave lands. */
@@ -226,7 +227,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
     setEditSize(task.size === "quick" ? "quick" : "regular");
-    setEditContext(task.context === "home" ? "home" : "");
+    setEditContext(task.context === "home" ? "home" : task.context === "outside" ? "outside" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
     // Let the seeded values settle before the autosave watcher arms.
@@ -642,6 +643,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               onClick={() => setEditContext(editContext === "home" ? "" : "home")}
             >
               <Home className={editContext === "home" ? "fill-current" : undefined} />
+            </IconButton>
+            <IconButton
+              label={tDetail("contextOutside")}
+              color="primary"
+              aria-pressed={editContext === "outside"}
+              className={editContext === "outside" ? "text-primary" : undefined}
+              onClick={() => setEditContext(editContext === "outside" ? "" : "outside")}
+            >
+              <MapPin className={editContext === "outside" ? "fill-current" : undefined} />
             </IconButton>
             <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
               <Clock />
