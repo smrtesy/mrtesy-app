@@ -412,6 +412,24 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
+  // Choose this take as the line's audio (single-select): mark it, clear the
+  // others, and repoint the line so play/download/archive use it.
+  async function chooseTake(take: Take) {
+    if (take.approved) return; // already the line's audio
+    setTakes((prev) => {
+      const key = takesOpenId ?? "";
+      const list = (prev[key] ?? []).map((tk) => ({ ...tk, approved: tk.id === take.id }));
+      return takesOpenId ? { ...prev, [key]: list } : prev;
+    });
+    try {
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: true } });
+      fetchLines(); // the line's audio now points at this take
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      if (takesOpenId) loadTakes(takesOpenId);
+    }
+  }
+
   async function patchTake(take: Take, body: Record<string, unknown>) {
     // Optimistically update the open take list, then persist.
     setTakes((prev) => {
@@ -701,6 +719,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.approved && (
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.inUse")}</span>
+                                )}
                                 <span>· {new Date(take.created_at).toLocaleString(locale)}</span>
                                 {take.duration_seconds ? <span>· {take.duration_seconds.toFixed(1)}s</span> : null}
                                 {takeTags.map((tg) => (
@@ -715,9 +736,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                title={take.approved ? t("studio.unapprove") : t("studio.approve")}
+                                title={take.approved ? t("studio.chosenTake") : t("studio.useTake")}
                                 className={take.approved ? "text-emerald-600" : undefined}
-                                onClick={() => patchTake(take, { approved: !take.approved })}
+                                onClick={() => chooseTake(take)}
                               >
                                 <BadgeCheck className="h-4 w-4" />
                               </Button>

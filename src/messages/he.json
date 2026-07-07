@@ -2634,7 +2634,10 @@
       "reanalyzeHint": "ה-LLM יבחר מחדש רגש ותגיות טון",
       "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב",
       "pause": "השהה",
-      "takeNotePlaceholder": "איזו מילה לקחת מהגרסה הזו?"
+      "takeNotePlaceholder": "איזו מילה לקחת מהגרסה הזו?",
+      "useTake": "השתמש בגרסה זו לשורה",
+      "chosenTake": "הגרסה שבשימוש לשורה",
+      "inUse": "בשימוש"
     },
     "lexicon": {
       "title": "מילון הגייה",

@@ -2635,7 +2635,10 @@
       "reanalyzeHint": "the LLM re-picks emotion + tone tags",
       "selectWordHint": "Select a word in the text to get spelling suggestions",
       "pause": "Pause",
-      "takeNotePlaceholder": "Which word to keep from this take?"
+      "takeNotePlaceholder": "Which word to keep from this take?",
+      "useTake": "Use this take for the line",
+      "chosenTake": "In use for the line",
+      "inUse": "in use"
     },
     "lexicon": {
       "title": "Pronunciation lexicon",

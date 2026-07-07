@@ -1806,28 +1806,80 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
   res.json({ takes: data ?? [] });
 });
 
-// PATCH /voice/takes/:id — mark a take good (✓) and/or jot a note ("use word X
-// from here"). Independent per take; multiple takes on a line may be approved.
-const TAKE_UPDATABLE = new Set(["approved", "note"]);
-
+// PATCH /voice/takes/:id — choose a take as the line's audio (✓) and/or jot a
+// note. `approved:true` is SINGLE-select per line: it clears the other takes,
+// marks this one, and repoints the line's output_audio_path/duration/cost at it
+// so play / download / archive all use the chosen take. `note` is independent.
 router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
-  const updates: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(req.body ?? {})) {
-    if (TAKE_UPDATABLE.has(k)) updates[k] = v;
-  }
-  if (Object.keys(updates).length === 0) {
+  const body = req.body ?? {};
+  const hasApproved = typeof body.approved === "boolean";
+  const hasNote = typeof body.note === "string" || body.note === null;
+  if (!hasApproved && !hasNote) {
     return res.status(400).json({ error: "No updatable fields in body" });
   }
-  const { data, error } = await db
+
+  const { data: take, error: takeErr } = await db
     .from("smrtvoice_line_takes")
-    .update(updates)
+    .select("id, line_id, output_audio_path, duration_seconds, cost_usd")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
-    .select()
     .maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: "Take not found" });
-  res.json({ take: data });
+  if (takeErr) return res.status(500).json({ error: takeErr.message });
+  if (!take) return res.status(404).json({ error: "Take not found" });
+
+  if (hasNote) {
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ note: (body.note as string | null) || null })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  if (hasApproved && body.approved === true) {
+    // Single-select: clear siblings, mark this take, and make it the line's audio.
+    const { error: clearErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (clearErr) return res.status(500).json({ error: clearErr.message });
+
+    const { error: setErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: true })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (setErr) return res.status(500).json({ error: setErr.message });
+
+    const { error: lineErr } = await db
+      .from("smrtvoice_lines")
+      .update({
+        output_audio_path: take.output_audio_path,
+        output_duration_seconds: take.duration_seconds,
+        generation_cost_usd: take.cost_usd,
+        approved: true,
+      })
+      .eq("id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (lineErr) return res.status(500).json({ error: lineErr.message });
+  } else if (hasApproved && body.approved === false) {
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  const { data: updated, error: readErr } = await db
+    .from("smrtvoice_line_takes")
+    .select()
+    .eq("id", take.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (readErr) return res.status(500).json({ error: readErr.message });
+  res.json({ take: updated });
 });
 
 router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => {
