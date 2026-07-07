@@ -305,6 +305,19 @@ export default function OnboardingSetup() {
         calendar_initial_scan_months: calMonths,
         drive_folder_id: selectedFolder || null,
       };
+      // Capture the real browser timezone so reminder/snooze times fire at the
+      // user's local hours. Only when unset — this page is re-reachable after
+      // onboarding, and a re-run must not overwrite a deliberate account-page
+      // choice (or capture a travel timezone).
+      const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (browserTz) {
+        const { data: curSettings } = await supabase
+          .from("user_settings")
+          .select("timezone")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (!curSettings?.timezone) updateData.timezone = browserTz;
+      }
       const { error: settingsErr } = await supabase
         .from("user_settings")
         .update(updateData)

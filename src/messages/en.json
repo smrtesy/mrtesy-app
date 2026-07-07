@@ -191,7 +191,11 @@
     "identity": "Identity",
     "name": "Name",
     "email": "Email",
-    "organization": "Organization"
+    "organization": "Organization",
+    "timezone": "Time zone",
+    "timezoneSaved": "Time zone saved",
+    "timezoneSaveFailed": "Failed to save time zone",
+    "timezoneUseBrowser": "Use browser time zone ({tz})"
   },
   "settingsTabs": {
     "apps": "Apps",
