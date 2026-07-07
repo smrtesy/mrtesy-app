@@ -349,18 +349,6 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
-  async function toggleApprove(line: Line) {
-    try {
-      await api(`/api/voice/lines/${line.id}`, {
-        method: "PATCH",
-        body: { approved: !line.approved },
-      });
-      fetchLines();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unknown error");
-    }
-  }
-
   async function rerunRedos() {
     setRerunning(true);
     try {
@@ -564,15 +552,6 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     <div className="text-sm truncate" dir="rtl">{line.text_clean}</div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      title={line.approved ? t("studio.unapprove") : t("studio.approve")}
-                      className={line.approved ? "text-emerald-600" : undefined}
-                      onClick={() => toggleApprove(line)}
-                    >
-                      <BadgeCheck className="h-4 w-4" />
-                    </Button>
                     <Button
                       size="icon"
                       variant="ghost"
