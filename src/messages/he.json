@@ -71,6 +71,7 @@
     "sizeQuick": "מהיר",
     "sizeRegular": "רגיל",
     "contextHome": "בית",
+    "contextOutside": "בחוץ",
     "moreOptions": "עוד אפשרויות",
     "addDescription": "הוסף תיאור",
     "addSubtask": "הוסף תת-משימה",
@@ -572,6 +573,7 @@
       "reopened": "המשימה נפתחה מחדש",
       "undo": "ביטול",
       "contextHome": "בית",
+      "contextOutside": "בחוץ",
       "recurring": "משימה חוזרת",
       "critical": "קריטי",
       "wokeChip": "חזר מנדנוד",
@@ -599,7 +601,8 @@
     "contextFilter": {
       "all": "הכל",
       "home": "בית",
-      "work": "עבודה"
+      "office": "משרד",
+      "outside": "בחוץ"
     },
     "review": {
       "banner": "{count} משימות ישנות מחכות לביקורת — עדיין רלוונטיות?",
@@ -1118,7 +1121,8 @@
     "contextLabel": "הקשר",
     "contextNone": "ללא",
     "contextHome": "בית",
-    "contextWork": "עבודה",
+    "contextWork": "משרד",
+    "contextOutside": "בחוץ",
     "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון",
     "savedFlash": "נשמר ✓",
     "assignLabel": "שייך לעובד",
@@ -2513,6 +2517,18 @@
         "genderNeutral": "ניטרלי",
         "personalityPromptLabel": "Personality prompt (English, ל-LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "בסיס סגנון (מנגינה קבועה)",
+        "styleBaselineHint": "תגיות שיחולו על כל שורה של הדמות — כך לכל דמות מנגינה משלה, גם במשפטים ניטרליים.",
+        "styleTag": {
+          "higherPitch": "גובה גבוה",
+          "lowerPitch": "גובה נמוך",
+          "slow": "איטי",
+          "fast": "מהיר",
+          "soft": "רך",
+          "loud": "חזק",
+          "emphasis": "מודגש",
+          "whisper": "לחישה"
+        },
         "cloneHint": "אחרי היצירה — במסך הדמות תוכל להעלות הקלטה מהמחשב או לבחור קבצים מ-Google Drive כדי ליצור את הקלון (Ultra).",
         "submit": "צור דמות",
         "editTitle": "עריכת דמות",

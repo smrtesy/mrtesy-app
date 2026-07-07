@@ -160,6 +160,9 @@ router.post(
         age_years: typeof body.age_years === "number" ? body.age_years : null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
+        style_baseline_tags: Array.isArray(body.style_baseline_tags)
+          ? body.style_baseline_tags
+          : [],
         ...(orgSettings?.default_resemble_model
           ? { resemble_model: orgSettings.default_resemble_model }
           : {}),
@@ -206,6 +209,7 @@ const CHARACTER_UPDATABLE = new Set([
   "age_years",
   "gender",
   "personality_prompt",
+  "style_baseline_tags",
   "resemble_model",
   "default_exaggeration",
   "default_pitch",
@@ -223,6 +227,11 @@ router.patch(
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No updatable fields in body" });
+    }
+    // style_baseline_tags is a jsonb NOT NULL array; coerce non-arrays to []
+    // (mirrors the create route) so a stray scalar/null can't break synthesis.
+    if ("style_baseline_tags" in updates && !Array.isArray(updates.style_baseline_tags)) {
+      updates.style_baseline_tags = [];
     }
 
     const { data, error } = await db

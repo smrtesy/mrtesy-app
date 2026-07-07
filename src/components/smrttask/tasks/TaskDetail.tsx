@@ -20,6 +20,7 @@ import {
   ExternalLink,
   X,
   Home,
+  MapPin,
   Trash2,
   ThumbsDown,
   ListPlus,
@@ -84,7 +85,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
-  const [editContext, setEditContext] = useState<"" | "home">("");
+  const [editContext, setEditContext] = useState<"" | "home" | "outside">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
   /** Tiny "saved ✓" flash after an autosave lands. */
@@ -226,7 +227,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
     setEditSize(task.size === "quick" ? "quick" : "regular");
-    setEditContext(task.context === "home" ? "home" : "");
+    setEditContext(task.context === "home" ? "home" : task.context === "outside" ? "outside" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
     // Let the seeded values settle before the autosave watcher arms.
@@ -354,7 +355,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <div className="flex items-center gap-2">
               <div dir="ltr" className="flex min-w-0 items-center gap-1.5">
                 <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
-                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
+                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation onNavigate={handleDialogClose} />}
                 <DueDateChip
                   deadline={effectiveDeadline(effectiveTask)}
                   time={effectiveTask.due_date ? effectiveTask.due_time : null}
@@ -631,7 +632,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 meta:   ℹ️/📋 context · ⚡ size · 🏠 home · ⏰ snooze · 📄 info · 👤 assign
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
-            <ContextButton task={effectiveTask} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
+            <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
             <IconButton
               label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
               color="amber"
@@ -648,6 +649,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               onClick={() => setEditContext(editContext === "home" ? "" : "home")}
             >
               <Home className={editContext === "home" ? "fill-current" : undefined} />
+            </IconButton>
+            <IconButton
+              label={tDetail("contextOutside")}
+              color="primary"
+              aria-pressed={editContext === "outside"}
+              className={editContext === "outside" ? "text-primary" : undefined}
+              onClick={() => setEditContext(editContext === "outside" ? "" : "outside")}
+            >
+              <MapPin className={editContext === "outside" ? "fill-current" : undefined} />
             </IconButton>
             <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
               <Clock />

@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
+import { X, Bell, Clock, Zap, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -270,8 +270,8 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     });
   }
 
-  async function handleHomeToggle(task: Task) {
-    const context = task.context === "home" ? null : "home";
+  async function handleContextToggle(task: Task, ctx: "home" | "outside") {
+    const context = task.context === ctx ? null : ctx;
     setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, context } : s)));
     try {
       await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { context } });
@@ -475,7 +475,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoTitle={title}
                     infoBody={task.description}
                     onSizeToggle={() => handleSizeToggle(task)}
-                    onHomeToggle={() => handleHomeToggle(task)}
+                    onContextToggle={(ctx) => handleContextToggle(task, ctx)}
                     onAssign={(uid) => handleAssign(task.id, uid)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
@@ -591,7 +591,7 @@ function SuggestionActions({
   infoTitle,
   infoBody,
   onSizeToggle,
-  onHomeToggle,
+  onContextToggle,
   onAssign,
   onFastDismiss,
   onDismissWithReason,
@@ -605,7 +605,7 @@ function SuggestionActions({
   infoTitle: string;
   infoBody: string | null;
   onSizeToggle: () => void;
-  onHomeToggle: () => void;
+  onContextToggle: (ctx: "home" | "outside") => void;
   onAssign: (userId: string | null) => void;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
@@ -620,6 +620,7 @@ function SuggestionActions({
   const isHome = task.context === "home";
   // An event reminder: "approve" reads as "close the reminder" (a ✓), not "add".
   const isEvent = task.task_type === "meeting";
+  const isOutside = task.context === "outside";
 
   return (
     <div className="flex gap-0.5 mt-3 items-center flex-wrap [&>button]:h-8 [&>button]:w-8">
@@ -638,9 +639,18 @@ function SuggestionActions({
         color="primary"
         className={isHome ? "text-primary" : undefined}
         aria-pressed={isHome}
-        onClick={onHomeToggle}
+        onClick={() => onContextToggle("home")}
       >
         <Home className={isHome ? "fill-current" : undefined} />
+      </IconButton>
+      <IconButton
+        label={tTasks("contextFilter.outside")}
+        color="primary"
+        className={isOutside ? "text-primary" : undefined}
+        aria-pressed={isOutside}
+        onClick={() => onContextToggle("outside")}
+      >
+        <MapPin className={isOutside ? "fill-current" : undefined} />
       </IconButton>
       <IconButton label={tTasks("actions.snooze")} color="amber" onClick={onSnooze}>
         <Clock />

@@ -71,6 +71,7 @@
     "sizeQuick": "Quick",
     "sizeRegular": "Regular",
     "contextHome": "Home",
+    "contextOutside": "Outside",
     "moreOptions": "More options",
     "addDescription": "Add description",
     "addSubtask": "Add subtask",
@@ -572,6 +573,7 @@
       "reopened": "Task reopened",
       "undo": "Undo",
       "contextHome": "Home",
+      "contextOutside": "Outside",
       "recurring": "Recurring task",
       "critical": "Critical",
       "wokeChip": "Back from snooze",
@@ -599,7 +601,8 @@
     "contextFilter": {
       "all": "All",
       "home": "Home",
-      "work": "Work"
+      "office": "Office",
+      "outside": "Outside"
     },
     "review": {
       "banner": "{count} stale tasks await review — still relevant?",
@@ -1118,7 +1121,8 @@
     "contextLabel": "Context",
     "contextNone": "None",
     "contextHome": "Home",
-    "contextWork": "Work",
+    "contextWork": "Office",
+    "contextOutside": "Outside",
     "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board",
     "savedFlash": "Saved ✓",
     "assignLabel": "Assign to a teammate",
@@ -2514,6 +2518,18 @@
         "genderNeutral": "Neutral",
         "personalityPromptLabel": "Personality prompt (English, for LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "Style baseline (constant melody)",
+        "styleBaselineHint": "Tags applied to every line of this character — so each character keeps its own melody, even on neutral lines.",
+        "styleTag": {
+          "higherPitch": "Higher pitch",
+          "lowerPitch": "Lower pitch",
+          "slow": "Slow",
+          "fast": "Fast",
+          "soft": "Soft",
+          "loud": "Loud",
+          "emphasis": "Emphasis",
+          "whisper": "Whisper"
+        },
         "cloneHint": "After creating — on the character screen you can upload a recording or pick files from Google Drive to create the (Ultra) clone.",
         "submit": "Create character",
         "editTitle": "Edit character",
