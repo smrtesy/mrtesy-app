@@ -1251,6 +1251,8 @@
     "searchAllHistory": "כל ההיסטוריה",
     "searchAllHistoryHint": "חיפוש בכל מה שנשמר, לא רק ב-48 השעות האחרונות",
     "searchNoResults": "אין פריטים תואמים",
+    "loadMore": "טען עוד",
+    "loadingMore": "טוען…",
     "openTask": "פתח משימה",
     "addCorrection": "תיקון",
     "addCorrectionTitle": "רישום תיקון עם הסבר"

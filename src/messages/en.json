@@ -1251,6 +1251,8 @@
     "searchAllHistory": "All history",
     "searchAllHistoryHint": "Search everything stored, not just the last 48 hours",
     "searchNoResults": "No matching entries",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
     "openTask": "Open task",
     "addCorrection": "Correction",
     "addCorrectionTitle": "Record a correction with an explanation"
