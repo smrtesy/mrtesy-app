@@ -2521,7 +2521,8 @@
       "defaultLlmModelDefault": "ברירת מחדל (שרת)",
       "postprocess": "עיבוד אחרי-הפקה",
       "postprocessCompress": "קומפרסור (ריכוך קפיצות ווליום)",
-      "postprocessSpeed": "מהירות (WSOLA, 1.0 = ללא שינוי)"
+      "postprocessSpeed": "מהירות (WSOLA, 1.0 = ללא שינוי)",
+      "postprocessNormalize": "יישור ווליום בין שורות (נרמול)"
     },
     "guide": {
       "title": "מדריך smrtVoice",

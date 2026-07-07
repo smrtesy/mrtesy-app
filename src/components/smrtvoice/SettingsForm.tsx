@@ -21,6 +21,7 @@ interface Settings {
   postprocess_enabled: boolean;
   postprocess_compress: boolean;
   postprocess_speed: number;
+  postprocess_normalize: boolean;
 }
 
 export function SettingsForm() {
@@ -63,6 +64,7 @@ export function SettingsForm() {
             postprocess_enabled: settings.postprocess_enabled,
             postprocess_compress: settings.postprocess_compress,
             postprocess_speed: settings.postprocess_speed,
+            postprocess_normalize: settings.postprocess_normalize,
           },
         },
       );
@@ -216,6 +218,16 @@ export function SettingsForm() {
         </label>
         {settings.postprocess_enabled && (
           <div className="space-y-2 ps-6">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.postprocess_normalize}
+                onChange={(e) =>
+                  setSettings({ ...settings, postprocess_normalize: e.target.checked })
+                }
+              />
+              {t("postprocessNormalize")}
+            </label>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"

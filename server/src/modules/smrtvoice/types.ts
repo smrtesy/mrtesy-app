@@ -263,6 +263,8 @@ export interface Settings {
   postprocess_enabled: boolean;
   postprocess_compress: boolean;
   postprocess_speed: number;
+  postprocess_normalize: boolean;
+  postprocess_target_db: number;
   notify_on_completion: boolean;
   notify_on_budget_warn: boolean;
   notify_via_whatsapp: boolean;
@@ -312,6 +314,8 @@ export interface CreateJobRequest {
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
+  postprocess_normalize?: boolean;
+  postprocess_target_db?: number;
   callback_url: string;
   callback_secret?: string;
   characters?: Array<{ name: string; resemble_voice_id?: string }>;

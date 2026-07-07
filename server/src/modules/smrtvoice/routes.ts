@@ -1235,6 +1235,8 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
+      postprocess_normalize: settings?.postprocess_normalize ?? undefined,
+      postprocess_target_db: settings?.postprocess_target_db ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -1576,7 +1578,7 @@ async function queueRegeneration(
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed")
+    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
@@ -1638,6 +1640,8 @@ async function queueRegeneration(
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
+      postprocess_normalize: settings?.postprocess_normalize ?? undefined,
+      postprocess_target_db: settings?.postprocess_target_db ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -2040,6 +2044,8 @@ const SETTINGS_UPDATABLE = new Set([
   "postprocess_enabled",
   "postprocess_compress",
   "postprocess_speed",
+  "postprocess_normalize",
+  "postprocess_target_db",
   "sample_text",
   "gdrive_archive_folder_id",
   "gdrive_archive_folder_url",
