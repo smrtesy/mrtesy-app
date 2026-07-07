@@ -191,7 +191,11 @@
     "identity": "פרטים אישיים",
     "name": "שם",
     "email": "אימייל",
-    "organization": "ארגון"
+    "organization": "ארגון",
+    "timezone": "אזור זמן",
+    "timezoneSaved": "אזור הזמן נשמר",
+    "timezoneSaveFailed": "שמירת אזור הזמן נכשלה",
+    "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})"
   },
   "settingsTabs": {
     "apps": "אפליקציות",
