@@ -59,6 +59,11 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
 
 // Safety valve for calendar sync token capture pagination.
 const MAX_SYNC_TOKEN_PAGES = 20;
+// timeMax bound for the token-capture listing: with singleEvents=true a
+// never-ending weekly recurrence otherwise expands into unbounded future
+// instances, the page cap is hit on every run, and the token is never
+// captured (permanent bootstrap mode).
+const SYNC_TOKEN_TIME_MAX_MS = 365 * 24 * 60 * 60 * 1000; // now + 1 year
 
 // Capture a fresh Calendar sync token for calendar-webhook's incremental
 // sync. nextSyncToken only appears on the LAST page of an events.list
@@ -68,17 +73,23 @@ const MAX_SYNC_TOKEN_PAGES = 20;
 // count small, and gets encoded into the token (it must NOT be re-sent with
 // syncToken later). No orderBy — it is incompatible with sync tokens and
 // suppresses nextSyncToken.
+// Trade-off of timeMax: the constraint is baked into the sync token, so
+// events further than a year out won't appear in incremental syncs until the
+// next re-bootstrap (410 resets rebuild the window) — acceptable for a task
+// app.
 async function captureCalendarSyncToken(
   accessToken: string,
   userId: string
 ): Promise<string | null> {
   const timeMin = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const timeMax = new Date(Date.now() + SYNC_TOKEN_TIME_MAX_MS).toISOString();
   let pageToken = "";
   for (let page = 0; page < MAX_SYNC_TOKEN_PAGES; page++) {
     const params = new URLSearchParams({
       maxResults: "250",
       singleEvents: "true",
       timeMin,
+      timeMax,
     });
     if (pageToken) params.set("pageToken", pageToken);
     const resp = await fetch(

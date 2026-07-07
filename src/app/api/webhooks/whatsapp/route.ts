@@ -676,26 +676,49 @@ async function processUserBatch(
   // Redelivery guard for auto-replies: the (user_id, wamid) upsert dedupes
   // STORAGE, but runAutoReplies would still fire on every Meta redelivery of
   // the same message — the customer gets the same auto-reply twice and Haiku
-  // is billed twice. Snapshot which wamids ALREADY existed before this batch
-  // writes anything (same pre-existence idea as existingTranscript below);
-  // a message is "new" only if it wasn't stored by a previous delivery.
+  // is billed twice. Snapshot which rows ALREADY existed before this batch
+  // writes anything (same pre-existence idea as existingTranscript below),
+  // along with the explicit autoreply_sent_at marker: mere existence is NOT
+  // proof a reply went out — the previous invocation may have died between
+  // storing the row and sending the reply.
   const batchWamids = messages
     .map((m) => m.meta.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
-  const preexistingWamids = new Set<string>();
+  const preexisting = new Map<string, { autoreplySentAt: string | null; createdAt: string | null }>();
   if (batchWamids.length > 0) {
     const { data: existingRows, error: preexistingErr } = await db
       .from("whatsapp_messages")
-      .select("wamid")
+      .select("wamid, autoreply_sent_at, created_at")
       .eq("user_id", userId)
       .in("wamid", batchWamids);
     if (preexistingErr) {
       // Best-effort: on lookup failure treat everything as new (current behavior).
       console.warn("[whatsapp-webhook] pre-existence lookup failed:", preexistingErr.message);
     } else {
-      for (const r of existingRows ?? []) preexistingWamids.add(String(r.wamid));
+      for (const r of existingRows ?? []) {
+        preexisting.set(String(r.wamid), {
+          autoreplySentAt: (r.autoreply_sent_at as string | null) ?? null,
+          createdAt: (r.created_at as string | null) ?? null,
+        });
+      }
     }
   }
+
+  // Auto-reply eligibility: a NEW wamid always qualifies. A preexisting row
+  // qualifies only if no reply was ever marked sent for it AND it was stored
+  // within the last 10 minutes — the crash-recovery case, where a previous
+  // invocation stored the message, died before replying, and Meta redelivered.
+  // Preexisting unmarked rows OLDER than 10 minutes predate the marker column
+  // (legacy rows); re-replying to those would resurrect the duplicate-reply
+  // bug for redeliveries in flight at deploy time, so they stay skipped.
+  const AUTOREPLY_REDELIVERY_WINDOW_MS = 10 * 60 * 1000;
+  const autoReplyEligible = (wamid: string): boolean => {
+    const prior = preexisting.get(wamid);
+    if (!prior) return true; // brand-new message
+    if (prior.autoreplySentAt) return false; // already replied
+    if (!prior.createdAt) return false;
+    return Date.now() - new Date(prior.createdAt).getTime() <= AUTOREPLY_REDELIVERY_WINDOW_MS;
+  };
 
   const touchedChats = new Set<string>();
   let inserted = 0;
@@ -735,12 +758,13 @@ async function processUserBatch(
 
   // Selective auto-reply (opt-in, allowlist-only, gated by a master switch).
   // Live incoming messages only — never during history backfill, never groups,
-  // never bot-flagged senders (already skipped above), and never messages that
-  // already existed before this delivery (Meta redeliveries must not re-reply).
+  // never bot-flagged senders (already skipped above), and never messages
+  // whose autoreply_sent_at marker (or age — see autoReplyEligible above)
+  // says a reply already went out (Meta redeliveries must not re-reply).
   if (!isHistoryBatch) {
     const incoming: IncomingForReply[] = messages
-      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone) && !preexistingWamids.has(m.meta.id))
-      .map((m) => ({ sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
+      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone) && autoReplyEligible(m.meta.id))
+      .map((m) => ({ wamid: m.meta.id!, sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
     const phoneNumberId = String(messages[0]?.metadata.phone_number_id ?? "");
     if (incoming.length > 0 && phoneNumberId) {
       try {
@@ -865,29 +889,39 @@ const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
 
 // Has this exact wamid already been stored with a REAL transcript (not a
 // placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
+// Returns the stored media fields too — the caller's upsert overwrites the
+// whole row, so reusing only the body would null out the stored audio link.
 async function existingTranscript(
   db: SupabaseAdmin,
   userId: string,
   wamid: string,
-): Promise<string | null> {
+): Promise<ExistingMediaRow | null> {
   if (!wamid) return null;
-  const { data } = await db
+  const { data, error } = await db
     .from("whatsapp_messages")
-    .select("body_text")
+    .select("body_text, media_url, media_filename, media_size")
     .eq("user_id", userId)
     .eq("wamid", wamid)
     .maybeSingle();
+  if (error) console.error("[whatsapp-webhook] existingTranscript lookup failed:", error.message);
   const body = String(data?.body_text ?? "").trim();
   // Placeholders all start with "[" (e.g. "[אודיו - לא ניתן לתמלל כרגע]",
   // "[הקלטה ארוכה …]"). A real transcript never does — reuse only those.
-  if (body.length > 0 && !body.startsWith("[")) return body;
+  if (body.length > 0 && !body.startsWith("[")) {
+    return {
+      body,
+      mediaUrl: (data?.media_url as string | null) ?? null,
+      mediaFilename: (data?.media_filename as string | null) ?? null,
+      mediaSize: (data?.media_size as number | null) ?? null,
+    };
+  }
   return null;
 }
 
 // Same redelivery guard for images: has this exact wamid already been stored
 // with a COMPLETED OCR? If so, reuse the stored body + media fields instead of
 // re-downloading and re-running Gemini OCR on every Meta redelivery.
-interface ExistingOcrRow {
+interface ExistingMediaRow {
   body: string;
   mediaUrl: string | null;
   mediaFilename: string | null;
@@ -898,14 +932,15 @@ async function existingOcr(
   db: SupabaseAdmin,
   userId: string,
   wamid: string,
-): Promise<ExistingOcrRow | null> {
+): Promise<ExistingMediaRow | null> {
   if (!wamid) return null;
-  const { data } = await db
+  const { data, error } = await db
     .from("whatsapp_messages")
     .select("body_text, media_ocr_text, media_url, media_filename, media_size")
     .eq("user_id", userId)
     .eq("wamid", wamid)
     .maybeSingle();
+  if (error) console.error("[whatsapp-webhook] existingOcr lookup failed:", error.message);
   if (!data) return null;
   const body = String(data.body_text ?? "").trim();
   const legacyOcr = String(data.media_ocr_text ?? "").trim();
@@ -972,7 +1007,10 @@ async function buildMessageRow(
         // already produced a real transcript for this wamid, reuse it.
         const prior = await existingTranscript(db, userId, m.id!);
         if (prior) {
-          body = prior;
+          body = prior.body;
+          mediaUrl = prior.mediaUrl;
+          mediaFilename = prior.mediaFilename;
+          mediaSize = prior.mediaSize;
           break;
         }
         try {

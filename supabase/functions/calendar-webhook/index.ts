@@ -60,24 +60,41 @@ const CALENDAR_EVENTS_URL =
   "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 // Safety valve for both the incremental sync loop and token capture.
 const MAX_SYNC_PAGES = 20;
+// timeMax bound for the token-capture listing: with singleEvents=true a
+// never-ending weekly recurrence otherwise expands into unbounded future
+// instances, the page cap is hit on every run, and the token is never
+// captured (permanent bootstrap mode).
+const SYNC_TOKEN_TIME_MAX_MS = 365 * 24 * 60 * 60 * 1000; // now + 1 year
 
-// Capture a fresh Calendar sync token. nextSyncToken only appears on the
-// LAST page of an events.list response, so page through to the end.
-// singleEvents=true must match what the incremental path sends alongside the
-// token; the 24h timeMin window keeps the page count small and gets encoded
-// into the token (it must NOT be re-sent with syncToken later). No orderBy —
-// it is incompatible with sync tokens and suppresses nextSyncToken.
+// Capture a fresh Calendar sync token, returning the events fetched along the
+// way so the bootstrap path can process the SAME window it stamps a token
+// over (a separate scan would miss changes landing between scan and capture).
+// nextSyncToken only appears on the LAST page of an events.list response, so
+// page through to the end. singleEvents=true must match what the incremental
+// path sends alongside the token; the 24h timeMin window keeps the page count
+// small and gets encoded into the token (it must NOT be re-sent with
+// syncToken later). No orderBy — it is incompatible with sync tokens and
+// suppresses nextSyncToken.
+// Trade-off of timeMax: the constraint is baked into the sync token, so
+// events further than a year out won't appear in incremental syncs until the
+// next re-bootstrap (410 resets rebuild the window) — acceptable for a task
+// app.
 async function captureCalendarSyncToken(
   accessToken: string,
   userId: string
-): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<{ token: string | null; events: any[] }> {
   const timeMin = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const timeMax = new Date(Date.now() + SYNC_TOKEN_TIME_MAX_MS).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const events: any[] = [];
   let pageToken = "";
   for (let page = 0; page < MAX_SYNC_PAGES; page++) {
     const params = new URLSearchParams({
       maxResults: "250",
       singleEvents: "true",
       timeMin,
+      timeMax,
     });
     if (pageToken) params.set("pageToken", pageToken);
     const resp = await fetch(`${CALENDAR_EVENTS_URL}?${params}`, {
@@ -85,14 +102,15 @@ async function captureCalendarSyncToken(
     });
     if (!resp.ok) {
       console.warn(`[calendar-webhook] sync token capture failed for ${userId}: ${resp.status}`);
-      return null;
+      return { token: null, events };
     }
     const data = await resp.json();
+    events.push(...(data.items || []));
     pageToken = data.nextPageToken || "";
-    if (!pageToken) return data.nextSyncToken || null;
+    if (!pageToken) return { token: data.nextSyncToken || null, events };
   }
   console.warn(`[calendar-webhook] sync token capture hit ${MAX_SYNC_PAGES}-page cap for ${userId} — skipping capture this run`);
-  return null;
+  return { token: null, events };
 }
 
 Deno.serve(async (req) => {
@@ -190,26 +208,14 @@ Deno.serve(async (req) => {
       }
 
       if (!checkpoint) {
-        // Bootstrap — no sync token yet (or it just expired above). Scan the
-        // last 24h for event processing, then capture a fresh sync token in
-        // a separate paged pass: orderBy suppresses nextSyncToken, so this
-        // scan can never yield one itself.
-        const params = new URLSearchParams({
-          maxResults: "50",
-          singleEvents: "true",
-          orderBy: "updated",
-          timeMin: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-        });
-
-        const resp = await fetch(`${CALENDAR_EVENTS_URL}?${params}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!resp.ok) throw new Error(`Calendar API: ${resp.status}`);
-
-        const data = await resp.json();
-        events = data.items || [];
-
-        newSyncToken = await captureCalendarSyncToken(token, userId);
+        // Bootstrap — no sync token yet (or it just expired above). One paged
+        // pass both captures a fresh sync token AND returns the events it
+        // fetched, so we process exactly the window the token stamps over —
+        // no separate maxResults-capped scan whose cut (or the gap between
+        // scan and capture) could permanently skip recent changes.
+        const capture = await captureCalendarSyncToken(token, userId);
+        events = capture.events;
+        newSyncToken = capture.token;
       }
 
       for (const event of events) {

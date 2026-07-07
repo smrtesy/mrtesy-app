@@ -220,7 +220,11 @@ export function LogPageClient({ locale }: { locale: string }) {
       query = query.eq("processing_status", statusFilter);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+    // Surface failed pages instead of silently rendering an empty list.
+    // No user-facing error surface exists in this component (all fetches are
+    // best-effort), so log-only.
+    if (error) console.error("[log] source_messages page fetch failed:", error.message);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mapped = (data || []).map((row: any) => {
       const logArr = row.log_entries || [];

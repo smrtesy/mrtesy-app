@@ -256,9 +256,11 @@ async function gmailHistorySync(userId: string, token: string, historyId: string
   } while (pageToken && pages < MAX_PAGES);
 
   // Cap hit with pages still pending → resume from the last processed history
-  // record next run. All pages consumed → the response historyId is safe to
-  // store, exactly as before.
-  const newHistoryId = pageToken && lastRecordId ? lastRecordId : responseHistoryId;
+  // record next run; if every fetched page was record-free (Gmail documents
+  // sparse pages), fall back to the INCOMING startHistoryId so the next run
+  // simply retries instead of jumping past the unfetched pages. Only when
+  // pagination completed is the response historyId safe to store.
+  const newHistoryId = pageToken ? (lastRecordId ?? historyId) : responseHistoryId;
 
   return { newMessages: messageIds, newHistoryId, needsReconcile: false };
 }
