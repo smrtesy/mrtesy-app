@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -11,13 +11,9 @@ import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Button } from "@/components/ui/button";
 import type { Plan, PlanMilestone } from "@/types/plan";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 const memberName = (m: Member) => personLabel(m);
 
 const fieldCls =
@@ -41,18 +37,11 @@ export function MilestoneEditor({
   onChanged: () => void;
 }) {
   const te = useTranslations("smrtPlan.edit");
-  const [members, setMembers] = useState<Member[]>([]);
+  const { members } = useOrgMembers();
   const [draft, setDraft] = useState({ ...EMPTY_DRAFT });
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState({ ...EMPTY_DRAFT });
-
-  useEffect(() => {
-    if (!open) return;
-    api<{ members: Member[] }>("/api/org/members")
-      .then((r) => setMembers(r.members ?? []))
-      .catch(() => setMembers([]));
-  }, [open]);
 
   function startEdit(m: PlanMilestone) {
     setEditingId(m.id);

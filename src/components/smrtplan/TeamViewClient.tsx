@@ -5,15 +5,11 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { personLabel } from "@/lib/smrtplan/people";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
 import { TaskDetailDialog } from "./TaskDetailDialog";
 
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 function memberName(m: Member) {
   return personLabel(m);
 }
@@ -23,7 +19,7 @@ const fieldCls =
 
 export function TeamViewClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
-  const [members, setMembers] = useState<Member[]>([]);
+  const { members } = useOrgMembers();
   const [userId, setUserId] = useState<string>("");
   const [tasks, setTasks] = useState<PlanZoneTask[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,13 +27,12 @@ export function TeamViewClient({ locale }: { locale: string }) {
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const today = new Date();
 
+  // Default the worker picker to the first member once the roster arrives.
   useEffect(() => {
-    api<{ members: Member[] }>("/api/org/members")
-      .then((r) => {
-        setMembers(r.members ?? []);
-        if (r.members?.length) setUserId(r.members[0].user_id);
-      })
-      .catch((e) => toast.error(e instanceof Error ? e.message : "Error"));
+    if (members.length) setUserId((cur) => cur || members[0].user_id);
+  }, [members]);
+
+  useEffect(() => {
     api<{ access_level: string }>("/api/plans/access")
       .then((r) => setCanEdit(r.access_level === "full"))
       .catch(() => setCanEdit(false));

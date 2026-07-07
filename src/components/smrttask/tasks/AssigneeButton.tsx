@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { User, Check } from "lucide-react";
 import {
@@ -10,29 +9,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IconButton } from "@/components/ui/icon-button";
-import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { useOrgRole } from "@/hooks/useOrgRole";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
-
-// Members list is org-stable within a session — fetch once, share.
-let cachedMembers: Member[] | null = null;
-let inflight: Promise<Member[]> | null = null;
-async function fetchMembers(): Promise<Member[]> {
-  if (cachedMembers) return cachedMembers;
-  if (!inflight) {
-    inflight = api<{ members: Member[] }>("/api/org/members")
-      .then((r) => { cachedMembers = r.members ?? []; return cachedMembers; })
-      .catch(() => { inflight = null; return []; });
-  }
-  return inflight;
-}
+type Member = OrgMember;
 
 function memberName(m: Member): string {
   return m.display_name || m.name || m.email || m.user_id.slice(0, 8);
@@ -55,16 +36,8 @@ export function AssigneeButton({
 }) {
   const t = useTranslations("taskDetailExt");
   const { isManager } = useOrgRole();
-  const [members, setMembers] = useState<Member[]>(cachedMembers ?? []);
-
-  const load = useCallback(() => {
-    if (members.length === 0) fetchMembers().then(setMembers);
-  }, [members.length]);
-
-  useEffect(() => {
-    // Preload so the assigned name is resolvable on first paint.
-    if (isManager) fetchMembers().then(setMembers);
-  }, [isManager]);
+  // Preloaded (managers only) so the assigned name is resolvable on first paint.
+  const { members } = useOrgMembers(isManager);
 
   if (!isManager) return null;
 
@@ -72,7 +45,7 @@ export function AssigneeButton({
   const label = assigned ? t("assignedTo", { name: memberName(assigned) }) : t("assignLabel");
 
   return (
-    <DropdownMenu onOpenChange={(o) => o && load()}>
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <IconButton
           label={label}
