@@ -76,6 +76,9 @@ const UPDATABLE_FIELDS = new Set([
   "size", "context",
   // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
   "woke_from_snooze_at",
+  // "Waiting on Claude" chip — UI sets it (→ now) when a task is handed off to
+  // claude.ai/code, and clears it (→ null) when the user marks Claude finished.
+  "claude_waiting_since",
   // Undo of a snooze: the UI PATCHes { status: "inbox", snoozed_until: null }
   // to pull a task back out of snooze (the auto-snooze undo window, and the
   // "wake up now" action). snooze_count is intentionally NOT touched here.
