@@ -42,6 +42,10 @@ import { runAutoReplies, type IncomingForReply } from "./autoreply";
 export const runtime = "nodejs";
 // Make sure Next never tries to cache or pre-render this route.
 export const dynamic = "force-dynamic";
+// A voice-note batch (download + Gemini transcription) easily exceeds the
+// default serverless timeout (~10-15s), after which Meta redelivers the
+// whole payload. 60s is the safe cross-plan maximum on Vercel.
+export const maxDuration = 60;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types — minimal shape of the Meta Cloud API webhook payload we read
@@ -277,9 +281,18 @@ export async function POST(request: NextRequest): Promise<Response> {
     const expected =
       "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
     if (!sig || !timingSafeEqual(sig, expected)) {
-      console.warn("[whatsapp-webhook] signature mismatch — rejecting");
+      console.warn(
+        `[whatsapp-webhook] signature ${sig ? "mismatch" : "missing"} for phone_number_id ${String(firstPhoneNumberId)} — rejecting`,
+      );
       return NextResponse.json({ ok: false, error: "signature_mismatch" }, { status: 200 });
     }
+  } else {
+    // No Vault secret for this connection and no META_APP_SECRET env — the
+    // payload is processed WITHOUT HMAC verification. Deliberately log-only
+    // for now (enforcement is a later, separate step), but loudly.
+    console.error(
+      `[whatsapp-webhook] UNVERIFIED payload processed — no app secret resolved for phone_number_id ${String(firstPhoneNumberId)}`,
+    );
   }
 
   try {
@@ -660,6 +673,30 @@ async function processUserBatch(
       .map((r) => String(r.trigger).replace(/^WhatsApp sender = /, "").trim()),
   );
 
+  // Redelivery guard for auto-replies: the (user_id, wamid) upsert dedupes
+  // STORAGE, but runAutoReplies would still fire on every Meta redelivery of
+  // the same message — the customer gets the same auto-reply twice and Haiku
+  // is billed twice. Snapshot which wamids ALREADY existed before this batch
+  // writes anything (same pre-existence idea as existingTranscript below);
+  // a message is "new" only if it wasn't stored by a previous delivery.
+  const batchWamids = messages
+    .map((m) => m.meta.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const preexistingWamids = new Set<string>();
+  if (batchWamids.length > 0) {
+    const { data: existingRows, error: preexistingErr } = await db
+      .from("whatsapp_messages")
+      .select("wamid")
+      .eq("user_id", userId)
+      .in("wamid", batchWamids);
+    if (preexistingErr) {
+      // Best-effort: on lookup failure treat everything as new (current behavior).
+      console.warn("[whatsapp-webhook] pre-existence lookup failed:", preexistingErr.message);
+    } else {
+      for (const r of existingRows ?? []) preexistingWamids.add(String(r.wamid));
+    }
+  }
+
   const touchedChats = new Set<string>();
   let inserted = 0;
   let skipped = 0;
@@ -698,10 +735,11 @@ async function processUserBatch(
 
   // Selective auto-reply (opt-in, allowlist-only, gated by a master switch).
   // Live incoming messages only — never during history backfill, never groups,
-  // never bot-flagged senders (already skipped above).
+  // never bot-flagged senders (already skipped above), and never messages that
+  // already existed before this delivery (Meta redeliveries must not re-reply).
   if (!isHistoryBatch) {
     const incoming: IncomingForReply[] = messages
-      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone))
+      .filter((m) => m.direction === "incoming" && !m.isHistory && !m.isGroup && m.meta.id && !botPhones.has(m.fromPhone) && !preexistingWamids.has(m.meta.id))
       .map((m) => ({ sender: m.fromPhone, name: m.fromName, text: m.meta.text?.body ?? "" }));
     const phoneNumberId = String(messages[0]?.metadata.phone_number_id ?? "");
     if (incoming.length > 0 && phoneNumberId) {
@@ -846,6 +884,54 @@ async function existingTranscript(
   return null;
 }
 
+// Same redelivery guard for images: has this exact wamid already been stored
+// with a COMPLETED OCR? If so, reuse the stored body + media fields instead of
+// re-downloading and re-running Gemini OCR on every Meta redelivery.
+interface ExistingOcrRow {
+  body: string;
+  mediaUrl: string | null;
+  mediaFilename: string | null;
+  mediaSize: number | null;
+}
+
+async function existingOcr(
+  db: SupabaseAdmin,
+  userId: string,
+  wamid: string,
+): Promise<ExistingOcrRow | null> {
+  if (!wamid) return null;
+  const { data } = await db
+    .from("whatsapp_messages")
+    .select("body_text, media_ocr_text, media_url, media_filename, media_size")
+    .eq("user_id", userId)
+    .eq("wamid", wamid)
+    .maybeSingle();
+  if (!data) return null;
+  const body = String(data.body_text ?? "").trim();
+  const legacyOcr = String(data.media_ocr_text ?? "").trim();
+  // A completed OCR body always carries the "[OCR]" marker (optionally after a
+  // "כיתוב: …" caption prefix); failure placeholders ("[תמונה]", download
+  // errors) never do. Legacy rows split by migration 20260520180000 hold the
+  // OCR in media_ocr_text with only the caption left in body_text.
+  if (body.includes("[OCR]")) {
+    return {
+      body,
+      mediaUrl: (data.media_url as string | null) ?? null,
+      mediaFilename: (data.media_filename as string | null) ?? null,
+      mediaSize: (data.media_size as number | null) ?? null,
+    };
+  }
+  if (legacyOcr.length > 0) {
+    return {
+      body: (body ? "כיתוב: " + body + "\n\n" : "") + "[OCR]\n" + legacyOcr,
+      mediaUrl: (data.media_url as string | null) ?? null,
+      mediaFilename: (data.media_filename as string | null) ?? null,
+      mediaSize: (data.media_size as number | null) ?? null,
+    };
+  }
+  return null;
+}
+
 async function buildMessageRow(
   db: SupabaseAdmin,
   userId: string,
@@ -946,6 +1032,17 @@ async function buildMessageRow(
       if (nm.isHistory) {
         body = caption || "[תמונה מהיסטוריה - לא בוצע OCR]";
       } else if (mediaId && accessToken) {
+        // Redelivery guard (same as the audio transcript above): if a prior
+        // delivery already produced a real OCR for this wamid, reuse the
+        // stored body + media fields and skip the download + Gemini call.
+        const prior = await existingOcr(db, userId, m.id!);
+        if (prior) {
+          body = prior.body;
+          mediaUrl = prior.mediaUrl;
+          mediaFilename = prior.mediaFilename;
+          mediaSize = prior.mediaSize;
+          break;
+        }
         let blob: MetaMediaBlob | null = null;
         try {
           blob = await downloadMetaMedia(db, mediaId, accessToken);
