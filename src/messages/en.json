@@ -195,7 +195,8 @@
     "timezone": "Time zone",
     "timezoneSaved": "Time zone saved",
     "timezoneSaveFailed": "Failed to save time zone",
-    "timezoneUseBrowser": "Use browser time zone ({tz})"
+    "timezoneUseBrowser": "Use browser time zone ({tz})",
+    "connectionSaveFailed": "Saving the connection failed — please reconnect"
   },
   "settingsTabs": {
     "apps": "Apps",

@@ -311,12 +311,15 @@ export default function OnboardingSetup() {
       // choice (or capture a travel timezone).
       const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (browserTz) {
-        const { data: curSettings } = await supabase
+        const { data: curSettings, error: tzReadErr } = await supabase
           .from("user_settings")
           .select("timezone")
           .eq("user_id", user.id)
           .maybeSingle();
-        if (!curSettings?.timezone) updateData.timezone = browserTz;
+        // On read failure we can't tell "unset" from "deliberately chosen" —
+        // skip the write rather than risk overwriting a chosen timezone.
+        if (tzReadErr) console.error("[onboarding] timezone read failed:", tzReadErr);
+        else if (!curSettings?.timezone) updateData.timezone = browserTz;
       }
       const { error: settingsErr } = await supabase
         .from("user_settings")

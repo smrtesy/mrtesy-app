@@ -195,7 +195,8 @@
     "timezone": "אזור זמן",
     "timezoneSaved": "אזור הזמן נשמר",
     "timezoneSaveFailed": "שמירת אזור הזמן נכשלה",
-    "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})"
+    "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})",
+    "connectionSaveFailed": "שמירת החיבור נכשלה — נסה להתחבר שוב"
   },
   "settingsTabs": {
     "apps": "אפליקציות",

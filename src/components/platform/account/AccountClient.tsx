@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { navigateTop } from "@/lib/navigate";
@@ -45,7 +45,18 @@ export function AccountClient() {
   const tAuth = useTranslations("auth");
   const { locale } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  // The Google OAuth callback redirects here with ?error=save_failed when the
+  // credential save failed (the service is deliberately NOT marked connected).
+  useEffect(() => {
+    if (searchParams.get("error") === "save_failed") {
+      toast.error(t("connectionSaveFailed"));
+      router.replace(`/${locale}/account`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>({
     gmail: false, drive: false, calendar: false, whatsapp: false,
   });
