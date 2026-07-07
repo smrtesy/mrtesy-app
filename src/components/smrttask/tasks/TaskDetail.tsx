@@ -32,6 +32,7 @@ import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
+import { ClaudeLauncher } from "@/components/smrttask/tasks/ClaudeLauncher";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
@@ -653,6 +654,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <AssigneeButton
               assignedTo={editAssignedTo || null}
               onAssign={(uid) => setEditAssignedTo(uid ?? "")}
+            />
+            <ClaudeLauncher
+              task={effectiveTask}
+              locale={locale}
+              onUpdate={() => { dirtyRef.current = true; onUpdate(); }}
+              onOptimistic={(patch) => setLiveTask((prev) => ({ ...(prev && prev.id === task.id ? prev : task), ...patch }))}
             />
 
             <div className="flex-1" />

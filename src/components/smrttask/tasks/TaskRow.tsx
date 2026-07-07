@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat } from "lucide-react";
+import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
@@ -51,6 +51,7 @@ export function TaskRow({
   onDueChange?: (taskId: string, date: string | null) => void;
 }) {
   const t = useTranslations("tasks");
+  const tClaude = useTranslations("claude");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isBlocked = unsatisfiedNeeds.length > 0;
   const isDone = zone === "done";
@@ -129,6 +130,9 @@ export function TaskRow({
           )}
           {woke && !isDone && (
             <AlarmClockCheck className="h-3 w-3 shrink-0 text-status-warn" aria-label={t("row.wokeHint")} />
+          )}
+          {task.claude_waiting_since && !isDone && (
+            <Bot className="h-3 w-3 shrink-0 text-primary" aria-label={tClaude("chipLabel")} />
           )}
           {planLabel && (
             <span className="shrink-0 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground">

@@ -79,6 +79,9 @@ export interface Task {
   context?: "home" | "work" | null;
   /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
   woke_from_snooze_at?: string | null;
+  /** Set when the task is handed off to Claude (opened via claude.ai/code); null
+   *  once the user marks Claude finished. Drives the "waiting on Claude" chip. */
+  claude_waiting_since?: string | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;
