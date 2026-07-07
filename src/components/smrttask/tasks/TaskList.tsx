@@ -89,7 +89,6 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
 const LIST_QUICK = "list:desk-quick";
 const LIST_REGULAR = "list:desk-regular";
 const LIST_IMPORTANT = "list:important";
-const LIST_WAITING = "list:waiting";
 
 /** A list that is both a sortable context (reorder within) and a droppable
  *  target (so a row can be dragged in from another list, even when empty). */
@@ -275,20 +274,20 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
-  /** Which of the four lists a task belongs to — the single source of truth for
-   *  both the partition below and the drag-drop "will this drop stick?" check.
-   *  Priority order: blocked → ממתינות; pinning wins; then the deadline radar;
-   *  then unpinned regular tasks without a deadline; everything else waits. */
+  /** Which desk list a task belongs to — the single source of truth for both
+   *  the partition below and the drag-drop "will this drop stick?" check.
+   *  There is no more ממתינות: every active task is on the desk, and it leaves
+   *  only by being completed or dismissed. Quick tasks always surface in
+   *  מהיר – עכשיו; regular tasks go to רגיל – עכשיו, except when a near deadline
+   *  pulls them into חשוב (the deadline radar). */
   const bucketOf = useCallback((task: Task): string => {
-    if (unsatisfiedOf(task).length > 0) return LIST_WAITING;
-    if (task.today_position != null) return task.size === "quick" ? LIST_QUICK : LIST_REGULAR;
+    if (task.size === "quick") return LIST_QUICK;
     const deadline = effectiveDeadline(task);
     if (deadline && dueUrgency(deadline, blocked) !== "far") return LIST_IMPORTANT;
-    if (task.size === "regular" && !deadline) return LIST_IMPORTANT;
-    return LIST_WAITING;
-  }, [unsatisfiedOf, blocked]);
+    return LIST_REGULAR;
+  }, [blocked]);
 
-  const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
+  const { deskQuick, deskRegular, important, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
       if (contextFilter === "outside") return task.context === "outside";
@@ -301,30 +300,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     const quickList: Task[] = [];
     const regularList: Task[] = [];
     const importantList: Task[] = [];
-    const waitingList: Task[] = [];
     for (const task of visible) {
       switch (bucketOf(task)) {
         case LIST_QUICK: quickList.push(task); break;
-        case LIST_REGULAR: regularList.push(task); break;
         case LIST_IMPORTANT: importantList.push(task); break;
-        default: waitingList.push(task);
+        default: regularList.push(task);
       }
     }
 
     // Desk order: manual position ascending (all desk rows are pinned).
     const byPosition = (a: Task, b: Task) => (a.today_position ?? 0) - (b.today_position ?? 0);
 
-    // ממתינות order: deadline asc (undated last), then priority, then newest.
-    const byUrgency = (a: Task, b: Task) => {
-      const da = effectiveDeadline(a);
-      const db = effectiveDeadline(b);
-      if (da && db && da !== db) return da.localeCompare(db);
-      if (da && !db) return -1;
-      if (!da && db) return 1;
-      const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
-      if (rank !== 0) return rank;
-      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-    };
     // חשוב order: the unpinned regular pile (undated) on top, newest first — so a
     // freshly added regular task lands at the very head of חשוב — then the dated
     // near-deadline items below, soonest first.
@@ -340,15 +326,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     };
     const importantSorted = [...importantList].sort(byImportant);
-    const waitingSorted = [...waitingList].sort(byUrgency);
 
-    const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
+    // The review banner surfaces stale tasks to prune (complete or dismiss),
+    // now sourced from the regular + חשוב piles instead of a ממתינות pool.
+    const review = [...regularList, ...importantList]
+      .filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
       deskQuick: [...quickList].sort(byPosition),
       deskRegular: [...regularList].sort(byPosition),
       important: importantSorted,
-      waiting: waitingSorted,
       reviewCandidates: review,
     };
   }, [tasks, contextFilter, blocked, bucketOf]);
@@ -506,15 +493,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
   }
 
-  function handleMove(taskId: string, toDesk: boolean) {
-    if (toDesk) {
-      const maxPos = tasks.reduce((m, task) => Math.max(m, task.today_position ?? -1), -1);
-      patchTask(taskId, { today_position: maxPos + 1 }, (task) => ({ ...task, today_position: maxPos + 1 }));
-    } else {
-      patchTask(taskId, { today_position: null }, (task) => ({ ...task, today_position: null }));
-    }
-  }
-
   function handleDelete(taskId: string) {
     if (!window.confirm(t("actions.deleteConfirm"))) return;
     api(`/api/tasks/${taskId}`, { method: "DELETE" })
@@ -570,11 +548,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         zone={zone}
         blocked={blocked}
         unsatisfiedNeeds={unsatisfiedOf(task)}
-        autoPromoted={zone === "desk" && task.today_position == null}
         onToggleDone={handleToggleDone}
         onOpen={handleSelect}
         onSnooze={(id) => setSnoozeTaskId(id)}
-        onMove={handleMove}
         onSizeToggle={handleSizeToggle}
         onDueChange={task.plan_id ? undefined : handleDueChange}
       />
@@ -626,7 +602,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       [LIST_QUICK]: deskQuick,
       [LIST_REGULAR]: deskRegular,
       [LIST_IMPORTANT]: important,
-      [LIST_WAITING]: waiting,
     };
     const containerOf = (id: string | number): string | null => {
       const s = String(id);
@@ -667,14 +642,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return;
     }
 
-    // חשוב = unpinned regular (so the unpinned-regular rule holds it);
-    // ממתינות = unpinned quick. But the deadline radar overrides both: a
-    // near-deadline task always lands in חשוב, and a far-dated regular task
-    // always lands in ממתינות. If this drop wouldn't stick, say so instead of
-    // silently letting it bounce.
-    const patch = to === LIST_IMPORTANT
-      ? { today_position: null, size: "regular" as const }
-      : { today_position: null, size: "quick" as const };
+    // The only non-desk drop target left is חשוב, which is deadline-driven:
+    // dropping a task there only sticks when it has a near deadline. If it
+    // wouldn't stick, say so instead of letting it silently bounce back.
+    const patch = { today_position: null, size: "regular" as const };
     if (bucketOf({ ...task, ...patch }) !== to) {
       toast.error(t("dndDeadlineLocked"));
       return;
@@ -809,15 +780,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
             </h2>
             {renderList(LIST_IMPORTANT, important, "important", t("desk.emptyImportant"))}
-          </section>
-
-          {/* ── WAITING ──────────────────────────────────────────────── */}
-          <section>
-            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              {t("desk.waiting")}
-              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{waiting.length}</span>
-            </h2>
-            {renderList(LIST_WAITING, waiting, "waiting", t("noTasksInView"))}
           </section>
           </DndContext>
 
