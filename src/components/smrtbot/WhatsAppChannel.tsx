@@ -90,10 +90,20 @@ export function WhatsAppChannel({ botId }: { botId: string }) {
   const pollRef = useRef(status);
   pollRef.current = status;
   useEffect(() => {
+    // Skip polls while the tab is hidden (a background tab otherwise polls
+    // around the clock); refresh immediately when the user comes back.
+    const shouldPoll = () => pollRef.current === "qr" || pollRef.current === "connecting";
     const id = setInterval(() => {
-      if (pollRef.current === "qr" || pollRef.current === "connecting") void loadStatus();
+      if (!document.hidden && shouldPoll()) void loadStatus();
     }, 4000);
-    return () => clearInterval(id);
+    const handleVisibility = () => {
+      if (!document.hidden && shouldPoll()) void loadStatus();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [loadStatus]);
 
   const connect = async () => {

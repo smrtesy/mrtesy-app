@@ -6,6 +6,37 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+async function notifyDisconnect(userId: string, reason: string) {
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
+
+  await supabase.from("log_entries").insert({
+    user_id: userId,
+    level: "error",
+    category: "calendar_webhook",
+    status: "failed",
+    error_message: `Calendar disconnected — ${reason}. User must reconnect in Settings → Connections.`,
+  }).then(() => {}, () => {});
+
+  if (membership?.org_id) {
+    await supabase.from("notifications").insert({
+      user_id: userId,
+      org_id: membership.org_id,
+      app_slug: "smrttask",
+      // notifications.type CHECK allows only info|warning|success|action_required.
+      // A dead connection needs a re-OAuth → action_required.
+      type: "action_required",
+      title: "יומן Google מנותק",
+      body: `חיבור יומן Google נותק (${reason}). יש להתחבר מחדש בהגדרות → חיבורים.`,
+      link: "/settings",
+    }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
+  }
+}
+
 async function refreshGoogleToken(userId: string): Promise<string> {
   const { data: cred } = await supabase
     .from("user_credentials")
@@ -32,8 +63,39 @@ async function refreshGoogleToken(userId: string): Promise<string> {
   });
 
   if (!resp.ok) {
+    const err = await resp.text();
+    // Token refresh rejected. Do NOT disconnect on the first failure — Google
+    // returns transient 400/401s, and a single blip used to flip
+    // calendar_connected=false and silently kill calendar sync. Same 3-strike
+    // policy as gmail-sync: count consecutive failures in sync_state and only
+    // disconnect (+notify) after DISCONNECT_AFTER_FAILURES in a row; a
+    // successful refresh resets the counter below.
     if (resp.status === 401 || resp.status === 400) {
-      await supabase.from("user_settings").update({ calendar_connected: false }).eq("user_id", userId);
+      const DISCONNECT_AFTER_FAILURES = 3;
+      const { data: ss } = await supabase
+        .from("sync_state")
+        .select("consecutive_failures")
+        .eq("user_id", userId)
+        .eq("source", "google_calendar")
+        .maybeSingle();
+      const failures = (Number(ss?.consecutive_failures) || 0) + 1;
+      const { error: failureCountUpsertError } = await supabase
+        .from("sync_state")
+        .upsert({
+          user_id: userId,
+          source: "google_calendar",
+          last_error: `Token refresh failed (${resp.status}), attempt ${failures}/${DISCONNECT_AFTER_FAILURES}: ${err.slice(0, 300)}`,
+          consecutive_failures: failures,
+        }, { onConflict: "user_id,source" });
+      if (failureCountUpsertError) console.error("sync_state failure count upsert failed:", failureCountUpsertError);
+      if (failures >= DISCONNECT_AFTER_FAILURES) {
+        const { error: disconnectUpdateError } = await supabase
+          .from("user_settings")
+          .update({ calendar_connected: false })
+          .eq("user_id", userId);
+        if (disconnectUpdateError) console.error("user_settings disconnect update failed:", disconnectUpdateError);
+        await notifyDisconnect(userId, `token refresh failed ${failures}× (${resp.status})`);
+      }
     }
     throw new Error(`Token refresh failed: ${resp.status}`);
   }
@@ -43,6 +105,16 @@ async function refreshGoogleToken(userId: string): Promise<string> {
     access_token: tokens.access_token,
     expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
   }).eq("user_id", userId).eq("service", "google_calendar");
+
+  // Reset the failure streak now that the token is healthy again — the
+  // disconnect threshold above counts CONSECUTIVE failures only.
+  const { error: failureResetError } = await supabase
+    .from("sync_state")
+    .update({ consecutive_failures: 0 })
+    .eq("user_id", userId)
+    .eq("source", "google_calendar")
+    .gt("consecutive_failures", 0);
+  if (failureResetError) console.error("sync_state failure reset failed:", failureResetError);
 
   return tokens.access_token;
 }

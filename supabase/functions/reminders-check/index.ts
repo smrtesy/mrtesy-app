@@ -394,14 +394,25 @@ async function replyArrived(task: { user_id: string | null; source_message_id: s
 }
 
 function calculateNextOccurrence(currentRemindAt: string, rule: string): string {
-  // Simple daily/weekly/monthly recurrence
+  // Simple daily/weekly/monthly recurrence. This legacy path can't route
+  // through _shared/recurrence.ts's nextOccurrence(): that helper is
+  // date-only (drops the reminder's time-of-day) and requires a well-formed
+  // "FREQ=..." RRULE, while legacy reminder rules may be bare keywords.
   const date = new Date(currentRemindAt);
   if (rule.includes("DAILY")) {
     date.setDate(date.getDate() + 1);
   } else if (rule.includes("WEEKLY")) {
     date.setDate(date.getDate() + 7);
   } else if (rule.includes("MONTHLY")) {
+    // Clamp the day-of-month like _shared/recurrence.ts does: a naive
+    // setMonth(+1) overflows short months (Jan 31 → Mar 3) and the reminder
+    // drifts off its anchor day forever. Advance from the 1st, then take
+    // min(anchor day, days in target month) — Jan 31 → Feb 28/29.
+    const day = date.getDate();
+    date.setDate(1);
     date.setMonth(date.getMonth() + 1);
+    const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    date.setDate(Math.min(day, daysInMonth));
   } else {
     // Default: 1 day
     date.setDate(date.getDate() + 1);

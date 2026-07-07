@@ -39,6 +39,11 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // Only ever clear flags on the exact rows this run examined — the fetch
+      // above is capped at 50, so a blanket needs_project_check=true reset
+      // would also clear rows that were never looked at.
+      const messageIds = messages.map((m) => m.id);
+
       // Group by sender/subject pattern
       const patterns: Record<string, number> = {};
       for (const msg of messages) {
@@ -52,11 +57,12 @@ Deno.serve(async (req) => {
         .map(([sender]) => sender);
 
       if (candidates.length === 0) {
-        // Reset flags
+        // Reset flags — these messages were examined (grouped by sender) and
+        // produced no candidates; no AI call was needed.
         const { error: earlyResetError } = await supabase.from("source_messages")
           .update({ needs_project_check: false })
           .eq("user_id", userId)
-          .eq("needs_project_check", true);
+          .in("id", messageIds);
         if (earlyResetError) console.error("source_messages flag reset failed:", earlyResetError);
         results.push({ user_id: userId, checked: messages.length, suggestions: 0 });
         continue;
@@ -105,7 +111,9 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
       });
 
       let suggestions: any[] = [];
+      let aiOk = false;
       if (resp.ok) {
+        aiOk = true;
         const data = await resp.json();
         const text = data.content?.[0]?.text || "[]";
         // Unified cost ledger (best-effort).
@@ -133,6 +141,8 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           // is visible in function logs.
           console.error("[project-detection] failed to parse suggestions JSON:", e);
         }
+      } else {
+        console.error(`[project-detection] AI call failed for ${userId}: ${resp.status} ${await resp.text().catch(() => "")}`);
       }
 
       // Create suggestion tasks for each new project
@@ -150,17 +160,22 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
         if (suggestionInsertError) console.error("project suggestion task insert failed:", suggestionInsertError);
       }
 
-      // Reset flags
-      const { error: flagResetError } = await supabase.from("source_messages")
-        .update({ needs_project_check: false })
-        .eq("user_id", userId)
-        .eq("needs_project_check", true);
-      if (flagResetError) console.error("source_messages flag reset failed:", flagResetError);
+      // Reset flags — but ONLY when the AI call actually succeeded, and only
+      // on the messages it examined. Clearing flags after a failed call would
+      // mean those messages are never re-examined on the next run.
+      if (aiOk) {
+        const { error: flagResetError } = await supabase.from("source_messages")
+          .update({ needs_project_check: false })
+          .eq("user_id", userId)
+          .in("id", messageIds);
+        if (flagResetError) console.error("source_messages flag reset failed:", flagResetError);
+      }
 
       results.push({
         user_id: userId,
         checked: messages.length,
         suggestions: suggestions.length,
+        ...(aiOk ? {} : { ai_failed: true }),
       });
     }
 
