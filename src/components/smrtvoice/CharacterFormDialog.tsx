@@ -19,6 +19,19 @@ import { api } from "@/lib/api/client";
 
 type Gender = "male" | "female" | "neutral";
 
+// Curated Resemble WRAP tags that make sense as a persistent per-character
+// baseline (register / pace / volume). value = the real tag; key = i18n label.
+const BASELINE_TAGS: { value: string; key: string }[] = [
+  { value: "higher-pitch", key: "higherPitch" },
+  { value: "lower-pitch", key: "lowerPitch" },
+  { value: "slow", key: "slow" },
+  { value: "fast", key: "fast" },
+  { value: "soft", key: "soft" },
+  { value: "loud", key: "loud" },
+  { value: "emphasis", key: "emphasis" },
+  { value: "whisper", key: "whisper" },
+];
+
 interface CharacterInit {
   id: string;
   name: string;
@@ -28,6 +41,7 @@ interface CharacterInit {
   age_years: number | null;
   gender: Gender | null;
   personality_prompt: string | null;
+  style_baseline_tags: string[] | null;
 }
 
 /**
@@ -60,6 +74,9 @@ export function CharacterFormDialog({
   );
   const [gender, setGender] = useState<Gender | "">(character?.gender ?? "");
   const [personalityPrompt, setPersonalityPrompt] = useState(character?.personality_prompt ?? "");
+  const [baselineTags, setBaselineTags] = useState<string[]>(
+    character?.style_baseline_tags ?? [],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,7 +89,14 @@ export function CharacterFormDialog({
     setAgeYears("");
     setGender("");
     setPersonalityPrompt("");
+    setBaselineTags([]);
     setError(null);
+  }
+
+  function toggleBaseline(value: string) {
+    setBaselineTags((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value],
+    );
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -87,6 +111,7 @@ export function CharacterFormDialog({
       age_years: ageYears.trim() === "" ? undefined : Number(ageYears),
       gender: gender || undefined,
       personality_prompt: personalityPrompt || undefined,
+      style_baseline_tags: baselineTags,
     };
     try {
       if (isEdit) {
@@ -206,6 +231,30 @@ export function CharacterFormDialog({
               onChange={(e) => setPersonalityPrompt(e.target.value)}
               placeholder={tf("personalityPromptPlaceholder")}
             />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{tf("styleBaselineLabel")}</label>
+            <p className="text-xs text-muted-foreground">{tf("styleBaselineHint")}</p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {BASELINE_TAGS.map(({ value, key }) => {
+                const on = baselineTags.includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => toggleBaseline(value)}
+                    className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      on
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input bg-background hover:bg-muted"
+                    }`}
+                  >
+                    {tf(`styleTag.${key}`)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {!isEdit && <p className="text-xs text-muted-foreground">{tf("cloneHint")}</p>}
