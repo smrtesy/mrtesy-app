@@ -463,8 +463,12 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
     // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
     // reminder one working day before, instead of the regular two-day auto-snooze.
+    // Clearing the time reverts an event back to a plain task.
     const isEvent = !!date && !!time;
-    const patch = { due_date: date, due_time: time, ...(isEvent ? { task_type: "meeting" } : {}) };
+    const wasMeeting = tasks.find((tk) => tk.id === taskId)?.task_type === "meeting";
+    const nextType = isEvent ? "meeting" : wasMeeting ? "action" : undefined;
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (nextType) patch.task_type = nextType;
     // Persist the due date FIRST and wait for it: the snooze route below reads
     // due_date from the DB to clamp the wake moment to the deadline, so it must
     // see the value we just set (and we must not snooze if the date write failed).

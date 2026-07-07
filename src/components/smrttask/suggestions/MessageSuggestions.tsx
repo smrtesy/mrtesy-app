@@ -201,15 +201,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   function handleApprove(taskId: string) {
-    // An event's whole purpose is the reminder, so "approve" CLOSES it
-    // (status=completed) rather than promoting it to a verified task.
+    // An event's whole purpose is the reminder, so "approve" CLOSES it via the
+    // canonical complete flow (status=archived + completed_at, recurrence spawn)
+    // rather than promoting it to a verified task.
     const isEvent = suggestions.find((s) => s.id === taskId)?.task_type === "meeting";
     removeLocal([taskId]);
     toast.success(isEvent ? t("reminderClosed") : t("approve"));
-    api(`/api/tasks/${taskId}`, {
-      method: "PATCH",
-      body: isEvent ? { status: "completed" } : { manually_verified: true },
-    })
+    const request = isEvent
+      ? api(`/api/tasks/${taskId}/complete`, { method: "POST" })
+      : api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
+    request
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -234,8 +235,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
     // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
     // reminder one working day before, instead of the regular two-day auto-snooze.
+    // Clearing the time reverts an event back to a plain task, so a de-timed
+    // reminder stops reading as "תזכורת" and its approve stops closing it.
     const isEvent = !!date && !!time;
-    const patch = { due_date: date, due_time: time, ...(isEvent ? { task_type: "meeting" } : {}) };
+    const wasMeeting = suggestions.find((s) => s.id === taskId)?.task_type === "meeting";
+    const nextType = isEvent ? "meeting" : wasMeeting ? "action" : undefined;
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (nextType) patch.task_type = nextType;
     setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, ...patch } as Task : s)));
     try {
       await api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch });

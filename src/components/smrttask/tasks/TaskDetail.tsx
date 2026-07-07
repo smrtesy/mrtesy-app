@@ -361,8 +361,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                   blocked={blocked}
                   locked={!!effectiveTask.plan_id}
                   onChange={effectiveTask.plan_id ? undefined : (d, tm) => {
-                    // A due date with a time is an event (task_type=meeting).
-                    const body = { due_date: d, due_time: tm, ...(d && tm ? { task_type: "meeting" as const } : {}) };
+                    // A due date with a time is an event (task_type=meeting);
+                    // clearing the time reverts an event back to a plain task.
+                    const body: Record<string, unknown> = { due_date: d, due_time: tm };
+                    if (d && tm) body.task_type = "meeting";
+                    else if (effectiveTask.task_type === "meeting") body.task_type = "action";
                     api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body })
                       .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, ...body } as Task : p); })
                       .catch((e) => toast.error((e as Error).message));

@@ -50,8 +50,11 @@ export async function listEvents(
 export interface CreateEventOptions {
   timeZone?: string;
   location?: string;
-  /** Google extended properties — used to tag events smrtesy itself created so
-   *  the calendar sync can skip re-ingesting them as duplicate tasks. */
+  /** Google extended properties. smrtesy tags the events it creates with
+   *  smrtesy_task_id / smrtesy_origin as a durable provenance marker. (The
+   *  active re-ingest dedup keys off tasks.calendar_event_id in ai-process;
+   *  this tag is a redundant, self-describing backup that survives a lost
+   *  calendar_event_id.) */
   extendedProperties?: { private?: Record<string, string>; shared?: Record<string, string> };
 }
 

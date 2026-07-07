@@ -368,9 +368,13 @@ export function MarathonMode({
                 time={view.due_date ? view.due_time : null}
                 blocked={blocked}
                 locked={!!view.plan_id}
-                onChange={view.plan_id ? undefined : (d, tm) =>
-                  patchCurrent({ due_date: d, due_time: tm, ...(d && tm ? { task_type: "meeting" } : {}) })
-                }
+                onChange={view.plan_id ? undefined : (d, tm) => {
+                  // Time makes it an event; clearing the time reverts to a task.
+                  const body: Record<string, unknown> = { due_date: d, due_time: tm };
+                  if (d && tm) body.task_type = "meeting";
+                  else if (view.task_type === "meeting") body.task_type = "action";
+                  patchCurrent(body);
+                }}
               />
               <IconButton label={tTasks("actions.delete")} color="red" onClick={handleDeleteCurrent}>
                 <Trash2 />

@@ -15,9 +15,11 @@
  * }
  * Returns: { task, event: { id, htmlLink } }
  *
- * The event is written to the connected Google Calendar tagged with our
- * extendedProperties so the calendar sync recognises it and does NOT re-ingest
- * it as a duplicate "meeting" task (see ai-process calendarForceActionable).
+ * The event is written to the connected Google Calendar and its Google id is
+ * stored in tasks.calendar_event_id; when the calendar sync re-ingests that
+ * event, ai-process (calendarForceActionable) matches the id and skips building
+ * a duplicate "meeting" task. The event is also tagged with extendedProperties
+ * (smrtesy_task_id/origin) as a durable provenance marker.
  */
 
 import { Router } from "express";
@@ -140,7 +142,9 @@ router.post("/events", async (req: Request, res: Response) => {
   const startLocal = `${due_date}T${pad(h)}:${pad(mi)}:00`;
   const endLocal = `${end.getUTCFullYear()}-${pad(end.getUTCMonth() + 1)}-${pad(end.getUTCDate())}T${pad(end.getUTCHours())}:${pad(end.getUTCMinutes())}:00`;
 
-  // Write the event to Google Calendar, tagged so the sync won't duplicate it.
+  // Write the event to Google Calendar. Its id is stored below in
+  // calendar_event_id, which is what stops the sync from re-ingesting it as a
+  // duplicate task; the extendedProperties tag is a redundant provenance marker.
   let event;
   try {
     event = await createCalendarEvent(
