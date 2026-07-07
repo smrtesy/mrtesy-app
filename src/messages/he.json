@@ -2492,6 +2492,18 @@
         "genderNeutral": "ניטרלי",
         "personalityPromptLabel": "Personality prompt (English, ל-LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "בסיס סגנון (מנגינה קבועה)",
+        "styleBaselineHint": "תגיות שיחולו על כל שורה של הדמות — כך לכל דמות מנגינה משלה, גם במשפטים ניטרליים.",
+        "styleTag": {
+          "higherPitch": "גובה גבוה",
+          "lowerPitch": "גובה נמוך",
+          "slow": "איטי",
+          "fast": "מהיר",
+          "soft": "רך",
+          "loud": "חזק",
+          "emphasis": "מודגש",
+          "whisper": "לחישה"
+        },
         "cloneHint": "אחרי היצירה — במסך הדמות תוכל להעלות הקלטה מהמחשב או לבחור קבצים מ-Google Drive כדי ליצור את הקלון (Ultra).",
         "submit": "צור דמות",
         "editTitle": "עריכת דמות",

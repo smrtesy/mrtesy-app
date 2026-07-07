@@ -24,6 +24,7 @@ interface Character {
   age_years: number | null;
   gender: "male" | "female" | "neutral" | null;
   personality_prompt: string | null;
+  style_baseline_tags: string[] | null;
 }
 
 export function CharacterDetails({ characterId }: { characterId: string }) {
@@ -89,6 +90,7 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
               age_years: character.age_years,
               gender: character.gender,
               personality_prompt: character.personality_prompt,
+              style_baseline_tags: character.style_baseline_tags,
             }}
             onSaved={refresh}
           />

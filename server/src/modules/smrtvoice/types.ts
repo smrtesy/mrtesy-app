@@ -30,6 +30,9 @@ export interface Character {
   default_pitch: number;
   default_pace: "slow" | "normal" | "fast";
   personality_prompt: string | null;
+  // Resemble WRAP tag names applied to every line as this character's
+  // register/pace "melody" backbone (e.g. ["lower-pitch","slow"]).
+  style_baseline_tags: string[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -385,6 +388,7 @@ export interface CreateCharacterRequest {
   age_years?: number;
   gender?: "male" | "female" | "neutral";
   personality_prompt?: string;
+  style_baseline_tags?: string[];
 }
 
 export interface CreateVoiceProfileRequest {

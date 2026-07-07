@@ -2493,6 +2493,18 @@
         "genderNeutral": "Neutral",
         "personalityPromptLabel": "Personality prompt (English, for LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "Style baseline (constant melody)",
+        "styleBaselineHint": "Tags applied to every line of this character — so each character keeps its own melody, even on neutral lines.",
+        "styleTag": {
+          "higherPitch": "Higher pitch",
+          "lowerPitch": "Lower pitch",
+          "slow": "Slow",
+          "fast": "Fast",
+          "soft": "Soft",
+          "loud": "Loud",
+          "emphasis": "Emphasis",
+          "whisper": "Whisper"
+        },
         "cloneHint": "After creating — on the character screen you can upload a recording or pick files from Google Drive to create the (Ultra) clone.",
         "submit": "Create character",
         "editTitle": "Edit character",
