@@ -203,32 +203,62 @@ async function refreshGoogleToken(userId: string): Promise<string> {
 }
 
 async function gmailHistorySync(userId: string, token: string, historyId: string) {
-  const resp = await fetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=${historyId}&historyTypes=messageAdded`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  if (!resp.ok) {
-    // 404 = historyId too old; 400 = historyId invalid/malformed. Both mean the
-    // stored checkpoint is unusable — self-heal by resetting it (next run does a
-    // fresh fetch) instead of throwing a 500 that wedges the whole cron.
-    if (resp.status === 404 || resp.status === 400) {
-      return { newMessages: [], newHistoryId: null, needsReconcile: true };
-    }
-    throw new Error(`Gmail history API: ${resp.status}`);
-  }
-
-  const data = await resp.json();
-  const newHistoryId = data.historyId;
+  // Paginate through ALL history pages. history.list returns at most ~100
+  // records per page by default; before this fix only the first page was read
+  // while the RESPONSE historyId was stored as the checkpoint — every record
+  // past page 1 was skipped permanently (real mail loss on busy mailboxes).
+  // Follow nextPageToken with a MAX_PAGES safety cap per invocation; if the
+  // cap is hit, checkpoint on the id of the LAST PROCESSED history record
+  // (history record ids are valid startHistoryId values) so the next cron run
+  // resumes exactly where this one stopped instead of jumping past the
+  // unread pages.
+  const MAX_PAGES = 20;
   const messageIds: string[] = [];
+  let pageToken: string | undefined = undefined;
+  let pages = 0;
+  let responseHistoryId: string | null = null;
+  let lastRecordId: string | null = null;
 
-  for (const record of data.history || []) {
-    for (const added of record.messagesAdded || []) {
-      // Skip drafts
-      if (added.message.labelIds?.includes("DRAFT")) continue;
-      messageIds.push(added.message.id);
+  do {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : "";
+    const resp = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=${historyId}&historyTypes=messageAdded${pageParam}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!resp.ok) {
+      // 404 = historyId too old; 400 = historyId invalid/malformed. Both mean the
+      // stored checkpoint is unusable — self-heal by resetting it (next run does a
+      // fresh fetch) instead of throwing a 500 that wedges the whole cron.
+      if (resp.status === 404 || resp.status === 400) {
+        return { newMessages: [], newHistoryId: null, needsReconcile: true };
+      }
+      throw new Error(`Gmail history API: ${resp.status}`);
     }
-  }
+
+    // Explicit annotation breaks the pageToken → pageParam → resp → data
+    // inference cycle that otherwise trips TS7022 in a do-while.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data: { historyId?: string; nextPageToken?: string; history?: any[] } = await resp.json();
+    responseHistoryId = data.historyId ?? responseHistoryId;
+
+    for (const record of data.history || []) {
+      lastRecordId = record.id ?? lastRecordId;
+      for (const added of record.messagesAdded || []) {
+        // Skip drafts
+        if (added.message.labelIds?.includes("DRAFT")) continue;
+        messageIds.push(added.message.id);
+      }
+    }
+
+    pageToken = data.nextPageToken;
+    pages++;
+  } while (pageToken && pages < MAX_PAGES);
+
+  // Cap hit with pages still pending → resume from the last processed history
+  // record next run. All pages consumed → the response historyId is safe to
+  // store, exactly as before.
+  const newHistoryId = pageToken && lastRecordId ? lastRecordId : responseHistoryId;
 
   return { newMessages: messageIds, newHistoryId, needsReconcile: false };
 }

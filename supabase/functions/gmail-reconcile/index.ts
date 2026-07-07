@@ -106,20 +106,33 @@ async function reconcileUser(userId: string) {
     ignoreDuplicates: true,
   });
 
-  // Update historyId
-  const profileResp = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if (profileResp.ok) {
-    const profile = await profileResp.json();
-    await supabase.from("sync_state").upsert({
-      user_id: userId,
-      source: "gmail",
-      checkpoint: profile.historyId,
-      last_synced_at: new Date().toISOString(),
-      last_error: null,
-    }, { onConflict: "user_id,source" });
+  // Bootstrap the historyId checkpoint ONLY when none exists yet (first run).
+  // Overwriting an existing checkpoint here discarded gmail-sync's position —
+  // anything between the old checkpoint and now that is not in:inbox within
+  // the last 7 days was skipped forever (real mail loss). gmail-sync owns the
+  // checkpoint; reconcile must never move it forward.
+  const { data: existingState } = await supabase
+    .from("sync_state")
+    .select("checkpoint")
+    .eq("user_id", userId)
+    .eq("source", "gmail")
+    .maybeSingle();
+  if (!existingState?.checkpoint) {
+    const profileResp = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (profileResp.ok) {
+      const profile = await profileResp.json();
+      const { error: checkpointBootstrapError } = await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "gmail",
+        checkpoint: profile.historyId,
+        last_synced_at: new Date().toISOString(),
+        last_error: null,
+      }, { onConflict: "user_id,source" });
+      if (checkpointBootstrapError) console.error("sync_state checkpoint bootstrap failed:", checkpointBootstrapError);
+    }
   }
 
   await supabase.from("log_entries").insert({
