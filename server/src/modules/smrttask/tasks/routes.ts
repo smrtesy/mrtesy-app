@@ -92,7 +92,7 @@ const SIZES = ["quick", "regular"];
 // 20260424000001_backend_pipeline.sql. Any insert with a value outside this
 // set fails at the DB level, so validate BEFORE inserting AI-parsed values.
 const RULE_MEMORY_RULE_TYPES = new Set(["skip", "skip_spam", "action", "style", "bot", "preference", "financial"]);
-const CONTEXTS = ["home", "work"];
+const CONTEXTS = ["home", "work", "outside"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 const TASK_TYPES = ["action", "project_suggestion", "brief_review", "followup", "meeting"];
 
@@ -231,7 +231,7 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
   // suggestions inbox, which is per-user rather than org-wide.
   if (mine === "true" && userId) q = q.eq("user_id", userId);
   if (size === "quick" || size === "regular") q = q.eq("size", size);
-  if (context === "home" || context === "work") q = q.eq("context", context);
+  if (context === "home" || context === "work" || context === "outside") q = q.eq("context", context);
   if (typeof status === "string") {
     const list = status.split(",").map((s) => s.trim()).filter(Boolean);
     if (list.length === 1) q = q.eq("status", list[0]);

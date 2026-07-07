@@ -75,8 +75,9 @@ export interface Task {
   today_position: number | null;
   /** Desk model: quick (one bounded action) vs regular (needs prep / multi-step). */
   size?: "quick" | "regular";
-  /** Execution context — where this can be done. Null = unspecified (work implied). */
-  context?: "home" | "work" | null;
+  /** Execution context — where this can be done.
+   *  'home' = בית, 'outside' = בחוץ, null (or legacy 'work') = משרד/office (default). */
+  context?: "home" | "work" | "outside" | null;
   /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
   woke_from_snooze_at?: string | null;
   /** Set when the task is handed off to Claude (opened via claude.ai/code); null

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
+import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
@@ -124,6 +124,9 @@ export function TaskRow({
           </span>
           {task.context === "home" && (
             <Home className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextHome")} />
+          )}
+          {task.context === "outside" && (
+            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextOutside")} />
           )}
           {task.recurrence_rule && (
             <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
