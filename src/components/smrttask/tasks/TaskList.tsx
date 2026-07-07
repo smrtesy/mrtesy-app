@@ -41,18 +41,19 @@ import {
   dueUrgency,
   sittingWorkdays,
   autoSnoozeMoment,
+  eventReminderMoment,
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical, ExternalLink } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
-type ContextFilter = "all" | "home" | "work";
+type ContextFilter = "all" | "home" | "office" | "outside";
 
 /** Plan metadata (needs/blocked state) for MY plan tasks, keyed by task id. */
 interface PlanMeta {
@@ -134,7 +135,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [contextFilter, setContextFilter] = useState<ContextFilter>("work");
+  const [contextFilter, setContextFilter] = useState<ContextFilter>("office");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
@@ -290,7 +291,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
-      if (contextFilter === "work") return task.context !== "home";
+      if (contextFilter === "outside") return task.context === "outside";
+      // Office is the quiet default: everything that isn't explicitly home/outside
+      // (null or the legacy 'work' value).
+      if (contextFilter === "office") return task.context !== "home" && task.context !== "outside";
       return true;
     });
 
@@ -459,16 +463,25 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
   }, [fetchTasks]);
 
-  async function handleDueChange(taskId: string, date: string | null) {
+  async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
+    // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
+    // reminder one working day before, instead of the regular two-day auto-snooze.
+    // Clearing the time reverts an event back to a plain task.
+    const isEvent = !!date && !!time;
+    const wasMeeting = tasks.find((tk) => tk.id === taskId)?.task_type === "meeting";
+    const nextType = isEvent ? "meeting" : wasMeeting ? "action" : undefined;
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (nextType) patch.task_type = nextType;
     // Persist the due date FIRST and wait for it: the snooze route below reads
     // due_date from the DB to clamp the wake moment to the deadline, so it must
     // see the value we just set (and we must not snooze if the date write failed).
-    const ok = await patchTask(taskId, { due_date: date }, (task) => ({ ...task, due_date: date }));
-    // Setting a due date auto-snoozes the item until two working days before it,
-    // so it disappears from the desk/waiting lists now and resurfaces in time.
-    // Skipped when there isn't enough lead time (autoSnoozeMoment → null).
+    const ok = await patchTask(taskId, patch, (task) => ({ ...task, ...patch } as Task));
+    // Setting a due date auto-snoozes the item until it needs attention (two
+    // working days before for a task, one for an event), so it disappears from
+    // the desk/waiting lists now and resurfaces in time. Skipped when there
+    // isn't enough lead time (moment → null).
     if (!ok || !date) return;
-    const moment = autoSnoozeMoment(date, blocked);
+    const moment = isEvent ? eventReminderMoment(date, blocked) : autoSnoozeMoment(date, blocked);
     if (!moment) return;
     optimisticRemove(taskId); // optimistic hide until it resurfaces near the deadline
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
@@ -534,7 +547,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const contextChips: { key: ContextFilter; label: string; icon?: typeof Home }[] = [
     { key: "all", label: t("contextFilter.all") },
     { key: "home", label: t("contextFilter.home"), icon: Home },
-    { key: "work", label: t("contextFilter.work"), icon: Briefcase },
+    { key: "office", label: t("contextFilter.office"), icon: Briefcase },
+    { key: "outside", label: t("contextFilter.outside"), icon: MapPin },
   ];
 
   function renderRow(task: Task, zone: RowZone) {

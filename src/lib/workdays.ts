@@ -108,6 +108,35 @@ export function autoSnoozeMoment(
   return { iso: at9.toISOString(), dateISO };
 }
 
+/**
+ * Working days of lead time before an EVENT (a task with a concrete time) at
+ * which its reminder should surface. The user's rule: an event pops up as a
+ * reminder ONE working day before it happens — never days ahead.
+ */
+export const EVENT_REMINDER_LEAD_WORKDAYS = 1;
+
+/**
+ * The reminder moment for an event: 09:00 local time,
+ * EVENT_REMINDER_LEAD_WORKDAYS working day(s) before the event's date.
+ *
+ * Returns null when that moment is today-or-earlier (the event is too close to
+ * hide it) — the caller then leaves the event visible now instead of snoozing.
+ * Mirrors autoSnoozeMoment, but with the shorter event lead.
+ */
+export function eventReminderMoment(
+  dueISO: string,
+  blocked: BlockedDays,
+  today = todayISO(),
+): { iso: string; dateISO: string } | null {
+  const target = subWorkdays(parseISODateLocal(dueISO), EVENT_REMINDER_LEAD_WORKDAYS, blocked);
+  const dateISO = toISODate(target);
+  if (dateISO <= today) return null;
+  // 09:00 LOCAL — build from numeric parts so the wall-clock hour is honored
+  // regardless of the browser timezone (same care autoSnoozeMoment takes).
+  const at9 = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 9, 0, 0, 0);
+  return { iso: at9.toISOString(), dateISO };
+}
+
 export type DueUrgency = "overdue" | "today" | "soon" | "far";
 
 /** Working days within which a deadline counts as "soon" (the desk rule). */

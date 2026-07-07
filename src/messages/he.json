@@ -1,4 +1,23 @@
 {
+  "events": {
+    "addEvent": "הוסף אירוע",
+    "dialogTitle": "הוספת אירוע ליומן",
+    "extracting": "מחלץ פרטי אירוע...",
+    "titleLabel": "כותרת",
+    "dateLabel": "תאריך",
+    "timeLabel": "שעה",
+    "descriptionLabel": "תיאור",
+    "save": "שמור ליומן",
+    "saved": "האירוע נוסף ליומן",
+    "openInCalendar": "פתח ביומן",
+    "needDateTime": "צריך לבחור תאריך ושעה",
+    "button": "אירועים",
+    "weekTitle": "אירועים בשבוע הקרוב",
+    "empty": "אין אירועים בשבוע הקרוב",
+    "loading": "טוען אירועים...",
+    "today": "היום",
+    "allDay": "כל היום"
+  },
   "manualTask": {
     "title": "משימה חדשה",
     "description": "צור משימה ידנית — מלא את הפרטים בעצמך, בלי AI.",
@@ -52,6 +71,7 @@
     "sizeQuick": "מהיר",
     "sizeRegular": "רגיל",
     "contextHome": "בית",
+    "contextOutside": "בחוץ",
     "moreOptions": "עוד אפשרויות",
     "addDescription": "הוסף תיאור",
     "addSubtask": "הוסף תת-משימה",
@@ -542,7 +562,10 @@
       "dialogTitle": "תאריך יעד",
       "clear": "הסר תאריך",
       "save": "שמירה",
-      "noDateHint": "הוסף תאריך יעד"
+      "noDateHint": "הוסף תאריך יעד",
+      "timeLabel": "שעה",
+      "timeHint": "הוספת שעה הופכת את זה לארוע — תזכורת שתופיע יום עסקים לפני",
+      "clearTime": "הסר שעה"
     },
     "row": {
       "blockedHint": "ממתין ל: {titles}",
@@ -550,6 +573,7 @@
       "reopened": "המשימה נפתחה מחדש",
       "undo": "ביטול",
       "contextHome": "בית",
+      "contextOutside": "בחוץ",
       "recurring": "משימה חוזרת",
       "critical": "קריטי",
       "wokeChip": "חזר מנדנוד",
@@ -577,7 +601,8 @@
     "contextFilter": {
       "all": "הכל",
       "home": "בית",
-      "work": "עבודה"
+      "office": "משרד",
+      "outside": "בחוץ"
     },
     "review": {
       "banner": "{count} משימות ישנות מחכות לביקורת — עדיין רלוונטיות?",
@@ -647,6 +672,9 @@
       "dismissed": "נדחה"
     },
     "approve": "אשר",
+    "reminderPrefix": "תזכורת: {title}",
+    "reminderClosed": "התזכורת נסגרה",
+    "closeReminder": "סגור תזכורת",
     "dismiss": "דחה",
     "dismissing": "דוחה...",
     "cancel": "ביטול",
@@ -1093,7 +1121,8 @@
     "contextLabel": "הקשר",
     "contextNone": "ללא",
     "contextHome": "בית",
-    "contextWork": "עבודה",
+    "contextWork": "משרד",
+    "contextOutside": "בחוץ",
     "dueDateLockedHint": "יעד של משימת פלאן נקבע ע״י מנהל התוכנית בלוח התכנון",
     "savedFlash": "נשמר ✓",
     "assignLabel": "שייך לעובד",
@@ -2488,6 +2517,18 @@
         "genderNeutral": "ניטרלי",
         "personalityPromptLabel": "Personality prompt (English, ל-LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "בסיס סגנון (מנגינה קבועה)",
+        "styleBaselineHint": "תגיות שיחולו על כל שורה של הדמות — כך לכל דמות מנגינה משלה, גם במשפטים ניטרליים.",
+        "styleTag": {
+          "higherPitch": "גובה גבוה",
+          "lowerPitch": "גובה נמוך",
+          "slow": "איטי",
+          "fast": "מהיר",
+          "soft": "רך",
+          "loud": "חזק",
+          "emphasis": "מודגש",
+          "whisper": "לחישה"
+        },
         "cloneHint": "אחרי היצירה — במסך הדמות תוכל להעלות הקלטה מהמחשב או לבחור קבצים מ-Google Drive כדי ליצור את הקלון (Ultra).",
         "submit": "צור דמות",
         "editTitle": "עריכת דמות",
@@ -2633,7 +2674,11 @@
       "reanalyzeTone": "נתח טון מחדש",
       "reanalyzeHint": "ה-LLM יבחר מחדש רגש ותגיות טון",
       "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב",
-      "pause": "השהה"
+      "pause": "השהה",
+      "takeNotePlaceholder": "איזו מילה לקחת מהגרסה הזו?",
+      "useTake": "השתמש בגרסה זו לשורה",
+      "chosenTake": "הגרסה שבשימוש לשורה",
+      "inUse": "בשימוש"
     },
     "lexicon": {
       "title": "מילון הגייה",

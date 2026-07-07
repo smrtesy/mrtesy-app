@@ -160,6 +160,9 @@ router.post(
         age_years: typeof body.age_years === "number" ? body.age_years : null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
+        style_baseline_tags: Array.isArray(body.style_baseline_tags)
+          ? body.style_baseline_tags
+          : [],
         ...(orgSettings?.default_resemble_model
           ? { resemble_model: orgSettings.default_resemble_model }
           : {}),
@@ -206,6 +209,7 @@ const CHARACTER_UPDATABLE = new Set([
   "age_years",
   "gender",
   "personality_prompt",
+  "style_baseline_tags",
   "resemble_model",
   "default_exaggeration",
   "default_pitch",
@@ -223,6 +227,11 @@ router.patch(
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No updatable fields in body" });
+    }
+    // style_baseline_tags is a jsonb NOT NULL array; coerce non-arrays to []
+    // (mirrors the create route) so a stray scalar/null can't break synthesis.
+    if ("style_baseline_tags" in updates && !Array.isArray(updates.style_baseline_tags)) {
+      updates.style_baseline_tags = [];
     }
 
     const { data, error } = await db
@@ -1804,6 +1813,101 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
     .order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ takes: data ?? [] });
+});
+
+// PATCH /voice/takes/:id — choose a take as the line's audio (✓) and/or jot a
+// note. `approved:true` is SINGLE-select per line: it clears the other takes,
+// marks this one, and repoints the line's output_audio_path/duration/cost at it
+// so play / download / archive all use the chosen take. `note` is independent.
+router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const hasApproved = typeof body.approved === "boolean";
+  const hasNote = typeof body.note === "string" || body.note === null;
+  if (!hasApproved && !hasNote) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+
+  const { data: take, error: takeErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, line_id, output_audio_path, duration_seconds, cost_usd")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (takeErr) return res.status(500).json({ error: takeErr.message });
+  if (!take) return res.status(404).json({ error: "Take not found" });
+
+  if (hasNote) {
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ note: (body.note as string | null) || null })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  if (hasApproved && body.approved === true) {
+    // Single-select: clear siblings, mark this take, and make it the line's audio.
+    const { error: clearErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (clearErr) return res.status(500).json({ error: clearErr.message });
+
+    const { error: setErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: true })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (setErr) return res.status(500).json({ error: setErr.message });
+
+    const { error: lineErr } = await db
+      .from("smrtvoice_lines")
+      .update({
+        output_audio_path: take.output_audio_path,
+        output_duration_seconds: take.duration_seconds,
+        generation_cost_usd: take.cost_usd,
+        approved: true,
+      })
+      .eq("id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (lineErr) return res.status(500).json({ error: lineErr.message });
+  } else if (hasApproved && body.approved === false) {
+    // Un-choose this take. Keep the line's last audio, but if no take remains
+    // chosen for the line, clear its approved indicator (the outer ✓).
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { count, error: countErr } = await db
+      .from("smrtvoice_line_takes")
+      .select("id", { count: "exact", head: true })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id)
+      .eq("approved", true);
+    if (countErr) return res.status(500).json({ error: countErr.message });
+
+    if (!count) {
+      const { error: lineErr } = await db
+        .from("smrtvoice_lines")
+        .update({ approved: false })
+        .eq("id", take.line_id)
+        .eq("org_id", req.org!.id);
+      if (lineErr) return res.status(500).json({ error: lineErr.message });
+    }
+  }
+
+  const { data: updated, error: readErr } = await db
+    .from("smrtvoice_line_takes")
+    .select()
+    .eq("id", take.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (readErr) return res.status(500).json({ error: readErr.message });
+  res.json({ take: updated });
 });
 
 router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => {

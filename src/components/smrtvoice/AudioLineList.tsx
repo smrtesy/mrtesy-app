@@ -57,7 +57,19 @@ interface Take {
   output_audio_path: string;
   duration_seconds: number | null;
   cost_usd: number | null;
+  approved: boolean;
+  note: string | null;
   created_at: string;
+}
+
+/** Pull the tone tags out of the exact body sent (works for old takes too):
+ *  wrapping <build-intensity>… and inline [sigh]. */
+function tagsFromBody(body: string | null): string[] {
+  if (!body) return [];
+  const found = new Set<string>();
+  for (const m of body.matchAll(/<([a-z][a-z-]*)>/gi)) found.add(m[1]);
+  for (const m of body.matchAll(/\[([a-z][a-z-]*)\]/gi)) found.add(m[1]);
+  return [...found];
 }
 
 interface Suggestions {
@@ -337,18 +349,6 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
-  async function toggleApprove(line: Line) {
-    try {
-      await api(`/api/voice/lines/${line.id}`, {
-        method: "PATCH",
-        body: { approved: !line.approved },
-      });
-      fetchLines();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unknown error");
-    }
-  }
-
   async function rerunRedos() {
     setRerunning(true);
     try {
@@ -397,6 +397,43 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  // Toggle this take as the line's audio (single-select). Clicking an
+  // unchosen take marks it and repoints the line; clicking the already-chosen
+  // take un-chooses it, and once no take is chosen the line's ✓ disappears.
+  async function chooseTake(take: Take) {
+    const next = !take.approved;
+    setTakes((prev) => {
+      const key = takesOpenId ?? "";
+      const list = (prev[key] ?? []).map((tk) => ({
+        ...tk,
+        approved: next ? tk.id === take.id : tk.id === take.id ? false : tk.approved,
+      }));
+      return takesOpenId ? { ...prev, [key]: list } : prev;
+    });
+    try {
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: next } });
+      fetchLines(); // the line's audio / ✓ indicator now reflects the choice
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      if (takesOpenId) loadTakes(takesOpenId);
+    }
+  }
+
+  async function patchTake(take: Take, body: Record<string, unknown>) {
+    // Optimistically update the open take list, then persist.
+    setTakes((prev) => {
+      const list = prev[takesOpenId ?? ""] ?? [];
+      const next = list.map((tk) => (tk.id === take.id ? { ...tk, ...body } : tk));
+      return takesOpenId ? { ...prev, [takesOpenId]: next } : prev;
+    });
+    try {
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      if (takesOpenId) loadTakes(takesOpenId); // reload to undo the optimistic change
     }
   }
 
@@ -519,15 +556,6 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     <div className="text-sm truncate" dir="rtl">{line.text_clean}</div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      title={line.approved ? t("studio.unapprove") : t("studio.approve")}
-                      className={line.approved ? "text-emerald-600" : undefined}
-                      onClick={() => toggleApprove(line)}
-                    >
-                      <BadgeCheck className="h-4 w-4" />
-                    </Button>
                     <Button
                       size="icon"
                       variant="ghost"
@@ -663,41 +691,75 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     {lineTakes.length === 0 ? (
                       <span className="text-muted-foreground">{t("studio.noTakes")}</span>
                     ) : (
-                      lineTakes.map((take, idx) => (
-                        <div key={take.id} className="flex items-center justify-between gap-2 rounded bg-muted/40 p-1.5">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-muted-foreground">
-                              {t("studio.takeLabel", { n: lineTakes.length - idx })}
-                              {" · "}
-                              {new Date(take.created_at).toLocaleString(locale)}
-                              {take.duration_seconds ? ` · ${take.duration_seconds.toFixed(1)}s` : ""}
+                      lineTakes.map((take, idx) => {
+                        const takeTags = tagsFromBody(take.text_used);
+                        return (
+                        <div
+                          key={take.id}
+                          className={`rounded p-1.5 space-y-1 ${take.approved ? "bg-emerald-50 ring-1 ring-emerald-300" : "bg-muted/40"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+                                <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.approved && (
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.inUse")}</span>
+                                )}
+                                <span>· {new Date(take.created_at).toLocaleString(locale)}</span>
+                                {take.duration_seconds ? <span>· {take.duration_seconds.toFixed(1)}s</span> : null}
+                                {takeTags.map((tg) => (
+                                  <code key={tg} className="rounded bg-background border px-1 py-0.5">{tg}</code>
+                                ))}
+                              </div>
+                              {take.text_used && (
+                                <div className="truncate" dir="auto">{take.text_used}</div>
+                              )}
                             </div>
-                            {take.text_used && (
-                              <div className="truncate" dir="auto">{take.text_used}</div>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
-                              <Download className="h-4 w-4" />
-                            </Button>
-                            {playingId === take.id ? (
-                              <Button size="icon" variant="ghost" onClick={stopPlayback} title={t("studio.pause")}>
-                                <Pause className="h-4 w-4" />
-                              </Button>
-                            ) : (
+                            <div className="flex items-center gap-1">
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                onClick={() => playTake(take)}
-                                disabled={playingAll}
-                                title={t("studio.play")}
+                                title={take.approved ? t("studio.chosenTake") : t("studio.useTake")}
+                                className={take.approved ? "text-emerald-600" : undefined}
+                                onClick={() => chooseTake(take)}
                               >
-                                <Play className="h-4 w-4" />
+                                <BadgeCheck className="h-4 w-4" />
                               </Button>
-                            )}
+                              <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
+                                <Download className="h-4 w-4" />
+                              </Button>
+                              {playingId === take.id ? (
+                                <Button size="icon" variant="ghost" onClick={stopPlayback} title={t("studio.pause")}>
+                                  <Pause className="h-4 w-4" />
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => playTake(take)}
+                                  disabled={playingAll}
+                                  title={t("studio.play")}
+                                >
+                                  <Play className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
                           </div>
+                          {/* Per-take note: which word to keep from this take. */}
+                          <input
+                            type="text"
+                            defaultValue={take.note ?? ""}
+                            placeholder={t("studio.takeNotePlaceholder")}
+                            dir="auto"
+                            className="w-full rounded border bg-background px-2 py-1 text-xs"
+                            onBlur={(e) => {
+                              const v = e.target.value.trim();
+                              if (v !== (take.note ?? "")) patchTake(take, { note: v || null });
+                            }}
+                          />
                         </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}

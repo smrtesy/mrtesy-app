@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
+import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
@@ -48,7 +48,7 @@ export function TaskRow({
   /** Move between desk and waiting (manual pin / unpin). */
   onMove?: (taskId: string, toDesk: boolean) => void;
   onSizeToggle?: (taskId: string, size: "quick" | "regular") => void;
-  onDueChange?: (taskId: string, date: string | null) => void;
+  onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
 }) {
   const t = useTranslations("tasks");
   const tClaude = useTranslations("claude");
@@ -125,6 +125,9 @@ export function TaskRow({
           {task.context === "home" && (
             <Home className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextHome")} />
           )}
+          {task.context === "outside" && (
+            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextOutside")} />
+          )}
           {task.recurrence_rule && (
             <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
           )}
@@ -174,11 +177,12 @@ export function TaskRow({
           {/* Deadline chip */}
           <DueDateChip
             deadline={deadline}
+            time={task.due_date ? task.due_time : null}
             locale={locale}
             blocked={blocked}
             locked={isPlan}
             constrained={constrained}
-            onChange={onDueChange ? (d) => onDueChange(task.id, d) : undefined}
+            onChange={onDueChange ? (d, tm) => onDueChange(task.id, d, tm) : undefined}
           />
 
           <div className="flex-1" />

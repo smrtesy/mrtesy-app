@@ -1,4 +1,23 @@
 {
+  "events": {
+    "addEvent": "Add event",
+    "dialogTitle": "Add event to calendar",
+    "extracting": "Extracting event details...",
+    "titleLabel": "Title",
+    "dateLabel": "Date",
+    "timeLabel": "Time",
+    "descriptionLabel": "Description",
+    "save": "Save to calendar",
+    "saved": "Event added to your calendar",
+    "openInCalendar": "Open in calendar",
+    "needDateTime": "Pick a date and time",
+    "button": "Events",
+    "weekTitle": "Events this coming week",
+    "empty": "No events in the coming week",
+    "loading": "Loading events...",
+    "today": "Today",
+    "allDay": "All day"
+  },
   "manualTask": {
     "title": "New Task",
     "description": "Create a task manually — fill in the details yourself, no AI.",
@@ -52,6 +71,7 @@
     "sizeQuick": "Quick",
     "sizeRegular": "Regular",
     "contextHome": "Home",
+    "contextOutside": "Outside",
     "moreOptions": "More options",
     "addDescription": "Add description",
     "addSubtask": "Add subtask",
@@ -542,7 +562,10 @@
       "dialogTitle": "Due date",
       "clear": "Remove date",
       "save": "Save",
-      "noDateHint": "Add a due date"
+      "noDateHint": "Add a due date",
+      "timeLabel": "Time",
+      "timeHint": "Adding a time turns this into an event — a reminder that shows up one working day before",
+      "clearTime": "Remove time"
     },
     "row": {
       "blockedHint": "Waiting for: {titles}",
@@ -550,6 +573,7 @@
       "reopened": "Task reopened",
       "undo": "Undo",
       "contextHome": "Home",
+      "contextOutside": "Outside",
       "recurring": "Recurring task",
       "critical": "Critical",
       "wokeChip": "Back from snooze",
@@ -577,7 +601,8 @@
     "contextFilter": {
       "all": "All",
       "home": "Home",
-      "work": "Work"
+      "office": "Office",
+      "outside": "Outside"
     },
     "review": {
       "banner": "{count} stale tasks await review — still relevant?",
@@ -647,6 +672,9 @@
       "dismissed": "Dismissed"
     },
     "approve": "Approve",
+    "reminderPrefix": "Reminder: {title}",
+    "reminderClosed": "Reminder closed",
+    "closeReminder": "Close reminder",
     "dismiss": "Dismiss",
     "dismissing": "Dismissing...",
     "cancel": "Cancel",
@@ -1093,7 +1121,8 @@
     "contextLabel": "Context",
     "contextNone": "None",
     "contextHome": "Home",
-    "contextWork": "Work",
+    "contextWork": "Office",
+    "contextOutside": "Outside",
     "dueDateLockedHint": "A plan task deadline is set by the plan manager on the planning board",
     "savedFlash": "Saved ✓",
     "assignLabel": "Assign to a teammate",
@@ -2489,6 +2518,18 @@
         "genderNeutral": "Neutral",
         "personalityPromptLabel": "Personality prompt (English, for LLM)",
         "personalityPromptPlaceholder": "with curious 7-year-old energy",
+        "styleBaselineLabel": "Style baseline (constant melody)",
+        "styleBaselineHint": "Tags applied to every line of this character — so each character keeps its own melody, even on neutral lines.",
+        "styleTag": {
+          "higherPitch": "Higher pitch",
+          "lowerPitch": "Lower pitch",
+          "slow": "Slow",
+          "fast": "Fast",
+          "soft": "Soft",
+          "loud": "Loud",
+          "emphasis": "Emphasis",
+          "whisper": "Whisper"
+        },
         "cloneHint": "After creating — on the character screen you can upload a recording or pick files from Google Drive to create the (Ultra) clone.",
         "submit": "Create character",
         "editTitle": "Edit character",
@@ -2634,7 +2675,11 @@
       "reanalyzeTone": "Re-analyze tone",
       "reanalyzeHint": "the LLM re-picks emotion + tone tags",
       "selectWordHint": "Select a word in the text to get spelling suggestions",
-      "pause": "Pause"
+      "pause": "Pause",
+      "takeNotePlaceholder": "Which word to keep from this take?",
+      "useTake": "Use this take for the line",
+      "chosenTake": "In use for the line",
+      "inUse": "in use"
     },
     "lexicon": {
       "title": "Pronunciation lexicon",
