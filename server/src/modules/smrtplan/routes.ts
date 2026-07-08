@@ -604,7 +604,9 @@ const MY_TASK_FIELDS =
   "assignment_status, " +
   // Desk-row fields: my plan tasks are merged into the unified /tasks desk,
   // whose rows need these to sort, age and render like any other task.
-  "size, context, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
+  // planned_for = the daily-method "picked for today" flag: the desk shows a
+  // plan task only when it's set to today, and the inbox filters picked ones out.
+  "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
   "description, has_unread_update, recurrence_rule";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */

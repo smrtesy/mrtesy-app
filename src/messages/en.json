@@ -764,6 +764,8 @@
     "resolvedHint": "Suggestions that closed after you already handled them in the conversation. Confirm done, or reopen.",
     "returnedTitle": "Plan for today ({count})",
     "returnedHint": "Undated tasks not picked yet — choose for today, give a date, or drop.",
+    "planTodayTitle": "Plan tasks due soon ({count})",
+    "planTodayHint": "Plan tasks with an approaching deadline — pick which to add to today.",
     "confirmDone": "Done",
     "reopen": "Reopen"
   },

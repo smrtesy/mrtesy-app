@@ -291,6 +291,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const bucketOf = useCallback((task: Task): string => {
     if (task.size === "quick") return LIST_QUICK;
     if (task.planned_for === todayStr) return LIST_REGULAR;
+    // Plan tasks flow through the inbox and live on their own board — they reach
+    // the desk ONLY when explicitly picked (planned_for = today), never
+    // auto-surfaced by their plan-assigned date. Otherwise they'd flood
+    // "picked for today" (daily-method spec: פלאן נכנסות דרך הנכנס).
+    if (task.plan_id) return LIST_HIDDEN;
     if (task.due_date && task.due_date <= todayStr) return LIST_REGULAR;
     if (task.woke_from_snooze_at) return LIST_REGULAR;
     // A future-dated task is scheduled — surfaced by the inbox, not the pool.

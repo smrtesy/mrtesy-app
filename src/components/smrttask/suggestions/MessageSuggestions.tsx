@@ -16,7 +16,7 @@ import {
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
+import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -37,7 +37,7 @@ import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment, todayISO } fr
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
-import type { Task } from "@/types/task";
+import type { Task, TaskNeed } from "@/types/task";
 
 /**
  * The suggestions inbox — the decision queue. Cards are deliberately minimal:
@@ -66,6 +66,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   // inbox each day for a decision (the daily-method forcing function). They also
   // live in the pool on the tasks screen (intended overlap: inbox = the prompt).
   const [returned, setReturned] = useState<Task[]>([]);
+  // Plan tasks whose deadline is near — surfaced in the inbox to pick for today.
+  // Plan tasks flow through the inbox (never auto-onto the desk); this is where
+  // you commit one to "היום".
+  const [planTasks, setPlanTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -145,6 +149,30 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
         );
       } catch { /* keep prior returned set */ }
+      // MY plan tasks with a near deadline (due within ~4 days or overdue), not
+      // blocked, not already picked — surfaced here to pick for today. Plan tasks
+      // never auto-fill the desk; the inbox is where you commit one. smrtPlan
+      // off → empty (endpoint 404/deny caught).
+      try {
+        const { tasks: pt } = await api<{ tasks: (Task & { needs?: TaskNeed[] })[] }>("/api/plan/my-tasks");
+        const today = todayISO();
+        const soonDate = new Date();
+        soonDate.setDate(soonDate.getDate() + 4);
+        // Local date (matches todayISO / effectiveDeadline) — avoid UTC slice,
+        // which would shift the window by a day in early-morning local hours.
+        const soonISO = `${soonDate.getFullYear()}-${String(soonDate.getMonth() + 1).padStart(2, "0")}-${String(soonDate.getDate()).padStart(2, "0")}`;
+        setPlanTasks(
+          (pt ?? [])
+            .filter((t) => {
+              if (t.planned_for === today) return false;
+              if (!["inbox", "in_progress", "pending_completion"].includes(t.status ?? "")) return false;
+              if ((t.needs ?? []).some((n) => !n.satisfied)) return false; // blocked → not actionable
+              const dl = effectiveDeadline(t);
+              return !!dl && dl <= soonISO;
+            })
+            .sort((a, b) => (effectiveDeadline(a) ?? "").localeCompare(effectiveDeadline(b) ?? "")),
+        );
+      } catch { /* smrtPlan not enabled → no plan section */ }
       setSelected(new Set());
       // Re-bind editTask to the freshly fetched row so an open TaskDetail
       // sheet renders the saved values instead of the pre-save snapshot.
@@ -206,6 +234,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setSuggestions((prev) => prev.filter((s) => !set.has(s.id)));
     setReturned((prev) => prev.filter((s) => !set.has(s.id)));
     setResolved((prev) => prev.filter((s) => !set.has(s.id)));
+    setPlanTasks((prev) => prev.filter((s) => !set.has(s.id)));
     setSelected((prev) => {
       const next = new Set(prev);
       ids.forEach((id) => next.delete(id));
@@ -383,6 +412,15 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
+  // Plan-task triage: pull a plan task onto today's desk (planned_for = today).
+  // It keeps living on the plan board; this is the daily-method "pick for today".
+  function handlePlanPickToday(taskId: string) {
+    setPlanTasks((prev) => prev.filter((task) => task.id !== taskId));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   // Returned-task triage: drop it (dismiss).
   function handleReturnedDismiss(taskId: string) {
     setReturned((prev) => prev.filter((task) => task.id !== taskId));
@@ -512,7 +550,37 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         </div>
       )}
 
-      {suggestions.length === 0 && resolved.length === 0 && returned.length === 0 ? (
+      {/* Plan tasks with a near deadline — pick one for today. Plan tasks flow
+          through the inbox and live on their own board; the desk never
+          auto-fills them, so this is where you commit one to "היום". */}
+      {planTasks.length > 0 && (
+        <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <ClipboardList className="h-3.5 w-3.5 shrink-0" />
+            <span dir="auto">{t("planTodayTitle", { count: planTasks.length })}</span>
+          </p>
+          <p className="text-[11px] text-muted-foreground" dir="auto">{t("planTodayHint")}</p>
+          {planTasks.map((task) => {
+            const pTitle = locale === "he" && task.title_he ? task.title_he : task.title;
+            const dl = effectiveDeadline(task);
+            return (
+              <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
+                <button type="button" className="min-w-0 flex-1 truncate text-start text-sm" dir="auto" onClick={() => setEditTask(task)}>{pTitle}</button>
+                {dl && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground" dir="ltr">
+                    {new Date(`${dl}T00:00:00`).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })}
+                  </span>
+                )}
+                <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePlanPickToday(task.id)}>
+                  <ListPlus />
+                </IconButton>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {suggestions.length === 0 && resolved.length === 0 && returned.length === 0 && planTasks.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noSuggestions")}</p>
