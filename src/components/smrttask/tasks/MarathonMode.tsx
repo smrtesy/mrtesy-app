@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ExternalLink, AlertTriangle, Home, Clock, Trash2 } from "lucide-react";
+import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ClipboardList, ExternalLink, AlertTriangle, Home, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { ManualTaskInput } from "./ManualTaskInput";
@@ -232,6 +232,7 @@ export function MarathonMode({
   const view = detail ?? current;
   const isQuickNow = (view?.size ?? mode) === "quick";
   const isHomeNow = view?.context === "home";
+  const isOutsideNow = view?.context === "outside";
   const description = detail?.description ?? current?.description ?? null;
   const checklist = detail?.checklist ?? [];
   const materials = detail?.task_materials ?? [];
@@ -328,7 +329,7 @@ export function MarathonMode({
             <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{title}</h2>
             {planLabel && (
               <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-0.5 text-[12px] font-medium text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5" /> {planLabel}
+                <ClipboardList className="h-3.5 w-3.5" /> {planLabel}
               </span>
             )}
           </div>
@@ -342,7 +343,7 @@ export function MarathonMode({
                 label={isQuickNow ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
                 color="amber"
                 className={isQuickNow ? "text-status-warn" : undefined}
-                onClick={() => patchCurrent({ size: isQuickNow ? "regular" : "quick" })}
+                onClick={() => patchCurrent({ size: isQuickNow ? "medium" : "quick" })}
               >
                 <Zap className={isQuickNow ? "fill-current" : undefined} />
               </IconButton>
@@ -355,6 +356,15 @@ export function MarathonMode({
               >
                 <Home className={isHomeNow ? "fill-current" : undefined} />
               </IconButton>
+              <IconButton
+                label={tDetail("contextOutside")}
+                color="primary"
+                aria-pressed={isOutsideNow}
+                className={isOutsideNow ? "text-primary" : undefined}
+                onClick={() => patchCurrent({ context: isOutsideNow ? null : "outside" })}
+              >
+                <MapPin className={isOutsideNow ? "fill-current" : undefined} />
+              </IconButton>
               <IconButton label={tTasks("actions.snooze")} color="amber" onClick={() => setSnoozeOpen(true)}>
                 <Clock />
               </IconButton>
@@ -365,9 +375,16 @@ export function MarathonMode({
               />
               <DueDateChip
                 deadline={effectiveDeadline(view)}
+                time={view.due_date ? view.due_time : null}
                 blocked={blocked}
                 locked={!!view.plan_id}
-                onChange={view.plan_id ? undefined : (d) => patchCurrent({ due_date: d })}
+                onChange={view.plan_id ? undefined : (d, tm) => {
+                  // Time makes it an event; clearing the time reverts to a task.
+                  const body: Record<string, unknown> = { due_date: d, due_time: tm };
+                  if (d && tm) body.task_type = "meeting";
+                  else if (view.task_type === "meeting") body.task_type = "action";
+                  patchCurrent(body);
+                }}
               />
               <IconButton label={tTasks("actions.delete")} color="red" onClick={handleDeleteCurrent}>
                 <Trash2 />

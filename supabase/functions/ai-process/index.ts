@@ -481,7 +481,7 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
   // Unified cost ledger — one row per paid call (best-effort; never blocks processing).
   if (meta) {
     try {
-      await supabase.from("ai_usage").insert({
+      const { error: aiUsageInsertError } = await supabase.from("ai_usage").insert({
         user_id: meta.userId ?? null,
         provider: "anthropic",
         component: meta.component,
@@ -493,6 +493,7 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
         cost_usd: estimateCost(usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, modelTypeFromName(model)),
         ref_id: meta.refId ?? null,
       });
+      if (aiUsageInsertError) console.error("ai_usage insert failed:", aiUsageInsertError);
     } catch (_e) { /* ledger insert must not break the pipeline */ }
   }
   return usage;
@@ -540,10 +541,11 @@ async function loadThreadMemory(userId: string, key: string): Promise<ThreadMemo
 }
 
 async function upsertThreadMemory(userId: string, key: string, fields: Partial<ThreadMemoryRow>) {
-  await supabase.from("thread_memory").upsert(
+  const { error: threadMemoryUpsertError } = await supabase.from("thread_memory").upsert(
     { user_id: userId, thread_key: key, ...fields, updated_at: new Date().toISOString() },
     { onConflict: "user_id,thread_key" },
   );
+  if (threadMemoryUpsertError) console.error("thread_memory upsert failed:", threadMemoryUpsertError);
 }
 
 interface ThreadAnalysis {
@@ -758,6 +760,15 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
     user's part is done. (Then, if the user's reply ALSO asks the other party
     for something back, that is a new_matter — but the original "you must
     answer" task is closed.)
+  • Same for a "notify / update / tell X" task ("להודיע ל-X", "לעדכן את X",
+    "למסור ל-X <מידע>"): an [OUTGOING] line in which the user ALREADY conveys
+    that information to X → completion=true. The user's message IS the
+    notification — do NOT keep a "still needs to tell X" task alive after they
+    already told them.
+  • completion is about the matter THIS task tracks. If the message closes a
+    DIFFERENT matter in the same chat while the tracked matter is still waiting
+    on the other party, completion=false and state=pending_other_party — a
+    resolved side-matter must never mark the tracked one done.
   • If the same message also opens a NEW request, still set completion=true
     for the ORIGINAL question (one task = one open question); the new request
     is the new_matter.
@@ -767,6 +778,17 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
   • "I'll check and get back to you" is NOT completion — that is R2b
     tracking, still pending.
   • A bare "תודה" with no linked task stays INFORMATIONAL, completion=false.
+
+═══ STATE ↔ TITLE must agree ═══
+new_title_he and state describe the SAME next move — they must never contradict:
+  • state=pending_user_action / open → the title names the USER's action
+    ("לענות ל-X", "לאשר ל-X", "לשלוח ל-X <דבר>").
+  • state=pending_other_party → the user already did their part; the title is a
+    PASSIVE tracker ("ממתין לתשובת X", "מעקב מול X"), NEVER a chore the user must
+    perform. A "לחכות ל-X / ממתין ל-X" title paired with state=pending_user_action
+    is a self-contradiction — decide the real direction from the transcript and
+    make BOTH fields reflect it. (This is what lets a "waiting on them" matter be
+    deferred instead of nagging in the action queue.)
 
 ═══ WORDING of reason_he / new_summary / new_title_he ═══
 W1. Register — three levels; never upgrade one into another:
@@ -1153,10 +1175,44 @@ async function appendUpdateToTask(
   }
   const markCompletion = analysis.completionSignal && !staleCompletionForFuture;
 
+  // "Waiting for a reply is not a task." When THIS message leaves the tracked
+  // matter's next move with the OTHER party (state=pending_other_party), the task
+  // becomes a QUIET deferred follow-up — never an active card, never
+  // pending_completion — regardless of how it got here. The creation path already
+  // does this for brand-new WhatsApp matters (~line 3269); this mirror covers a
+  // task that only TRANSITIONED into a waiting state via an update: the user
+  // answered X, so the "answer X" matter is done and all that's left is waiting on
+  // X — that belongs in the 48-business-hour follow-up loop, not the action queue.
+  // It also stops a completion signal that fired on a SIBLING matter in the same
+  // WhatsApp chat from closing this task while its OWN matter is still open (the
+  // Levi case: "payment received" must not archive "waiting for Levi to open the
+  // computers", which the analyzer itself flagged pending_other_party). Scoped to
+  // WhatsApp — email has its own send-time check_followup defer.
+  // Defer takes precedence over reopen ON PURPOSE: a closed matter the router
+  // revives (opts.reopen) whose next move is now the other party's should come
+  // back as a QUIET tracker, not jump into the active queue. When the revival
+  // leaves the ball with the USER (state open/pending_user_action) deferToFollowup
+  // is false, so reopen resurfaces it active as before.
+  const deferToFollowup = isWhatsApp(msg)
+    && analysis.state === "pending_other_party"
+    && classification !== "spam"
+    // Never convert a recurring occurrence into a follow-up snooze — recurrence
+    // has its own materialise/advance lifecycle in reminders-check.
+    && !existing?.recurrence_rule
+    && !existing?.recurrence_parent_id;
+
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
-  if (opts?.reopen) {
+  if (deferToFollowup) {
+    const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+    updateFields.task_type = "followup";
+    updateFields.status = "snoozed";
+    updateFields.snoozed_until = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
+    // Clear any stale completion flag so it doesn't read "done" while it waits.
+    updateFields.completion_signal_detected = false;
+    updateFields.completion_signal_reason = null;
+  } else if (opts?.reopen) {
     updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
@@ -1174,14 +1230,19 @@ async function appendUpdateToTask(
     updateFields.snoozed_until = null;
   }
 
-  await supabase.from("tasks").update(updateFields).eq("id", taskId);
-  await supabase.from("task_activities").insert({
+  const { error: taskUpdateError } = await supabase.from("tasks").update(updateFields).eq("id", taskId);
+  if (taskUpdateError) console.error("tasks update failed:", taskUpdateError);
+  const { error: followupActivityError } = await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
-    note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
+    activity_type: deferToFollowup ? "snoozed" : opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
+    new_value: deferToFollowup ? "snoozed" : null,
+    note: deferToFollowup
+      ? `Follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours (ball in other party's court): ${(analysis.reason || msg.subject || "").slice(0, 300)}`
+      : (analysis.reason || msg.subject || `Linked via ${msg.source_type}`),
     actor: "system",
   });
+  if (followupActivityError) console.error("task_activities insert failed:", followupActivityError);
   // The occurrence the update actually landed on (may differ from the id the
   // caller passed when a recurring series was redirected above).
   return taskId;
@@ -1227,7 +1288,7 @@ Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that ma
 An [open] matter is the right home ONLY when the latest message is about the SAME specific topic/action that matter tracks — the same question, deal, document, payment, or event. A shared chat is NOT a shared matter: if the latest message raises a clearly DIFFERENT topic, return NEW even though the same contact has an open matter. Do not staple an unrelated new message onto an old suggestion just because they share a chat (the recurring "חיבר להצעה ישנה שלא קשורה להודעות החדשות" bug).
 Judge by the LAST message in the transcript. When the latest message is genuinely the next turn of an [open] matter, pick it; when it is a different topic, prefer NEW; when the only fit is a [DONE/closed], [SNOOZED], or [DISMISSED] matter, prefer NEW unless it unmistakably continues that exact matter.`;
   const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
-  const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(sys.classification_model, cachedSystem(system), user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
@@ -1275,6 +1336,12 @@ Decide by the LAST meaningful exchange, in this priority order (first match wins
   5. Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה")
      with nothing pending → INFORMATIONAL.
   6. Conversation appears closed and resolved → INFORMATIONAL.
+CONCRETE ERRAND OVERRIDE: a specific thing the contact asks the USER to
+get / order / buy / bring / pick up for them ("תזמין לי", "תביא", "תקנה לי",
+"can you order me…") is ACTIONABLE and stays a task until it is fulfilled or
+declined — a later casual line in the same burst (small talk, "יישר כוח", an
+unrelated topic) does NOT downgrade it to informational. This overrides the
+last-line rule above for that still-open errand.
 A personal chat is NEVER spam — junk or promo content quoted inside the
 transcript does not make the chat spam.
 The generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
@@ -1408,7 +1475,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // Static instructions → cached prefix (admin-editable via ai_prompts key
   // "edge_task_builder"). Dynamic context (WhatsApp rules, project brief,
   // contact memory, body) goes in the user message to keep the cache warm.
-  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of a transaction the user PAID (money going out) — but NOT a benefit / refund / grant / entitlement coming TO the user, which DOES need a task\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TERSE HUMAN MESSAGE RULE (mandatory) ═══\nA short message from a HUMAN sender — a person or business writing\ndirectly, not an automated noreply/service/notification address — is\nusually business shorthand, not noise. Subject "Order" with body "More\nbedtime stories" from a retailer IS a purchase order → build the task\n("לטפל בהזמנה של <product> מ<sender>"). When a human wrote only a few\nwords, infer the obvious ask conservatively from the subject + sender +\ncontact context; do NOT return [] merely because the message is terse.\nThe EMPTY-ARRAY categories above describe AUTOMATED mail and closures —\nthey never license dropping a human's three-word request.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name. When the sender is shown as a handle ("@..."), a bare phone number, or is empty, you do NOT know their real name — do NOT invent or transliterate one (the "מי זה לויק? מאיפה לקחת את השם?" bug). Use "איש הקשר" or the phone as written, unless a real name literally appears in the body.\n• All times you write (in title or description) are in the user's LOCAL timezone, stated in the "Current date/time" line — the [INCOMING]/[OUTGOING] timestamps are already local. Never emit a UTC/server time.\n• A name, person, or thing MENTIONED IN PASSING is NOT a task. Do NOT turn "who is X?" / "לברר מי X" / "find out about Y" into a sub-task unless the user EXPLICITLY asked to find out — a name dropped in conversation ("גם ריזל אמר ש...") is context, not an action item. Never pad a title with an invented clarification step like "ולברר מי ריזל".\n• The ACTION in title_he must be one the message actually asks for or unmistakably implies. NEVER infer an unrelated action the text does not support: a "review your upcoming delivery" / "price changed" notice is NOT a request to "update payment method"; an auto-renewal footer ("renews until you cancel") is NOT a payment-method problem; a shipping update is NOT a billing task. When the message states no explicit action, keep the literal ask (לבדוק / לעיין / לעקוב) — never upgrade it to a payment / billing / cancellation action that is not written in the message.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "size":         "quick|regular — quick = ONE bounded action with no prep work (reply, confirm, call, schedule, send, sign, pay) doable in one short sitting; regular = requires creation, preparation, gathering material, multiple steps, or depends on others (prepare, write, plan, summarize, build, compare). WHEN IN DOUBT → regular (a polluted quick-list breaks the user's quick-marathon habit; a missed quick task costs nothing).",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null",\n  "confidence":   "'high' | 'low' — your certainty this extraction is correct AND complete. Use 'low' when the message is genuinely hard to turn into a task: several intertwined actions, an unclear owner or deadline, the real content sits behind a link/PDF/attachment you could not read, or the ask is buried in a long thread. Use 'high' only when the task is unambiguous from the text in front of you."\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a transaction the USER paid (money OUT) → return []. BUT a benefit / refund / grant / subsidy / entitlement coming TO the user — especially with an amount to collect or a date to claim/use (food-stamps/EBT, grant, refund, eligibility date) → build ONE task: title "להשתמש ב<benefit>" / "לממש <benefit> עד <date>", describe the amount + date + how to use it.\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of a transaction the user PAID (money going out) — but NOT a benefit / refund / grant / entitlement coming TO the user, which DOES need a task\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TERSE HUMAN MESSAGE RULE (mandatory) ═══\nA short message from a HUMAN sender — a person or business writing\ndirectly, not an automated noreply/service/notification address — is\nusually business shorthand, not noise. Subject "Order" with body "More\nbedtime stories" from a retailer IS a purchase order → build the task\n("לטפל בהזמנה של <product> מ<sender>"). When a human wrote only a few\nwords, infer the obvious ask conservatively from the subject + sender +\ncontact context; do NOT return [] merely because the message is terse.\nThe EMPTY-ARRAY categories above describe AUTOMATED mail and closures —\nthey never license dropping a human's three-word request.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name. When the sender is shown as a handle ("@..."), a bare phone number, or is empty, you do NOT know their real name — do NOT invent or transliterate one (the "מי זה לויק? מאיפה לקחת את השם?" bug). Use "איש הקשר" or the phone as written, unless a real name literally appears in the body.\n• All times you write (in title or description) are in the user's LOCAL timezone, stated in the "Current date/time" line — the [INCOMING]/[OUTGOING] timestamps are already local. Never emit a UTC/server time.\n• A name, person, or thing MENTIONED IN PASSING is NOT a task. Do NOT turn "who is X?" / "לברר מי X" / "find out about Y" into a sub-task unless the user EXPLICITLY asked to find out — a name dropped in conversation ("גם ריזל אמר ש...") is context, not an action item. Never pad a title with an invented clarification step like "ולברר מי ריזל".\n• The ACTION in title_he must be one the message actually asks for or unmistakably implies. NEVER infer an unrelated action the text does not support: a "review your upcoming delivery" / "price changed" notice is NOT a request to "update payment method"; an auto-renewal footer ("renews until you cancel") is NOT a payment-method problem; a shipping update is NOT a billing task. When the message states no explicit action, keep the literal ask (לבדוק / לעיין / לעקוב) — never upgrade it to a payment / billing / cancellation action that is not written in the message. The title must describe the SAME matter as the description and never introduce a concept, product, feature, or scenario absent from the body — do NOT free-associate from the sender's brand or name (a vendor called "Dualhook" does not make the message about webhooks / "heartbeat" / a "connection" that expires); a billing email stays a billing task. If title and description would describe different things, the title is wrong — rebuild it from the description.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "size":         "quick|regular — quick = ONE bounded action with no prep work (reply, confirm, call, schedule, send, sign, pay) doable in one short sitting; regular = requires creation, preparation, gathering material, multiple steps, or depends on others (prepare, write, plan, summarize, build, compare). WHEN IN DOUBT → regular (a polluted quick-list breaks the user's quick-marathon habit; a missed quick task costs nothing).",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null",\n  "confidence":   "'high' | 'low' — your certainty this extraction is correct AND complete. Use 'low' when the message is genuinely hard to turn into a task: several intertwined actions, an unclear owner or deadline, the real content sits behind a link/PDF/attachment you could not read, or the ask is buried in a long thread. Use 'high' only when the task is unambiguous from the text in front of you."\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a transaction the USER paid (money OUT) → return []. BUT a benefit / refund / grant / subsidy / entitlement coming TO the user — especially with an amount to collect or a date to claim/use (food-stamps/EBT, grant, refund, eligibility date) → build ONE task: title "להשתמש ב<benefit>" / "לממש <benefit> עד <date>", describe the amount + date + how to use it.\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   let context = `\n\n${nowContextLine(userTz(settings))}`;
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
@@ -1585,12 +1652,17 @@ INFO when the message:
     question) with nothing awaited back;
   • is a pure FYI, broadcast, mass mail, newsletter, receipt or automated
     notification;
+  • is a marketing / promotional / sales blast or a templated bulk message —
+    abandoned-cart or "Last Chance!" / "Dear Valued Customer/Contestant" /
+    "your <item> is waiting for you" promos — EVEN when it says "we're just
+    waiting for you to confirm/update"; that is a marketing call-to-action, not
+    a personal 1:1 message awaiting a human reply;
   • expects no reply by its nature (calendar response, unsubscribe, ack).
 When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
 
 Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
-  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, cachedSystem(system), `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -1699,7 +1771,7 @@ async function refreshGmailToken(userId: string): Promise<string> {
   if (!resp.ok) throw new Error(`Token refresh failed: ${resp.status}`);
 
   const tokens = await resp.json();
-  await supabase
+  const { error: credUpdateError } = await supabase
     .from("user_credentials")
     .update({
       access_token: tokens.access_token,
@@ -1707,6 +1779,7 @@ async function refreshGmailToken(userId: string): Promise<string> {
     })
     .eq("user_id", userId)
     .eq("service", "gmail");
+  if (credUpdateError) console.error("user_credentials update failed:", credUpdateError);
   return tokens.access_token;
 }
 
@@ -1969,7 +2042,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `EMAIL:\nSubject: ${msg.subject || ""}\nBody:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ OPEN TASKS (last 90 days) ═══\n${taskList}`;
 
-    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2008,7 +2081,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `DRIVE DOCUMENT:\nTitle: ${msg.subject || ""}\nContent:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ PAST CONFIRMATION EMAILS (last 90 days) ═══\n${emailList}`;
 
-    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
+    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2280,7 +2353,7 @@ async function findDuplicateOpenTask(
 
   const userMessage = `NEW ITEM (about to become a task):\nTitle: ${probe.title}\nDate: ${probe.dueDate || "—"}\nContact emails: ${[...probe.emails].join(", ") || "—"}\nContact phones: ${[...probe.phones].join(", ") || "—"}\nBody:\n${probe.description.substring(0, 900)}\n\n═══ OPEN TASK CANDIDATES ═══\n${candList}`;
 
-  const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
+  const result = await callClaude(sys.classification_model, cachedSystem(DUPE_MATCH_PROMPT), userMessage, 300,
     { component: "ai_process.dupe_match", userId, refId });
 
   try {
@@ -2377,13 +2450,14 @@ async function linkAndEnrichDuplicate(
 // possible duplicate. Record an activity so the suggestion is auditable
 // alongside the suggested_duplicate_of pointer the UI reads.
 async function logDuplicateSuggestion(userId: string, newTaskId: string, suggestedOfTaskId: string) {
-  await supabase.from("task_activities").insert({
+  const { error: dupeActivityError } = await supabase.from("task_activities").insert({
     user_id: userId,
     task_id: newTaskId,
     activity_type: "duplicate_suggested",
     note: `Possible duplicate of task ${suggestedOfTaskId}`,
     actor: "system",
   });
+  if (dupeActivityError) console.error("task_activities insert failed:", dupeActivityError);
 }
 
 async function processMessage(msg: any, settings: any, sys: SystemParams) {
@@ -2423,19 +2497,22 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
   // ── Early exits that don't need AI ─────────────────────────────────────────
   if (!userForceActionable && preResult.result === "defer") {
-    await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
+    const { error: deferUnlockError } = await supabase.from("source_messages").update({ processing_lock_at: null }).eq("id", msg.id);
+    if (deferUnlockError) console.error("source_messages defer unlock failed:", deferUnlockError);
     return "deferred";
   }
 
   if (!userForceActionable && preResult.result === "skip") {
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: skipUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "skip", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (skipUpdateError) console.error("source_messages skip update failed:", skipUpdateError);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "skipped", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "skip", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "skip");
     return;
   }
 
   if (!userForceActionable && preResult.result === "informational") {
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: infoUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", skip_reason: preResult.skipReason, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (infoUpdateError) console.error("source_messages informational update failed:", infoUpdateError);
     await supabase.from("log_entries").insert({ user_id: msg.user_id, category: "ai_process", status: "ok", ...msgLogFields(msg), pre_classification: preResult.result, ai_classification: "informational", classification_reason: preResult.skipReason, processing_duration_ms: Date.now() - startTime });
     await tagGmailReview(msg, "informational");
     return;
@@ -2458,7 +2535,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     };
     if (!fu.isFollowup) {
       // Outgoing message that closes a loop / needs no chasing → informational.
-      await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      const { error: noFollowupUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "informational", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+      if (noFollowupUpdateError) console.error("source_messages no-followup update failed:", noFollowupUpdateError);
       await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "informational", classification_reason: `no follow-up needed: ${fu.reason}` });
       return;
     }
@@ -2479,7 +2557,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         recipient ? `נשלח אל: ${recipient}` : null,
         sourceUrl ? `קישור להודעה: ${sourceUrl}` : null,
       ].filter(Boolean).join("\n");
-      const { data: newTask } = await supabase.from("tasks").insert({
+      const { data: newTask, error: followupTaskInsertError } = await supabase.from("tasks").insert({
         user_id: msg.user_id, source_message_id: msg.id,
         title, title_he: title, description,
         task_type: "followup", priority: "medium",
@@ -2490,16 +2568,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         ai_actions: [], ai_confidence: 0.7, ai_model_used: sys.classification_model,
         updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
       }).select("id").single();
+      if (followupTaskInsertError) console.error("followup task insert failed:", followupTaskInsertError);
       if (newTask) {
-        await supabase.from("task_activities").insert({
+        const { error: followupCreatedActivityError } = await supabase.from("task_activities").insert({
           user_id: msg.user_id, task_id: newTask.id,
           activity_type: "created", new_value: "snoozed",
           note: `Follow-up scheduled for ${surfaceAt.toISOString()} (${FOLLOWUP_LEAD_HOURS} business hours after send)`,
           actor: "system",
         });
+        if (followupCreatedActivityError) console.error("task_activities insert failed:", followupCreatedActivityError);
       }
     }
-    await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    const { error: followupMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+    if (followupMsgUpdateError) console.error("source_messages followup update failed:", followupMsgUpdateError);
     await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "actionable_followup", classification_reason: `follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours: ${fu.reason}` });
     return;
   }
@@ -2591,11 +2672,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // and recoverable, never silently buried as "informational".
         const ageMs = msg.received_at ? Date.now() - new Date(msg.received_at).getTime() : 0;
         const tooOld = ageMs > 24 * 60 * 60 * 1000;
-        await supabase.from("source_messages").update(
+        const { error: transientUpdateError } = await supabase.from("source_messages").update(
           tooOld
             ? { processing_status: "processed", dead_letter: true, skip_reason: "ai_transient_failure_timeout", processing_lock_at: null }
             : { processing_status: "pending", processing_lock_at: null },
         ).eq("id", msg.id);
+        if (transientUpdateError) console.error("source_messages transient update failed:", transientUpdateError);
         await supabase.from("log_entries").insert({ user_id: msg.user_id, level: tooOld ? "error" : "warning", category: "ai_process", status: "failed", ...msgLogFields(msg), error_message: `${tooOld ? "transient >24h — flagged dead_letter for review" : "transient — will auto-retry until provider recovers"}: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
         return;
       }
@@ -2610,7 +2692,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // failed-out row is indistinguishable from a genuine "informational"
       // classification — which is how 24 failure-path rows hid from the
       // damage query during the 2026-06-11 prefill outage.
-      await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      const { error: retryUpdateError } = await supabase.from("source_messages").update({ processing_status: retryCount >= 3 ? "processed" : "pending", ai_classification: retryCount >= 3 ? "informational" : "pending", skip_reason: retryCount >= 3 ? "ai_failed_after_3_retries" : null, retry_count: retryCount, dead_letter: false, processing_lock_at: null }).eq("id", msg.id);
+      if (retryUpdateError) console.error("source_messages retry update failed:", retryUpdateError);
       // Attempts 1-2 are the retry mechanism WORKING, not an incident: log
       // them as warning so the error-fanout trigger (level='error' →
       // action_required notification to super-admins) only pages on the
@@ -2625,7 +2708,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   if (preResult.result === "customer_inquiry") {
     classification = "actionable";
     classificationReason = `${classificationReason} | pre:customer_inquiry`;
-    await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+    const { error: inquiryUpdateError } = await supabase.from("source_messages").update({ is_customer_inquiry: true }).eq("id", msg.id);
+    if (inquiryUpdateError) console.error("source_messages customer_inquiry update failed:", inquiryUpdateError);
   }
 
   // User override: user reclassified as actionable via the log UI
@@ -2988,6 +3072,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // Calling Claude here would generate "לתאם" (to schedule) tasks even
       // though the appointment already exists in the calendar.
       if (calendarForceActionable) {
+        // Dedup: an event smrtesy itself pushed to Google Calendar already has a
+        // task (its calendar_event_id equals this event's id). Re-ingesting it
+        // must NOT spawn a second "meeting" task — link to the existing one.
+        const { data: selfCreatedTask, error: selfCreatedErr } = await supabase
+          .from("tasks").select("id")
+          .eq("user_id", msg.user_id)
+          .eq("calendar_event_id", msg.source_id)
+          .maybeSingle();
+        if (selfCreatedErr) console.error("calendar self-created lookup failed:", selfCreatedErr);
+        if (selfCreatedTask) {
+          linkedTaskId = selfCreatedTask.id as string;
+          classificationReason = "calendar event created by smrtesy — linked to existing task, no duplicate";
+        } else {
         const eventDate = new Date(msg.received_at);
         const dueDateStr = eventDate.toISOString().split("T")[0];
         const eventTitle = msg.subject || "ארוע ביומן";
@@ -2997,7 +3094,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // meeting starts. The banner keys off reminder_at (a precise instant,
         // tz-rendered on the client), so we don't need a tz-correct due_time.
         const reminderAt = new Date(eventDate.getTime() - 60 * 60 * 1000);
-        const { data: newTask } = await supabase.from("tasks").insert({
+        const { data: newTask, error: calendarTaskInsertError } = await supabase.from("tasks").insert({
           user_id: msg.user_id, source_message_id: msg.id,
           title: eventTitle, title_he: eventTitle,
           description, task_type: "meeting", priority: "medium",
@@ -3008,16 +3105,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           suggested_duplicate_of: dupSuggestionTaskId,
           updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: description }],
         }).select("id").single();
+        if (calendarTaskInsertError) console.error("calendar task insert failed:", calendarTaskInsertError);
         if (newTask) {
           linkedTaskId = newTask.id as string;
           classificationReason = dupSuggestionTaskId ? classificationReason : "calendar event → direct task (no AI)";
-          await supabase.from("task_activities").insert({
+          const { error: calendarActivityError } = await supabase.from("task_activities").insert({
             user_id: msg.user_id, task_id: newTask.id,
             activity_type: "created", new_value: "inbox",
             note: `Created from google_calendar: ${eventTitle}`,
             actor: "system",
           });
+          if (calendarActivityError) console.error("task_activities insert failed:", calendarActivityError);
           if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
+        }
         }
       } else {
         let projectContext: { projectId: string; brief: string } | undefined;
@@ -3105,12 +3205,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             } else {
               linkedTaskId = fbTask!.id as string;
               classificationReason = `builder returned no task for a HUMAN sender — minimal review suggestion created (${senderEmailLc})`;
-              await supabase.from("task_activities").insert({
+              const { error: fbActivityError } = await supabase.from("task_activities").insert({
                 user_id: msg.user_id, task_id: fbTask!.id,
                 activity_type: "created", new_value: "inbox",
                 note: `Human-sender fallback: classifier=actionable, builder=[] — ${subj}`,
                 actor: "system",
               });
+              if (fbActivityError) console.error("task_activities insert failed:", fbActivityError);
               if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, fbTask!.id as string, dupSuggestionTaskId);
             }
             aiModel = taskResult.model;
@@ -3191,12 +3292,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             const taggedDescription = (!firstTaskId && resendContext)
               ? `${resendContext}\n\n${task.description ?? ""}`
               : task.description;
-            const { data: newTask } = await supabase.from("tasks").insert({
+            const { data: newTask, error: taskInsertError } = await supabase.from("tasks").insert({
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
               description: taggedDescription, task_type: taskType, priority: task.priority || "medium",
-              // CHECK constraint on tasks.size — only pass through valid values.
-              size: task.size === "quick" ? "quick" : "regular",
+              // CHECK constraint on tasks.size (quick|medium|big) — the AI knows
+              // only quick vs the neutral default; unsure → medium.
+              size: task.size === "quick" ? "quick" : "medium",
               status: "inbox", manually_verified: false,
               due_date: task.due_date,
               project_id: taskResult.projectId,
@@ -3206,11 +3308,13 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               suggested_duplicate_of: firstTaskId ? null : dupSuggestionTaskId,
               updates: [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), type: "initial", actor: "system", content: taggedDescription }],
             }).select("id").single();
+            if (taskInsertError) console.error("task insert failed:", taskInsertError);
             if (newTask) {
               const isFirst = !firstTaskId;
               if (isFirst) firstTaskId = newTask.id as string;
               createdTaskIds.push(newTask.id as string);
-              await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+              const { error: createdActivityError } = await supabase.from("task_activities").insert({ user_id: msg.user_id, task_id: newTask.id, activity_type: "created", new_value: "inbox", note: `Created from ${msg.source_type}: ${msg.subject || "(no subject)"}`, actor: "system" });
+              if (createdActivityError) console.error("task_activities insert failed:", createdActivityError);
               if (isFirst && dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
             }
           }
@@ -3255,7 +3359,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               classificationReason = `${classificationReason} | WhatsApp follow-up deferred ${FOLLOWUP_LEAD_HOURS}h (${why})`;
             }
           }
-          if (!projectContext) await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+          if (!projectContext) {
+            const { error: projectCheckUpdateError } = await supabase.from("source_messages").update({ needs_project_check: true }).eq("id", msg.id);
+            if (projectCheckUpdateError) console.error("source_messages needs_project_check update failed:", projectCheckUpdateError);
+          }
         }
       }
     } catch (e) {
@@ -3343,7 +3450,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     }
   }
 
-  await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+  const { error: finalMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+  if (finalMsgUpdateError) console.error("source_messages final update failed:", finalMsgUpdateError);
   await tagGmailReview(msg, classification);
   const costType = modelTypeFromName(aiModel);
   await supabase.from("log_entries").insert({
@@ -3536,7 +3644,7 @@ async function notifyNewInboxItems(userId: string, sinceISO: string) {
     body: "הגיעו הצעות חדשות — לחץ כדי לעבור עליהן.",
     link: "/inbox",
     entity_type: "inbox_digest",
-  }).then(() => {}, () => {});
+  }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
 }
 
 Deno.serve(async (req) => {
@@ -3621,7 +3729,8 @@ Deno.serve(async (req) => {
     gmailTokenCache.clear();
     gmailLabelMapCache.clear();
 
-    await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
+    const { error: staleLockClearError } = await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
+    if (staleLockClearError) console.error("source_messages stale lock clear failed:", staleLockClearError);
 
     const { data: pendingUsers } = await supabase.from("source_messages").select("user_id").eq("processing_status", "pending").is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER).limit(100);
     const uniqueUserIds = [...new Set((pendingUsers || []).map((r) => r.user_id))];
@@ -3737,7 +3846,8 @@ Deno.serve(async (req) => {
           if (result === "deferred") totalDeferred++; else totalProcessed++;
         } catch (e) {
           const outerRetry = (msg.retry_count || 0) + 1;
-          await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: outerRetry }).eq("id", msg.id);
+          const { error: outerRetryUpdateError } = await supabase.from("source_messages").update({ processing_lock_at: null, retry_count: outerRetry }).eq("id", msg.id);
+          if (outerRetryUpdateError) console.error("source_messages outer retry update failed:", outerRetryUpdateError);
           // Same retry-aware level as the inner classify catch: warning while
           // the row will be retried, error only once it has burned 3 attempts
           // (the fanout trigger pages super-admins on level='error').

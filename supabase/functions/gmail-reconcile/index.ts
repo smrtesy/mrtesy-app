@@ -74,14 +74,20 @@ async function reconcileUser(userId: string) {
   const data = await resp.json();
   const gmailIds = new Set((data.messages || []).map((m: any) => m.id));
 
-  // Get DB message IDs for the same period
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Get DB message IDs to compare against the inbox query results.
+  // Match against BOTH gmail and gmail_sent: a message the inbox query returns
+  // may already be stored as 'gmail_sent' (batch-details reclassifies SENT
+  // mail). Comparing only against 'gmail' made reconcile think those were
+  // missing and insert duplicate 'gmail' rows that could never hydrate
+  // (batch-details' reclassify UPDATE hit the UNIQUE(user,source_type,source_id)
+  // constraint and no-oped). Also drop the received_at floor: reconcile-created
+  // rows are stamped at insert time, and a real row's received_at is the mail's
+  // own (possibly older) date, so a window filter here can miss an existing row.
   const { data: dbMessages } = await supabase
     .from("source_messages")
     .select("source_id")
     .eq("user_id", userId)
-    .eq("source_type", "gmail")
-    .gte("received_at", sevenDaysAgo);
+    .in("source_type", ["gmail", "gmail_sent"]);
 
   const dbIds = new Set((dbMessages || []).map((m) => m.source_id));
 
@@ -106,20 +112,33 @@ async function reconcileUser(userId: string) {
     ignoreDuplicates: true,
   });
 
-  // Update historyId
-  const profileResp = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if (profileResp.ok) {
-    const profile = await profileResp.json();
-    await supabase.from("sync_state").upsert({
-      user_id: userId,
-      source: "gmail",
-      checkpoint: profile.historyId,
-      last_synced_at: new Date().toISOString(),
-      last_error: null,
-    }, { onConflict: "user_id,source" });
+  // Bootstrap the historyId checkpoint ONLY when none exists yet (first run).
+  // Overwriting an existing checkpoint here discarded gmail-sync's position —
+  // anything between the old checkpoint and now that is not in:inbox within
+  // the last 7 days was skipped forever (real mail loss). gmail-sync owns the
+  // checkpoint; reconcile must never move it forward.
+  const { data: existingState } = await supabase
+    .from("sync_state")
+    .select("checkpoint")
+    .eq("user_id", userId)
+    .eq("source", "gmail")
+    .maybeSingle();
+  if (!existingState?.checkpoint) {
+    const profileResp = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (profileResp.ok) {
+      const profile = await profileResp.json();
+      const { error: checkpointBootstrapError } = await supabase.from("sync_state").upsert({
+        user_id: userId,
+        source: "gmail",
+        checkpoint: profile.historyId,
+        last_synced_at: new Date().toISOString(),
+        last_error: null,
+      }, { onConflict: "user_id,source" });
+      if (checkpointBootstrapError) console.error("sync_state checkpoint bootstrap failed:", checkpointBootstrapError);
+    }
   }
 
   await supabase.from("log_entries").insert({

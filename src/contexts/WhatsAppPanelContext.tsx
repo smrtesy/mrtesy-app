@@ -31,6 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { isEmbeddedPane } from "@/lib/navigate";
 
 interface WhatsAppPanelValue {
   isOpen: boolean;
@@ -93,10 +94,7 @@ export function WhatsAppPanelProvider({ children }: { children: React.ReactNode 
     // origin-global, so an open panel in the main window would otherwise leak
     // into every split pane — setting `data-wa-panel`, which repositions
     // dialogs and bumps their z-index over popovers (hiding date pickers).
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1"
-    ) {
+    if (isEmbeddedPane()) {
       return;
     }
     try {

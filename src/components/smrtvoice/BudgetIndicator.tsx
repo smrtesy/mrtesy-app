@@ -5,16 +5,6 @@ import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api/client";
 
-interface Settings {
-  monthly_budget_usd: number;
-  budget_warning_threshold: number;
-}
-
-interface Project {
-  total_cost_usd: number | null;
-  created_at: string;
-}
-
 export function BudgetIndicator() {
   const t = useTranslations("smrtVoice.budget");
   const [data, setData] = useState<{ used: number; budget: number } | null>(null);
@@ -23,19 +13,10 @@ export function BudgetIndicator() {
     let mounted = true;
     (async () => {
       try {
-        const [{ settings }, { projects }] = await Promise.all([
-          api<{ settings: Settings }>("/api/voice/settings"),
-          api<{ projects: Project[] }>("/api/voice/projects"),
-        ]);
-        const monthStart = new Date();
-        monthStart.setDate(1);
-        monthStart.setHours(0, 0, 0, 0);
-        const used = projects
-          .filter((p) => new Date(p.created_at) >= monthStart)
-          .reduce((sum, p) => sum + (p.total_cost_usd ?? 0), 0);
-        if (mounted) {
-          setData({ used, budget: settings.monthly_budget_usd });
-        }
+        const { used, budget } = await api<{ used: number; budget: number }>(
+          "/api/voice/budget",
+        );
+        if (mounted) setData({ used, budget });
       } catch {
         // silently ignore — header widget shouldn't error out
       }

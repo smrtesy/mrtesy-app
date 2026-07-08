@@ -39,6 +39,11 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // Only ever clear flags on the exact rows this run examined — the fetch
+      // above is capped at 50, so a blanket needs_project_check=true reset
+      // would also clear rows that were never looked at.
+      const messageIds = messages.map((m) => m.id);
+
       // Group by sender/subject pattern
       const patterns: Record<string, number> = {};
       for (const msg of messages) {
@@ -52,11 +57,13 @@ Deno.serve(async (req) => {
         .map(([sender]) => sender);
 
       if (candidates.length === 0) {
-        // Reset flags
-        await supabase.from("source_messages")
+        // Reset flags — these messages were examined (grouped by sender) and
+        // produced no candidates; no AI call was needed.
+        const { error: earlyResetError } = await supabase.from("source_messages")
           .update({ needs_project_check: false })
           .eq("user_id", userId)
-          .eq("needs_project_check", true);
+          .in("id", messageIds);
+        if (earlyResetError) console.error("source_messages flag reset failed:", earlyResetError);
         results.push({ user_id: userId, checked: messages.length, suggestions: 0 });
         continue;
       }
@@ -104,7 +111,9 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
       });
 
       let suggestions: any[] = [];
+      let aiOk = false;
       if (resp.ok) {
+        aiOk = true;
         const data = await resp.json();
         const text = data.content?.[0]?.text || "[]";
         // Unified cost ledger (best-effort).
@@ -112,7 +121,7 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           const inTok = data.usage?.input_tokens || 0;
           const outTok = data.usage?.output_tokens || 0;
           const r = model.includes("opus") ? { i: 15, o: 75 } : model.includes("sonnet") ? { i: 3, o: 15 } : { i: 0.8, o: 4 };
-          await supabase.from("ai_usage").insert({
+          const { error: usageInsertError } = await supabase.from("ai_usage").insert({
             user_id: userId,
             provider: "anthropic",
             component: "project_detection",
@@ -121,6 +130,7 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
             output_tokens: outTok,
             cost_usd: (inTok * r.i + outTok * r.o) / 1_000_000,
           });
+          if (usageInsertError) console.error("ai_usage insert failed:", usageInsertError);
         } catch (_e) { /* ledger insert must not break processing */ }
         try {
           const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -131,11 +141,13 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           // is visible in function logs.
           console.error("[project-detection] failed to parse suggestions JSON:", e);
         }
+      } else {
+        console.error(`[project-detection] AI call failed for ${userId}: ${resp.status} ${await resp.text().catch(() => "")}`);
       }
 
       // Create suggestion tasks for each new project
       for (const suggestion of suggestions) {
-        await supabase.from("tasks").insert({
+        const { error: suggestionInsertError } = await supabase.from("tasks").insert({
           user_id: userId,
           title: `Project suggestion: ${suggestion.name}`,
           title_he: `הצעת פרויקט: ${suggestion.name_he || suggestion.name}`,
@@ -145,18 +157,25 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
           status: "inbox",
           ai_model_used: model,
         });
+        if (suggestionInsertError) console.error("project suggestion task insert failed:", suggestionInsertError);
       }
 
-      // Reset flags
-      await supabase.from("source_messages")
-        .update({ needs_project_check: false })
-        .eq("user_id", userId)
-        .eq("needs_project_check", true);
+      // Reset flags — but ONLY when the AI call actually succeeded, and only
+      // on the messages it examined. Clearing flags after a failed call would
+      // mean those messages are never re-examined on the next run.
+      if (aiOk) {
+        const { error: flagResetError } = await supabase.from("source_messages")
+          .update({ needs_project_check: false })
+          .eq("user_id", userId)
+          .in("id", messageIds);
+        if (flagResetError) console.error("source_messages flag reset failed:", flagResetError);
+      }
 
       results.push({
         user_id: userId,
         checked: messages.length,
         suggestions: suggestions.length,
+        ...(aiOk ? {} : { ai_failed: true }),
       });
     }
 

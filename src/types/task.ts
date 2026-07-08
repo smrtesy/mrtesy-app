@@ -73,12 +73,18 @@ export interface Task {
   ai_model_used: string | null;
   manually_verified: boolean;
   today_position: number | null;
-  /** Desk model: quick (one bounded action) vs regular (needs prep / multi-step). */
-  size?: "quick" | "regular";
-  /** Execution context — where this can be done. Null = unspecified (work implied). */
-  context?: "home" | "work" | null;
+  /** Daily-method effort tier: quick (do all daily) · medium (3/day) · big (1/day). */
+  size?: "quick" | "medium" | "big";
+  /** The day this task is committed to; planned_for === today → shown in "Today". */
+  planned_for?: string | null;
+  /** Execution context — where this can be done.
+   *  'home' = בית, 'outside' = בחוץ, null (or legacy 'work') = משרד/office (default). */
+  context?: "home" | "work" | "outside" | null;
   /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
   woke_from_snooze_at?: string | null;
+  /** Set when the task is handed off to Claude (opened via claude.ai/code); null
+   *  once the user marks Claude finished. Drives the "waiting on Claude" chip. */
+  claude_waiting_since?: string | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;

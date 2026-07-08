@@ -19,6 +19,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Plan, PlanKind, PlanStage, PlanStatus } from "@/types/plan";
+import { useOrgMembers } from "@/hooks/useOrgMembers";
 
 const COLORS = [
   "#534AB7", "#7F77DD", "#185FA5", "#378ADD", "#0F6E56", "#1D9E75",
@@ -42,7 +43,7 @@ export function PlanEditDialog({
 }) {
   const t = useTranslations("smrtPlan");
   const te = useTranslations("smrtPlan.edit");
-  const [members, setMembers] = useState<Array<{ user_id: string; email: string | null; name: string | null; display_name: string | null }>>([]);
+  const { members } = useOrgMembers();
   const [form, setForm] = useState({
     title_he: "",
     title_en: "",
@@ -75,9 +76,6 @@ export function PlanEditDialog({
       end_date: plan?.end_date ?? "",
       owner_user_id: plan?.owner_user_id ?? "",
     });
-    api<{ members: typeof members }>("/api/org/members")
-      .then((r) => setMembers(r.members ?? []))
-      .catch(() => setMembers([]));
   }, [open, plan]);
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {

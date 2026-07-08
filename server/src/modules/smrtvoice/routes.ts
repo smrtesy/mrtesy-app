@@ -16,7 +16,8 @@ import type { Request, Response } from "express";
 
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
-import { emitEvent, notifyError } from "../../lib/platform";
+import { emitEvent, notify, notifyError } from "../../lib/platform";
+import { simpleCall, parseJsonResponse } from "../../anthropic";
 import { getOAuthClient } from "../../services/token-refresh";
 import { getDriveClient } from "../../services/drive";
 
@@ -48,6 +49,37 @@ async function getGoogleAccessToken(userId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Load the org pronunciation lexicon shaped for the voice-engine payload:
+ * [{word, replacement, language}]. Notation-agnostic — `replacement` is a
+ * free-form phonetic string (Hebrew respelling or Latin) sent verbatim.
+ * Best-effort: on error we send [] and generation falls back to defaults.
+ */
+async function loadPronunciation(
+  orgId: string,
+): Promise<Array<{ word: string; replacement: string; language: string }>> {
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .select("original_word, pronounced_as, language")
+    .eq("org_id", orgId)
+    // Deterministic order so, if a word carries both a Hebrew and a Latin
+    // entry, the variant the engine falls back to is stable (the engine
+    // otherwise prefers the one matching each voice's language).
+    .order("original_word")
+    .order("language");
+  if (error) {
+    console.warn("[smrtvoice] loadPronunciation failed:", error.message);
+    return [];
+  }
+  return (data ?? [])
+    .filter((r: { original_word: string | null; pronounced_as: string | null }) => r.original_word && r.pronounced_as)
+    .map((r: { original_word: string; pronounced_as: string; language: string | null }) => ({
+      word: r.original_word,
+      replacement: r.pronounced_as,
+      language: r.language ?? "he",
+    }));
 }
 
 /**
@@ -128,6 +160,9 @@ router.post(
         age_years: typeof body.age_years === "number" ? body.age_years : null,
         gender: body.gender ?? null,
         personality_prompt: body.personality_prompt ?? null,
+        style_baseline_tags: Array.isArray(body.style_baseline_tags)
+          ? body.style_baseline_tags
+          : [],
         ...(orgSettings?.default_resemble_model
           ? { resemble_model: orgSettings.default_resemble_model }
           : {}),
@@ -174,6 +209,7 @@ const CHARACTER_UPDATABLE = new Set([
   "age_years",
   "gender",
   "personality_prompt",
+  "style_baseline_tags",
   "resemble_model",
   "default_exaggeration",
   "default_pitch",
@@ -191,6 +227,11 @@ router.patch(
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No updatable fields in body" });
+    }
+    // style_baseline_tags is a jsonb NOT NULL array; coerce non-arrays to []
+    // (mirrors the create route) so a stray scalar/null can't break synthesis.
+    if ("style_baseline_tags" in updates && !Array.isArray(updates.style_baseline_tags)) {
+      updates.style_baseline_tags = [];
     }
 
     const { data, error } = await db
@@ -621,7 +662,29 @@ router.get("/voice/projects", async (req: Request, res: Response) => {
     .order("created_at", { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ projects: data ?? [] });
+
+  const projects = data ?? [];
+
+  // Attach each folder's scripts so the list can render a direct-open button
+  // per script (one round trip instead of N-per-folder).
+  const { data: scripts, error: scriptsErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, project_id, seq, code, name, status")
+    .eq("org_id", req.org!.id)
+    .order("seq");
+
+  if (scriptsErr) return res.status(500).json({ error: scriptsErr.message });
+
+  const byProject = new Map<string, typeof scripts>();
+  for (const s of scripts ?? []) {
+    const list = byProject.get(s.project_id) ?? [];
+    list.push(s);
+    byProject.set(s.project_id, list);
+  }
+
+  res.json({
+    projects: projects.map((p) => ({ ...p, scripts: byProject.get(p.id) ?? [] })),
+  });
 });
 
 // Create a project (folder): { name, description?, code_prefix }.
@@ -1125,7 +1188,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
         description: ch.description,
       };
     } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
     }
   }
   if (Object.keys(speakerMap).length === 0) {
@@ -1177,9 +1240,12 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
+      pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
+      postprocess_normalize: settings?.postprocess_normalize ?? undefined,
+      postprocess_target_db: settings?.postprocess_target_db ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -1198,7 +1264,8 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       .single();
     if (jobErr || !job) return res.status(500).json({ error: jobErr?.message ?? "job insert failed" });
 
-    await db.from("smrtvoice_scripts").update({ status: "queued" }).eq("id", script.id);
+    const { error: queueFlipErr } = await db.from("smrtvoice_scripts").update({ status: "queued" }).eq("id", script.id);
+    if (queueFlipErr) console.error("[smrtvoice] script queued-status update failed:", queueFlipErr);
     await emitEvent(req.org!.id, "smrtvoice", "job.queued", "job", job.id, {
       script_id: script.id,
       estimated_seconds: engineJob.estimated_seconds,
@@ -1209,6 +1276,103 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to start audio generation", body: message });
     res.status(502).json({ error: message });
   }
+});
+
+// POST /voice/scripts/:id/sync — reconcile a script that's stuck in
+// queued/processing because its job.completed / job.failed webhook never
+// arrived. The voice-engine worker writes counts/cost/stage directly to the
+// script row, so a dropped completion webhook leaves ONLY the terminal status
+// unset. We poll the engine for the job's real status and flip the script
+// (and fire the completion notification) accordingly. Counts/cost are left
+// untouched — the worker owns those.
+router.post("/voice/scripts/:id/sync", async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, org_id, project_id, created_by, code, name, status")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+
+  // Only queued/processing scripts can be stuck; anything terminal is left alone.
+  if (script.status !== "queued" && script.status !== "processing") {
+    return res.json({ script_status: script.status, reconciled: false });
+  }
+
+  // Only the full-generation job can leave a script stuck in queued/processing;
+  // a redo (regenerate_line) never changes the script status, so scope to it.
+  const { data: job } = await db
+    .from("smrtvoice_jobs")
+    .select("id, voice_engine_job_id, job_type")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .eq("job_type", "generate_audio")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!job?.voice_engine_job_id) {
+    return res.json({ script_status: script.status, reconciled: false });
+  }
+
+  let engine;
+  try {
+    engine = await getVoiceEngineClient().getJob(job.voice_engine_job_id);
+  } catch (err) {
+    return res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+
+  if (engine.status === "completed") {
+    const { error: jobDoneErr } = await db
+      .from("smrtvoice_jobs")
+      .update({ status: "completed", progress: 100 })
+      .eq("id", job.id);
+    if (jobDoneErr) console.error("[smrtvoice] sync job completed-status update failed:", jobDoneErr);
+    // Abort before notifying if the status flip fails — otherwise the row stays
+    // queued and the next mount re-syncs and double-notifies the user.
+    const { error: flipErr } = await db
+      .from("smrtvoice_scripts")
+      .update({ status: "audio_ready", audio_ready_at: new Date().toISOString() })
+      .eq("id", script.id);
+    if (flipErr) return res.status(500).json({ error: flipErr.message });
+    const label = script.name || script.code;
+    await notify(script.org_id, script.created_by, {
+      app_slug: "smrtvoice",
+      type: "success",
+      title: `הקול ל-${label} מוכן`,
+      body: `${engine.lines_completed ?? 0} שורות הסתיימו בהצלחה.`,
+      link: `/voice/scripts/${script.id}`,
+      entity_type: "script",
+      entity_id: script.id,
+    });
+    return res.json({ script_status: "audio_ready", reconciled: true });
+  }
+
+  if (engine.status === "failed") {
+    const { error: jobFailErr } = await db
+      .from("smrtvoice_jobs")
+      .update({
+        status: "failed",
+        error_message: engine.error_message ?? "Unknown error",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    if (jobFailErr) console.error("[smrtvoice] sync job failed-status update failed:", jobFailErr);
+    const { error: flipErr } = await db
+      .from("smrtvoice_scripts")
+      .update({ status: "failed" })
+      .eq("id", script.id);
+    if (flipErr) return res.status(500).json({ error: flipErr.message });
+    await notifyError(script.org_id, "smrtvoice", {
+      title: `הייצור ל-${script.name || script.code} נכשל`,
+      body: engine.error_message ?? "Unknown error",
+      link: `/voice/scripts/${script.id}`,
+    });
+    return res.json({ script_status: "failed", reconciled: true });
+  }
+
+  // Still queued/running on the engine — nothing to reconcile yet.
+  res.json({ script_status: script.status, reconciled: false });
 });
 
 // STS input-recording upload URL for a script.
@@ -1283,7 +1447,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     }
     if (!folderId) return res.status(502).json({ error: "Failed to create Drive folder" });
 
-    await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
+    const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
+    if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
 
     let uploaded = 0;
     let skipped = 0;
@@ -1305,7 +1470,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     }
 
     if (uploaded === 0) {
-      await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+      const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+      if (revertErr) console.error("[smrtvoice] script status revert after failed archive failed:", revertErr);
       return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
@@ -1344,7 +1510,24 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id)
     .order("line_number");
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ lines: data ?? [] });
+
+  // Attach each line's take count (how many renders it has in history) so the
+  // list can show a "N versions" badge without a per-line round trip.
+  const { data: takeRows, error: takeErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("line_id")
+    .eq("script_id", req.params.id)
+    .eq("org_id", req.org!.id);
+  if (takeErr) console.warn("[smrtvoice] take_count query failed:", takeErr.message);
+  const takeCounts = new Map<string, number>();
+  for (const t of takeRows ?? []) {
+    takeCounts.set(t.line_id, (takeCounts.get(t.line_id) ?? 0) + 1);
+  }
+  const lines = (data ?? []).map((l: { id: string }) => ({
+    ...l,
+    take_count: takeCounts.get(l.id) ?? 0,
+  }));
+  res.json({ lines });
 });
 
 const LINE_UPDATABLE = new Set([
@@ -1359,6 +1542,7 @@ const LINE_UPDATABLE = new Set([
   "final_pitch",
   "final_pace",
   "status",
+  "approved",
 ]);
 
 router.patch("/voice/lines/:id", async (req: Request, res: Response) => {
@@ -1388,16 +1572,22 @@ async function queueRegeneration(
     id: string;
     project_id: string;
     code: string;
+    language?: string | null;
     generation_mode?: "sts" | "tts";
     input_recording_path?: string | null;
   },
   lineNumbers: number[],
+  // Verbatim per-line text edits ("send again with edited text"). Each is sent
+  // to voice-engine as a line_override and synthesized exactly as given.
+  lineOverrides: Array<{ line_number: number; text_for_tts: string }> = [],
+  // Line numbers to re-run through the LLM (fresh emotion + tone tags).
+  reprocessLineNumbers: number[] = [],
 ) {
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed")
+    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
@@ -1422,7 +1612,7 @@ async function queueRegeneration(
       const ch = charMap.get(c.character_id)!;
       speakerMap[c.speaker_name] = { resemble_voice_id: ch.resemble_voice_id!, model: ch.resemble_model, language: ch.language, character_id: c.character_id, character_name: ch.name, description: ch.description };
     } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: "he" };
+      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
     }
   }
 
@@ -1453,9 +1643,14 @@ async function queueRegeneration(
       code: script.code,
       speaker_map: speakerMap,
       line_numbers: lineNumbers,
+      pronunciation: await loadPronunciation(req.org!.id),
+      line_overrides: lineOverrides,
+      reprocess_line_numbers: reprocessLineNumbers,
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
       postprocess_speed: settings?.postprocess_speed ?? undefined,
+      postprocess_normalize: settings?.postprocess_normalize ?? undefined,
+      postprocess_target_db: settings?.postprocess_target_db ?? undefined,
     });
 
     const { data: job, error: jobErr } = await db
@@ -1498,7 +1693,7 @@ async function loadScriptForLine(req: Request, lineId: string) {
   if (!line) return null;
   const { data: script } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path")
     .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1508,7 +1703,34 @@ async function loadScriptForLine(req: Request, lineId: string) {
 router.post("/voice/lines/:id/regenerate", async (req: Request, res: Response) => {
   const found = await loadScriptForLine(req, req.params.id);
   if (!found) return res.status(404).json({ error: "Line not found" });
-  await queueRegeneration(req, res, found.script, [found.line.line_number]);
+
+  // Optional "send again with edited text": the client passes the exact text
+  // to speak (prefilled from tts_body). `reprocess` re-runs the LLM for fresh
+  // emotion/tone tags instead of sending the text verbatim.
+  const editedText =
+    typeof req.body?.text_for_tts === "string" ? req.body.text_for_tts.trim() : "";
+  const reprocess = req.body?.reprocess === true;
+  const lineNo = found.line.line_number;
+
+  // The edited text is always forwarded: verbatim when not reprocessing, or as
+  // the LLM's input when reprocessing.
+  const overrides = editedText ? [{ line_number: lineNo, text_for_tts: editedText }] : [];
+  const reprocessLineNumbers = reprocess ? [lineNo] : [];
+
+  // Only persist a verbatim edit when NOT reprocessing — if the LLM re-runs it
+  // will produce (and the engine will persist) fresh text/tags, so persisting
+  // a verbatim body + empty tags here would be wrong.
+  if (editedText && !reprocess) {
+    // Mirror the engine's override behaviour: the edited text becomes the body
+    // verbatim (tone tags are baked into it), so clear the separate tags.
+    const { error: saveErr } = await db
+      .from("smrtvoice_lines")
+      .update({ text_for_tts: editedText, tts_body: editedText, tags: [] })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id);
+    if (saveErr) return res.status(500).json({ error: saveErr.message });
+  }
+  await queueRegeneration(req, res, found.script, [lineNo], overrides, reprocessLineNumbers);
 });
 
 router.post("/voice/lines/:id/redo", async (req: Request, res: Response) => {
@@ -1542,7 +1764,7 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
 router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1579,6 +1801,133 @@ router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => 
 });
 
 // ============================================================
+// LINE TAKES (render history — every take is kept, never overwritten)
+// ============================================================
+
+router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtvoice_line_takes")
+    .select("*")
+    .eq("line_id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ takes: data ?? [] });
+});
+
+// PATCH /voice/takes/:id — choose a take as the line's audio (✓) and/or jot a
+// note. `approved:true` is SINGLE-select per line: it clears the other takes,
+// marks this one, and repoints the line's output_audio_path/duration/cost at it
+// so play / download / archive all use the chosen take. `note` is independent.
+router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const hasApproved = typeof body.approved === "boolean";
+  const hasNote = typeof body.note === "string" || body.note === null;
+  if (!hasApproved && !hasNote) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+
+  const { data: take, error: takeErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, line_id, output_audio_path, duration_seconds, cost_usd")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (takeErr) return res.status(500).json({ error: takeErr.message });
+  if (!take) return res.status(404).json({ error: "Take not found" });
+
+  if (hasNote) {
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ note: (body.note as string | null) || null })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  if (hasApproved && body.approved === true) {
+    // Single-select: clear siblings, mark this take, and make it the line's audio.
+    const { error: clearErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (clearErr) return res.status(500).json({ error: clearErr.message });
+
+    const { error: setErr } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: true })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (setErr) return res.status(500).json({ error: setErr.message });
+
+    const { error: lineErr } = await db
+      .from("smrtvoice_lines")
+      .update({
+        output_audio_path: take.output_audio_path,
+        output_duration_seconds: take.duration_seconds,
+        generation_cost_usd: take.cost_usd,
+        approved: true,
+      })
+      .eq("id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (lineErr) return res.status(500).json({ error: lineErr.message });
+  } else if (hasApproved && body.approved === false) {
+    // Un-choose this take. Keep the line's last audio, but if no take remains
+    // chosen for the line, clear its approved indicator (the outer ✓).
+    const { error } = await db
+      .from("smrtvoice_line_takes")
+      .update({ approved: false })
+      .eq("id", take.id)
+      .eq("org_id", req.org!.id);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { count, error: countErr } = await db
+      .from("smrtvoice_line_takes")
+      .select("id", { count: "exact", head: true })
+      .eq("line_id", take.line_id)
+      .eq("org_id", req.org!.id)
+      .eq("approved", true);
+    if (countErr) return res.status(500).json({ error: countErr.message });
+
+    if (!count) {
+      const { error: lineErr } = await db
+        .from("smrtvoice_lines")
+        .update({ approved: false })
+        .eq("id", take.line_id)
+        .eq("org_id", req.org!.id);
+      if (lineErr) return res.status(500).json({ error: lineErr.message });
+    }
+  }
+
+  const { data: updated, error: readErr } = await db
+    .from("smrtvoice_line_takes")
+    .select()
+    .eq("id", take.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (readErr) return res.status(500).json({ error: readErr.message });
+  res.json({ take: updated });
+});
+
+router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => {
+  const { data: take, error } = await db
+    .from("smrtvoice_line_takes")
+    .select("output_audio_path")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!take || !take.output_audio_path) return res.status(404).json({ error: "Take not found" });
+
+  const { data, error: signErr } = await db.storage
+    .from("smrtvoice-audio")
+    .createSignedUrl(take.output_audio_path, 3600);
+  if (signErr || !data) return res.status(500).json({ error: signErr?.message ?? "signing failed" });
+  res.json({ audio_url: data.signedUrl });
+});
+
+// ============================================================
 // VOICE LIBRARY (Resemble account)
 // ============================================================
 
@@ -1609,7 +1958,8 @@ router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: 
       .filter((c: { resemble_voice_id: string }) => !liveIds.has(c.resemble_voice_id))
       .map((c: { id: string }) => c.id);
     if (dangling.length > 0) {
-      await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+      const { error: unlinkErr } = await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).in("id", dangling);
+      if (unlinkErr) console.error("[smrtvoice] dangling voice unlink failed:", unlinkErr);
     }
 
     // Which voices already have a stored preview for this org.
@@ -1646,8 +1996,10 @@ router.delete("/voice/resemble/voices/:uuid", requireRole("owner", "admin"), asy
     const client = getVoiceEngineClient();
     const result = await client.deleteVoice(uuid);
     // Unlink any characters + drop the stored preview.
-    await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
-    await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    const { error: unlinkErr } = await db.from("smrtvoice_characters").update({ resemble_voice_id: null }).eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    if (unlinkErr) console.error("[smrtvoice] character unlink on voice delete failed:", unlinkErr);
+    const { error: previewDelErr } = await db.from("smrtvoice_voice_previews").delete().eq("org_id", req.org!.id).eq("resemble_voice_id", uuid);
+    if (previewDelErr) console.error("[smrtvoice] preview delete on voice delete failed:", previewDelErr);
     res.json({ deleted: result.deleted });
   } catch (err) {
     res.status(502).json({ error: veMessage(err) });
@@ -1748,6 +2100,38 @@ router.get("/voice/settings", async (req: Request, res: Response) => {
   res.json({ settings: data });
 });
 
+// GET /voice/budget — this month's spend vs the org budget. Sums cost from
+// `smrtvoice_scripts` (v2 writes cost there, not to projects), matching the
+// authoritative check in the generate route.
+router.get("/voice/budget", async (req: Request, res: Response) => {
+  const { data: settings } = await db
+    .from("smrtvoice_settings")
+    .select("monthly_budget_usd, budget_warning_threshold, budget_block_threshold")
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const { data: monthCosts, error: costErr } = await db
+    .from("smrtvoice_scripts")
+    .select("total_cost_usd")
+    .eq("org_id", req.org!.id)
+    .gte("created_at", monthStart.toISOString());
+  if (costErr) return res.status(500).json({ error: costErr.message });
+
+  const used = (monthCosts ?? []).reduce(
+    (sum: number, s: { total_cost_usd: number | null }) => sum + (s.total_cost_usd ?? 0),
+    0,
+  );
+  res.json({
+    used,
+    budget: settings?.monthly_budget_usd ?? 0,
+    warning_threshold: settings?.budget_warning_threshold ?? 0.8,
+    block_threshold: settings?.budget_block_threshold ?? 1.0,
+  });
+});
+
 const SETTINGS_UPDATABLE = new Set([
   "monthly_budget_usd",
   "budget_warning_threshold",
@@ -1764,7 +2148,11 @@ const SETTINGS_UPDATABLE = new Set([
   "postprocess_enabled",
   "postprocess_compress",
   "postprocess_speed",
+  "postprocess_normalize",
+  "postprocess_target_db",
   "sample_text",
+  "gdrive_archive_folder_id",
+  "gdrive_archive_folder_url",
   "notify_on_completion",
   "notify_on_budget_warn",
   "notify_via_whatsapp",
@@ -1805,25 +2193,79 @@ router.get("/voice/lexicon", async (req: Request, res: Response) => {
   res.json({ entries: data ?? [] });
 });
 
+// `language` marks the notation of `pronounced_as`: 'he' (Hebrew respelling)
+// or 'en' (Latin transliteration). Same word can carry one entry per language.
+const LEXICON_LANGUAGES = new Set(["he", "en"]);
+
 router.post("/voice/lexicon", async (req: Request, res: Response) => {
   const { original_word, pronounced_as, category, notes } = req.body ?? {};
+  const language = (req.body?.language ?? "he").toString();
   if (!original_word || !pronounced_as) {
     return res.status(400).json({ error: "original_word and pronounced_as required" });
+  }
+  if (!LEXICON_LANGUAGES.has(language)) {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
   }
   const { data, error } = await db
     .from("smrtvoice_pronunciation_lexicon")
     .insert({
       org_id: req.org!.id,
       created_by: req.user!.id,
-      original_word,
-      pronounced_as,
+      original_word: String(original_word).trim(),
+      pronounced_as: String(pronounced_as).trim(),
+      language,
       category: category ?? "general",
       notes: notes ?? null,
     })
     .select()
     .single();
-  if (error || !data) return res.status(500).json({ error: error?.message ?? "create failed" });
+  if (error || !data) {
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "That word already has an entry for this language" });
+    }
+    return res.status(500).json({ error: error?.message ?? "create failed" });
+  }
   res.status(201).json({ entry: data });
+});
+
+const LEXICON_UPDATABLE = new Set([
+  "original_word",
+  "pronounced_as",
+  "language",
+  "category",
+  "notes",
+]);
+
+router.patch("/voice/lexicon/:id", async (req: Request, res: Response) => {
+  const updates: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.body ?? {})) {
+    if (LEXICON_UPDATABLE.has(k)) updates[k] = v;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No updatable fields in body" });
+  }
+  if ("language" in updates && !LEXICON_LANGUAGES.has(String(updates.language))) {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
+  for (const k of ["original_word", "pronounced_as"] as const) {
+    if (k in updates) updates[k] = String(updates[k]).trim();
+  }
+
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .update(updates)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .select()
+    .maybeSingle();
+  if (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "That word already has an entry for this language" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) return res.status(404).json({ error: "Not found" });
+  res.json({ entry: data });
 });
 
 router.delete("/voice/lexicon/:id", async (req: Request, res: Response) => {
@@ -1834,6 +2276,39 @@ router.delete("/voice/lexicon/:id", async (req: Request, res: Response) => {
     .eq("org_id", req.org!.id);
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).end();
+});
+
+// POST /voice/pronunciation/suggest — AI phonetic-respelling suggestions for a
+// word/phrase. Returns Hebrew respellings AND Latin transliterations as
+// separate chip lists; the UI drops a chosen chip into the edit/lexicon field.
+router.post("/voice/pronunciation/suggest", async (req: Request, res: Response) => {
+  const word = (req.body?.word ?? req.body?.text ?? "").toString().trim();
+  if (!word) return res.status(400).json({ error: "word is required" });
+  if (word.length > 200) return res.status(400).json({ error: "text too long (max 200 chars)" });
+
+  const system = `You help a Hebrew children's TV studio fix mispronunciations on Resemble "resemble-ultra" TTS. Ultra has NO working phoneme/IPA/<sub> support and niqqud HARMS it — the ONLY fix is respelling the text so it READS correctly.
+
+Given a Hebrew word or short phrase, propose respellings that steer the engine to the intended pronunciation:
+- "hebrew": up to 3 alternative HEBREW spellings using plain letters only (NO niqqud / vowel points) — e.g. double a letter, add a mater lectionis (א/ו/י), split a cluster.
+- "latin": up to 3 Latin/English transliterations that read correctly when spoken.
+Keep each suggestion short and directly speakable. Never add niqqud. Do not explain.
+Return ONLY JSON: {"hebrew": string[], "latin": string[]}`;
+
+  try {
+    const { content } = await simpleCall(
+      "haiku",
+      system,
+      `Word/phrase: ${word}`,
+      400,
+      { component: "smrtvoice.pronounce_suggest", userId: req.user!.id },
+    );
+    const parsed = parseJsonResponse<{ hebrew?: string[]; latin?: string[] }>(content);
+    const clean = (arr?: string[]) =>
+      Array.from(new Set((arr ?? []).map((s) => String(s).trim()).filter(Boolean))).slice(0, 3);
+    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin) });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
 });
 
 export default router;

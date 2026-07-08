@@ -103,23 +103,37 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const canEdit = access === "full";
   const trackRef = useRef<HTMLDivElement | null>(null);
 
-  const load = useCallback(async () => {
-    const [{ plans }, { access_level }, { milestones }, { holidays }, { templates }, { stages }] = await Promise.all([
+  // Refetch only what a board edit can actually change: plans (any PATCH/POST
+  // triggers the engine's auto-recompute, moving other plans' dates/health),
+  // stages (their windows are pinned/derived off plan dates) and milestones
+  // (worker-constraint milestones feed the schedule). Access level, templates
+  // and the holiday calendar cannot change from a board edit — refetching them
+  // on every drag/rename was pure waste.
+  const reloadBoard = useCallback(async () => {
+    const [{ plans }, { milestones }, { stages }] = await Promise.all([
       api<{ plans: Plan[] }>("/api/plans/board"),
-      api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
       api<{ milestones: PlanMilestone[] }>("/api/plans/milestones"),
-      api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
-      api<{ templates: { id: string; name_he: string }[] }>("/api/plan/templates").catch(() => ({ templates: [] })),
       api<{ stages: BoardStage[] }>("/api/plans/board-stages").catch(() => ({ stages: [] })),
     ]);
     setPlans(plans ?? []);
-    setAccess(access_level ?? "lite");
     setMilestones(milestones ?? []);
-    setHolidays(holidays ?? []);
-    setTemplates(templates ?? []);
     setStages(stages ?? []);
     if (plans?.length) setSelectedId((cur) => cur ?? plans[0].id);
   }, []);
+
+  // Full load — initial mount and explicit refreshes (recompute button,
+  // settings hub changes) only; mutations go through reloadBoard().
+  const load = useCallback(async () => {
+    const [, { access_level }, { holidays }, { templates }] = await Promise.all([
+      reloadBoard(),
+      api<{ access_level: PlanAccessLevel }>("/api/plans/access"),
+      api<{ holidays: { blocked_date: string; reason: string | null }[] }>("/api/plans/holidays"),
+      api<{ templates: { id: string; name_he: string }[] }>("/api/plan/templates").catch(() => ({ templates: [] })),
+    ]);
+    setAccess(access_level ?? "lite");
+    setHolidays(holidays ?? []);
+    setTemplates(templates ?? []);
+  }, [reloadBoard]);
 
   useEffect(() => {
     let alive = true;
@@ -160,7 +174,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   async function setStatus(id: string, status: PlanStatus) {
     try {
       await api(`/api/plans/${id}`, { method: "PATCH", body: { status } });
-      await load();
+      await reloadBoard();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     }
@@ -169,7 +183,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   async function setAvailable(id: string, is_available: boolean) {
     try {
       await api(`/api/plans/${id}`, { method: "PATCH", body: { is_available } });
-      await load();
+      await reloadBoard();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     }
@@ -240,16 +254,16 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const { run: histRun, undo: histUndo, redo: histRedo, reset: histReset, resolve: histResolve, keyOf: histKeyOf, bind: histBind } = history;
 
   const runCmd = useCallback(
-    (cmd: HistoryCmd) => histRun(cmd).catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
-    [histRun, load],
+    (cmd: HistoryCmd) => histRun(cmd).catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await reloadBoard(); }),
+    [histRun, reloadBoard],
   );
   const doUndo = useCallback(
-    () => histUndo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
-    [histUndo, load],
+    () => histUndo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await reloadBoard(); }),
+    [histUndo, reloadBoard],
   );
   const doRedo = useCallback(
-    () => histRedo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await load(); }),
-    [histRedo, load],
+    () => histRedo().catch(async (e) => { toast.error(e instanceof Error ? e.message : "Error"); await reloadBoard(); }),
+    [histRedo, reloadBoard],
   );
 
   // Keyboard: ⌘/Ctrl+Z = undo, ⌘/Ctrl+Shift+Z or Ctrl+Y = redo (edit mode only,
@@ -286,11 +300,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         const live = histResolve(key);
         setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, start_date: s, end_date: e } : p)));
         await api(`/api/plans/${live}`, { method: "PATCH", body: { start_date: s, end_date: e } });
-        await load();
+        await reloadBoard();
       };
       await runCmd({ label: t("edit.actDates"), redo: () => setDates(start_date, end_date), undo: () => setDates(oldStart, oldEnd) });
     },
-    [plans, dateAt, load, histKeyOf, histResolve, runCmd, t],
+    [plans, dateAt, reloadBoard, histKeyOf, histResolve, runCmd, t],
   );
 
   const commitMilestoneDate = useCallback(
@@ -305,11 +319,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         const live = histResolve(key);
         setMilestones((ms) => ms.map((m) => (m.id === live ? { ...m, milestone_date: d } : m)));
         await api(`/api/plan-milestones/${live}`, { method: "PATCH", body: { milestone_date: d } });
-        await load();
+        await reloadBoard();
       };
       await runCmd({ label: t("edit.actMilestoneMove"), redo: () => setDate(milestone_date), undo: () => setDate(oldDate) });
     },
-    [milestones, dateAt, load, histKeyOf, histResolve, runCmd, t],
+    [milestones, dateAt, reloadBoard, histKeyOf, histResolve, runCmd, t],
   );
 
   const planDrag = useGanttDrag(tl, locale, trackRef, commitPlanDates);
@@ -326,7 +340,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       const live = histResolve(key);
       setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, title_he: val } : p)));
       await api(`/api/plans/${live}`, { method: "PATCH", body: { title_he: val } });
-      await load();
+      await reloadBoard();
     };
     runCmd({ label: t("edit.actRename"), redo: () => setTitle(trimmed), undo: () => setTitle(oldTitle) });
   }
@@ -340,7 +354,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       const live = histResolve(key);
       setPlans((ps) => ps.map((p) => (p.id === live ? { ...p, group_label: val } : p)));
       await api(`/api/plans/${live}`, { method: "PATCH", body: { group_label: val } });
-      await load();
+      await reloadBoard();
     };
     runCmd({ label: t("table.section"), redo: () => apply(label || null), undo: () => apply(old) });
   }
@@ -387,7 +401,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       const live = histResolve(key);
       setMilestones((ms) => ms.filter((x) => x.id !== live));
       await api(`/api/plan-milestones/${live}`, { method: "DELETE" });
-      if (m.constrains_user_id) await load(); // a worker-constraint relaxes the schedule
+      if (m.constrains_user_id) await reloadBoard(); // a worker-constraint relaxes the schedule
     };
     const recreate = async () => {
       setMilestones((ms) => [...ms.filter((x) => x.id !== m.id), m]);
@@ -406,7 +420,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         histBind(key, milestone.id);
         setMilestones((ms) => ms.map((x) => (x.id === m.id ? { ...x, id: milestone.id } : x)));
       }
-      if (m.constrains_user_id) await load();
+      if (m.constrains_user_id) await reloadBoard();
     };
     runCmd({ label: t("edit.actMilestoneDel"), redo: remove, undo: recreate });
   }
@@ -433,11 +447,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         setSelectedId(plan.id);
         setEditingTitleId(plan.id);
       }
-      await load();
+      await reloadBoard();
     };
     const remove = async () => {
       await api(`/api/plans/${histResolve(key)}`, { method: "DELETE" });
-      await load();
+      await reloadBoard();
     };
     runCmd({ label: t("edit.actAddRow"), redo: create, undo: remove });
   }
@@ -449,7 +463,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         method: "POST",
         body: { start_date: isoOf(today) },
       });
-      await load();
+      await reloadBoard();
       // Applying a template isn't itself undoable; drop any stale redo history so
       // a later Redo can't replay against the now-changed board.
       histReset();
@@ -572,11 +586,11 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         const live = histResolve(key);
         setStages((ss) => ss.map((x) => (x.id === live ? { ...x, start_date: s, end_date: e } : x)));
         await api(`/api/plan-stages/${live}`, { method: "PATCH", body: { start_date: s, end_date: e } });
-        await load();
+        await reloadBoard();
       };
       await runCmd({ label: t("edit.actStageMove"), redo: () => apply(start_date, end_date), undo: () => apply(oldStart, oldEnd) });
     },
-    [stages, dateAt, load, histKeyOf, histResolve, runCmd, t],
+    [stages, dateAt, reloadBoard, histKeyOf, histResolve, runCmd, t],
   );
   const stageDrag = useGanttDrag(tl, locale, trackRef, commitStageDates);
 
@@ -596,9 +610,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
         body: { name_he: name.trim(), sequence: sts.length + 1, start_date, end_date },
       });
       if (stage?.id) histBind(key, stage.id);
-      await load();
+      await reloadBoard();
     };
-    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await load(); };
+    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await reloadBoard(); };
     runCmd({ label: t("edit.actStageAdd"), redo: create, undo: remove });
   }
 
@@ -622,14 +636,14 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
   function deleteStage(st: BoardStage) {
     const key = histKeyOf(st.id);
-    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await load(); };
+    const remove = async () => { await api(`/api/plan-stages/${histResolve(key)}`, { method: "DELETE" }); await reloadBoard(); };
     const recreate = async () => {
       const { stage } = await api<{ stage: { id: string } }>(`/api/plans/${st.plan_id}/stages`, {
         method: "POST",
         body: { name_he: st.name_he, name_en: st.name_en, sequence: st.sequence, default_duration_days: st.default_duration_days, start_date: st.start_date, end_date: st.end_date },
       });
       if (stage?.id) histBind(key, stage.id);
-      await load();
+      await reloadBoard();
     };
     runCmd({ label: t("edit.actStageDel"), redo: remove, undo: recreate });
   }
@@ -682,7 +696,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       </div>
 
       {pageView === "table" ? (
-        <PlanTableView locale={locale} canEdit={canEdit} onChanged={load} />
+        <PlanTableView locale={locale} canEdit={canEdit} onChanged={reloadBoard} />
       ) : (
       <>
       {access === "lite" && (
@@ -1361,7 +1375,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             </div>
           )}
           {selected.kind === "stream" ? (
-            <PlanMatrix plan={selected} locale={locale} canEdit={canEdit} today={today} onChanged={load} />
+            <PlanMatrix plan={selected} locale={locale} canEdit={canEdit} today={today} onChanged={reloadBoard} />
           ) : (
             <>
               {/* list (rows + needs) vs gantt (bars + dependency arrows) */}
@@ -1380,23 +1394,23 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 ))}
               </div>
               {detailView === "gantt" ? (
-                <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={load} />
+                <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={reloadBoard} />
               ) : (
-                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} stages={stagesByPlan.get(selected.id) ?? []} onChanged={load} />
+                <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} stages={stagesByPlan.get(selected.id) ?? []} holidays={holidays} onChanged={reloadBoard} />
               )}
             </>
           )}
         </div>
       )}
 
-      <PlanEditDialog plan={editorPlan} open={editorOpen} onClose={() => setEditorOpen(false)} onSaved={load} />
+      <PlanEditDialog plan={editorPlan} open={editorOpen} onClose={() => setEditorOpen(false)} onSaved={reloadBoard} />
       <MilestoneEditor
         milestones={milestones}
         plans={plans}
         locale={locale}
         open={milestonesOpen}
         onClose={() => setMilestonesOpen(false)}
-        onChanged={load}
+        onChanged={reloadBoard}
       />
       <PlanSettingsHub open={settingsOpen} onClose={() => setSettingsOpen(false)} onChanged={load} />
       </>

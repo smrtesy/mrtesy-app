@@ -55,29 +55,17 @@ async function renewWatch(userId: string) {
     .eq("source", "google_calendar")
     .maybeSingle();
 
-  // Stop the previous watch using its stored channel id + opaque resourceId.
-  // Google's channels.stop requires the resourceId returned at creation time —
-  // NOT the calendar id "primary". Passing "primary" silently fails and leaves
-  // the old channel alive, which is what produced channelIdNotUnique on renew.
-  if (prev?.watch_channel_id && prev?.watch_resource_id) {
-    try {
-      await fetch("https://www.googleapis.com/calendar/v3/channels/stop", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          id: prev.watch_channel_id,
-          resourceId: prev.watch_resource_id,
-        }),
-      });
-    } catch (_e) { /* best-effort cleanup */ }
-  }
-
-  // Create a fresh watch with a UNIQUE channel id every renewal. A unique id
-  // makes channelIdNotUnique impossible even if a previous channel is still
-  // alive (the 6-day renew cron overlaps the 7-day ttl, and stop is best-effort).
+  // Create the NEW watch FIRST, and only stop the old channel once it exists.
+  // The old stop-then-create order meant a failed creation left NO live watch
+  // until the next cron run — a silent notification gap. Google allows
+  // multiple simultaneous watch channels on the same calendar as long as
+  // their channel ids differ (and ours are unique per renewal), so briefly
+  // having both old + new alive is safe — the webhook processing is
+  // idempotent anyway.
+  //
+  // A UNIQUE channel id every renewal also makes channelIdNotUnique
+  // impossible even if a previous channel is still alive (the 6-day renew
+  // cron overlaps the 7-day ttl, and stop is best-effort).
   const channelId = `calendar-${userId}-${Date.now()}`;
   // Opaque per-watch secret. Google echoes it back on every notification as the
   // X-Goog-Channel-Token header; the webhook validates it so a forged
@@ -103,10 +91,34 @@ async function renewWatch(userId: string) {
 
   if (!resp.ok) {
     const err = await resp.text();
+    // The old channel (if any) is deliberately left running — it keeps
+    // notifications flowing until the next renewal attempt succeeds.
+    console.error(`[calendar-renew-watch] watch creation failed for ${userId} — keeping previous channel alive: ${resp.status} ${err}`);
     throw new Error(`Watch creation failed: ${resp.status} ${err}`);
   }
 
   const watch = await resp.json();
+
+  // New watch is live — now stop the previous one using its stored channel id
+  // + opaque resourceId. Google's channels.stop requires the resourceId
+  // returned at creation time — NOT the calendar id "primary". Passing
+  // "primary" silently fails and leaves the old channel alive, which is what
+  // produced channelIdNotUnique on renew (before ids were unique).
+  if (prev?.watch_channel_id && prev?.watch_resource_id) {
+    try {
+      await fetch("https://www.googleapis.com/calendar/v3/channels/stop", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: prev.watch_channel_id,
+          resourceId: prev.watch_resource_id,
+        }),
+      });
+    } catch (_e) { /* best-effort cleanup — worst case the old channel expires at its ttl */ }
+  }
 
   // Persist the new channel + resourceId so the next renewal can stop it.
   // Upsert so a missing sync_state row (user connected but never synced yet)

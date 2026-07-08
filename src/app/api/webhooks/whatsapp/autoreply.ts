@@ -18,6 +18,7 @@ type SupabaseAdmin = NonNullable<ReturnType<typeof createAdminSupabaseClient>>;
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 
 export interface IncomingForReply {
+  wamid: string;
   sender: string;
   name: string;
   text: string;
@@ -125,7 +126,7 @@ async function sendWhatsApp(
   to: string,
   text: string,
   buttons: { id?: string; title?: string }[],
-): Promise<void> {
+): Promise<boolean> {
   const valid = buttons.filter((b) => b.id && b.title).slice(0, 3);
   const payload =
     valid.length > 0
@@ -148,6 +149,7 @@ async function sendWhatsApp(
   if (!res.ok) {
     console.error("[wa-autoreply] send", res.status, (await res.text()).slice(0, 200));
   }
+  return res.ok;
 }
 
 /** Evaluate + send selective auto-replies for a batch of live incoming messages. */
@@ -180,9 +182,19 @@ export async function runAutoReplies(
   const rules = (rulesData as RuleRow[]) ?? [];
   if (rules.length === 0) return;
 
-  // One reply per distinct sender (latest message wins).
+  // One reply per distinct sender (latest message wins). Track every wamid per
+  // sender so a successful reply marks ALL of the sender's batch messages —
+  // the reply covers the whole batch, and a redelivery of any of them must
+  // not trigger another one.
   const bySender = new Map<string, IncomingForReply>();
-  for (const m of incoming) if (m.sender && m.sender !== ownNumber) bySender.set(m.sender, m);
+  const wamidsBySender = new Map<string, string[]>();
+  for (const m of incoming) {
+    if (!m.sender || m.sender === ownNumber) continue;
+    bySender.set(m.sender, m);
+    const list = wamidsBySender.get(m.sender) ?? [];
+    if (m.wamid) list.push(m.wamid);
+    wamidsBySender.set(m.sender, list);
+  }
 
   for (const msg of bySender.values()) {
     try {
@@ -203,7 +215,20 @@ export async function runAutoReplies(
         }
       }
       if (!body) continue;
-      await sendWhatsApp(apiVersion, phoneNumberId, accessToken, msg.sender, body, rule.reply_buttons ?? []);
+      const sent = await sendWhatsApp(apiVersion, phoneNumberId, accessToken, msg.sender, body, rule.reply_buttons ?? []);
+      if (sent) {
+        // Marker set only after a confirmed send — this is what makes
+        // redelivery idempotency precise (see the webhook's autoReplyEligible).
+        const wamids = (wamidsBySender.get(msg.sender) ?? []).filter(Boolean);
+        if (wamids.length > 0) {
+          const { error: markErr } = await db
+            .from("whatsapp_messages")
+            .update({ autoreply_sent_at: new Date().toISOString() })
+            .eq("user_id", userId)
+            .in("wamid", wamids);
+          if (markErr) console.error("[wa-autoreply] marker update failed:", markErr.message);
+        }
+      }
     } catch (e) {
       console.error("[wa-autoreply] sender", msg.sender, e instanceof Error ? e.message : String(e));
     }

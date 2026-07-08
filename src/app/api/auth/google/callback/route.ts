@@ -227,6 +227,13 @@ export async function GET(request: Request) {
     if (gmailErr || calErr) {
       console.error("Credential save error:", gmailErr || calErr);
     }
+    // Only flag a service as connected when its credential upsert actually
+    // succeeded — a failed save must not produce a "connected" account with
+    // no tokens. Gmail and Calendar share one grant but are stored as two
+    // rows, so a partial failure marks only the surviving service.
+    const connectedFlags: Record<string, boolean> = {};
+    if (!gmailErr) connectedFlags.gmail_connected = true;
+    if (!calErr) connectedFlags.calendar_connected = true;
 
     // Update settings. my_emails is the set of addresses the user considers
     // "themselves" — used for identity hints, not scan scope. Merge the newly
@@ -250,14 +257,25 @@ export async function GET(request: Request) {
         )
       : prior;
 
-    await supabase
+    const { error: settingsUpdateErr } = await supabase
       .from("user_settings")
       .update({
-        gmail_connected: true,
-        calendar_connected: true,
+        ...connectedFlags,
         my_emails: merged,
       })
       .eq("user_id", user.id);
+    if (settingsUpdateErr) {
+      console.error("[google-callback] gmail_calendar user_settings update failed:", settingsUpdateErr);
+    }
+
+    // Surface the failed save to the user instead of redirecting as success.
+    if (gmailErr || calErr) {
+      const dest =
+        redirectTo === "settings" ? "settings" :
+        redirectTo === "account" ? "account" :
+        "onboarding";
+      return NextResponse.redirect(`${origin}/${locale}/${dest}?error=save_failed`);
+    }
 
     // If reconnecting from Settings/Account, return there instead of
     // restarting the onboarding flow.
@@ -285,13 +303,23 @@ export async function GET(request: Request) {
     );
 
     if (error) {
+      // A failed save must not produce a "connected" Drive with no tokens —
+      // skip the drive_connected flag and surface the failure to the user.
       console.error("Credential save error:", error);
+      const dest =
+        redirectTo === "settings" ? "settings" :
+        redirectTo === "account" ? "account" :
+        "onboarding";
+      return NextResponse.redirect(`${origin}/${locale}/${dest}?error=save_failed`);
     }
 
-    await supabase
+    const { error: driveSettingsErr } = await supabase
       .from("user_settings")
       .update({ drive_connected: true })
       .eq("user_id", user.id);
+    if (driveSettingsErr) {
+      console.error("[google-callback] drive user_settings update failed:", driveSettingsErr);
+    }
 
     if (redirectTo === "settings") {
       return NextResponse.redirect(`${origin}/${locale}/settings`);

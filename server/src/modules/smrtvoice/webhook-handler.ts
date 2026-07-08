@@ -77,16 +77,6 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
   }
 });
 
-/** Resolve the script this voice-engine job belongs to (via the job row). */
-async function scriptIdForJob(jobId: string): Promise<string | null> {
-  const { data } = await db
-    .from("smrtvoice_jobs")
-    .select("script_id")
-    .eq("voice_engine_job_id", jobId)
-    .maybeSingle();
-  return (data?.script_id as string | undefined) ?? null;
-}
-
 async function handleJobStarted(jobId: string): Promise<void> {
   const { data: job } = await db
     .from("smrtvoice_jobs")
@@ -109,6 +99,7 @@ async function handleLineCompleted(
   const audioPath = data.output_audio_path as string | undefined;
   const duration = (data.duration_seconds as number | undefined) ?? 0;
   const cost = (data.cost_usd as number | undefined) ?? 0;
+  const model = (data.model as string | undefined) ?? null;
 
   if (lineId && audioPath) {
     await db
@@ -120,6 +111,12 @@ async function handleLineCompleted(
         generation_cost_usd: cost,
       })
       .eq("id", lineId);
+
+    // NOTE: take history (smrtvoice_line_takes) is written DIRECTLY by the
+    // voice-engine worker (db/takes.py) as each clip lands — webhook-independent,
+    // the same reliability pattern used for line status/progress. We deliberately
+    // do NOT insert takes here: this callback is best-effort and often never
+    // arrives, and doing so would double-record whenever it does.
   }
 
   // Unified cost ledger — Resemble TTS generation (best-effort).
@@ -128,23 +125,19 @@ async function handleLineCompleted(
       await db.from("ai_usage").insert({
         provider: "resemble",
         component: "resemble.tts",
-        model: "resemble",
+        model: model ?? "resemble",
         cost_usd: cost,
         ref_id: lineId ?? null,
       });
     } catch { /* ledger insert must not break webhook handling */ }
   }
 
-  // Increment per-script totals via RPC. The orchestrator sends script_id in
-  // the line payload; fall back to the job row if it's absent.
-  const scriptId = (data.script_id as string | undefined) ?? (await scriptIdForJob(jobId));
-  if (scriptId) {
-    await db.rpc("increment_script_progress", {
-      p_script_id: scriptId,
-      p_cost: cost,
-      p_duration: duration,
-    });
-  }
+  // NOTE: per-script progress counters (completed_lines, stage, cost, duration)
+  // are now written DIRECTLY by the voice-engine worker, keyed by script_id, as
+  // each line lands — see orchestrator._set_stage. That path is authoritative
+  // and webhook-independent (it works even when this callback URL is
+  // misconfigured). We deliberately do NOT increment here anymore: doing so
+  // would double-count the moment both paths are live.
 }
 
 async function handleJobCompleted(

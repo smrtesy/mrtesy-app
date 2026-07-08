@@ -37,6 +37,7 @@ import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { useTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
+import { isEmbeddedPane } from "@/lib/navigate";
 
 // Per-app items shown below each app section header. Guides moved out —
 // they're reached by clicking the app NAME in AppSectionHeader. Settings
@@ -103,10 +104,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   // (mobile avatar, FABs, bottom nav) leaks into the pane.
   const [isEmbedded, setIsEmbedded] = useState(false);
   useEffect(() => {
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1"
-    ) {
+    if (isEmbeddedPane()) {
       setIsEmbedded(true);
     }
   }, []);
@@ -162,10 +160,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
   useEffect(() => {
     // Skip the realtime/polling work entirely inside an embedded pane.
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1"
-    ) {
+    if (isEmbeddedPane()) {
       return;
     }
     let mounted = true;
@@ -440,7 +435,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
       </aside>
 
       {/* Mobile Bottom Tab Bar */}
-      <nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
+      <nav data-mobile-nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
           {activeMobileItems.map((item) => {
             if (item.key === "more") {

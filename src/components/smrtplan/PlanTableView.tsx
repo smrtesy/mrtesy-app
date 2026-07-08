@@ -15,6 +15,7 @@ import type { Plan } from "@/types/plan";
 import type { TaskNeed } from "@/types/task";
 import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
 import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 
 interface TableTask {
   id: string;
@@ -45,12 +46,7 @@ interface TableStage {
   start_date: string | null;
   end_date: string | null;
 }
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 function newKey(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
 }
@@ -75,7 +71,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   const [tasks, setTasks] = useState<TableTask[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [stages, setStages] = useState<TableStage[]>([]);
-  const [members, setMembers] = useState<Member[]>([]);
+  const { members, loading: membersLoading } = useOrgMembers();
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<{ r: number; c: number } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -106,17 +102,15 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
     let alive = true;
     (async () => {
       try {
-        const [{ tasks }, { plans }, { stages }, mem] = await Promise.all([
+        const [{ tasks }, { plans }, { stages }] = await Promise.all([
           api<{ tasks: TableTask[] }>("/api/plan/all-tasks"),
           api<{ plans: Plan[] }>("/api/plans"),
           api<{ stages: TableStage[] }>("/api/plans/board-stages").catch(() => ({ stages: [] })),
-          api<{ members: Member[] }>("/api/org/members").catch(() => ({ members: [] as Member[] })),
         ]);
         if (!alive) return;
         setTasks(tasks ?? []);
         setPlans(plans ?? []);
         setStages(stages ?? []);
-        setMembers(mem.members ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
@@ -563,7 +557,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   const statusLabel = (s: string) =>
     s === "in_progress" ? te("statusInProgress") : DONE.has(s) ? te("statusDone") : te("statusInbox");
 
-  if (loading) return <div className="h-40 animate-pulse rounded-lg bg-muted" />;
+  if (loading || membersLoading) return <div className="h-40 animate-pulse rounded-lg bg-muted" />;
 
   return (
     <div className="space-y-3">

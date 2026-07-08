@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
+import { isEmbeddedPane } from "@/lib/navigate";
 import { TabsWorkspace } from "./TabsWorkspace";
 
 /**
@@ -21,11 +22,7 @@ export function TabsArea({ children }: { children: React.ReactNode }) {
   // A pane's iframe loads this very layout. localStorage is origin-global, so
   // the pane would hydrate the same open tabs and render its OWN workspace —
   // recursing panes-within-panes. When embedded, always show the plain page.
-  const [isEmbedded] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("embed") === "1",
-  );
+  const [isEmbedded] = useState(() => isEmbeddedPane());
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 768px)");

@@ -8,12 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Home, AlignLeft, ListChecks, Paperclip } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Circle, Layers, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { dueUrgency } from "@/lib/workdays";
+import { todayISO } from "@/lib/workdays";
 import { RecurrenceEditor, type RecurrenceModel } from "./RecurrenceEditor";
 
 interface ManualTaskInputProps {
@@ -57,15 +56,15 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const t = useTranslations("manualTask");
   const tCommon = useTranslations("common");
   const locale = useLocale();
-  const blocked = useWorkCalendar();
   const dir = locale === "he" ? "rtl" : "ltr";
 
   const [tab, setTab] = useState<"task" | "info">("task");
 
   // ── task tab state ──────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
-  const [size, setSize] = useState<"quick" | "regular">("quick");
-  const [isHome, setIsHome] = useState(false);
+  const [size, setSize] = useState<"quick" | "medium" | "big">("medium");
+  // "" = משרד/office (default), "home" = בית, "outside" = בחוץ.
+  const [taskContext, setTaskContext] = useState<"" | "home" | "outside">("");
   const [dueDate, setDueDate] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [recurrence, setRecurrence] = useState<RecurrenceModel>({ rule: null, until: null });
@@ -97,8 +96,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const reset = useCallback(() => {
     setTab("task");
     setTitle("");
-    setSize("quick");
-    setIsHome(false);
+    setSize("medium");
+    setTaskContext("");
     setDueDate("");
     setDueTime("");
     setRecurrence({ rule: null, until: null });
@@ -127,15 +126,17 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         const d = JSON.parse(raw) as Partial<{
           title: string; showDescription: boolean; description: string;
           showSubtasks: boolean; subtasks: DraftSubtask[];
-          size: "quick" | "regular"; isHome: boolean; dueDate: string; dueTime: string;
+          size: "quick" | "medium" | "big"; isHome?: boolean;
+          context?: "" | "home" | "outside"; dueDate: string; dueTime: string;
         }>;
         setTitle(d.title ?? "");
         setShowDescription(!!d.showDescription);
         setDescription(d.description ?? "");
         setShowSubtasks(!!d.showSubtasks);
         setSubtasks(Array.isArray(d.subtasks) ? d.subtasks : []);
-        setSize(d.size === "regular" ? "regular" : "quick");
-        setIsHome(!!d.isHome);
+        setSize(d.size === "big" ? "big" : d.size === "quick" ? "quick" : "medium");
+        // Back-compat: older drafts stored a boolean `isHome`.
+        setTaskContext(d.context ?? (d.isHome ? "home" : ""));
         setDueDate(d.dueDate ?? "");
         setDueTime(d.dueTime ?? "");
       }
@@ -146,9 +147,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // Auto-save the task draft as the user types (after hydration, while open).
   useEffect(() => {
     if (!open || !hydrated.current) return;
-    const draft = { title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime };
+    const draft = { title, showDescription, description, showSubtasks, subtasks, size, context: taskContext, dueDate, dueTime };
     try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* ignore quota */ }
-  }, [open, title, showDescription, description, showSubtasks, subtasks, size, isHome, dueDate, dueTime]);
+  }, [open, title, showDescription, description, showSubtasks, subtasks, size, taskContext, dueDate, dueTime]);
 
   // Load projects when the info tab is first needed; remember the last target.
   useEffect(() => {
@@ -252,8 +253,11 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         title: trimmedTitle,
         title_he: trimmedTitle,
         size,
+        // Manually-created tasks are the user's own — verified, so they land
+        // straight in the pool/Today (verified screen), not the triage inbox.
+        manually_verified: true,
       };
-      if (isHome) body.context = "home";
+      if (taskContext) body.context = taskContext;
       if (showDescription && description.trim()) body.description = description.trim();
       if (dueDate) body.due_date = dueDate;
       if (dueTime) body.due_time = dueTime;
@@ -269,16 +273,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
           created_by: "user" as const,
         }));
       if (checklist.length) body.checklist = checklist;
-      // A new ⚡quick task goes straight onto the desk (pinned → "מהיר – עכשיו").
-      // A regular task is deliberately NOT pinned: it lands in "חשוב" (the
-      // unpinned-regular rule), matching "switch to regular → goes to חשוב".
-      // Either way, a far-off deadline keeps it off the desk (auto-snoozed to
-      // resurface near the deadline). Position = seconds since a fixed recent
-      // epoch: monotonic and safely inside int4.
-      const goesToWaiting = !!dueDate && dueUrgency(dueDate, blocked) === "far";
-      if (!goesToWaiting && size === "quick") {
-        body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
-      }
+      // Daily method: a ⚡quick task is auto-committed to today (you do all
+      // quick daily); medium/big land in the pool (no planned_for) until the
+      // user pulls them into "היום".
+      if (size === "quick") body.planned_for = todayISO();
 
       const { task: created } = await api<{ task: { id: string } }>("/api/tasks", { method: "POST", body });
 
@@ -307,7 +305,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         }
       }
 
-      toast.success(goesToWaiting ? t("createdToWaiting", { date: dueDate }) : t("created"));
+      toast.success(t("created"));
       reset();
       onCreated();
       onClose();
@@ -483,43 +481,71 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               </div>
             )}
 
-            {/* Quick/regular · home · attach */}
+            {/* Size: quick / medium / big · home · attach */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-lg border p-0.5">
                 <button
                   type="button"
+                  title={t("sizeQuick")}
+                  aria-label={t("sizeQuick")}
                   onClick={() => setSize("quick")}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
                     size === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
                   )}
                 >
-                  <Zap className="h-3.5 w-3.5" />
-                  {t("sizeQuick")}
+                  <Zap className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSize("regular")}
+                  title={t("sizeMedium")}
+                  aria-label={t("sizeMedium")}
+                  onClick={() => setSize("medium")}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
-                    size === "regular" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                    size === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                   )}
                 >
-                  {t("sizeRegular")}
+                  <Circle className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  title={t("sizeBig")}
+                  aria-label={t("sizeBig")}
+                  onClick={() => setSize("big")}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                    size === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  <Layers className="h-4 w-4" />
                 </button>
               </div>
 
               <button
                 type="button"
-                onClick={() => setIsHome((v) => !v)}
+                onClick={() => setTaskContext((v) => (v === "home" ? "" : "home"))}
                 className={cn(
                   "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
-                  isHome ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
+                  taskContext === "home" ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
                 )}
-                aria-pressed={isHome}
+                aria-pressed={taskContext === "home"}
               >
                 <Home className="h-3.5 w-3.5" />
                 {t("contextHome")}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTaskContext((v) => (v === "outside" ? "" : "outside"))}
+                className={cn(
+                  "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
+                  taskContext === "outside" ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
+                )}
+                aria-pressed={taskContext === "outside"}
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                {t("contextOutside")}
               </button>
 
               {/* Attach a file — click to pick, or drag a file onto the button. */}

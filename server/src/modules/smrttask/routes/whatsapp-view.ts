@@ -21,6 +21,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { simpleCall } from "../../../anthropic";
 import { transcribeAudio } from "../../../gemini";
+import { metaErrorSummary } from "../../../lib/meta-errors";
 
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask")];
@@ -275,22 +276,38 @@ router.patch("/whatsapp/threads/:chat_id/name", ...gate, async (req: Request, re
 });
 
 // ── Messages within a chat ────────────────────────────────────────────────
+// Optional `after` (ISO timestamp): incremental mode — return only rows whose
+// `updated_at` moved past it. The DB trigger bumps updated_at on every UPDATE
+// (status flips, reaction clears, late transcript/OCR fills), so polling with
+// after=<max updated_at seen> picks up both new messages AND mutations to old
+// ones, instead of re-shipping the whole 200-row conversation every 10s.
+// Response shape is identical in both modes; rows never get deleted (there is
+// no whatsapp_messages delete path — reactions are soft-cleared via UPDATE),
+// so an incremental client can't miss a removal.
 router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) => {
   const chatId = String(req.query.chat_id ?? "");
   if (!chatId) return res.status(400).json({ error: "chat_id is required" });
 
   const limit = Math.min(parseInt(String(req.query.limit ?? "200"), 10) || 200, 1000);
 
+  // Validate the cursor server-side: a malformed value degrades to a full
+  // fetch rather than a PostgREST filter error.
+  const afterRaw = String(req.query.after ?? "");
+  const afterMs = afterRaw ? Date.parse(afterRaw) : NaN;
+  const afterIso = Number.isFinite(afterMs) ? new Date(afterMs).toISOString() : null;
+
   // We return chronological (oldest → newest) so the page renders like a
   // chat: most-recent at the bottom. Database query stays DESC so LIMIT
   // gives us the right *recent* window, then we reverse in JS.
-  const { data, error } = await db
+  let query = db
     .from("whatsapp_messages")
     .select(
-      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_ocr_text, audio_transcript, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at, status, status_error, sent_at, delivered_at, read_at",
+      "id, wamid, chat_id, direction, from_phone, from_name, to_phone, message_type, body_text, media_ocr_text, audio_transcript, media_id, media_mime, media_url, media_filename, media_size, reply_to_wamid, reaction_emoji, is_reaction, is_history, history_phase, received_at, updated_at, status, status_error, sent_at, delivered_at, read_at",
     )
     .eq("user_id", req.user!.id)
-    .eq("chat_id", chatId)
+    .eq("chat_id", chatId);
+  if (afterIso) query = query.gt("updated_at", afterIso);
+  const { data, error } = await query
     .order("received_at", { ascending: false })
     .limit(limit);
 
@@ -363,7 +380,45 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
     source_wamid: echoWamidByTaskId.get(t.id as string) ?? null,
   }));
 
-  return res.json({ messages: [...(data ?? [])].reverse(), tasks });
+  // Batch-mint short-lived signed URLs for every media row in ONE Storage
+  // call (createSignedUrls), and attach them to the payload as
+  // media_signed_url. Saves the client a per-bubble /whatsapp/media
+  // round-trip on first render; the per-path endpoint below stays as the
+  // fallback (legacy rows whose media_url is a full URL rather than a
+  // storage path, or a sign failure here — both leave media_signed_url
+  // null). Same ownership rule as /whatsapp/media: only paths under the
+  // caller's own folder are signed.
+  type MessageOut = NonNullable<typeof data>[number] & {
+    media_signed_url?: string | null;
+  };
+  const messages: MessageOut[] = [...(data ?? [])].reverse();
+  const ownPrefix = `${req.user!.id}/`;
+  const mediaPaths = [
+    ...new Set(
+      messages
+        .map((m) => m.media_url as string | null)
+        .filter((p): p is string => Boolean(p) && p!.startsWith(ownPrefix)),
+    ),
+  ];
+  if (mediaPaths.length > 0) {
+    const { data: signed, error: signErr } = await db.storage
+      .from("whatsapp-media")
+      .createSignedUrls(mediaPaths, SIGNED_URL_TTL_SECONDS);
+    if (signErr) {
+      // Best-effort: media falls back to the per-bubble endpoint.
+      console.warn("[whatsapp-view] batch signed URLs failed:", signErr.message);
+    } else {
+      const urlByPath = new Map<string, string>();
+      for (const s of signed ?? []) {
+        if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
+      }
+      for (const m of messages) {
+        if (m.media_url) m.media_signed_url = urlByPath.get(m.media_url as string) ?? null;
+      }
+    }
+  }
+
+  return res.json({ messages, tasks });
 });
 
 // ── Full-text-ish search across a chat's message content ──────────────────
@@ -709,22 +764,27 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   }
 
   const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
-  const sendRes = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error("[whatsapp-send] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string; code?: number };
   };
 
   if (!sendRes.ok) {
-    const msg = sendJson.error?.message ?? `meta_${sendRes.status}`;
-    return res.status(502).json({ error: msg });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
 
   const wamid = sendJson.messages?.[0]?.id ?? null;
@@ -734,7 +794,7 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
   // When Meta's echo arrives via the webhook, the upsert on (user_id, wamid)
   // is a no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -753,6 +813,7 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately — the client renders the message optimistically and
   // only needs the wamid. The source_messages thread refresh (several DB
@@ -871,7 +932,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     if (!uploadRes.ok || !uploadJson.id) {
       return res
         .status(502)
-        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+        .json({ error: metaErrorSummary(uploadRes.status, uploadJson) });
     }
     mediaId = uploadJson.id;
   } catch (e) {
@@ -886,20 +947,26 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     type: "image",
     image: { id: mediaId, ...(captionText ? { caption: captionText } : {}) },
   };
-  const sendRes = await fetch(
-    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  } catch (e) {
+    console.error("[whatsapp-send-image] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
   const wamid = sendJson.messages?.[0]?.id ?? null;
   if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
@@ -923,7 +990,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
   // Optimistically insert the outgoing image so the UI sees it immediately.
   // The webhook echo upserts on (user_id, wamid) → no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -946,6 +1013,7 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send-image] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately; refresh the thread row in the background (see the
   // text-send route for the same rationale).
@@ -1068,7 +1136,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     if (!uploadRes.ok || !uploadJson.id) {
       return res
         .status(502)
-        .json({ error: uploadJson.error?.message ?? `meta_upload_${uploadRes.status}` });
+        .json({ error: metaErrorSummary(uploadRes.status, uploadJson) });
     }
     mediaId = uploadJson.id;
   } catch (e) {
@@ -1090,20 +1158,26 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     type: "audio",
     audio: { id: mediaId, voice: true },
   };
-  const sendRes = await fetch(
-    `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  } catch (e) {
+    console.error("[whatsapp-send-audio] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
   const wamid = sendJson.messages?.[0]?.id ?? null;
   if (!wamid) return res.status(502).json({ error: "meta_no_wamid" });
@@ -1125,7 +1199,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
   // Optimistically insert the outgoing voice note so the UI sees it
   // immediately. The webhook echo upserts on (user_id, wamid) → no-op.
   const nowIso = new Date().toISOString();
-  await db.from("whatsapp_messages").upsert(
+  const { error: msgUpsertErr } = await db.from("whatsapp_messages").upsert(
     {
       user_id: req.user!.id,
       wamid,
@@ -1148,6 +1222,7 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     },
     { onConflict: "user_id,wamid" },
   );
+  if (msgUpsertErr) console.error("[whatsapp-send-audio] outgoing message upsert failed:", msgUpsertErr);
 
   // Respond immediately; refresh the thread row in the background (see the
   // text-send route for the same rationale).
@@ -1248,17 +1323,23 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
   };
 
   const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
-  const sendRes = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let sendRes: Awaited<ReturnType<typeof fetch>>;
+  try {
+    sendRes = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error("[whatsapp-react] Meta send request failed:", e);
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
   const sendJson = (await sendRes.json().catch(() => ({}))) as {
     messages?: Array<{ id?: string }>;
     error?: { message?: string };
   };
   if (!sendRes.ok) {
-    return res.status(502).json({ error: sendJson.error?.message ?? `meta_${sendRes.status}` });
+    return res.status(502).json({ error: metaErrorSummary(sendRes.status, sendJson) });
   }
 
   const wamid = sendJson.messages?.[0]?.id ?? null;
@@ -1272,7 +1353,7 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
   // Soft-delete prior outgoing reactions on the same target so the UI
   // doesn't render them alongside the new one. We can do this by setting
   // their reaction_emoji to "" — the ThreadView filters empties out.
-  await db
+  const { error: clearReactErr } = await db
     .from("whatsapp_messages")
     .update({ reaction_emoji: "" })
     .eq("user_id", req.user!.id)
@@ -1280,9 +1361,10 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
     .eq("is_reaction", true)
     .eq("reply_to_wamid", target_wamid)
     .neq("wamid", wamid);
+  if (clearReactErr) console.error("[whatsapp-react] prior reaction clear failed:", clearReactErr);
 
   if (emoji.trim()) {
-    await db.from("whatsapp_messages").upsert(
+    const { error: reactUpsertErr } = await db.from("whatsapp_messages").upsert(
       {
         user_id: req.user!.id,
         wamid,
@@ -1302,6 +1384,7 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
       },
       { onConflict: "user_id,wamid" },
     );
+    if (reactUpsertErr) console.error("[whatsapp-react] reaction upsert failed:", reactUpsertErr);
   }
 
   return res.json({ ok: true, wamid });

@@ -34,7 +34,7 @@ async function notifyDisconnect(userId: string, reason: string) {
       title: "Google Drive disconnected",
       body: `Drive connection was lost (${reason}). Please reconnect in Settings → Connections.`,
       link: "/settings",
-    }).then(() => {}, () => {});
+    }).then(({ error }) => { if (error) console.error("notifications insert failed:", error); }, () => {});
   }
 }
 
@@ -43,21 +43,26 @@ async function notifyDisconnect(userId: string, reason: string) {
 // account drops out of the cron loop until the user re-OAuths, records the
 // failure, and notifies the user — but ONLY on the true→false transition, so a
 // dead connection never pages the user every cron tick.
-async function markDriveDisconnected(userId: string, reason: string, prevFailures: number) {
+async function markDriveDisconnected(userId: string, reason: string) {
   const { data: prev } = await supabase
     .from("user_settings")
     .select("drive_connected")
     .eq("user_id", userId)
     .maybeSingle();
 
-  await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
+  const { error: disconnectUpdateError } = await supabase.from("user_settings").update({ drive_connected: false }).eq("user_id", userId);
+  if (disconnectUpdateError) console.error("user_settings disconnect update failed:", disconnectUpdateError);
 
-  await supabase.from("sync_state").upsert({
+  const { error: disconnectStateUpsertError } = await supabase.from("sync_state").upsert({
     user_id: userId,
     source: "google_drive",
     last_error: reason,
-    consecutive_failures: prevFailures + 1,
+    // Reset the streak on disconnect: the counter has done its job. Leaving
+    // it >=3 meant one fresh auth blip after the user re-OAuthed immediately
+    // re-disconnected them (prevFailures + 1 >= 3 on the very first strike).
+    consecutive_failures: 0,
   }, { onConflict: "user_id,source" });
+  if (disconnectStateUpsertError) console.error("sync_state upsert failed:", disconnectStateUpsertError);
 
   if (prev?.drive_connected) await notifyDisconnect(userId, reason);
 }
@@ -70,9 +75,10 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
     .eq("service", service)
     .single();
 
-  // "AUTH:" prefix marks an unrecoverable auth failure that the caller turns
-  // into a disconnect (drive_connected=false + one notification). Transient
-  // errors throw without the prefix and are retried on the next cron run.
+  // "AUTH:" prefix marks an auth failure that the caller turns into a
+  // disconnect (drive_connected=false + one notification) once it repeats
+  // 3 ticks in a row. Transient errors throw without the prefix and are
+  // retried on the next cron run.
   if (!cred) throw new Error("AUTH: no google_drive credentials found");
 
   if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
@@ -101,10 +107,11 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   }
 
   const tokens = await resp.json();
-  await supabase.from("user_credentials").update({
+  const { error: credUpdateError } = await supabase.from("user_credentials").update({
     access_token: tokens.access_token,
     expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
   }).eq("user_id", userId).eq("service", service);
+  if (credUpdateError) console.error("user_credentials update failed:", credUpdateError);
 
   return tokens.access_token;
 }
@@ -260,7 +267,7 @@ async function ocrBinaryFile(
 
     // Best-effort cost ledger row (mirrors ai-process). Never blocks the sync.
     try {
-      await supabase.from("ai_usage").insert({
+      const { error: ocrUsageInsertError } = await supabase.from("ai_usage").insert({
         user_id: userId,
         provider: "anthropic",
         component: "drive_ocr",
@@ -272,6 +279,7 @@ async function ocrBinaryFile(
         cost_usd: estimateHaikuCost(data.usage?.input_tokens || 0, data.usage?.output_tokens || 0),
         ref_id: fileId,
       });
+      if (ocrUsageInsertError) console.error("ai_usage insert failed:", ocrUsageInsertError);
     } catch { /* ledger must not break the pipeline */ }
 
     if (!text || text === "NO_TEXT") return "";
@@ -346,20 +354,49 @@ async function syncUserDrive(userId: string) {
 
   // No permanent circuit-breaker here: a brief failure streak (e.g. a
   // transient missing-credentials window) must never brick Drive sync forever.
-  // Auth failures flip drive_connected=false (so the account leaves the loop
-  // until the user re-OAuths) and transient failures simply retry next tick —
-  // either way a reconnected user recovers automatically.
+  // Repeated auth failures flip drive_connected=false (so the account leaves
+  // the loop until the user re-OAuths) and transient failures simply retry
+  // next tick — either way a reconnected user recovers automatically.
   let token: string;
   try {
     token = await refreshGoogleToken(userId, "google_drive");
   } catch (e) {
     const errMsg = (e as Error).message;
     if (errMsg.startsWith("AUTH:")) {
-      // Unrecoverable auth failure → disconnect + notify once, then drop out.
-      await markDriveDisconnected(userId, errMsg.slice(5).trim(), syncState?.consecutive_failures ?? 0);
+      // Auth failure — but do NOT disconnect on the first one. Google returns
+      // transient 400/401s from the token endpoint, and a single blip used to
+      // flip drive_connected=false and silently kill Drive sync. Same 3-strike
+      // policy as gmail-sync: count consecutive failures in sync_state and
+      // only disconnect + notify after DISCONNECT_AFTER_FAILURES in a row;
+      // any successful run resets the counter (below and at the end of sync).
+      const DISCONNECT_AFTER_FAILURES = 3;
+      // consecutive_failures is shared with the transient paths (network /
+      // 5xx also increment it), so treat the stored count as AUTH strikes
+      // only when the previous failure was itself an auth failure — i.e. the
+      // stored last_error carries the "AUTH:" prefix. Otherwise 2 network
+      // blips + 1 auth blip would disconnect instantly.
+      const prevFailures =
+        typeof syncState?.last_error === "string" && syncState.last_error.startsWith("AUTH:")
+          ? (syncState?.consecutive_failures ?? 0)
+          : 0;
+      if (prevFailures + 1 >= DISCONNECT_AFTER_FAILURES) {
+        // Unrecoverable auth failure → disconnect + notify once, then drop out.
+        await markDriveDisconnected(userId, errMsg.slice(5).trim());
+      } else {
+        const { error: authFailUpsertError } = await supabase.from("sync_state").upsert(
+          {
+            user_id: userId,
+            source: "google_drive",
+            last_error: `${errMsg} — attempt ${prevFailures + 1}/${DISCONNECT_AFTER_FAILURES} before disconnect`,
+            consecutive_failures: prevFailures + 1,
+          },
+          { onConflict: "user_id,source" }
+        );
+        if (authFailUpsertError) console.error("sync_state upsert failed:", authFailUpsertError);
+      }
     } else {
       // Transient (network / 5xx / rate limit) → record and retry next run.
-      await supabase.from("sync_state").upsert(
+      const { error: tokenFailUpsertError } = await supabase.from("sync_state").upsert(
         {
           user_id: userId,
           source: "google_drive",
@@ -368,6 +405,7 @@ async function syncUserDrive(userId: string) {
         },
         { onConflict: "user_id,source" }
       );
+      if (tokenFailUpsertError) console.error("sync_state upsert failed:", tokenFailUpsertError);
     }
     return { error: errMsg };
   }
@@ -390,13 +428,14 @@ async function syncUserDrive(userId: string) {
     : (settings?.drive_folder_id ? [settings.drive_folder_id] : []);
 
   if (rootIds.length === 0) {
-    await supabase.from("sync_state").upsert({
+    const { error: noFoldersUpsertError } = await supabase.from("sync_state").upsert({
       user_id: userId,
       source: "google_drive",
       last_synced_at: new Date().toISOString(),
       last_error: null,
       consecutive_failures: 0,
     }, { onConflict: "user_id,source" });
+    if (noFoldersUpsertError) console.error("sync_state upsert failed:", noFoldersUpsertError);
     return { synced: 0, skipped: true, reason: "no folders selected" };
   }
 
@@ -437,17 +476,19 @@ async function syncUserDrive(userId: string) {
         if (resp.status === 400) {
           // Stale checkpoint after re-auth. Self-heal: clear it so the next
           // run does a fresh initial scan instead of looping on 400 forever.
-          await supabase.from("sync_state").upsert({
+          const { error: checkpointResetError } = await supabase.from("sync_state").upsert({
             user_id: userId, source: "google_drive",
             checkpoint: null, last_error: null, consecutive_failures: 0,
           }, { onConflict: "user_id,source" });
+          if (checkpointResetError) console.error("sync_state checkpoint reset failed:", checkpointResetError);
           return { error: "pageToken invalid — checkpoint reset for fresh fetch" };
         }
-        await supabase.from("sync_state").upsert({
+        const { error: changesFailUpsertError } = await supabase.from("sync_state").upsert({
           user_id: userId, source: "google_drive",
           last_error: `Drive API: ${resp.status} ${errText}`,
           consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
         }, { onConflict: "user_id,source" });
+        if (changesFailUpsertError) console.error("sync_state upsert failed:", changesFailUpsertError);
         throw new Error(`Drive API: ${resp.status}`);
       }
       const data = await resp.json();
@@ -482,11 +523,12 @@ async function syncUserDrive(userId: string) {
           (batchPage ? `&pageToken=${batchPage}` : "");
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!resp.ok) {
-          await supabase.from("sync_state").upsert({
+          const { error: scanFailUpsertError } = await supabase.from("sync_state").upsert({
             user_id: userId, source: "google_drive",
             last_error: `Drive API: ${resp.status} ${await resp.text()}`,
             consecutive_failures: (syncState?.consecutive_failures || 0) + 1,
           }, { onConflict: "user_id,source" });
+          if (scanFailUpsertError) console.error("sync_state upsert failed:", scanFailUpsertError);
           throw new Error(`Drive API: ${resp.status}`);
         }
         const data = await resp.json();
@@ -553,7 +595,7 @@ async function syncUserDrive(userId: string) {
       }
     }
 
-    await supabase.from("source_messages").upsert({
+    const { error: fileUpsertError } = await supabase.from("source_messages").upsert({
       user_id: userId,
       source_type: "google_drive",
       source_id: file.id,
@@ -564,6 +606,7 @@ async function syncUserDrive(userId: string) {
       processing_status: "pending",
       ai_classification: "pending",
     }, { onConflict: "user_id,source_type,source_id", ignoreDuplicates: false });
+    if (fileUpsertError) console.error(`drive-sync file upsert failed (${file.id}):`, fileUpsertError);
     synced++;
   }
 
@@ -594,7 +637,8 @@ async function syncUserDrive(userId: string) {
     consecutive_failures: 0,
   };
   if (checkpointToWrite !== undefined) stateUpdate.checkpoint = checkpointToWrite;
-  await supabase.from("sync_state").upsert(stateUpdate, { onConflict: "user_id,source" });
+  const { error: stateUpsertError } = await supabase.from("sync_state").upsert(stateUpdate, { onConflict: "user_id,source" });
+  if (stateUpsertError) console.error("sync_state upsert failed:", stateUpsertError);
 
   return { synced, ocrDeferred };
 }

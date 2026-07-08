@@ -14,6 +14,7 @@ import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { SettingsForm as SmrtVoiceSettingsForm } from "@/components/smrtvoice/SettingsForm";
+import { LexiconManager as SmrtVoiceLexiconManager } from "@/components/smrtvoice/LexiconManager";
 
 interface Props {
   enabledApps: string[];
@@ -91,11 +92,18 @@ function AppSettings({ slug, locale, pathname }: {
   }
   if (slug === "smrtvoice") {
     return (
-      <Card>
-        <CardContent className="p-4 md:p-6">
-          <SmrtVoiceSettingsForm />
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <Card>
+          <CardContent className="p-4 md:p-6">
+            <SmrtVoiceSettingsForm />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 md:p-6">
+            <SmrtVoiceLexiconManager />
+          </CardContent>
+        </Card>
+      </div>
     );
   }
   // Unknown app — defensive

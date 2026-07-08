@@ -12,6 +12,7 @@ import { formatDateOnly } from "@/lib/date";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
+import { EventsPanel } from "@/components/smrttask/tasks/EventsPanel";
 import type { Task } from "@/types/task";
 
 // Rich select so result cards (and the TaskDetail sheet they open) can render
@@ -214,6 +215,10 @@ export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchPro
           />
           {t("includeArchive")}
         </label>
+        {/* Events entry point — coming-week agenda, beside the search field. */}
+        <div className="ms-auto">
+          <EventsPanel locale={locale} />
+        </div>
       </div>
 
       {results === null ? (

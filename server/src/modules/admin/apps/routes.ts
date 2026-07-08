@@ -14,6 +14,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db, invalidateAppSecretCache } from "../../../db";
 import { requireAuth, requireSuperAdmin } from "../../../middleware";
+import { metaErrorSummary } from "../../../lib/meta-errors";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
@@ -521,6 +522,7 @@ router.get(
     if (!metaRes.ok) {
       return res.status(502).json({
         error: "meta_query_failed",
+        reason: metaErrorSummary(metaRes.status, metaJson),
         status: metaRes.status,
         meta_response: metaJson,
       });

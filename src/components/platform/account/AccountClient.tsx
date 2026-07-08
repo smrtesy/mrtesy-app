@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { navigateTop } from "@/lib/navigate";
@@ -14,8 +14,16 @@ import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import { NotificationSettings } from "@/components/pwa/NotificationSettings";
 import {
   LogOut, Mail, FolderOpen, MessageCircle, Calendar,
-  CheckCircle2, XCircle, RefreshCw,
+  CheckCircle2, XCircle, RefreshCw, Globe,
 } from "lucide-react";
+import { toast } from "sonner";
+
+function timezoneList(current?: string): string[] {
+  const sv = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone");
+  const list = sv && sv.length > 0 ? [...sv] : ["America/New_York", "Asia/Jerusalem", "Europe/London", "UTC"];
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
 
 interface ConnectionStatus {
   gmail: boolean;
@@ -37,12 +45,30 @@ export function AccountClient() {
   const tAuth = useTranslations("auth");
   const { locale } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  // The Google OAuth callback redirects here with ?error=save_failed when the
+  // credential save failed (the service is deliberately NOT marked connected).
+  useEffect(() => {
+    if (searchParams.get("error") === "save_failed") {
+      toast.error(t("connectionSaveFailed"));
+      router.replace(`/${locale}/account`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>({
     gmail: false, drive: false, calendar: false, whatsapp: false,
   });
   const [userEmail, setUserEmail] = useState<string>("");
   const [userName, setUserName] = useState<string>("");
+  const [timezone, setTimezone] = useState<string>("");
+  // Resolved after mount — during SSR prerender Intl reports the server's
+  // timezone, which would mismatch on hydration.
+  const [browserTz, setBrowserTz] = useState<string>("");
+  useEffect(() => {
+    setBrowserTz(Intl.DateTimeFormat().resolvedOptions().timeZone ?? "");
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -58,9 +84,10 @@ export function AccountClient() {
 
       const { data } = await supabase
         .from("user_settings")
-        .select("whatsapp_connected")
+        .select("whatsapp_connected, timezone")
         .eq("user_id", user.id)
         .single();
+      if (data?.timezone) setTimezone(data.timezone);
 
       // Mirror the health probe behaviour from the old /settings page:
       // refresh credentials and drop revoked rows so the indicators reflect
@@ -104,6 +131,18 @@ export function AccountClient() {
       /* no SW (dev or unsupported) — nothing cached to clear */
     }
     router.push(`/${locale}/login`);
+  }
+
+  async function saveTimezone(tz: string) {
+    const prev = timezone;
+    setTimezone(tz);
+    try {
+      await api("/api/me/settings", { method: "PATCH", body: { timezone: tz }, noOrg: true });
+      toast.success(t("timezoneSaved"));
+    } catch {
+      setTimezone(prev);
+      toast.error(t("timezoneSaveFailed"));
+    }
   }
 
   async function switchLanguage() {
@@ -212,6 +251,39 @@ export function AccountClient() {
 
       {/* Notifications */}
       <NotificationSettings />
+
+      {/* Timezone */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Globe className="h-4 w-4" />
+            {t("timezone")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <select
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[40px]"
+            value={timezone}
+            onChange={(e) => saveTimezone(e.target.value)}
+            dir="ltr"
+          >
+            {!timezone && <option value="">—</option>}
+            {timezoneList(timezone || undefined).map((z) => (
+              <option key={z} value={z}>{z}</option>
+            ))}
+          </select>
+          {browserTz && timezone && timezone !== browserTz && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              onClick={() => saveTimezone(browserTz)}
+            >
+              {t("timezoneUseBrowser", { tz: browserTz })}
+            </Button>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Language */}
       <Card>

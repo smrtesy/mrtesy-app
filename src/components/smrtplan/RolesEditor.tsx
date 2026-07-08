@@ -9,6 +9,7 @@ import { personLabel } from "@/lib/smrtplan/people";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 
 interface RoleMember {
   id: string;
@@ -22,12 +23,7 @@ interface Role {
   color: string | null;
   members: RoleMember[];
 }
-interface Member {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  display_name: string | null;
-}
+type Member = OrgMember;
 
 const COLORS = ["#534AB7", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#6B7280"];
 
@@ -40,8 +36,9 @@ function memberName(m: Member | undefined, userId: string): string {
 export function RolesSection() {
   const t = useTranslations("smrtPlan.roles");
   const [roles, setRoles] = useState<Role[]>([]);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { members, loading: membersLoading } = useOrgMembers();
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const loading = rolesLoading || membersLoading;
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -57,17 +54,12 @@ export function RolesSection() {
     let alive = true;
     (async () => {
       try {
-        const [{ roles }, { members }] = await Promise.all([
-          api<{ roles: Role[] }>("/api/plan/roles"),
-          api<{ members: Member[] }>("/api/org/members"),
-        ]);
-        if (!alive) return;
-        setRoles(roles ?? []);
-        setMembers(members ?? []);
+        const { roles } = await api<{ roles: Role[] }>("/api/plan/roles");
+        if (alive) setRoles(roles ?? []);
       } catch (e) {
         if (alive) toast.error(e instanceof Error ? e.message : "Error");
       } finally {
-        if (alive) setLoading(false);
+        if (alive) setRolesLoading(false);
       }
     })();
     return () => {

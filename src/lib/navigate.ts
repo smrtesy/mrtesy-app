@@ -25,10 +25,26 @@ export function navigateTop(url: string): void {
   window.location.href = url;
 }
 
-/** True when the current document is rendered inside a tabs-workspace pane
- *  (the iframe is loaded with `?embed=1` — see TabsWorkspace). */
+/** True when the current document is rendered inside a tabs-workspace pane.
+ *
+ *  The pane iframe is opened with `?embed=1`, but that query is fragile: any
+ *  hard reload or plain in-pane navigation (a `<Link>`, `router.push`, or a
+ *  `window.location` change that doesn't re-append it) drops the flag, and the
+ *  page then re-mounts as full-chrome — mobile sidebar, bottom nav and FABs all
+ *  leak back into the narrow pane. So we treat "am I framed in a window that
+ *  isn't the top?" as the authoritative signal: it's structural, can't be lost
+ *  by navigation, and the tabs workspace is the only thing that iframes our own
+ *  pages. The `?embed=1` check stays as a belt-and-suspenders fallback for the
+ *  first paint before the frame relationship is readable. */
 export function isEmbeddedPane(): boolean {
   if (typeof window === "undefined") return false;
+  try {
+    if (window.self !== window.top) return true;
+  } catch {
+    // Accessing window.top threw — we're framed by a cross-origin parent,
+    // which still means we're embedded.
+    return true;
+  }
   return new URLSearchParams(window.location.search).get("embed") === "1";
 }
 

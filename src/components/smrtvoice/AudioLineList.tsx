@@ -1,16 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   Play,
+  Pause,
   Square,
   RefreshCw,
   Settings2,
-  RotateCcw,
-  X,
   FolderUp,
+  Download,
+  Sparkles,
+  BadgeCheck,
+  History,
+  Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -41,29 +45,80 @@ interface Line {
   output_audio_path: string | null;
   output_duration_seconds: number | null;
   status: string;
+  approved: boolean;
   redo_requested: boolean;
-  redo_reason: string | null;
-  redo_instructions: string | null;
+  take_count?: number;
+}
+
+interface Take {
+  id: string;
+  text_used: string | null;
+  model: string | null;
+  output_audio_path: string;
+  duration_seconds: number | null;
+  cost_usd: number | null;
+  approved: boolean;
+  note: string | null;
+  created_at: string;
+}
+
+/** Pull the tone tags out of the exact body sent (works for old takes too):
+ *  wrapping <build-intensity>… and inline [sigh]. */
+function tagsFromBody(body: string | null): string[] {
+  if (!body) return [];
+  const found = new Set<string>();
+  for (const m of body.matchAll(/<([a-z][a-z-]*)>/gi)) found.add(m[1]);
+  for (const m of body.matchAll(/\[([a-z][a-z-]*)\]/gi)) found.add(m[1]);
+  return [...found];
+}
+
+interface Suggestions {
+  hebrew: string[];
+  latin: string[];
+}
+
+/** The body last sent to Resemble — what the edit box is prefilled with. */
+function sentBodyOf(line: Line): string {
+  const req = line.resemble_request ?? {};
+  return ((req.body as string | undefined) ?? line.tts_body ?? line.text_for_tts ?? line.text_clean ?? "").trim();
 }
 
 export function AudioLineList({ scriptId }: { scriptId: string }) {
   const t = useTranslations("smrtVoice");
+  const locale = useLocale();
   const [lines, setLines] = useState<Line[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playingAll, setPlayingAll] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [redoOpenId, setRedoOpenId] = useState<string | null>(null);
-  const [redoReason, setRedoReason] = useState("");
-  const [redoInstructions, setRedoInstructions] = useState("");
   const [archiving, setArchiving] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
   const [newLineNumbers, setNewLineNumbers] = useState<number[]>([]);
 
+  // Combined settings + edit + send-again panel (one per line).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [reanalyze, setReanalyze] = useState(false);
+  const [regenLineId, setRegenLineId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const editRef = useRef<HTMLTextAreaElement | null>(null);
+  // The body the panel opened with, to detect an actual edit.
+  const origBodyRef = useRef<string>("");
+  // Live text selection inside the edit box, so "suggest" targets the picked
+  // word and clicking a suggestion replaces exactly that word.
+  const selRef = useRef<{ start: number; end: number } | null>(null);
+
+  // Take history state (per-line, lazy-loaded on expand).
+  const [takesOpenId, setTakesOpenId] = useState<string | null>(null);
+  const [takes, setTakes] = useState<Record<string, Take[]>>({});
+  const takesOpenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    takesOpenIdRef.current = takesOpenId;
+  }, [takesOpenId]);
+
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const cancelRef = useRef(false);
-  // Resolver of the in-flight playOne promise, so stop can unblock the loop.
   const resolveRef = useRef<(() => void) | null>(null);
 
   const fetchLines = useCallback(async () => {
@@ -76,6 +131,15 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       setError(err instanceof Error ? err.message : "Unknown error");
     }
   }, [scriptId]);
+
+  const loadTakes = useCallback(async (lineId: string) => {
+    try {
+      const { takes } = await api<{ takes: Take[] }>(`/api/voice/lines/${lineId}/takes`);
+      setTakes((prev) => ({ ...prev, [lineId]: takes }));
+    } catch {
+      /* takes are supplementary — a failure shouldn't break the list */
+    }
+  }, []);
 
   useEffect(() => {
     fetchLines();
@@ -90,16 +154,32 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
           table: "smrtvoice_lines",
           filter: `script_id=eq.${scriptId}`,
         },
-        () => fetchLines(),
+        () => {
+          fetchLines();
+          const openId = takesOpenIdRef.current;
+          if (openId) loadTakes(openId);
+        },
       )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchLines, scriptId]);
+  }, [fetchLines, loadTakes, scriptId]);
 
   const rendered = (lines ?? []).filter((l) => l.output_audio_path);
   const redoCount = (lines ?? []).filter((l) => l.redo_requested).length;
+
+  async function playUrl(url: string, id: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      resolveRef.current = resolve;
+      const audio = new Audio(url);
+      currentAudioRef.current = audio;
+      setPlayingId(id);
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve();
+      audio.play().catch(() => resolve());
+    });
+  }
 
   async function playOne(line: Line): Promise<void> {
     if (!line.output_audio_path) return;
@@ -107,20 +187,41 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/lines/${line.id}/audio-url`,
       );
-      await new Promise<void>((resolve) => {
-        resolveRef.current = resolve;
-        const audio = new Audio(audio_url);
-        currentAudioRef.current = audio;
-        setPlayingId(line.id);
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
-        audio.play().catch(() => resolve());
-      });
+      await playUrl(audio_url, line.id);
     } catch {
       /* skip a failed line and continue */
     } finally {
       resolveRef.current = null;
       setPlayingId(null);
+    }
+  }
+
+  async function downloadBlob(url: string, filename: string) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  async function downloadOne(line: Line) {
+    if (!line.output_audio_path) return;
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/lines/${line.id}/audio-url`,
+      );
+      await downloadBlob(
+        audio_url,
+        `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
@@ -141,34 +242,110 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     cancelRef.current = true;
     currentAudioRef.current?.pause();
     currentAudioRef.current = null;
-    // Unblock the awaiting playOne promise so the sequence loop exits now.
     resolveRef.current?.();
     resolveRef.current = null;
     setPlayingAll(false);
     setPlayingId(null);
   }
 
-  async function markRedo(lineId: string) {
-    try {
-      await api(`/api/voice/lines/${lineId}/redo`, {
-        method: "POST",
-        body: { reason: redoReason, instructions: redoInstructions },
-      });
-      setRedoOpenId(null);
-      setRedoReason("");
-      setRedoInstructions("");
-      fetchLines();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unknown error");
+  // Open/close the combined settings + edit panel. On open, prefill the edit
+  // box with exactly what was last sent to Resemble.
+  function toggleSettings(line: Line) {
+    const next = expandedId === line.id ? null : line.id;
+    setExpandedId(next);
+    if (next) {
+      const body = sentBodyOf(line);
+      setEditText(body);
+      origBodyRef.current = body;
+      setReanalyze(false);
+      setSuggestions(null);
+      selRef.current = null;
     }
   }
 
-  async function clearRedo(lineId: string) {
+  function captureSelection() {
+    const el = editRef.current;
+    if (!el) return;
+    const s = el.selectionStart ?? 0;
+    const e = el.selectionEnd ?? 0;
+    selRef.current = e > s ? { start: s, end: e } : null;
+  }
+
+  async function suggestForWord() {
+    // Prefer the selected word; fall back to a single-token box.
+    let query = "";
+    if (selRef.current) {
+      query = editText.slice(selRef.current.start, selRef.current.end).trim();
+    }
+    if (!query) {
+      const whole = editText.trim();
+      if (whole && !/\s/.test(whole) && whole.length <= 30) {
+        query = whole;
+        selRef.current = null;
+      }
+    }
+    if (!query) {
+      toast(t("studio.selectWordHint"));
+      return;
+    }
+    setSuggesting(true);
     try {
-      await api(`/api/voice/lines/${lineId}/redo`, { method: "DELETE" });
+      const s = await api<Suggestions>("/api/voice/pronunciation/suggest", {
+        method: "POST",
+        body: { word: query },
+      });
+      setSuggestions(s);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  // Replace the selected word with the chosen suggestion (or insert at caret).
+  function applySuggestion(value: string) {
+    const el = editRef.current;
+    const sel = selRef.current;
+    if (sel) {
+      const next = editText.slice(0, sel.start) + value + editText.slice(sel.end);
+      setEditText(next);
+      const end = sel.start + value.length;
+      selRef.current = { start: sel.start, end };
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(sel.start, end);
+      });
+      return;
+    }
+    const start = el?.selectionStart ?? editText.length;
+    const endc = el?.selectionEnd ?? editText.length;
+    const next = editText.slice(0, start) + value + editText.slice(endc);
+    setEditText(next);
+    const caret = start + value.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
+  }
+
+  // "Send again" for one line: edited text (verbatim) and/or re-analyze tone.
+  async function regenerateNow(line: Line) {
+    setRegenLineId(line.id);
+    try {
+      const edited = editText.trim();
+      const changed = !!edited && edited !== origBodyRef.current.trim();
+      const body: Record<string, unknown> = {};
+      if (changed) body.text_for_tts = edited;
+      if (reanalyze) body.reprocess = true;
+      await api(`/api/voice/lines/${line.id}/regenerate`, { method: "POST", body });
+      setNewLineNumbers([line.line_number]);
+      setExpandedId(null);
+      toast.success(t("studio.redoQueued", { count: 1 }));
       fetchLines();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setRegenLineId(null);
     }
   }
 
@@ -186,6 +363,77 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setRerunning(false);
+    }
+  }
+
+  function toggleTakes(lineId: string) {
+    const next = takesOpenId === lineId ? null : lineId;
+    setTakesOpenId(next);
+    if (next) loadTakes(next);
+  }
+
+  async function playTake(take: Take) {
+    stopPlayback();
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/takes/${take.id}/audio-url`,
+      );
+      await playUrl(audio_url, take.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      resolveRef.current = null;
+      setPlayingId(null);
+    }
+  }
+
+  // `n` is the human take number shown on screen (newest = highest), so the
+  // downloaded filename matches the "Take N" label the user clicked.
+  async function downloadTake(take: Take, lineNumber: number, n: number) {
+    try {
+      const { audio_url } = await api<{ audio_url: string }>(
+        `/api/voice/takes/${take.id}/audio-url`,
+      );
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}.wav`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  // Toggle this take as the line's audio (single-select). Clicking an
+  // unchosen take marks it and repoints the line; clicking the already-chosen
+  // take un-chooses it, and once no take is chosen the line's ✓ disappears.
+  async function chooseTake(take: Take) {
+    const next = !take.approved;
+    setTakes((prev) => {
+      const key = takesOpenId ?? "";
+      const list = (prev[key] ?? []).map((tk) => ({
+        ...tk,
+        approved: next ? tk.id === take.id : tk.id === take.id ? false : tk.approved,
+      }));
+      return takesOpenId ? { ...prev, [key]: list } : prev;
+    });
+    try {
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: next } });
+      fetchLines(); // the line's audio / ✓ indicator now reflects the choice
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      if (takesOpenId) loadTakes(takesOpenId);
+    }
+  }
+
+  async function patchTake(take: Take, body: Record<string, unknown>) {
+    // Optimistically update the open take list, then persist.
+    setTakes((prev) => {
+      const list = prev[takesOpenId ?? ""] ?? [];
+      const next = list.map((tk) => (tk.id === take.id ? { ...tk, ...body } : tk));
+      return takesOpenId ? { ...prev, [takesOpenId]: next } : prev;
+    });
+    try {
+      await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+      if (takesOpenId) loadTakes(takesOpenId); // reload to undo the optimistic change
     }
   }
 
@@ -211,9 +459,6 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (lines === null) return <p className="text-sm text-muted-foreground">…</p>;
 
-  // Only offer "play new" for re-rendered lines that have actually finished —
-  // a re-queued line keeps its OLD audio (status flips to processing) until the
-  // job completes, so gating on completed avoids replaying the stale take.
   const newOnes = rendered.filter(
     (l) => newLineNumbers.includes(l.line_number) && l.status === "completed",
   );
@@ -260,11 +505,22 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       ) : (
         rendered.map((line) => {
           const req = line.resemble_request ?? {};
-          const sentBody = (req.body as string | undefined) ?? line.tts_body ?? line.text_for_tts ?? "";
           const model = (req.model as string | undefined) ?? null;
           const expanded = expandedId === line.id;
+          const lineTakes = takes[line.id] ?? [];
+          const takeCount = line.take_count ?? 0;
+          const regenerating = line.status === "processing";
           return (
-            <Card key={line.id} className={line.redo_requested ? "border-amber-400" : undefined}>
+            <Card
+              key={line.id}
+              className={
+                line.approved
+                  ? "border-emerald-400"
+                  : line.redo_requested
+                    ? "border-amber-400"
+                    : undefined
+              }
+            >
               <CardContent className="p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
@@ -279,6 +535,18 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                           <SourceBadge source={line.emotion_source} t={t} />
                         </span>
                       )}
+                      {regenerating && (
+                        <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-blue-800">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          {t("studio.recreating")}
+                        </span>
+                      )}
+                      {line.approved && (
+                        <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
+                          <BadgeCheck className="h-3 w-3" />
+                          {t("studio.approved")}
+                        </span>
+                      )}
                       {line.redo_requested && (
                         <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">
                           {t("studio.needsRedo")}
@@ -291,37 +559,55 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     <Button
                       size="icon"
                       variant="ghost"
+                      title={t("studio.takes")}
+                      className="relative"
+                      onClick={() => toggleTakes(line.id)}
+                    >
+                      <History className="h-4 w-4" />
+                      {takeCount > 0 && (
+                        <span className="absolute -top-1 -end-1 min-w-[16px] rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-primary-foreground">
+                          {takeCount}
+                        </span>
+                      )}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
                       title={t("studio.settings")}
-                      onClick={() => setExpandedId(expanded ? null : line.id)}
+                      onClick={() => toggleSettings(line)}
                     >
                       <Settings2 className="h-4 w-4" />
                     </Button>
                     <Button
                       size="icon"
                       variant="ghost"
-                      title={t("studio.markRedo")}
-                      onClick={() => {
-                        setRedoOpenId(redoOpenId === line.id ? null : line.id);
-                        setRedoReason(line.redo_reason ?? "");
-                        setRedoInstructions(line.redo_instructions ?? "");
-                      }}
+                      onClick={() => downloadOne(line)}
+                      title={t("studio.download")}
                     >
-                      <RotateCcw className="h-4 w-4" />
+                      <Download className="h-4 w-4" />
                     </Button>
-                    <Button
-                      size="icon"
-                      onClick={() => playOne(line)}
-                      disabled={playingId === line.id || playingAll}
-                      title={t("studio.play")}
-                    >
-                      <Play className="h-4 w-4" />
-                    </Button>
+                    {playingId === line.id ? (
+                      // Currently playing (single or as part of "play all") —
+                      // show a pause control so it's clear which line is live.
+                      <Button size="icon" onClick={stopPlayback} title={t("studio.pause")}>
+                        <Pause className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="icon"
+                        onClick={() => playOne(line)}
+                        disabled={playingAll}
+                        title={t("studio.play")}
+                      >
+                        <Play className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
 
-                {/* Settings transparency — exactly what was sent to Resemble. */}
+                {/* Combined transparency + edit + send-again panel. */}
                 {expanded && (
-                  <div className="rounded-md bg-muted/50 p-2 text-xs space-y-1.5" dir="rtl">
+                  <div className="rounded-md bg-muted/50 p-2 text-xs space-y-2" dir="rtl">
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
                       {model && <span>{t("studio.model")}: <code className="text-foreground">{model}</code></span>}
                       {req.sample_rate ? <span>{t("studio.sampleRate")}: {String(req.sample_rate)}</span> : null}
@@ -338,41 +624,143 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                         ))}
                       </div>
                     )}
-                    <div>
-                      <span className="text-muted-foreground">{t("studio.sentBody")}:</span>
-                      <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-background border p-2 text-foreground" dir="rtl">{sentBody}</pre>
+
+                    {/* Editable body (what gets sent to Resemble). */}
+                    <div className="space-y-1">
+                      <label className="font-medium">{t("studio.sentBody")}</label>
+                      <Textarea
+                        ref={editRef}
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onSelect={captureSelection}
+                        rows={3}
+                        dir="auto"
+                        className="text-sm"
+                      />
+                      <p className="text-muted-foreground">{t("studio.editHint")}</p>
+                    </div>
+
+                    {/* Word-level phonetic suggestions. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="button" size="sm" variant="ghost" onClick={suggestForWord} disabled={suggesting}>
+                        <Sparkles className={`h-4 w-4 me-1 ${suggesting ? "animate-pulse" : ""}`} />
+                        {t("studio.suggest")}
+                      </Button>
+                      <span className="text-muted-foreground">{t("studio.selectWordHint")}</span>
+                    </div>
+                    {suggestions && (
+                      <div className="space-y-1.5 rounded-md bg-background/60 p-2">
+                        {suggestions.hebrew.length === 0 && suggestions.latin.length === 0 && (
+                          <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                        )}
+                        {suggestions.hebrew.length > 0 && (
+                          <SuggestChips label={t("studio.suggestHebrew")} items={suggestions.hebrew} onPick={applySuggestion} />
+                        )}
+                        {suggestions.latin.length > 0 && (
+                          <SuggestChips label={t("studio.suggestLatin")} items={suggestions.latin} onPick={applySuggestion} />
+                        )}
+                      </div>
+                    )}
+
+                    {/* Re-analyze tone: re-run the LLM for fresh emotion + tags. */}
+                    <label className="flex flex-wrap items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={reanalyze}
+                        onChange={(e) => setReanalyze(e.target.checked)}
+                      />
+                      <span className="font-medium">{t("studio.reanalyzeTone")}</span>
+                      <span className="text-muted-foreground">({t("studio.reanalyzeHint")})</span>
+                    </label>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button size="sm" onClick={() => regenerateNow(line)} disabled={regenLineId === line.id || regenerating}>
+                        <RefreshCw className={`h-4 w-4 me-1 ${regenLineId === line.id ? "animate-spin" : ""}`} />
+                        {regenLineId === line.id ? t("studio.regenerating") : t("studio.regenerateNow")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setExpandedId(null)}>
+                        {t("studio.cancel")}
+                      </Button>
                     </div>
                   </div>
                 )}
 
-                {/* Mark-for-redo form. */}
-                {redoOpenId === line.id && (
-                  <div className="rounded-md border p-2 space-y-2" dir="rtl">
-                    <Textarea
-                      value={redoReason}
-                      onChange={(e) => setRedoReason(e.target.value)}
-                      placeholder={t("studio.redoReasonPlaceholder")}
-                      rows={2}
-                    />
-                    <Textarea
-                      value={redoInstructions}
-                      onChange={(e) => setRedoInstructions(e.target.value)}
-                      placeholder={t("studio.redoInstructionsPlaceholder")}
-                      rows={2}
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={() => markRedo(line.id)}>
-                        {t("studio.redoSubmit")}
-                      </Button>
-                      {line.redo_requested && (
-                        <Button size="sm" variant="ghost" onClick={() => clearRedo(line.id)}>
-                          <X className="h-4 w-4 me-1" /> {t("studio.clearRedo")}
-                        </Button>
-                      )}
-                      <Button size="sm" variant="outline" onClick={() => setRedoOpenId(null)}>
-                        {t("studio.cancel")}
-                      </Button>
-                    </div>
+                {/* Take history. */}
+                {takesOpenId === line.id && (
+                  <div className="rounded-md border p-2 space-y-1.5 text-xs" dir="rtl">
+                    {lineTakes.length === 0 ? (
+                      <span className="text-muted-foreground">{t("studio.noTakes")}</span>
+                    ) : (
+                      lineTakes.map((take, idx) => {
+                        const takeTags = tagsFromBody(take.text_used);
+                        return (
+                        <div
+                          key={take.id}
+                          className={`rounded p-1.5 space-y-1 ${take.approved ? "bg-emerald-50 ring-1 ring-emerald-300" : "bg-muted/40"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+                                <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.approved && (
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.inUse")}</span>
+                                )}
+                                <span>· {new Date(take.created_at).toLocaleString(locale)}</span>
+                                {take.duration_seconds ? <span>· {take.duration_seconds.toFixed(1)}s</span> : null}
+                                {takeTags.map((tg) => (
+                                  <code key={tg} className="rounded bg-background border px-1 py-0.5">{tg}</code>
+                                ))}
+                              </div>
+                              {take.text_used && (
+                                <div className="truncate" dir="auto">{take.text_used}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title={take.approved ? t("studio.chosenTake") : t("studio.useTake")}
+                                className={take.approved ? "text-emerald-600" : undefined}
+                                onClick={() => chooseTake(take)}
+                              >
+                                <BadgeCheck className="h-4 w-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => downloadTake(take, line.line_number, lineTakes.length - idx)} title={t("studio.download")}>
+                                <Download className="h-4 w-4" />
+                              </Button>
+                              {playingId === take.id ? (
+                                <Button size="icon" variant="ghost" onClick={stopPlayback} title={t("studio.pause")}>
+                                  <Pause className="h-4 w-4" />
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => playTake(take)}
+                                  disabled={playingAll}
+                                  title={t("studio.play")}
+                                >
+                                  <Play className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          {/* Per-take note: which word to keep from this take. */}
+                          <input
+                            type="text"
+                            defaultValue={take.note ?? ""}
+                            placeholder={t("studio.takeNotePlaceholder")}
+                            dir="auto"
+                            className="w-full rounded border bg-background px-2 py-1 text-xs"
+                            onBlur={(e) => {
+                              const v = e.target.value.trim();
+                              if (v !== (take.note ?? "")) patchTake(take, { note: v || null });
+                            }}
+                          />
+                        </div>
+                        );
+                      })
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -380,6 +768,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
           );
         })
       )}
+    </div>
+  );
+}
+
+function SuggestChips({
+  label,
+  items,
+  onPick,
+}: {
+  label: string;
+  items: string[];
+  onPick: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-muted-foreground">{label}:</span>
+      {items.map((s, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onPick(s)}
+          className="inline-flex items-center rounded-full border bg-background px-2 py-0.5 hover:bg-accent"
+          dir="auto"
+        >
+          {s}
+        </button>
+      ))}
     </div>
   );
 }

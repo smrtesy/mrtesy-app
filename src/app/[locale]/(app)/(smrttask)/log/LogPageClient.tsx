@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,29 @@ const statusFilters = [
   { key: "pending", labelKey: "statusPending" },
   { key: "processed", labelKey: "statusProcessed" },
 ];
+
+// Page size for the log list. The first fetch pulls one page; a quiet
+// "load more" button below the list appends the next page on demand.
+const PAGE_SIZE = 200;
+
+// Only the columns the UI actually renders/filters on. Deliberately NOT "*":
+// source_messages carries wide fields (body_text, raw message payloads) that
+// would make the default 48h view transfer megabytes. Note: the "all history"
+// search still matches on body_text server-side — filtering doesn't require
+// selecting the column.
+const SELECT_COLUMNS =
+  "id, serial_display, source_type, source_id, processing_status, ai_classification, received_at, created_at, subject, sender, sender_email, recipient, source_url, " +
+  "log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), " +
+  "tasks!source_message_id(id, serial_display, status, manually_verified)";
+
+// Merge the two timestamps into one sort key so the list is ordered by the
+// date each row actually shows (processed time when present, else ingestion
+// time) — otherwise pending items (no log_created_at) drift out of order.
+function byDisplayDateDesc(a: SourceEntry, b: SourceEntry): number {
+  const da = new Date(a.log_created_at || a.created_at).getTime();
+  const db = new Date(b.log_created_at || b.created_at).getTime();
+  return db - da;
+}
 
 const RECLASSIFY_OPTIONS = [
   { value: "actionable", labelKey: "classActionable" },
@@ -107,14 +130,28 @@ export function LogPageClient({ locale }: { locale: string }) {
   // refresh key that keeps the export button's "pending" badge in sync.
   const [correctionDraft, setCorrectionDraft] = useState<CorrectionDraft | null>(null);
   const [correctionsRefreshKey, setCorrectionsRefreshKey] = useState(0);
+  // "Search all history": when on (and a query is typed) the 48h window is
+  // dropped and the search runs server-side across the user's whole stored
+  // history. Debounced so we don't fire a query on every keystroke.
+  const [searchAllHistory, setSearchAllHistory] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Pagination: hasMore is true when the last fetch returned a full page;
+  // fetchedCountRef tracks the raw row offset for the next page request.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const fetchedCountRef = useRef(0);
 
   const dateFmtLocale = locale === "he" ? "he-IL" : "en-US";
-  const dateFormatter = new Intl.DateTimeFormat(dateFmtLocale, {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(dateFmtLocale, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    [dateFmtLocale],
+  );
 
   // Close reclassify dropdown when clicking outside any [data-reclassify] element
   useEffect(() => {
@@ -127,21 +164,49 @@ export function LogPageClient({ locale }: { locale: string }) {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [reclassifyOpenId]);
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setLoading(false); return; }
+  // Debounce the query that drives the server-side "all history" search so a
+  // fresh DB round-trip only fires ~300ms after the user stops typing.
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
 
-    // Show every item from the last 48 hours — not just the newest 200.
-    // The window is defined on ingestion time (created_at); the high limit is
-    // only a safety net so a busy 48h window is never silently truncated.
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  // Effective search derived from the DEBOUNCED query — one source of truth
+  // shared by the fetch and the client-side filter. `historyMode` is true only
+  // once the box is ticked AND the term is long enough to be worth a full-
+  // history scan. `historySearchKey` collapses to "" whenever we are NOT doing
+  // a history search, so typing with the box off never changes fetchLogs' deps
+  // (no DB round-trip / skeleton flash on every keystroke).
+  const searchTerm = debouncedQuery.replace(/[,()*%\\"]/g, " ").trim();
+  const historyMode = searchAllHistory && searchTerm.length >= 2;
+  const historySearchKey = historyMode ? searchTerm : "";
+
+  /** Fetch one page of log rows starting at raw-row offset `from`, fully
+   *  mapped (log entry merged in, routed task ids resolved). Shared by the
+   *  initial fetch and "load more". Returns rawCount so callers can tell
+   *  whether the page was full (i.e. more rows likely exist). */
+  const fetchPage = useCallback(async (from: number) => {
+    // Two modes:
+    //  • default — items from the last 48 hours (window on ingestion time
+    //    created_at), newest first, one page at a time.
+    //  • "search all history" — the 48h window is dropped and the query is
+    //    filtered server-side across the user's ENTIRE stored history, so an
+    //    email / WhatsApp / Drive item from weeks ago is findable. The match
+    //    covers the human-meaningful columns plus body_text (message content),
+    //    so a hit inside the body still surfaces the row.
     let query = supabase
       .from("source_messages")
-      .select("*, log_entries!log_source_msg_fk(classification_reason, task_title, task_id, error_message, status, ai_model_used, ai_input_tokens, ai_output_tokens, ai_cost_usd, processing_duration_ms, pre_classification, details, created_at), tasks!source_message_id(id, serial_display, status, manually_verified)")
-      .gte("created_at", cutoff)
+      .select(SELECT_COLUMNS)
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (historyMode) {
+      const cols = ["subject", "sender", "sender_email", "recipient", "serial_display", "body_text"];
+      query = query.or(cols.map((c) => `${c}.ilike.*${historySearchKey}*`).join(","));
+    } else {
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      query = query.gte("created_at", cutoff);
+    }
 
     if (sourceFilter !== "all") {
       if (sourceFilter === "whatsapp") {
@@ -155,7 +220,11 @@ export function LogPageClient({ locale }: { locale: string }) {
       query = query.eq("processing_status", statusFilter);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+    // Surface failed pages instead of silently rendering an empty list.
+    // No user-facing error surface exists in this component (all fetches are
+    // best-effort), so log-only.
+    if (error) console.error("[log] source_messages page fetch failed:", error.message);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mapped = (data || []).map((row: any) => {
       const logArr = row.log_entries || [];
@@ -238,21 +307,42 @@ export function LogPageClient({ locale }: { locale: string }) {
       }
     }
 
-    // Merge the two timestamps into one sort key so the list is ordered by the
-    // date each row actually shows (processed time when present, else ingestion
-    // time) — otherwise pending items (no log_created_at) drift out of order.
-    mapped.sort((a: SourceEntry, b: SourceEntry) => {
-      const da = new Date(a.log_created_at || a.created_at).getTime();
-      const db = new Date(b.log_created_at || b.created_at).getTime();
-      return db - da;
-    });
+    return { rows: mapped as SourceEntry[], rawCount: (data || []).length };
+  }, [supabase, sourceFilter, statusFilter, historyMode, historySearchKey]);
 
-    setLogs(mapped as SourceEntry[]);
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setLoading(false); return; }
+
+    const { rows, rawCount } = await fetchPage(0);
+    rows.sort(byDisplayDateDesc);
+    setLogs(rows);
+    fetchedCountRef.current = rawCount;
+    setHasMore(rawCount === PAGE_SIZE);
     setLoading(false);
 
     const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").split(",").map((e) => e.trim().toLowerCase());
     setIsAdmin(adminEmails.includes(user.email?.toLowerCase() || ""));
-  }, [supabase, sourceFilter, statusFilter]);
+  }, [supabase, fetchPage]);
+
+  /** Append the next page. Dedupes by id (offset pagination can re-serve a
+   *  row when new items arrive between fetches) and re-sorts the merged list
+   *  by display date so appended rows interleave correctly. */
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const { rows, rawCount } = await fetchPage(fetchedCountRef.current);
+    fetchedCountRef.current += rawCount;
+    setHasMore(rawCount === PAGE_SIZE);
+    setLogs((prev) => {
+      const seen = new Set(prev.map((r) => r.id));
+      const merged = [...prev, ...rows.filter((r) => !seen.has(r.id))];
+      merged.sort(byDisplayDateDesc);
+      return merged;
+    });
+    setLoadingMore(false);
+  }, [fetchPage, hasMore, loadingMore]);
 
   useEffect(() => {
     fetchLogs();
@@ -380,17 +470,24 @@ export function LogPageClient({ locale }: { locale: string }) {
 
   // Free-text search over the loaded entries — matches across every
   // human-meaningful field so the user can find an item by subject, sender,
-  // reason, task title, serial, etc.
+  // reason, task title, serial, etc. Skip it ONLY when a history search is
+  // actually running (box on AND term long enough) — then the server already
+  // filtered the full history, so render as-is. With the box on but the term
+  // still too short, we keep narrowing the 48h window client-side.
   const q = searchQuery.trim().toLowerCase();
-  const displayedLogs = q
-    ? logs.filter((l) =>
-        [
-          l.subject, l.sender, l.sender_email, l.recipient,
-          l.classification_reason, l.task_title, l.task_serial,
-          l.serial_display, l.source_type, l.ai_classification, l.error_message,
-        ].some((v) => v && v.toLowerCase().includes(q)),
-      )
-    : logs;
+  const displayedLogs = useMemo(
+    () =>
+      q && !historyMode
+        ? logs.filter((l) =>
+            [
+              l.subject, l.sender, l.sender_email, l.recipient,
+              l.classification_reason, l.task_title, l.task_serial,
+              l.serial_display, l.source_type, l.ai_classification, l.error_message,
+            ].some((v) => v && v.toLowerCase().includes(q)),
+          )
+        : logs,
+    [logs, q, historyMode],
+  );
 
   return (
     <>
@@ -420,6 +517,22 @@ export function LogPageClient({ locale }: { locale: string }) {
         </div>
         <CorrectionsExportButton refreshKey={correctionsRefreshKey} />
       </div>
+
+      {/* "Search all history" — quiet: only shown once the user is actually
+          searching. Ticking it drops the 48h window and runs the search
+          server-side across the whole stored history (incl. message body). */}
+      {searchQuery.trim().length > 0 && (
+        <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={searchAllHistory}
+            onChange={(e) => setSearchAllHistory(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-muted-foreground/40 accent-primary"
+          />
+          <span className="font-medium text-foreground/80">{tLog("searchAllHistory")}</span>
+          <span className="truncate">{tLog("searchAllHistoryHint")}</span>
+        </label>
+      )}
 
       {/* Source Filter Tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-1">
@@ -813,6 +926,21 @@ export function LogPageClient({ locale }: { locale: string }) {
               </div>
             );
           })}
+
+          {/* Quiet "load more": only when the last fetch returned a full
+              page. Small centered ghost button — per the compact-UI rule. */}
+          {hasMore && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded-full px-3 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                {loadingMore ? tLog("loadingMore") : tLog("loadMore")}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -30,6 +30,9 @@ export interface Character {
   default_pitch: number;
   default_pace: "slow" | "normal" | "fast";
   personality_prompt: string | null;
+  // Resemble WRAP tag names applied to every line as this character's
+  // register/pace "melody" backbone (e.g. ["lower-pitch","slow"]).
+  style_baseline_tags: string[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -134,6 +137,7 @@ export interface ScriptSpeaker {
   speaker_name: string;
   character_id: string | null;
   resemble_voice_id: string | null;
+  skip: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -148,7 +152,7 @@ export type LineStatus =
 export interface ScriptLine {
   id: string;
   org_id: string;
-  project_id: string;
+  script_id: string;
   line_number: number;
   scene_title: string | null;
   speaker_name: string;
@@ -178,12 +182,30 @@ export interface ScriptLine {
   attempt_count: number;
   error_message: string | null;
   generation_cost_usd: number | null;
+  approved: boolean;
   redo_requested: boolean;
   redo_reason: string | null;
   redo_instructions: string | null;
   redone_at: string | null;
   created_at: string;
   updated_at: string;
+  // Computed by the lines endpoint (not a column): how many takes this line has.
+  take_count?: number;
+}
+
+export interface LineTake {
+  id: string;
+  org_id: string;
+  line_id: string;
+  script_id: string | null;
+  text_used: string | null;
+  model: string | null;
+  output_audio_path: string;
+  duration_seconds: number | null;
+  cost_usd: number | null;
+  approved: boolean;
+  note: string | null;
+  created_at: string;
 }
 
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -192,6 +214,7 @@ export interface Job {
   id: string;
   org_id: string;
   project_id: string;
+  script_id: string | null;
   created_by: string;
   job_type:
     | "parse_script"
@@ -217,7 +240,10 @@ export interface PronunciationEntry {
   org_id: string;
   created_by: string;
   original_word: string;
+  // A PHONETIC RESPELLING sent to Resemble verbatim — Hebrew respelling or a
+  // Latin transliteration, chosen per-word. Never niqqud.
   pronounced_as: string;
+  language: "he" | "en";
   category: "general" | "chabad" | "name" | "theophilic_name" | "place" | "foreign";
   notes: string | null;
   created_at: string;
@@ -242,9 +268,12 @@ export interface Settings {
   postprocess_enabled: boolean;
   postprocess_compress: boolean;
   postprocess_speed: number;
+  postprocess_normalize: boolean;
+  postprocess_target_db: number;
   notify_on_completion: boolean;
   notify_on_budget_warn: boolean;
   notify_via_whatsapp: boolean;
+  sample_text: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -280,9 +309,18 @@ export interface CreateJobRequest {
   llm_model?: string;
   code?: string;
   line_numbers?: number[];
+  // Notation-agnostic per-org pronunciation lexicon (Hebrew or Latin
+  // replacements, applied verbatim by voice-engine).
+  pronunciation?: Array<{ word: string; replacement: string; language: string }>;
+  // regenerate_line only: verbatim per-line text edits sent to voice-engine.
+  line_overrides?: Array<{ line_number: number; text_for_tts: string }>;
+  // regenerate_line only: line numbers to re-run through the LLM (fresh tone).
+  reprocess_line_numbers?: number[];
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
+  postprocess_normalize?: boolean;
+  postprocess_target_db?: number;
   callback_url: string;
   callback_secret?: string;
   characters?: Array<{ name: string; resemble_voice_id?: string }>;
@@ -350,6 +388,7 @@ export interface CreateCharacterRequest {
   age_years?: number;
   gender?: "male" | "female" | "neutral";
   personality_prompt?: string;
+  style_baseline_tags?: string[];
 }
 
 export interface CreateVoiceProfileRequest {
@@ -372,4 +411,5 @@ export interface UpdateLineRequest {
   final_pitch?: number;
   final_pace?: "slow" | "normal" | "fast";
   status?: LineStatus;
+  approved?: boolean;
 }

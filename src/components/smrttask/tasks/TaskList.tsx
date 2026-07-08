@@ -37,22 +37,22 @@ import { Button } from "@/components/ui/button";
 import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import {
-  effectiveDeadline,
-  dueUrgency,
   sittingWorkdays,
   autoSnoozeMoment,
+  eventReminderMoment,
+  todayISO,
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, GripVertical, ExternalLink } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
-type ContextFilter = "all" | "home" | "work";
+type ContextFilter = "all" | "home" | "office" | "outside";
 
 /** Plan metadata (needs/blocked state) for MY plan tasks, keyed by task id. */
 interface PlanMeta {
@@ -83,12 +83,12 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
   );
 }
 
-/** Identifiers for the four drop zones. A cross-list drop maps to the target
- *  list's (pinned, size) signature; see handleDragEnd. */
-const LIST_QUICK = "list:desk-quick";
-const LIST_REGULAR = "list:desk-regular";
-const LIST_IMPORTANT = "list:important";
-const LIST_WAITING = "list:waiting";
+/** Drop zones on the daily "היום" screen. Drag only reorders WITHIN a list
+ *  (today_position); moving a task in/out of Today is done with the +/− button
+ *  (planned_for), not drag. */
+const LIST_QUICK = "list:today-quick";   // all quick tasks (do them all today)
+const LIST_REGULAR = "list:today-picked"; // medium/big picked for today
+const LIST_POOL = "list:pool";           // undated medium/big not picked — collapsed pool
 
 /** A list that is both a sortable context (reorder within) and a droppable
  *  target (so a row can be dragged in from another list, even when empty). */
@@ -102,17 +102,16 @@ function DroppableList({ id, items, children }: { id: string; items: string[]; c
 }
 
 /**
- * The desk page — four lists, assigned in priority order (active = not blocked,
- * not snoozed; snoozed rows aren't fetched):
- *   מהיר – עכשיו / רגיל – עכשיו — manually pinned (today_position) tasks, split
- *               by size. Pinning wins: a task you put on the desk lives here
- *               even if its deadline is near.
- *   חשוב       — the radar: anything with an effective deadline within 3 working
- *               days, plus any regular task you haven't pinned and didn't give a
- *               far-off deadline (e.g. a regular task you just created).
- *   ממתינות   — the rest: unpinned quick tasks with no near deadline, regular
- *               tasks parked behind a far deadline, and blocked tasks.
- *   הושלמו    — collapsed, with reopen.
+ * The desk page — every active task is on the desk (active = not snoozed;
+ * snoozed rows aren't fetched). A task leaves only by being completed or
+ * dismissed — there is no ממתינות holding pile. Three lists by nature:
+ *   מהיר – עכשיו — every quick task (size==="quick").
+ *   רגיל – עכשיו — every regular task, except those a near deadline pulls into חשוב.
+ *   חשוב         — the deadline radar: regular tasks with an effective deadline
+ *                  within 3 working days.
+ *   הושלמו       — collapsed, with reopen.
+ * (today_position now only orders rows within מהיר / רגיל; snooze is the
+ * deliberate "not now" path that hides a task until it should resurface.)
  */
 export function TaskList({ locale, title }: { locale: string; title?: string }) {
   const t = useTranslations("tasks");
@@ -131,10 +130,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [planMeta, setPlanMeta] = useState<Map<string, PlanMeta>>(new Map());
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [showPool, setShowPool] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [contextFilter, setContextFilter] = useState<ContextFilter>("work");
+  const [contextFilter, setContextFilter] = useState<ContextFilter>("office");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
 
@@ -267,87 +267,76 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
   }, [fetchTasks, supabase]);
 
-  // ── partition: desk / waiting ───────────────────────────────────────────────
+  // ── partition: desk lists (מהיר / רגיל / חשוב) ───────────────────────────────
 
   const unsatisfiedOf = useCallback((task: Task): TaskNeed[] => {
     const needs = planMeta.get(task.id)?.needs ?? task.needs ?? [];
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
-  /** Which of the four lists a task belongs to — the single source of truth for
-   *  both the partition below and the drag-drop "will this drop stick?" check.
-   *  Priority order: blocked → ממתינות; pinning wins; then the deadline radar;
-   *  then unpinned regular tasks without a deadline; everything else waits. */
-  const bucketOf = useCallback((task: Task): string => {
-    if (unsatisfiedOf(task).length > 0) return LIST_WAITING;
-    if (task.today_position != null) return task.size === "quick" ? LIST_QUICK : LIST_REGULAR;
-    const deadline = effectiveDeadline(task);
-    if (deadline && dueUrgency(deadline, blocked) !== "far") return LIST_IMPORTANT;
-    if (task.size === "regular" && !deadline) return LIST_IMPORTANT;
-    return LIST_WAITING;
-  }, [unsatisfiedOf, blocked]);
+  // Today's local date — the anchor for planned_for ("היום").
+  const todayStr = todayISO();
 
-  const { deskQuick, deskRegular, important, waiting, reviewCandidates } = useMemo(() => {
+  /** Where a task sits on the "היום" screen. Nothing is hidden — every active
+   *  (non-snoozed, verified) task lands in Today or the pool:
+   *  - quick tasks are always in Today (do all quick daily) → LIST_QUICK
+   *  - anything planned_for today (the picked medium/big) → LIST_REGULAR
+   *  - a dated task that's due today/overdue, or one that just woke from snooze
+   *    to demand attention, surfaces in Today → LIST_REGULAR
+   *  - everything else (undated, or a future date not yet due) → collapsed pool. */
+  const bucketOf = useCallback((task: Task): string => {
+    if (task.size === "quick") return LIST_QUICK;
+    if (task.planned_for === todayStr) return LIST_REGULAR;
+    if (task.due_date && task.due_date <= todayStr) return LIST_REGULAR;
+    if (task.woke_from_snooze_at) return LIST_REGULAR;
+    return LIST_POOL;
+  }, [todayStr]);
+
+  const { deskQuick, deskRegular, pool, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
-      if (contextFilter === "work") return task.context !== "home";
+      if (contextFilter === "outside") return task.context === "outside";
+      // Office is the quiet default: everything that isn't explicitly home/outside
+      // (null or the legacy 'work' value).
+      if (contextFilter === "office") return task.context !== "home" && task.context !== "outside";
       return true;
     });
 
     const quickList: Task[] = [];
-    const regularList: Task[] = [];
-    const importantList: Task[] = [];
-    const waitingList: Task[] = [];
+    const pickedList: Task[] = [];
+    const poolList: Task[] = [];
     for (const task of visible) {
       switch (bucketOf(task)) {
         case LIST_QUICK: quickList.push(task); break;
-        case LIST_REGULAR: regularList.push(task); break;
-        case LIST_IMPORTANT: importantList.push(task); break;
-        default: waitingList.push(task);
+        case LIST_REGULAR: pickedList.push(task); break;
+        case LIST_POOL: poolList.push(task); break;
+        default: break; // hidden (dated, not today)
       }
     }
 
-    // Desk order: manual position ascending (all desk rows are pinned).
+    // Today order: manual position ascending (drag-reorder within a list).
     const byPosition = (a: Task, b: Task) => (a.today_position ?? 0) - (b.today_position ?? 0);
-
-    // ממתינות order: deadline asc (undated last), then priority, then newest.
-    const byUrgency = (a: Task, b: Task) => {
-      const da = effectiveDeadline(a);
-      const db = effectiveDeadline(b);
-      if (da && db && da !== db) return da.localeCompare(db);
-      if (da && !db) return -1;
-      if (!da && db) return 1;
+    // Pool order: priority, then newest — so the pool reads worst-first.
+    const byPriority = (a: Task, b: Task) => {
       const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
       if (rank !== 0) return rank;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     };
-    // חשוב order: the unpinned regular pile (undated) on top, newest first — so a
-    // freshly added regular task lands at the very head of חשוב — then the dated
-    // near-deadline items below, soonest first.
-    const byImportant = (a: Task, b: Task) => {
-      const da = effectiveDeadline(a);
-      const db = effectiveDeadline(b);
-      if (!da && !db) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-      if (!da) return -1; // undated floats above dated
-      if (!db) return 1;
-      if (da !== db) return da.localeCompare(db);
-      const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
-      if (rank !== 0) return rank;
-      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-    };
-    const importantSorted = [...importantList].sort(byImportant);
-    const waitingSorted = [...waitingList].sort(byUrgency);
 
-    const review = waitingSorted.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
+    // The review banner surfaces stale pool tasks to prune (complete or dismiss).
+    const review = poolList.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
       deskQuick: [...quickList].sort(byPosition),
-      deskRegular: [...regularList].sort(byPosition),
-      important: importantSorted,
-      waiting: waitingSorted,
+      deskRegular: [...pickedList].sort(byPosition),
+      pool: [...poolList].sort(byPriority),
       reviewCandidates: review,
     };
   }, [tasks, contextFilter, blocked, bucketOf]);
+
+  // Soft daily quota: 3 medium + 1 big picked for today (over → gentle warning).
+  const pickedMedium = deskRegular.filter((task) => task.size === "medium").length;
+  const pickedBig = deskRegular.filter((task) => task.size === "big").length;
 
   // Open focused task detail after load (deep links: ?focus=<id>)
   useEffect(() => {
@@ -447,8 +436,18 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
   }
 
-  function handleSizeToggle(taskId: string, size: "quick" | "regular") {
-    patchTask(taskId, { size }, (task) => ({ ...task, size }));
+  function handleSizeToggle(taskId: string, size: "quick" | "medium" | "big") {
+    // Marking a task "quick" (⚡) means "do it now" — pin it onto the desk's
+    // מהיר – עכשיו section so it surfaces there by default instead of being
+    // left in ממתינות. (Switching back to regular only changes the size; the
+    // desk position, if any, is kept so it moves to רגיל – עכשיו.)
+    if (size === "quick") {
+      const maxPos = tasks.reduce((m, task) => Math.max(m, task.today_position ?? -1), -1);
+      const patch = { size, today_position: maxPos + 1 };
+      patchTask(taskId, patch, (task) => ({ ...task, ...patch }));
+    } else {
+      patchTask(taskId, { size }, (task) => ({ ...task, size }));
+    }
   }
 
   /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */
@@ -459,16 +458,25 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       .catch((e) => { toast.error((e as Error).message); fetchTasks(); });
   }, [fetchTasks]);
 
-  async function handleDueChange(taskId: string, date: string | null) {
+  async function handleDueChange(taskId: string, date: string | null, time: string | null = null) {
+    // A due date WITH a time is an EVENT (task_type=meeting): it resurfaces as a
+    // reminder one working day before, instead of the regular two-day auto-snooze.
+    // Clearing the time reverts an event back to a plain task.
+    const isEvent = !!date && !!time;
+    const wasMeeting = tasks.find((tk) => tk.id === taskId)?.task_type === "meeting";
+    const nextType = isEvent ? "meeting" : wasMeeting ? "action" : undefined;
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (nextType) patch.task_type = nextType;
     // Persist the due date FIRST and wait for it: the snooze route below reads
     // due_date from the DB to clamp the wake moment to the deadline, so it must
     // see the value we just set (and we must not snooze if the date write failed).
-    const ok = await patchTask(taskId, { due_date: date }, (task) => ({ ...task, due_date: date }));
-    // Setting a due date auto-snoozes the item until two working days before it,
-    // so it disappears from the desk/waiting lists now and resurfaces in time.
-    // Skipped when there isn't enough lead time (autoSnoozeMoment → null).
+    const ok = await patchTask(taskId, patch, (task) => ({ ...task, ...patch } as Task));
+    // Setting a due date auto-snoozes the item until it needs attention (two
+    // working days before for a task, one for an event), so it leaves the desk
+    // now and resurfaces in time. Skipped when there isn't enough lead time
+    // (moment → null).
     if (!ok || !date) return;
-    const moment = autoSnoozeMoment(date, blocked);
+    const moment = isEvent ? eventReminderMoment(date, blocked) : autoSnoozeMoment(date, blocked);
     if (!moment) return;
     optimisticRemove(taskId); // optimistic hide until it resurfaces near the deadline
     api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: moment.iso } })
@@ -481,15 +489,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       changeLabel: t("undo.changeDate"),
       onChange: () => setSnoozeTaskId(taskId),
     });
-  }
-
-  function handleMove(taskId: string, toDesk: boolean) {
-    if (toDesk) {
-      const maxPos = tasks.reduce((m, task) => Math.max(m, task.today_position ?? -1), -1);
-      patchTask(taskId, { today_position: maxPos + 1 }, (task) => ({ ...task, today_position: maxPos + 1 }));
-    } else {
-      patchTask(taskId, { today_position: null }, (task) => ({ ...task, today_position: null }));
-    }
   }
 
   function handleDelete(taskId: string) {
@@ -534,7 +533,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const contextChips: { key: ContextFilter; label: string; icon?: typeof Home }[] = [
     { key: "all", label: t("contextFilter.all") },
     { key: "home", label: t("contextFilter.home"), icon: Home },
-    { key: "work", label: t("contextFilter.work"), icon: Briefcase },
+    { key: "office", label: t("contextFilter.office"), icon: Briefcase },
+    { key: "outside", label: t("contextFilter.outside"), icon: MapPin },
   ];
 
   function renderRow(task: Task, zone: RowZone) {
@@ -546,13 +546,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         zone={zone}
         blocked={blocked}
         unsatisfiedNeeds={unsatisfiedOf(task)}
-        autoPromoted={zone === "desk" && task.today_position == null}
         onToggleDone={handleToggleDone}
         onOpen={handleSelect}
         onSnooze={(id) => setSnoozeTaskId(id)}
-        onMove={handleMove}
         onSizeToggle={handleSizeToggle}
         onDueChange={task.plan_id ? undefined : handleDueChange}
+        onPlanToggle={handlePlanToggle}
+        plannedToday={task.planned_for === todayStr}
       />
     );
   }
@@ -560,7 +560,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   /** Persist a desk column's order: write today_position 0..n to `ids` in order,
    *  and (when a row is crossing in from another list) set its size. Optimistic
    *  + pending-reconciled so a racing refetch can't undo it. */
-  async function applyDeskOrder(ids: string[], crossingId: string | null, crossingSize: "quick" | "regular" | null) {
+  async function applyDeskOrder(ids: string[], crossingId: string | null, crossingSize: "quick" | "medium" | "big" | null) {
     const posById = new Map(ids.map((id, i) => [id, i]));
     const bodyFor = (id: string): Record<string, unknown> => {
       const body: Record<string, unknown> = { today_position: posById.get(id)! };
@@ -573,10 +573,12 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     const now = Date.now();
     for (const id of ids) pendingEditsRef.current.set(id, { patch: bodyFor(id), confirmedAt: null, at: now });
     try {
-      const results = await Promise.all(
-        ids.map((id) => api<{ task: Task }>(`/api/tasks/${id}`, { method: "PATCH", body: bodyFor(id) })),
+      // One batch request for the whole column (previously one PATCH per row).
+      const { tasks: saved } = await api<{ tasks: { id: string; updated_at: string | null }[] }>(
+        "/api/tasks/reorder",
+        { method: "PATCH", body: { items: ids.map((id) => ({ id, ...bodyFor(id) })) } },
       );
-      for (const { task } of results) {
+      for (const task of saved ?? []) {
         const pend = task?.id ? pendingEditsRef.current.get(task.id) : undefined;
         if (pend && task?.updated_at) {
           pendingEditsRef.current.set(task.id, { ...pend, confirmedAt: task.updated_at, at: Date.now() });
@@ -589,18 +591,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
   }
 
-  /** Drag end — reorder within a desk column, or move a row to another list.
-   *  Each list is defined by a (pinned, size) signature, so a cross-list drop is
-   *  just a patch of today_position + size; the deadline radar still overrides
-   *  (a near-deadline row always lands in חשוב when unpinned). */
+  /** Drag reorders WITHIN a Today list only (quick / picked). Moving a task in
+   *  or out of Today is done with the +/− button (planned_for), not drag; the
+   *  pool has no manual order. */
   async function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over) return;
+    if (!over || active.id === over.id) return;
     const lists: Record<string, Task[]> = {
       [LIST_QUICK]: deskQuick,
       [LIST_REGULAR]: deskRegular,
-      [LIST_IMPORTANT]: important,
-      [LIST_WAITING]: waiting,
+      [LIST_POOL]: pool,
     };
     const containerOf = (id: string | number): string | null => {
       const s = String(id);
@@ -609,51 +609,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
     const from = containerOf(active.id);
     const to = containerOf(over.id);
-    if (!from || !to) return;
-    const isDesk = (k: string) => k === LIST_QUICK || k === LIST_REGULAR;
-    const activeId = String(active.id);
+    // Only reorder within the same orderable Today list.
+    if (!from || from !== to || (from !== LIST_QUICK && from !== LIST_REGULAR)) return;
+    const column = lists[from];
+    const oldIndex = column.findIndex((row) => row.id === String(active.id));
+    const newIndex = column.findIndex((row) => row.id === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
+  }
 
-    if (from === to) {
-      // חשוב / ממתינות have no persistent manual order — only desk columns reorder.
-      if (!isDesk(to) || active.id === over.id) return;
-      const column = lists[to];
-      const oldIndex = column.findIndex((row) => row.id === activeId);
-      const newIndex = column.findIndex((row) => row.id === String(over.id));
-      if (oldIndex < 0 || newIndex < 0) return;
-      await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
-      return;
-    }
-
-    // Cross-list move. A blocked task is forced to ממתינות by the partition, so
-    // moving it elsewhere would just snap back — ignore the drop.
-    const task = tasks.find((row) => row.id === activeId);
-    if (!task || unsatisfiedOf(task).length > 0) return;
-
-    if (isDesk(to)) {
-      // Pinning wins over the deadline radar, so a desk drop always sticks.
-      const size = to === LIST_QUICK ? "quick" : "regular";
-      const column = lists[to];
-      const overIdx = column.findIndex((row) => row.id === String(over.id));
-      const insertAt = overIdx >= 0 ? overIdx : column.length;
-      const ids = column.map((row) => row.id);
-      ids.splice(insertAt, 0, activeId);
-      await applyDeskOrder(ids, activeId, size);
-      return;
-    }
-
-    // חשוב = unpinned regular (so the unpinned-regular rule holds it);
-    // ממתינות = unpinned quick. But the deadline radar overrides both: a
-    // near-deadline task always lands in חשוב, and a far-dated regular task
-    // always lands in ממתינות. If this drop wouldn't stick, say so instead of
-    // silently letting it bounce.
-    const patch = to === LIST_IMPORTANT
-      ? { today_position: null, size: "regular" as const }
-      : { today_position: null, size: "quick" as const };
-    if (bucketOf({ ...task, ...patch }) !== to) {
-      toast.error(t("dndDeadlineLocked"));
-      return;
-    }
-    patchTask(activeId, patch, (row) => ({ ...row, ...patch }));
+  /** Add a task to / remove it from today's plan (planned_for). */
+  function handlePlanToggle(taskId: string, addToToday: boolean) {
+    const planned_for = addToToday ? todayStr : null;
+    patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
   }
 
   /** One drop zone: sortable + droppable, with a grip per row. */
@@ -727,24 +695,28 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
           />
 
           <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-          {/* ── ON THE DESK — quick stacked above regular (full width each,
-                 so rows never get cramped) ──────────────────────────────── */}
+          {/* ── היום — all quick + the picked medium/big, with a soft quota ── */}
           <section className="space-y-4">
-            {/* Quick */}
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{t("desk.today")}</h2>
+              <span className={cn("text-xs font-medium", pickedMedium > 3 ? "text-status-late" : "text-muted-foreground")}>
+                {t("desk.mediumQuota", { n: pickedMedium })}
+              </span>
+              <span className={cn("text-xs font-medium", pickedBig > 1 ? "text-status-late" : "text-muted-foreground")}>
+                {t("desk.bigQuota", { n: pickedBig })}
+              </span>
+            </div>
+
+            {/* Quick — do them all; marathon run available */}
             <div>
               <div className="mb-2 flex items-center gap-2">
-                <h2 className="flex items-center gap-1 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                <h3 className="flex items-center gap-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   <Zap className="h-3.5 w-3.5 text-status-warn" />
                   {t("desk.quick")}
                   <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskQuick.length}</span>
-                </h2>
+                </h3>
                 {deskQuick.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ms-auto h-7 gap-1 text-xs"
-                    onClick={() => setMarathonMode("quick")}
-                  >
+                  <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("quick")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
                   </Button>
@@ -753,47 +725,43 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"))}
             </div>
 
-            {/* Regular — same run feature as the quick column */}
+            {/* Picked medium/big for today */}
             <div>
               <div className="mb-2 flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                  {t("desk.regular")}
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {t("desk.picked")}
                   <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
-                </h2>
+                </h3>
                 {deskRegular.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ms-auto h-7 gap-1 text-xs"
-                    onClick={() => setMarathonMode("regular")}
-                  >
+                  <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("regular")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
                   </Button>
                 )}
               </div>
-              {renderList(LIST_REGULAR, deskRegular, "desk", t("desk.emptyRegular"))}
+              {renderList(LIST_REGULAR, deskRegular, "desk", t("desk.emptyPicked"))}
             </div>
           </section>
-
-          {/* ── IMPORTANT (חשוב) — deadline radar + the unpinned regular pile ── */}
-          <section>
-            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              {t("desk.important")}
-              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
-            </h2>
-            {renderList(LIST_IMPORTANT, important, "important", t("desk.emptyImportant"))}
-          </section>
-
-          {/* ── WAITING ──────────────────────────────────────────────── */}
-          <section>
-            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              {t("desk.waiting")}
-              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{waiting.length}</span>
-            </h2>
-            {renderList(LIST_WAITING, waiting, "waiting", t("noTasksInView"))}
-          </section>
           </DndContext>
+
+          {/* ── בריכה (collapsed) — undated medium/big not picked for today ── */}
+          <section>
+            <button
+              className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground"
+              onClick={() => setShowPool((v) => !v)}
+            >
+              {showPool ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {t("desk.pool")}
+              <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{pool.length}</span>
+            </button>
+            {showPool && (
+              pool.length === 0 ? (
+                <p className="py-2 text-center text-sm text-muted-foreground">{t("desk.emptyPool")}</p>
+              ) : (
+                <div className="space-y-2">{pool.map((task) => renderRow(task, "waiting"))}</div>
+              )
+            )}
+          </section>
 
           {/* ── COMPLETED (collapsible) ──────────────────────────────── */}
           <section>
@@ -849,7 +817,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             // "Wrong column" — flip to the OTHER size and drop from this run.
             await api(`/api/tasks/${taskId}`, {
               method: "PATCH",
-              body: { size: marathonMode === "quick" ? "regular" : "quick" },
+              body: { size: marathonMode === "quick" ? "medium" : "quick" },
             });
             fetchTasks();
           }}
