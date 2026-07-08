@@ -343,7 +343,7 @@ export function MarathonMode({
                 label={isQuickNow ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
                 color="amber"
                 className={isQuickNow ? "text-status-warn" : undefined}
-                onClick={() => patchCurrent({ size: isQuickNow ? "regular" : "quick" })}
+                onClick={() => patchCurrent({ size: isQuickNow ? "medium" : "quick" })}
               >
                 <Zap className={isQuickNow ? "fill-current" : undefined} />
               </IconButton>

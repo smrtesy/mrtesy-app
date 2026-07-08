@@ -70,6 +70,8 @@
     "tabInfo": "Info",
     "sizeQuick": "Quick",
     "sizeRegular": "Regular",
+    "sizeMedium": "Medium",
+    "sizeBig": "Big",
     "contextHome": "Home",
     "contextOutside": "Outside",
     "moreOptions": "More options",
@@ -582,10 +584,14 @@
       "sittingHint": "Working days without interaction",
       "sizeQuick": "Quick",
       "sizeRegular": "Regular",
+      "sizeMedium": "Medium",
+      "sizeBig": "Big",
       "sizeQuickHint": "Quick task — click to make regular",
       "sizeRegularHint": "Regular task — click to make quick",
       "moveToDesk": "Move to desk",
-      "moveToWaiting": "Move to waiting"
+      "moveToWaiting": "Move to waiting",
+      "addToToday": "Add to today",
+      "removeFromToday": "Remove from today"
     },
     "desk": {
       "quick": "Quick – now",
@@ -594,9 +600,17 @@
       "waiting": "Waiting",
       "completed": "Completed",
       "startRun": "Start run",
-      "emptyQuick": "No quick tasks on the desk — pull from waiting or create one",
+      "today": "Today",
+      "picked": "Picked for today",
+      "pool": "Pool",
+      "mediumQuota": "Medium {n}/3",
+      "bigQuota": "Big {n}/1",
+      "emptyToday": "Today is empty — pull tasks from the pool or create new ones",
+      "emptyPicked": "No medium/big picked for today — open the pool to choose",
+      "emptyPool": "The pool is empty",
+      "emptyQuick": "No quick tasks on the desk — mark a task quick or create one",
       "emptyRegular": "No regular tasks on the desk",
-      "emptyImportant": "Nothing important — tasks due soon or unpinned regular tasks show up here"
+      "emptyImportant": "Nothing important — tasks with a near deadline show up here"
     },
     "contextFilter": {
       "all": "All",
@@ -3176,6 +3190,8 @@
     "size": "Size",
     "sizeQuick": "⚡ Quick (AI suggestion)",
     "sizeRegular": "Regular",
+    "sizeMedium": "Medium",
+    "sizeBig": "Big",
     "reason": "Reasoning",
     "critical": "Critical",
     "duration": "{days} working days",

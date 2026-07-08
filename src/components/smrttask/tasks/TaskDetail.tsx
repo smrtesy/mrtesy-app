@@ -87,7 +87,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   // Task field edit — autosaved (debounced); no save buttons anywhere.
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
+  const [editSize, setEditSize] = useState<"quick" | "medium" | "big">("medium");
   const [editContext, setEditContext] = useState<"" | "home" | "outside">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
@@ -230,7 +230,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     if (!task) return;
     seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
-    setEditSize(task.size === "quick" ? "quick" : "regular");
+    setEditSize(task.size === "quick" ? "quick" : task.size === "big" ? "big" : "medium");
     setEditContext(task.context === "home" ? "home" : task.context === "outside" ? "outside" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
@@ -641,7 +641,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
               color="amber"
               className={editSize === "quick" ? "text-status-warn" : undefined}
-              onClick={() => setEditSize(editSize === "quick" ? "regular" : "quick")}
+              onClick={() => setEditSize(editSize === "quick" ? "medium" : "quick")}
             >
               <Zap className={editSize === "quick" ? "fill-current" : undefined} />
             </IconButton>

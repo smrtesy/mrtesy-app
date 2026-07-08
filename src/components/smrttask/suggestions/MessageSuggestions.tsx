@@ -216,7 +216,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   }
 
   async function handleSizeToggle(task: Task) {
-    const size = task.size === "quick" ? "regular" : "quick";
+    const size = task.size === "quick" ? "medium" : "quick";
     setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, size } : s)));
     try {
       await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { size } });

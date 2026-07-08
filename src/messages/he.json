@@ -70,6 +70,8 @@
     "tabInfo": "מידע",
     "sizeQuick": "מהיר",
     "sizeRegular": "רגיל",
+    "sizeMedium": "בינוני",
+    "sizeBig": "גדול",
     "contextHome": "בית",
     "contextOutside": "בחוץ",
     "moreOptions": "עוד אפשרויות",
@@ -582,10 +584,14 @@
       "sittingHint": "ימי עסקים ללא טיפול",
       "sizeQuick": "מהיר",
       "sizeRegular": "רגיל",
+      "sizeMedium": "בינוני",
+      "sizeBig": "גדול",
       "sizeQuickHint": "משימה מהירה — לחיצה תהפוך לרגילה",
       "sizeRegularHint": "משימה רגילה — לחיצה תהפוך למהירה",
       "moveToDesk": "העלה לשולחן",
-      "moveToWaiting": "הורד לממתינות"
+      "moveToWaiting": "הורד לממתינות",
+      "addToToday": "הוסף להיום",
+      "removeFromToday": "הסר מהיום"
     },
     "desk": {
       "quick": "מהיר – עכשיו",
@@ -594,9 +600,17 @@
       "waiting": "ממתינות",
       "completed": "הושלמו",
       "startRun": "התחל ריצה",
-      "emptyQuick": "אין משימות מהירות על השולחן — גרור מממתינות או צור חדשה",
+      "today": "היום",
+      "picked": "נבחרו להיום",
+      "pool": "בריכה",
+      "mediumQuota": "בינוני {n}/3",
+      "bigQuota": "גדול {n}/1",
+      "emptyToday": "היום ריק — הוסף משימות מהבריכה או צור חדשות",
+      "emptyPicked": "לא נבחרו בינוני/גדול להיום — פתח את הבריכה כדי לבחור",
+      "emptyPool": "הבריכה ריקה",
+      "emptyQuick": "אין משימות מהירות על השולחן — סמן משימה כמהירה או צור חדשה",
       "emptyRegular": "אין משימות רגילות על השולחן",
-      "emptyImportant": "אין משימות חשובות — דדליין קרוב או משימה רגילה שלא נעצת יופיעו כאן"
+      "emptyImportant": "אין משימות חשובות — משימות עם דדליין קרוב יופיעו כאן"
     },
     "contextFilter": {
       "all": "הכל",
@@ -3175,6 +3189,8 @@
     "size": "גודל",
     "sizeQuick": "⚡ מהיר (הצעת AI)",
     "sizeRegular": "רגיל",
+    "sizeMedium": "בינוני",
+    "sizeBig": "גדול",
     "reason": "נימוק",
     "critical": "קריטי",
     "duration": "{days} ימי עבודה",
