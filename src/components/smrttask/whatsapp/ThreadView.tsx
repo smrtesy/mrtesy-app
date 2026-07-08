@@ -2349,7 +2349,17 @@ function DeliveryReceipt({
     return <AlertCircle className="h-3.5 w-3.5 text-status-late" aria-label="failed" />;
   }
   if (status === "read") {
-    return <CheckCheck className="h-3.5 w-3.5 text-primary" aria-label="read" />;
+    // Phosphorescent neon-violet double-check that pops on the green outgoing
+    // bubble: brand purple was too muted against status-ok-bg. Bolder stroke +
+    // a colored glow make "read" unmistakable at a glance.
+    return (
+      <CheckCheck
+        className="h-3.5 w-3.5 text-wa-read"
+        strokeWidth={3}
+        style={{ filter: "drop-shadow(0 0 2px hsl(var(--wa-read) / 0.85))" }}
+        aria-label="read"
+      />
+    );
   }
   if (status === "delivered") {
     return <CheckCheck className="h-3.5 w-3.5 text-muted-foreground" aria-label="delivered" />;
