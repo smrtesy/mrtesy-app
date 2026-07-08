@@ -253,6 +253,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         title: trimmedTitle,
         title_he: trimmedTitle,
         size,
+        // Manually-created tasks are the user's own — verified, so they land
+        // straight in the pool/Today (verified screen), not the triage inbox.
+        manually_verified: true,
       };
       if (taskContext) body.context = taskContext;
       if (showDescription && description.trim()) body.description = description.trim();
