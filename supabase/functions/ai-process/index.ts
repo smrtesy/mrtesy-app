@@ -760,6 +760,15 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
     user's part is done. (Then, if the user's reply ALSO asks the other party
     for something back, that is a new_matter — but the original "you must
     answer" task is closed.)
+  • Same for a "notify / update / tell X" task ("להודיע ל-X", "לעדכן את X",
+    "למסור ל-X <מידע>"): an [OUTGOING] line in which the user ALREADY conveys
+    that information to X → completion=true. The user's message IS the
+    notification — do NOT keep a "still needs to tell X" task alive after they
+    already told them.
+  • completion is about the matter THIS task tracks. If the message closes a
+    DIFFERENT matter in the same chat while the tracked matter is still waiting
+    on the other party, completion=false and state=pending_other_party — a
+    resolved side-matter must never mark the tracked one done.
   • If the same message also opens a NEW request, still set completion=true
     for the ORIGINAL question (one task = one open question); the new request
     is the new_matter.
@@ -769,6 +778,17 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
   • "I'll check and get back to you" is NOT completion — that is R2b
     tracking, still pending.
   • A bare "תודה" with no linked task stays INFORMATIONAL, completion=false.
+
+═══ STATE ↔ TITLE must agree ═══
+new_title_he and state describe the SAME next move — they must never contradict:
+  • state=pending_user_action / open → the title names the USER's action
+    ("לענות ל-X", "לאשר ל-X", "לשלוח ל-X <דבר>").
+  • state=pending_other_party → the user already did their part; the title is a
+    PASSIVE tracker ("ממתין לתשובת X", "מעקב מול X"), NEVER a chore the user must
+    perform. A "לחכות ל-X / ממתין ל-X" title paired with state=pending_user_action
+    is a self-contradiction — decide the real direction from the transcript and
+    make BOTH fields reflect it. (This is what lets a "waiting on them" matter be
+    deferred instead of nagging in the action queue.)
 
 ═══ WORDING of reason_he / new_summary / new_title_he ═══
 W1. Register — three levels; never upgrade one into another:
@@ -1155,10 +1175,44 @@ async function appendUpdateToTask(
   }
   const markCompletion = analysis.completionSignal && !staleCompletionForFuture;
 
+  // "Waiting for a reply is not a task." When THIS message leaves the tracked
+  // matter's next move with the OTHER party (state=pending_other_party), the task
+  // becomes a QUIET deferred follow-up — never an active card, never
+  // pending_completion — regardless of how it got here. The creation path already
+  // does this for brand-new WhatsApp matters (~line 3269); this mirror covers a
+  // task that only TRANSITIONED into a waiting state via an update: the user
+  // answered X, so the "answer X" matter is done and all that's left is waiting on
+  // X — that belongs in the 48-business-hour follow-up loop, not the action queue.
+  // It also stops a completion signal that fired on a SIBLING matter in the same
+  // WhatsApp chat from closing this task while its OWN matter is still open (the
+  // Levi case: "payment received" must not archive "waiting for Levi to open the
+  // computers", which the analyzer itself flagged pending_other_party). Scoped to
+  // WhatsApp — email has its own send-time check_followup defer.
+  // Defer takes precedence over reopen ON PURPOSE: a closed matter the router
+  // revives (opts.reopen) whose next move is now the other party's should come
+  // back as a QUIET tracker, not jump into the active queue. When the revival
+  // leaves the ball with the USER (state open/pending_user_action) deferToFollowup
+  // is false, so reopen resurfaces it active as before.
+  const deferToFollowup = isWhatsApp(msg)
+    && analysis.state === "pending_other_party"
+    && classification !== "spam"
+    // Never convert a recurring occurrence into a follow-up snooze — recurrence
+    // has its own materialise/advance lifecycle in reminders-check.
+    && !existing?.recurrence_rule
+    && !existing?.recurrence_parent_id;
+
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
-  if (opts?.reopen) {
+  if (deferToFollowup) {
+    const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+    updateFields.task_type = "followup";
+    updateFields.status = "snoozed";
+    updateFields.snoozed_until = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
+    // Clear any stale completion flag so it doesn't read "done" while it waits.
+    updateFields.completion_signal_detected = false;
+    updateFields.completion_signal_reason = null;
+  } else if (opts?.reopen) {
     updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
@@ -1181,8 +1235,11 @@ async function appendUpdateToTask(
   const { error: followupActivityError } = await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
-    note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
+    activity_type: deferToFollowup ? "snoozed" : opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
+    new_value: deferToFollowup ? "snoozed" : null,
+    note: deferToFollowup
+      ? `Follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours (ball in other party's court): ${(analysis.reason || msg.subject || "").slice(0, 300)}`
+      : (analysis.reason || msg.subject || `Linked via ${msg.source_type}`),
     actor: "system",
   });
   if (followupActivityError) console.error("task_activities insert failed:", followupActivityError);
