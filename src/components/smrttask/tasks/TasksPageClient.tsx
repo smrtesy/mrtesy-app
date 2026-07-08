@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { TaskList } from "./TaskList";
 import { UpcomingBanner } from "./UpcomingBanner";
+import { MorningInboxRedirect } from "@/components/smrttask/suggestions/MorningStart";
 
 /**
  * Top-level chrome for /tasks — the desk page. The old list/calendar view
@@ -13,6 +14,7 @@ export function TasksPageClient({ title }: { title: string }) {
 
   return (
     <div className="space-y-4">
+      <MorningInboxRedirect locale={locale as string} />
       <UpcomingBanner locale={locale as string} />
       {/* The page title now lives inside TaskList, on the same row as the
           context filter. */}

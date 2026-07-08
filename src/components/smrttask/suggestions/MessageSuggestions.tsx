@@ -16,7 +16,7 @@ import {
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
+import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
@@ -239,11 +239,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleSizeToggle(task: Task) {
-    const size = task.size === "quick" ? "medium" : "quick";
-    setSuggestions((prev) => prev.map((s) => (s.id === task.id ? { ...s, size } : s)));
+  async function handleSizeSet(taskId: string, size: "quick" | "medium" | "big") {
+    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, size } : s)));
     try {
-      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { size } });
+      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { size } });
     } catch (e) {
       toast.error((e as Error).message);
       fetchSuggestions();
@@ -389,6 +388,19 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
+  // Returned-task triage: give it a real due date. A dated task is scheduled
+  // (floats in at its time via the inbox scheduled track), so it leaves the
+  // returned set and the pool. A date WITH a time makes it an event (meeting).
+  function handleReturnedDueChange(taskId: string, date: string | null, time: string | null) {
+    if (!date) return;
+    setReturned((prev) => prev.filter((task) => task.id !== taskId));
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (date && time) patch.task_type = "meeting";
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
@@ -465,9 +477,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                 <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePickToday(task.id)}>
                   <ListPlus />
                 </IconButton>
-                <IconButton label={tTasks("actions.snooze")} color="amber" className="h-7 w-7" onClick={() => setSnoozeTaskId(task.id)}>
-                  <Clock />
-                </IconButton>
+                <DueDateChip
+                  deadline={null}
+                  time={null}
+                  locale={locale}
+                  blocked={blocked}
+                  onChange={(d, tm) => handleReturnedDueChange(task.id, d, tm)}
+                />
                 <IconButton label={t("fastDismiss")} color="red" className="h-7 w-7" onClick={() => handleReturnedDismiss(task.id)}>
                   <X />
                 </IconButton>
@@ -580,7 +596,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoProjectId={task.project_id}
                     infoTitle={title}
                     infoBody={task.description}
-                    onSizeToggle={() => handleSizeToggle(task)}
+                    onSizeChange={(size) => handleSizeSet(task.id, size)}
                     onContextToggle={(ctx) => handleContextToggle(task, ctx)}
                     onAssign={(uid) => handleAssign(task.id, uid)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
@@ -696,7 +712,7 @@ function SuggestionActions({
   infoProjectId,
   infoTitle,
   infoBody,
-  onSizeToggle,
+  onSizeChange,
   onContextToggle,
   onAssign,
   onFastDismiss,
@@ -710,7 +726,7 @@ function SuggestionActions({
   infoProjectId: string | null;
   infoTitle: string;
   infoBody: string | null;
-  onSizeToggle: () => void;
+  onSizeChange: (size: "quick" | "medium" | "big") => void;
   onContextToggle: (ctx: "home" | "outside") => void;
   onAssign: (userId: string | null) => void;
   onFastDismiss: () => void;
@@ -732,14 +748,29 @@ function SuggestionActions({
     <div className="flex gap-0.5 mt-3 items-center flex-wrap [&>button]:h-8 [&>button]:w-8">
       {/* ── meta ───────────────────────────────────────────────────────── */}
       <ContextButton task={task} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
-      <IconButton
-        label={isQuick ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
-        color="amber"
-        className={isQuick ? "text-status-warn" : undefined}
-        onClick={onSizeToggle}
-      >
-        <Zap className={isQuick ? "fill-current" : undefined} />
-      </IconButton>
+      {/* Effort level — "file by level" triage. Three levels (quick/regular/big);
+          the trigger icon reflects the current one. Events have no level. */}
+      {!isEvent && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title={tTasks("sizeChange")}
+              aria-label={tTasks("sizeChange")}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {isQuick ? <Zap className="h-4 w-4 fill-current text-status-warn" /> : task.size === "big" ? <Layers className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" className="min-w-[7rem]">
+            <DropdownMenuRadioGroup value={task.size ?? "medium"} onValueChange={(v) => onSizeChange(v as "quick" | "medium" | "big")}>
+              <DropdownMenuRadioItem value="big">{tTasks("sizeBig")}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="medium">{tTasks("sizeMedium")}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="quick">{tTasks("sizeQuick")}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <IconButton
         label={tTasks("contextFilter.home")}
         color="primary"

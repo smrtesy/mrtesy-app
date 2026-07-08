@@ -72,6 +72,7 @@
     "sizeRegular": "Regular",
     "sizeMedium": "Regular",
     "sizeBig": "Big",
+    "addToToday": "To today",
     "contextHome": "Home",
     "contextOutside": "Outside",
     "moreOptions": "More options",
@@ -511,7 +512,10 @@
       "presetNextWeek": "Next week",
       "pastDeadline": "Cannot snooze past the deadline ({date}) — the task would hide until it is already late",
       "presetTomorrowNoon": "Tomorrow 15:00",
-      "presetTwoWorkdays": "+2 working days, 9:00"
+      "presetTwoWorkdays": "+2 working days, 9:00",
+    "deadlineWarn": "That date is after the deadline ({due}). Deferring past it — consider:",
+    "cutToDeadline": "Cut to the deadline day",
+    "moveDeadline": "Move the deadline to this date"
     },
     "materials": {
       "title": "Background Materials",
@@ -725,6 +729,10 @@
     "searchPlaceholder": "Search suggestions (title, description, sender...)",
     "noScheduled": "No scheduled reminders",
     "snoozedSection": "Snoozed suggestions",
+    "datedSection": "Scheduled by date",
+    "kindEvent": "Event",
+    "morningTitle": "Good morning 👋 start with the inbox",
+    "morningHint": "Go through the items one by one — for each: pick for today · give a date · file by level · drop.",
     "remindersSection": "Reminders",
     "snoozedUntil": "Returns {when}",
     "unsnooze": "Wake up now",
