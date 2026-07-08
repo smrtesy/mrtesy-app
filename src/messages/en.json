@@ -2612,7 +2612,14 @@
     "step1": "Install SMS Gateway for Android, turn on 'Local server' (ON), and grant the SMS read permission.",
     "step2": "Open 'Connect device' here, paste the Device ID from the app's HOME screen, and click Connect.",
     "step3": "Copy the Webhook URL shown here (the secret token is already embedded in it).",
-    "step4": "Register a webhook on your phone with this URL and the 'sms:received' event (via the app's API — the exact command is provided in chat)."
+    "step4": "Register a webhook on your phone with this URL and the 'sms:received' event (via the app's API — the exact command is provided in chat).",
+    "webhookLog": "Webhook log",
+    "webhookLogHint": "What your phone last delivered here — for connection diagnostics",
+    "webhookLogRefresh": "Refresh",
+    "webhookLogEmpty": "No webhook events yet (or messages arrived malformed / without a device id and can't be attributed). If you sent or received an SMS and nothing shows here, the phone may not be reaching the server (wrong URL, app asleep in the background, or no webhook registered for that event).",
+    "outcomeIngested": "Ingested",
+    "outcomeIgnored": "Ignored",
+    "outcomeDropped": "Dropped"
   },
   "smrtPlan": {
     "title": "Planning board",
