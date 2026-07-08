@@ -26,7 +26,7 @@ import { PlanProposals } from "./PlanProposals";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment } from "@/lib/workdays";
+import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment, todayISO } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
@@ -55,6 +55,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   // so without this they vanished silently. Surfaced as a "resolved itself"
   // strip you can confirm (→done) or reopen (→back to a suggestion).
   const [resolved, setResolved] = useState<Task[]>([]);
+  // "Returned" — verified, undated, not-picked-today tasks that resurface in the
+  // inbox each day for a decision (the daily-method forcing function). They also
+  // live in the pool on the tasks screen (intended overlap: inbox = the prompt).
+  const [returned, setReturned] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -121,6 +125,19 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         all.filter((t) => t.status === "pending_completion")
           .sort((a, b) => (b.status_changed_at ?? b.created_at ?? "").localeCompare(a.status_changed_at ?? a.created_at ?? "")),
       );
+      // Daily-method "returned" set — verified, active, undated, not picked for
+      // today, not quick — resurfaced here for a daily decision.
+      try {
+        const { tasks: verified } = await api<{ tasks: Task[] }>(
+          "/api/tasks?status=inbox,in_progress&verified=true&mine=true&limit=1000",
+        );
+        const today = todayISO();
+        setReturned(
+          (verified ?? [])
+            .filter((t) => t.size !== "quick" && !t.due_date && t.planned_for !== today)
+            .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
+        );
+      } catch { /* keep prior returned set */ }
       setSelected(new Set());
       // Re-bind editTask to the freshly fetched row so an open TaskDetail
       // sheet renders the saved values instead of the pre-save snapshot.
@@ -333,6 +350,22 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
+  // Returned-task triage: commit to today (planned_for = today).
+  function handlePickToday(taskId: string) {
+    setReturned((prev) => prev.filter((task) => task.id !== taskId));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
+  // Returned-task triage: drop it (dismiss).
+  function handleReturnedDismiss(taskId: string) {
+    setReturned((prev) => prev.filter((task) => task.id !== taskId));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "dismissed" } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
@@ -371,7 +404,38 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         </div>
       )}
 
-      {suggestions.length === 0 && resolved.length === 0 ? (
+      {/* Returned — undated tasks resurfaced for today's decision (daily method):
+          pick for today, give a date, or drop. They also live in the pool. */}
+      {returned.length > 0 && (
+        <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+            <span dir="auto">{t("returnedTitle", { count: returned.length })}</span>
+          </p>
+          <p className="text-[11px] text-muted-foreground" dir="auto">{t("returnedHint")}</p>
+          {returned.map((task) => {
+            const rTitle = locale === "he" && task.title_he ? task.title_he : task.title;
+            return (
+              <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
+                <button type="button" className="min-w-0 flex-1 truncate text-start text-sm" dir="auto" onClick={() => setEditTask(task)}>{rTitle}</button>
+                <Badge variant="outline" className="shrink-0 text-[10px]">{task.size === "big" ? tTasks("sizeBig") : tTasks("sizeMedium")}</Badge>
+                <Button size="sm" variant="ghost" className="h-7 gap-1 text-primary" onClick={() => handlePickToday(task.id)}>
+                  <ListPlus className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{tTasks("desk.addToToday")}</span>
+                </Button>
+                <IconButton label={tTasks("actions.snooze")} color="amber" className="h-7 w-7" onClick={() => setSnoozeTaskId(task.id)}>
+                  <Clock />
+                </IconButton>
+                <IconButton label={t("fastDismiss")} color="red" className="h-7 w-7" onClick={() => handleReturnedDismiss(task.id)}>
+                  <X />
+                </IconButton>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {suggestions.length === 0 && resolved.length === 0 && returned.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noSuggestions")}</p>

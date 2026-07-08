@@ -747,6 +747,8 @@
     "learnScopeGeneral": "כלל כללי",
     "resolvedTitle": "נפתרו מעצמם ({count})",
     "resolvedHint": "הצעות שנסגרו אחרי שכבר טיפלת בהן בשיחה. אשר שבוצעו או החזר להצעה.",
+    "returnedTitle": "לתכנן להיום ({count})",
+    "returnedHint": "משימות בלי תאריך שלא נבחרו — בחר להיום, תן תאריך, או זרוק.",
     "confirmDone": "בוצע",
     "reopen": "החזר"
   },
