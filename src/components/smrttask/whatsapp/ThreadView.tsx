@@ -2233,7 +2233,18 @@ const MessageBubble = memo(function MessageBubble({
               webhook field; the receiver (route.ts → applyStatusUpdate) maps
               them onto status/delivered_at/read_at, and the poll surfaces the
               change here. */}
-          {isOutgoing && <DeliveryReceipt status={message.status ?? null} pending={message.pending} t={t} />}
+          {isOutgoing && (
+            <DeliveryReceipt
+              status={message.status ?? null}
+              pending={message.pending}
+              sentAt={message.sent_at}
+              deliveredAt={message.delivered_at}
+              readAt={message.read_at}
+              statusError={message.status_error}
+              locale={locale}
+              t={t}
+            />
+          )}
         </div>
         </div>
         {/* React button on the LTR side — same component, just rendered
@@ -2335,38 +2346,75 @@ function ExtractedBlock({
 function DeliveryReceipt({
   status,
   pending,
+  sentAt,
+  deliveredAt,
+  readAt,
+  statusError,
+  locale,
   t,
 }: {
   status: Message["status"];
   /** Optimistic bubble not yet confirmed by Meta — show a clock. */
   pending?: boolean;
+  /** Per-stage receipt timestamps, surfaced in the hover tooltip. */
+  sentAt?: string | null;
+  deliveredAt?: string | null;
+  readAt?: string | null;
+  statusError?: string | null;
+  locale: string;
   t: (key: string) => string;
 }) {
   if (pending) {
     return <Clock className="h-3.5 w-3.5 text-muted-foreground/70" aria-label="sending" />;
   }
+
+  // Hover tooltip: one line per lifecycle stage we have a timestamp for
+  // (נשלח / נמסר / נקרא). Native `title` renders \n as line breaks, matching
+  // the existing timestamp tooltip on the bubble — no extra dependency.
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString(locale === "he" ? "he-IL" : "en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  const lines: string[] = [];
+  if (sentAt) lines.push(`${t("statusSent")}: ${fmt(sentAt)}`);
+  if (deliveredAt) lines.push(`${t("statusDelivered")}: ${fmt(deliveredAt)}`);
+  if (readAt) lines.push(`${t("statusRead")}: ${fmt(readAt)}`);
+
   if (status === "failed") {
-    return <AlertCircle className="h-3.5 w-3.5 text-status-late" aria-label="failed" />;
+    const errLine = statusError ? `${t("statusFailed")}: ${statusError}` : t("statusFailed");
+    return (
+      <span title={[errLine, ...lines].join("\n")}>
+        <AlertCircle className="h-3.5 w-3.5 text-status-late" aria-label="failed" />
+      </span>
+    );
   }
   if (status === "read") {
     // Phosphorescent neon-violet double-check that pops on the green outgoing
     // bubble: brand purple was too muted against status-ok-bg. Bolder stroke +
     // a colored glow make "read" unmistakable at a glance.
     return (
-      <CheckCheck
-        className="h-3.5 w-3.5 text-wa-read"
-        strokeWidth={3}
-        style={{ filter: "drop-shadow(0 0 2px hsl(var(--wa-read) / 0.85))" }}
-        aria-label="read"
-      />
+      <span title={lines.join("\n")}>
+        <CheckCheck
+          className="h-3.5 w-3.5 text-wa-read"
+          strokeWidth={3}
+          style={{ filter: "drop-shadow(0 0 2px hsl(var(--wa-read) / 0.85))" }}
+          aria-label="read"
+        />
+      </span>
     );
   }
   if (status === "delivered") {
-    return <CheckCheck className="h-3.5 w-3.5 text-muted-foreground" aria-label="delivered" />;
+    return (
+      <span title={lines.join("\n")}>
+        <CheckCheck className="h-3.5 w-3.5 text-muted-foreground" aria-label="delivered" />
+      </span>
+    );
   }
-  // sent or unknown.
+  // sent or unknown. Show the send time if we have it, else the "no receipt
+  // yet" explainer.
   return (
-    <span title={t("noReceiptsTooltip")}>
+    <span title={lines.length ? lines.join("\n") : t("noReceiptsTooltip")}>
       <Check className="h-3.5 w-3.5 text-muted-foreground" aria-label="sent" />
     </span>
   );
