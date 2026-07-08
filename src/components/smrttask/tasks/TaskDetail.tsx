@@ -639,7 +639,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
             <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
-            {/* Effort level — quick / medium / big (autosaved). Icon-only. */}
+            {/* Effort level — quick / medium / big (autosaved). Icon-only.
+                Events (meetings) have no effort level, so it's hidden for them. */}
+            {effectiveTask.task_type !== "meeting" && (
             <div className="flex h-8 items-center rounded-md border p-0.5">
               <button
                 type="button"
@@ -678,6 +680,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 <Layers className="h-3.5 w-3.5" />
               </button>
             </div>
+            )}
             <IconButton
               label={tDetail("contextHome")}
               color="primary"
@@ -766,6 +769,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         open={snoozeOpen}
         onClose={() => setSnoozeOpen(false)}
         onConfirm={handleSnoozeConfirm}
+        dueDate={effectiveTask.due_date ?? null}
+        onUpdateDeadline={effectiveTask.plan_id ? undefined : async (newDue) => {
+          await api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: newDue } });
+          dirtyRef.current = true;
+          setLiveTask((p) => (p ? { ...p, due_date: newDue } as Task : p));
+        }}
       />
 
       {addEventOpen && (

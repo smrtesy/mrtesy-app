@@ -389,6 +389,19 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
+  // Returned-task triage: give it a real due date. A dated task is scheduled
+  // (floats in at its time via the inbox scheduled track), so it leaves the
+  // returned set and the pool. A date WITH a time makes it an event (meeting).
+  function handleReturnedDueChange(taskId: string, date: string | null, time: string | null) {
+    if (!date) return;
+    setReturned((prev) => prev.filter((task) => task.id !== taskId));
+    const patch: Record<string, unknown> = { due_date: date, due_time: time };
+    if (date && time) patch.task_type = "meeting";
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
@@ -465,9 +478,13 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                 <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePickToday(task.id)}>
                   <ListPlus />
                 </IconButton>
-                <IconButton label={tTasks("actions.snooze")} color="amber" className="h-7 w-7" onClick={() => setSnoozeTaskId(task.id)}>
-                  <Clock />
-                </IconButton>
+                <DueDateChip
+                  deadline={null}
+                  time={null}
+                  locale={locale}
+                  blocked={blocked}
+                  onChange={(d, tm) => handleReturnedDueChange(task.id, d, tm)}
+                />
                 <IconButton label={t("fastDismiss")} color="red" className="h-7 w-7" onClick={() => handleReturnedDismiss(task.id)}>
                   <X />
                 </IconButton>

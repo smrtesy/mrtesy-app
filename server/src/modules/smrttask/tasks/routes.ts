@@ -544,7 +544,7 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
     .update({ status: "archived", completed_at: now, status_changed_at: now })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, project_id, tags, checklist")
+    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, size, context, project_id, tags, checklist")
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
@@ -611,6 +611,9 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
           organization_id: req.org!.id,
           title: data.title, title_he: data.title_he, description: data.description,
           priority: data.priority, task_type: data.task_type ?? "action",
+          // A recurring occurrence inherits its parent's effort size and context
+          // — the daily method must not silently re-classify it to the DB default.
+          size: data.size ?? "medium", context: data.context,
           status: spawnStatus, manually_verified: true,
           snoozed_until: spawnSnoozedUntil,
           due_date: next, due_time: data.due_time,

@@ -89,6 +89,7 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
 const LIST_QUICK = "list:today-quick";   // all quick tasks (do them all today)
 const LIST_REGULAR = "list:today-picked"; // medium/big picked for today
 const LIST_POOL = "list:pool";           // undated medium/big not picked — collapsed pool
+const LIST_HIDDEN = "list:hidden";       // dated (future) & events — live in the inbox scheduled track, never the pool
 
 /** A list that is both a sortable context (reorder within) and a droppable
  *  target (so a row can be dragged in from another list, even when empty). */
@@ -283,12 +284,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
    *  - anything planned_for today (the picked medium/big) → LIST_REGULAR
    *  - a dated task that's due today/overdue, or one that just woke from snooze
    *    to demand attention, surfaces in Today → LIST_REGULAR
-   *  - everything else (undated, or a future date not yet due) → collapsed pool. */
+   *  - a future-dated task (an event is always dated) belongs to the inbox's
+   *    scheduled track — it floats in at its time and never clutters the pool
+   *    → LIST_HIDDEN
+   *  - everything else (undated, not picked) → collapsed pool. */
   const bucketOf = useCallback((task: Task): string => {
     if (task.size === "quick") return LIST_QUICK;
     if (task.planned_for === todayStr) return LIST_REGULAR;
     if (task.due_date && task.due_date <= todayStr) return LIST_REGULAR;
     if (task.woke_from_snooze_at) return LIST_REGULAR;
+    // A future-dated task is scheduled — surfaced by the inbox, not the pool.
+    if (task.due_date && task.due_date > todayStr) return LIST_HIDDEN;
     return LIST_POOL;
   }, [todayStr]);
 
@@ -335,7 +341,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }, [tasks, contextFilter, blocked, bucketOf]);
 
   // Soft daily quota: 3 medium + 1 big picked for today (over → gentle warning).
-  const pickedMedium = deskRegular.filter((task) => task.size === "medium").length;
+  // A task with no explicit size defaults to medium (matches the desk bucketing),
+  // so it still counts toward the medium quota instead of vanishing from both.
+  const pickedMedium = deskRegular.filter((task) => (task.size ?? "medium") === "medium").length;
   const pickedBig = deskRegular.filter((task) => task.size === "big").length;
 
   // Open focused task detail after load (deep links: ?focus=<id>)
@@ -859,6 +867,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         open={!!snoozeTaskId}
         onClose={() => setSnoozeTaskId(null)}
         onConfirm={handleSnoozeConfirm}
+        dueDate={snoozeTaskId ? tasks.find((task) => task.id === snoozeTaskId)?.due_date ?? null : null}
+        onUpdateDeadline={
+          snoozeTaskId
+            ? async (newDue) => {
+                const id = snoozeTaskId;
+                await patchTask(id, { due_date: newDue }, (task) => ({ ...task, due_date: newDue }));
+                toast.success(t("actions.snooze"));
+                fetchTasks();
+              }
+            : undefined
+        }
       />
     </>
   );

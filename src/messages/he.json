@@ -72,6 +72,7 @@
     "sizeRegular": "רגיל",
     "sizeMedium": "רגיל",
     "sizeBig": "גדול",
+    "addToToday": "להיום",
     "contextHome": "בית",
     "contextOutside": "בחוץ",
     "moreOptions": "עוד אפשרויות",
@@ -511,7 +512,10 @@
       "presetNextWeek": "שבוע הבא",
       "pastDeadline": "אי אפשר לנדנד מעבר ליעד ({date}) — המשימה תוסתר עד אחרי הדדליין",
       "presetTomorrowNoon": "מחר 15:00",
-      "presetTwoWorkdays": "עוד 2 ימי עסקים, 9:00"
+      "presetTwoWorkdays": "עוד 2 ימי עסקים, 9:00",
+    "deadlineWarn": "התאריך שבחרת אחרי היעד ({due}). דחייה מעבר לדדליין — לשקול:",
+    "cutToDeadline": "חתוך ליום היעד",
+    "moveDeadline": "עדכן את היעד לתאריך זה"
     },
     "materials": {
       "title": "חומר רקע",
@@ -725,6 +729,10 @@
     "searchPlaceholder": "חפש בהצעות (שם, תיאור, שולח...)",
     "noScheduled": "אין תזכורות מתוזמנות",
     "snoozedSection": "הצעות שדחיתי",
+    "datedSection": "מתוזמנות לתאריך",
+    "kindEvent": "אירוע",
+    "morningTitle": "בוקר טוב 👋 מתחילים מהנכנס",
+    "morningHint": "עבור על הפריטים אחד-אחד — לכל אחד: בחר להיום · תן תאריך · תייק לפי רמה · זרוק.",
     "remindersSection": "תזכורות",
     "snoozedUntil": "חוזר ב-{when}",
     "unsnooze": "החזר עכשיו",
