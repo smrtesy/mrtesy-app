@@ -195,11 +195,17 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
   function clearSelection() { setSelected(new Set()); }
 
-  // Optimistically drop card(s) from the list so an action feels instant; the
-  // API call + background refetch reconcile. On failure we refetch to restore.
+  // Optimistically drop card(s) from EVERY local list so an action feels
+  // instant, no matter which section the item is showing in — the AI-suggestion
+  // list, the "לתכנן להיום" returned list, or the self-resolved list. (Approve /
+  // dismiss from inside the detail window go through here; without clearing all
+  // three, acting on a returned-list item closed the sheet but left the row.)
+  // The API call + background refetch reconcile; on failure we refetch to restore.
   function removeLocal(ids: string[]) {
     const set = new Set(ids);
     setSuggestions((prev) => prev.filter((s) => !set.has(s.id)));
+    setReturned((prev) => prev.filter((s) => !set.has(s.id)));
+    setResolved((prev) => prev.filter((s) => !set.has(s.id)));
     setSelected((prev) => {
       const next = new Set(prev);
       ids.forEach((id) => next.delete(id));
