@@ -37,11 +37,10 @@ import { Button } from "@/components/ui/button";
 import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import {
-  effectiveDeadline,
-  dueUrgency,
   sittingWorkdays,
   autoSnoozeMoment,
   eventReminderMoment,
+  todayISO,
   AGING_REVIEW_WORKDAYS,
 } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
@@ -84,11 +83,12 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
   );
 }
 
-/** Identifiers for the four drop zones. A cross-list drop maps to the target
- *  list's (pinned, size) signature; see handleDragEnd. */
-const LIST_QUICK = "list:desk-quick";
-const LIST_REGULAR = "list:desk-regular";
-const LIST_IMPORTANT = "list:important";
+/** Drop zones on the daily "היום" screen. Drag only reorders WITHIN a list
+ *  (today_position); moving a task in/out of Today is done with the +/− button
+ *  (planned_for), not drag. */
+const LIST_QUICK = "list:today-quick";   // all quick tasks (do them all today)
+const LIST_REGULAR = "list:today-picked"; // medium/big picked for today
+const LIST_POOL = "list:pool";           // undated medium/big not picked — collapsed pool
 
 /** A list that is both a sortable context (reorder within) and a droppable
  *  target (so a row can be dragged in from another list, even when empty). */
@@ -130,6 +130,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [planMeta, setPlanMeta] = useState<Map<string, PlanMeta>>(new Map());
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [showPool, setShowPool] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -273,20 +274,22 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     return needs.filter((n) => !n.satisfied);
   }, [planMeta]);
 
-  /** Which desk list a task belongs to — the single source of truth for both
-   *  the partition below and the drag-drop "will this drop stick?" check.
-   *  There is no more ממתינות: every active task is on the desk, and it leaves
-   *  only by being completed or dismissed. Quick tasks always surface in
-   *  מהיר – עכשיו; regular tasks go to רגיל – עכשיו, except when a near deadline
-   *  pulls them into חשוב (the deadline radar). */
+  // Today's local date — the anchor for planned_for ("היום").
+  const todayStr = todayISO();
+
+  /** Where a task sits on the "היום" screen:
+   *  - quick tasks are always in Today (do all quick daily) → LIST_QUICK
+   *  - anything planned_for today (the picked medium/big) → LIST_REGULAR
+   *  - a dated task not planned for today lives in the inbox's מתוזמן → hidden
+   *  - the rest (undated medium/big) is the collapsed pool → LIST_POOL */
   const bucketOf = useCallback((task: Task): string => {
     if (task.size === "quick") return LIST_QUICK;
-    const deadline = effectiveDeadline(task);
-    if (deadline && dueUrgency(deadline, blocked) !== "far") return LIST_IMPORTANT;
-    return LIST_REGULAR;
-  }, [blocked]);
+    if (task.planned_for === todayStr) return LIST_REGULAR;
+    if (task.due_date) return "hidden";
+    return LIST_POOL;
+  }, [todayStr]);
 
-  const { deskQuick, deskRegular, important, reviewCandidates } = useMemo(() => {
+  const { deskQuick, deskRegular, pool, reviewCandidates } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
       if (contextFilter === "outside") return task.context === "outside";
@@ -297,47 +300,40 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
 
     const quickList: Task[] = [];
-    const regularList: Task[] = [];
-    const importantList: Task[] = [];
+    const pickedList: Task[] = [];
+    const poolList: Task[] = [];
     for (const task of visible) {
       switch (bucketOf(task)) {
         case LIST_QUICK: quickList.push(task); break;
-        case LIST_IMPORTANT: importantList.push(task); break;
-        default: regularList.push(task);
+        case LIST_REGULAR: pickedList.push(task); break;
+        case LIST_POOL: poolList.push(task); break;
+        default: break; // hidden (dated, not today)
       }
     }
 
-    // Desk order: manual position ascending (all desk rows are pinned).
+    // Today order: manual position ascending (drag-reorder within a list).
     const byPosition = (a: Task, b: Task) => (a.today_position ?? 0) - (b.today_position ?? 0);
-
-    // חשוב order: the unpinned regular pile (undated) on top, newest first — so a
-    // freshly added regular task lands at the very head of חשוב — then the dated
-    // near-deadline items below, soonest first.
-    const byImportant = (a: Task, b: Task) => {
-      const da = effectiveDeadline(a);
-      const db = effectiveDeadline(b);
-      if (!da && !db) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-      if (!da) return -1; // undated floats above dated
-      if (!db) return 1;
-      if (da !== db) return da.localeCompare(db);
+    // Pool order: priority, then newest — so the pool reads worst-first.
+    const byPriority = (a: Task, b: Task) => {
       const rank = (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9);
       if (rank !== 0) return rank;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     };
-    const importantSorted = [...importantList].sort(byImportant);
 
-    // The review banner surfaces stale tasks to prune (complete or dismiss),
-    // now sourced from the regular + חשוב piles instead of a ממתינות pool.
-    const review = [...regularList, ...importantList]
-      .filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
+    // The review banner surfaces stale pool tasks to prune (complete or dismiss).
+    const review = poolList.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
 
     return {
       deskQuick: [...quickList].sort(byPosition),
-      deskRegular: [...regularList].sort(byPosition),
-      important: importantSorted,
+      deskRegular: [...pickedList].sort(byPosition),
+      pool: [...poolList].sort(byPriority),
       reviewCandidates: review,
     };
   }, [tasks, contextFilter, blocked, bucketOf]);
+
+  // Soft daily quota: 3 medium + 1 big picked for today (over → gentle warning).
+  const pickedMedium = deskRegular.filter((task) => task.size === "medium").length;
+  const pickedBig = deskRegular.filter((task) => task.size === "big").length;
 
   // Open focused task detail after load (deep links: ?focus=<id>)
   useEffect(() => {
@@ -552,6 +548,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         onSnooze={(id) => setSnoozeTaskId(id)}
         onSizeToggle={handleSizeToggle}
         onDueChange={task.plan_id ? undefined : handleDueChange}
+        onPlanToggle={handlePlanToggle}
+        plannedToday={task.planned_for === todayStr}
       />
     );
   }
@@ -590,17 +588,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
   }
 
-  /** Drag end — reorder within a desk column, or move a row to another list.
-   *  Each list is defined by a (pinned, size) signature, so a cross-list drop is
-   *  just a patch of today_position + size; the deadline radar still overrides
-   *  (a near-deadline row always lands in חשוב when unpinned). */
+  /** Drag reorders WITHIN a Today list only (quick / picked). Moving a task in
+   *  or out of Today is done with the +/− button (planned_for), not drag; the
+   *  pool has no manual order. */
   async function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over) return;
+    if (!over || active.id === over.id) return;
     const lists: Record<string, Task[]> = {
       [LIST_QUICK]: deskQuick,
       [LIST_REGULAR]: deskRegular,
-      [LIST_IMPORTANT]: important,
+      [LIST_POOL]: pool,
     };
     const containerOf = (id: string | number): string | null => {
       const s = String(id);
@@ -609,53 +606,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
     const from = containerOf(active.id);
     const to = containerOf(over.id);
-    if (!from || !to) return;
-    const isDesk = (k: string) => k === LIST_QUICK || k === LIST_REGULAR;
-    const activeId = String(active.id);
+    // Only reorder within the same orderable Today list.
+    if (!from || from !== to || (from !== LIST_QUICK && from !== LIST_REGULAR)) return;
+    const column = lists[from];
+    const oldIndex = column.findIndex((row) => row.id === String(active.id));
+    const newIndex = column.findIndex((row) => row.id === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
+  }
 
-    if (from === to) {
-      // חשוב / ממתינות have no persistent manual order — only desk columns reorder.
-      if (!isDesk(to) || active.id === over.id) return;
-      const column = lists[to];
-      const oldIndex = column.findIndex((row) => row.id === activeId);
-      const newIndex = column.findIndex((row) => row.id === String(over.id));
-      if (oldIndex < 0 || newIndex < 0) return;
-      await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
-      return;
-    }
-
-    // Cross-list move. A blocked task can't be started (it's pending a
-    // dependency), so re-filing it between desk columns is a no-op — ignore.
-    const task = tasks.find((row) => row.id === activeId);
-    if (!task || unsatisfiedOf(task).length > 0) return;
-
-    if (isDesk(to)) {
-      // מהיר sets size=quick (always sticks — quick always lives in מהיר); רגיל
-      // sets size=regular, which only sticks when no near deadline pulls the
-      // task into חשוב. If the drop wouldn't stick, say so instead of bouncing.
-      const size = to === LIST_QUICK ? "quick" : "medium";
-      if (bucketOf({ ...task, size }) !== to) {
-        toast.error(t("dndDeadlineLocked"));
-        return;
-      }
-      const column = lists[to];
-      const overIdx = column.findIndex((row) => row.id === String(over.id));
-      const insertAt = overIdx >= 0 ? overIdx : column.length;
-      const ids = column.map((row) => row.id);
-      ids.splice(insertAt, 0, activeId);
-      await applyDeskOrder(ids, activeId, size);
-      return;
-    }
-
-    // The only non-desk drop target left is חשוב, which is deadline-driven:
-    // dropping a task there only sticks when it has a near deadline. If it
-    // wouldn't stick, say so instead of letting it silently bounce back.
-    const patch = { today_position: null, size: "medium" as const };
-    if (bucketOf({ ...task, ...patch }) !== to) {
-      toast.error(t("dndDeadlineLocked"));
-      return;
-    }
-    patchTask(activeId, patch, (row) => ({ ...row, ...patch }));
+  /** Add a task to / remove it from today's plan (planned_for). */
+  function handlePlanToggle(taskId: string, addToToday: boolean) {
+    const planned_for = addToToday ? todayStr : null;
+    patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
   }
 
   /** One drop zone: sortable + droppable, with a grip per row. */
@@ -729,24 +692,28 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
           />
 
           <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-          {/* ── ON THE DESK — quick stacked above regular (full width each,
-                 so rows never get cramped) ──────────────────────────────── */}
+          {/* ── היום — all quick + the picked medium/big, with a soft quota ── */}
           <section className="space-y-4">
-            {/* Quick */}
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{t("desk.today")}</h2>
+              <span className={cn("text-xs font-medium", pickedMedium > 3 ? "text-status-late" : "text-muted-foreground")}>
+                {t("desk.mediumQuota", { n: pickedMedium })}
+              </span>
+              <span className={cn("text-xs font-medium", pickedBig > 1 ? "text-status-late" : "text-muted-foreground")}>
+                {t("desk.bigQuota", { n: pickedBig })}
+              </span>
+            </div>
+
+            {/* Quick — do them all; marathon run available */}
             <div>
               <div className="mb-2 flex items-center gap-2">
-                <h2 className="flex items-center gap-1 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                <h3 className="flex items-center gap-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   <Zap className="h-3.5 w-3.5 text-status-warn" />
                   {t("desk.quick")}
                   <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskQuick.length}</span>
-                </h2>
+                </h3>
                 {deskQuick.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ms-auto h-7 gap-1 text-xs"
-                    onClick={() => setMarathonMode("quick")}
-                  >
+                  <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("quick")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
                   </Button>
@@ -755,38 +722,43 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"))}
             </div>
 
-            {/* Regular — same run feature as the quick column */}
+            {/* Picked medium/big for today */}
             <div>
               <div className="mb-2 flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                  {t("desk.regular")}
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {t("desk.picked")}
                   <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
-                </h2>
+                </h3>
                 {deskRegular.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ms-auto h-7 gap-1 text-xs"
-                    onClick={() => setMarathonMode("regular")}
-                  >
+                  <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("regular")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
                   </Button>
                 )}
               </div>
-              {renderList(LIST_REGULAR, deskRegular, "desk", t("desk.emptyRegular"))}
+              {renderList(LIST_REGULAR, deskRegular, "desk", t("desk.emptyPicked"))}
             </div>
           </section>
-
-          {/* ── IMPORTANT (חשוב) — deadline radar + the unpinned regular pile ── */}
-          <section>
-            <h2 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              {t("desk.important")}
-              <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{important.length}</span>
-            </h2>
-            {renderList(LIST_IMPORTANT, important, "important", t("desk.emptyImportant"))}
-          </section>
           </DndContext>
+
+          {/* ── בריכה (collapsed) — undated medium/big not picked for today ── */}
+          <section>
+            <button
+              className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground"
+              onClick={() => setShowPool((v) => !v)}
+            >
+              {showPool ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {t("desk.pool")}
+              <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{pool.length}</span>
+            </button>
+            {showPool && (
+              pool.length === 0 ? (
+                <p className="py-2 text-center text-sm text-muted-foreground">{t("desk.emptyPool")}</p>
+              ) : (
+                <div className="space-y-2">{pool.map((task) => renderRow(task, "waiting"))}</div>
+              )
+            )}
+          </section>
 
           {/* ── COMPLETED (collapsible) ──────────────────────────────── */}
           <section>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
+import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot, Plus, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
@@ -35,6 +35,8 @@ export function TaskRow({
   onMove,
   onSizeToggle,
   onDueChange,
+  onPlanToggle,
+  plannedToday,
 }: {
   task: Task;
   locale: string;
@@ -49,6 +51,9 @@ export function TaskRow({
   onMove?: (taskId: string, toDesk: boolean) => void;
   onSizeToggle?: (taskId: string, size: "quick" | "medium" | "big") => void;
   onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
+  /** Add to / remove from today's plan (planned_for). Not shown for quick. */
+  onPlanToggle?: (taskId: string, addToToday: boolean) => void;
+  plannedToday?: boolean;
 }) {
   const t = useTranslations("tasks");
   const tClaude = useTranslations("claude");
@@ -187,8 +192,19 @@ export function TaskRow({
 
           <div className="flex-1" />
 
-          {/* Snooze / move — always visible but faint; full strength on hover. */}
+          {/* Plan / snooze / move — always visible but faint; full on hover. */}
           <span className="flex shrink-0 items-center gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {/* Add to / remove from today's plan (medium/big only — quick is always today). */}
+            {onPlanToggle && task.size !== "quick" && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onPlanToggle(task.id, !plannedToday); }}
+                title={plannedToday ? t("row.removeFromToday") : t("row.addToToday")}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                {plannedToday ? <Minus className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+              </button>
+            )}
             {onSnooze && (
               <button
                 type="button"
