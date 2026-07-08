@@ -2225,16 +2225,14 @@ const MessageBubble = memo(function MessageBubble({
             <span className="rounded bg-status-warn-bg px-1 text-status-warn">{t("history")}</span>
           )}
           {/* WhatsApp-style delivery ticks on outgoing only.
-              sent      → single grey check
-              delivered → double grey checks (CheckCheck)
-              read      → double blue checks (CheckCheck colored)
-              failed    → red alert icon.
-              Note: DualHook's Webhook Override does not forward Meta's
-              `statuses` events to us — they classify them as "operational
-              monitoring" and keep them on their app-level callback.
-              So today every outgoing message stays at "sent ✓" forever
-              regardless of whether the recipient actually delivered/read
-              it. The tooltip explains why so it's not surprising. */}
+              sent          → single grey check
+              delivered     → double grey checks (CheckCheck)
+              read / played → double blue checks (CheckCheck colored)
+              failed        → red alert icon.
+              Meta delivers these as value.statuses[] under the "messages"
+              webhook field; the receiver (route.ts → applyStatusUpdate) maps
+              them onto status/delivered_at/read_at, and the poll surfaces the
+              change here. */}
           {isOutgoing && <DeliveryReceipt status={message.status ?? null} pending={message.pending} t={t} />}
         </div>
         </div>
@@ -2325,17 +2323,14 @@ function ExtractedBlock({
  * WhatsApp-style delivery indicator for outgoing messages.
  * - null / sent              → single grey check (Meta accepted the message)
  * - delivered                → double grey checks
- * - read                     → double blue checks
+ * - read                     → double blue checks (also covers `played` voice
+ *                              notes, which the receiver normalizes to `read`)
  * - failed                   → red alert
  *
- * Production caveat: DualHook (our BSP) currently does NOT forward
- * Meta's `statuses` webhook events to our override URL — only message
- * webhooks (incoming, echoes, history). As a result every outgoing
- * message stays at "sent ✓" indefinitely regardless of whether the
- * recipient actually delivered/read it. The single check still means
- * "Meta accepted the message" (we got a wamid back), which is more
- * meaningful than nothing. The tooltip on the icon explains the
- * limitation so the user isn't confused.
+ * These come from Meta's value.statuses[] webhook events (delivered as part of
+ * the "messages" field, not a separate "statuses" field). The single check is
+ * the initial state until the delivered/read receipt arrives; a message with
+ * no receipt yet also shows it, so the tooltip clarifies "sent".
  */
 function DeliveryReceipt({
   status,
