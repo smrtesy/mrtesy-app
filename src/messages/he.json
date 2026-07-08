@@ -394,6 +394,9 @@
   },
   "tasks": {
     "title": "משימות",
+    "sizeQuick": "מהיר",
+    "sizeMedium": "בינוני",
+    "sizeBig": "גדול",
     "openLog": "פתח לוג מקורות",
     "new": "משימה חדשה",
     "inbox": "ממתינות",

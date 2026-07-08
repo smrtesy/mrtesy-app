@@ -394,6 +394,9 @@
   },
   "tasks": {
     "title": "Tasks",
+    "sizeQuick": "Quick",
+    "sizeMedium": "Medium",
+    "sizeBig": "Big",
     "openLog": "Open source log",
     "new": "New Task",
     "inbox": "Pending",

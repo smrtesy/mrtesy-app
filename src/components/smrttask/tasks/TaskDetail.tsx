@@ -25,6 +25,8 @@ import {
   ThumbsDown,
   ListPlus,
   CalendarPlus,
+  Circle,
+  Layers,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -637,38 +639,43 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
             <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
-            {/* Effort level — quick / medium / big (autosaved). */}
+            {/* Effort level — quick / medium / big (autosaved). Icon-only. */}
             <div className="flex h-8 items-center rounded-md border p-0.5">
               <button
                 type="button"
+                title={t("sizeQuick")}
+                aria-label={t("sizeQuick")}
                 onClick={() => setEditSize("quick")}
                 className={cn(
-                  "flex h-7 items-center gap-1 rounded px-2 text-xs font-medium transition-colors",
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
                   editSize === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
                 )}
               >
-                <Zap className="h-3 w-3" />
-                {t("sizeQuick")}
+                <Zap className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
+                title={t("sizeMedium")}
+                aria-label={t("sizeMedium")}
                 onClick={() => setEditSize("medium")}
                 className={cn(
-                  "h-7 rounded px-2 text-xs font-medium transition-colors",
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
                   editSize === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                 )}
               >
-                {t("sizeMedium")}
+                <Circle className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
+                title={t("sizeBig")}
+                aria-label={t("sizeBig")}
                 onClick={() => setEditSize("big")}
                 className={cn(
-                  "h-7 rounded px-2 text-xs font-medium transition-colors",
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
                   editSize === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                 )}
               >
-                {t("sizeBig")}
+                <Layers className="h-3.5 w-3.5" />
               </button>
             </div>
             <IconButton
