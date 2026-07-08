@@ -1282,6 +1282,7 @@
     "filterDrive": "📁 Drive",
     "filterCalendar": "📅 Calendar",
     "filterWhatsapp": "💬 WhatsApp",
+    "filterSms": "📱 SMS",
     "statusAll": "All",
     "statusPending": "Pending",
     "statusProcessed": "Processed",

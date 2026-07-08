@@ -16,6 +16,7 @@ const sourceIcons: Record<string, string> = {
   whatsapp_echo: "💬",
   google_drive: "📁",
   google_calendar: "📅",
+  sms: "📱",
 };
 
 const processingBadge: Record<string, { variant: "default" | "secondary" | "outline"; key: string }> = {
@@ -42,6 +43,7 @@ const sourceFilters = [
   { key: "google_drive", labelKey: "filterDrive" },
   { key: "google_calendar", labelKey: "filterCalendar" },
   { key: "whatsapp", labelKey: "filterWhatsapp" },
+  { key: "sms", labelKey: "filterSms" },
 ];
 
 const statusFilters = [
