@@ -747,6 +747,8 @@
     "learnScopeGeneral": "General rule",
     "resolvedTitle": "Resolved themselves ({count})",
     "resolvedHint": "Suggestions that closed after you already handled them in the conversation. Confirm done, or reopen.",
+    "returnedTitle": "Plan for today ({count})",
+    "returnedHint": "Undated tasks not picked yet — choose for today, give a date, or drop.",
     "confirmDone": "Done",
     "reopen": "Reopen"
   },
