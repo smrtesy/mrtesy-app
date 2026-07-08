@@ -18,10 +18,12 @@
  *   4. Find the phone_number_id → resolve connection → decrypt App Secret.
  *      If a secret is configured, validate X-Hub-Signature-256.
  *   5. Walk entry[].changes[]:
- *        - "messages"          → incoming + Coexistence echoes
+ *        - "messages"          → incoming + Coexistence echoes. Also carries
+ *                                value.statuses[] delivery/read receipts (Meta
+ *                                sends those under this field, not a separate
+ *                                "statuses" field) → applyStatusUpdate.
  *        - "smb_message_echoes" / "message_echoes" → outgoing echoes (phone-sent)
  *        - "history"           → one-shot Coexistence backfill
- *        - "statuses"          → ignored
  *   6. Per user batch:
  *        - skip bot-flagged senders;
  *        - map message → row (audio→Gemini transcript, image→Gemini OCR +
@@ -470,6 +472,20 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
       const contacts = value.contacts ?? [];
       const list = perUser.get(userId) ?? [];
 
+      // Delivery/read receipts on outgoing messages. Meta's Cloud API sends
+      // these under `field: "messages"` with a `value.statuses[]` array — NOT
+      // a separate `field: "statuses"` change (that shape does not exist in
+      // the Cloud API; every status webhook we receive is field "messages").
+      // Process them here, unconditionally, whenever the array is present, so
+      // outgoing bubbles advance sent → delivered → read. A status-only
+      // payload carries no messages/echoes, so the field branch below just
+      // walks empty arrays and adds nothing to the batch.
+      if (value.statuses && value.statuses.length > 0) {
+        for (const s of value.statuses) {
+          await applyStatusUpdate(db, userId, s);
+        }
+      }
+
       if (change.field === "messages" || change.field == null) {
         for (const m of value.messages ?? []) {
           list.push(normalizeLive(m, contacts, metadata, "incoming"));
@@ -500,14 +516,6 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
             }
           }
         }
-      } else if (change.field === "statuses") {
-        // Delivery/read receipts on outgoing messages. Process inline so
-        // the UI's checkmarks update without waiting for an unrelated
-        // event to wake the thread.
-        for (const s of value.statuses ?? []) {
-          await applyStatusUpdate(db, userId, s);
-        }
-        continue;
       } else {
         console.log(`[whatsapp-webhook] ignored field=${change.field}`);
       }
@@ -533,13 +541,20 @@ const STATUS_RANK: Record<string, number> = {
   sent: 1,
   delivered: 2,
   read: 3,
+  // Meta emits `played` when the recipient listens to a voice note. For our
+  // sent/delivered/read/failed UI it's equivalent to `read` (and implies it),
+  // so it's normalized to `read` below and shares its rank.
+  played: 3,
   failed: 4, // terminal; never downgraded
 };
 
 async function applyStatusUpdate(db: SupabaseAdmin, userId: string, s: MetaStatus): Promise<void> {
   const wamid = s.id;
-  const newStatus = s.status;
-  if (!wamid || !newStatus || !(newStatus in STATUS_RANK)) return;
+  const rawStatus = s.status;
+  if (!wamid || !rawStatus || !(rawStatus in STATUS_RANK)) return;
+  // Collapse `played` (voice-note listened) into `read` — the reader UI only
+  // knows sent/delivered/read/failed, and a played voice note is read.
+  const newStatus = rawStatus === "played" ? "read" : rawStatus;
 
   const ts = s.timestamp ? new Date(parseInt(s.timestamp, 10) * 1000).toISOString() : null;
 

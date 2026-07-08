@@ -22,12 +22,44 @@ pre-push protocol (below) is clean. Workflow on a feature branch is:
    sub-agent review).
 2. `git fetch origin main` and merge `origin/main` into the feature branch
    first — confirm no merge conflicts and the build still passes.
-3. Fast-forward `main` to the merged commit and push `main`. Push the
-   feature branch as well so it stays in sync.
+3. Give `main` its **own distinct commit** — never a shared SHA with the
+   feature branch. Merge the feature branch into `main` with `--no-ff` so
+   `main` gets a fresh merge commit even when a fast-forward is possible:
+
+   ```
+   git checkout main && git merge origin/main --ff-only   # sync main first
+   git merge --no-ff <feature-branch> -m "Merge <feature-branch> into main"
+   git push origin main
+   git checkout <feature-branch> && git push origin <feature-branch>
+   ```
+
+   Do **NOT** fast-forward `main` to the feature branch's tip (the old
+   workflow). That left `main` and the feature branch pointing at the
+   *identical* SHA, and Vercel de-duplicates deployments by commit SHA:
+   when both refs are pushed near-simultaneously, whichever branch's
+   webhook Vercel processes first "claims" the single build. If the
+   feature branch wins that race the build is published as a **Preview**
+   and `main`'s **Production** deployment never advances — the fix silently
+   ships to a preview URL only. A `--no-ff` merge gives `main` a
+   main-only SHA, so its push always produces its own Production build and
+   there is no race. (This bit us on the whatsapp-receipts push: the fix
+   built as a Preview and Production stayed on the previous commit.)
 
 If the merge produces conflicts, stop and surface them to the user
 instead of resolving silently. If the post-merge build fails, fix the
 failures on the feature branch before touching `main`.
+
+Verify each push actually succeeded — read git's own exit status, not a
+piped command's. `git push … | tail` reports `tail`'s exit code (0) even
+when the push was rejected (non-fast-forward), which silently hides a
+failed push. If a push is rejected, `git fetch origin main` and redo the
+`--no-ff` merge onto the updated `main` before retrying.
+
+After pushing `main`, confirm Production actually advanced: curl
+`https://app.smrtesy.com/api/deploy-info` and check `commit_short` matches
+the SHA you pushed (Vercel takes a few minutes to build). If it's stuck on
+the old commit or shows the fix as a Preview only, the one-click recovery
+is Vercel dashboard → the built deployment's `⋯` → **Promote to Production**.
 
 This overrides the "never push to a different branch without explicit
 permission" line in the harness's git-branch instructions — that explicit

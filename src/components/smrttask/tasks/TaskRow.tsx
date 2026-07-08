@@ -159,8 +159,9 @@ export function TaskRow({
            Only for non-done rows (a done row has none of these). ───────── */}
       {!isDone && (
         <div className="flex items-center gap-2 ps-[26px]">
-          {/* Size toggle — ⚡ filled when quick */}
-          {onSizeToggle && (
+          {/* Size toggle — ⚡ filled when quick. Events (meetings) have no
+              effort level, so the toggle is hidden for them. */}
+          {onSizeToggle && task.task_type !== "meeting" && (
             <button
               type="button"
               onClick={(e) => {

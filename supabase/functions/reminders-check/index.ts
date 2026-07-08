@@ -174,7 +174,7 @@ Deno.serve(async (req) => {
 
     const { data: openRec } = await supabase
       .from("tasks")
-      .select("id, user_id, organization_id, status, due_date, due_time, reminder_at, recurrence_rule, recurrence_until, recurrence_parent_id, title, title_he, description, priority, task_type, project_id, tags, checklist")
+      .select("id, user_id, organization_id, status, due_date, due_time, reminder_at, recurrence_rule, recurrence_until, recurrence_parent_id, title, title_he, description, priority, task_type, size, context, project_id, tags, checklist")
       .not("recurrence_rule", "is", null)
       .in("status", ["inbox", "in_progress", "snoozed", "pending_completion"]);
 
@@ -255,6 +255,8 @@ Deno.serve(async (req) => {
           organization_id: t.organization_id,
           title: t.title, title_he: t.title_he, description: t.description,
           priority: t.priority, task_type: t.task_type ?? "action",
+          // Inherit the parent's effort size/context — don't fall back to the DB default.
+          size: t.size ?? "medium", context: t.context,
           status, manually_verified: true,
           snoozed_until: snoozedUntil,
           due_date: next, due_time: t.due_time,
