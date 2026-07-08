@@ -334,7 +334,7 @@
     "englishKeepMine": "Keep mine",
     "englishChecking": "Polishing…",
     "englishApproved": "English looks good",
-    "noReceiptsTooltip": "Meta accepted the message. Delivery (✓✓) and read (blue ✓✓) receipts aren't available on the current DualHook setup — check the full status in the WhatsApp app on the phone.",
+    "noReceiptsTooltip": "Sent — Meta accepted the message. No delivery (✓✓) or read (blue ✓✓) receipt yet.",
     "newChat": "New chat",
     "newChatTitle": "Start a new conversation",
     "newChatHint": "Enter an international phone number + your first message.",
