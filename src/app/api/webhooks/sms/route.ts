@@ -200,7 +200,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "no_device" }, { status: 200 });
   }
 
-  const conn = await resolveConnection(db, deviceId);
+  let conn = await resolveConnection(db, deviceId);
+  if (!conn) {
+    // A reinstall mints a new deviceId; adopt it onto the connection whose
+    // secret matches the URL token instead of dropping every message until the
+    // mapping is fixed by hand.
+    const urlToken = new URL(request.url).searchParams.get("token");
+    conn = await adoptDeviceByToken(db, deviceId, urlToken);
+  }
   if (!conn) {
     console.warn(`[sms-webhook] no active connection for deviceId=${deviceId}, dropping`);
     await recordWebhookDebug(db, {
@@ -307,6 +314,66 @@ async function resolveConnection(
   if (!signingKey) signingKey = process.env.SMS_GATEWAY_SIGNING_KEY ?? null;
 
   return { userId, signingKey };
+}
+
+/**
+ * deviceId auto-heal. Reinstalling the SMS Gateway app mints a fresh deviceId,
+ * which orphans the registered connection — every webhook then drops as
+ * unknown_device until the mapping is fixed by hand. Since the URL token IS the
+ * connection's bearer secret, a webhook presenting a token that matches an
+ * active connection is already authorized for it, so we adopt the new deviceId
+ * onto that connection and proceed. deviceId is only a routing hint; the token
+ * is the credential, so this grants nothing a valid token didn't already.
+ *
+ * Matched by the token's SHA-256 against the stored `signing_key_sha256` — a
+ * single indexed lookup, so an unauthenticated unknown-device flood can't
+ * amplify into per-connection Vault reads. The plaintext key is still read from
+ * Vault once, for a defence-in-depth constant-time compare before adopting.
+ */
+async function adoptDeviceByToken(
+  db: SupabaseAdmin,
+  deviceId: string,
+  token: string | null,
+): Promise<ResolvedSmsConnection | null> {
+  if (!token) return null;
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const { data, error } = await db
+    .from("sms_connections")
+    .select("id, user_id, signing_key_id")
+    .eq("signing_key_sha256", tokenHash)
+    .is("disconnected_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[sms-webhook] adoptDeviceByToken query failed:", error.message);
+    return null;
+  }
+  if (!data) return null;
+
+  // Confirm the real key from Vault matches (guards against a hash collision or
+  // a stale hash), in constant time, before repointing the connection.
+  const secretId = (data.signing_key_id as string | null | undefined) ?? null;
+  if (!secretId) return null;
+  const { data: secret, error: vaultErr } = await db.rpc("vault_read_secret", {
+    secret_id: secretId,
+  });
+  if (vaultErr || typeof secret !== "string" || !timingSafeEqual(token, secret)) {
+    return null;
+  }
+
+  const { error: updErr } = await db
+    .from("sms_connections")
+    .update({ device_id: deviceId })
+    .eq("id", data.id as string);
+  if (updErr) {
+    console.error("[sms-webhook] adoptDeviceByToken update failed:", updErr.message);
+    return null;
+  }
+  console.warn(
+    `[sms-webhook] adopted new deviceId=${deviceId} onto connection ${data.id} via token match`,
+  );
+  return { userId: data.user_id as string, signingKey: secret };
 }
 
 /**

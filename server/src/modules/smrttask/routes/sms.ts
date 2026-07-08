@@ -70,6 +70,9 @@ router.post("/sms/connect", ...gate, async (req: Request, res: Response) => {
 
   // Fresh signing key on every connect/rotate.
   const signingKey = crypto.randomBytes(32).toString("hex");
+  // SHA-256 of the key lets the webhook auto-heal a reinstalled device via a
+  // single indexed lookup instead of scanning every connection's Vault secret.
+  const signingKeySha256 = crypto.createHash("sha256").update(signingKey).digest("hex");
   const { data: secretId, error: vaultErr } = await db.rpc("vault_create_secret", {
     new_secret: signingKey,
     new_name: `sms_signing_key:${req.user!.id}:${device}:${Date.now()}`,
@@ -90,6 +93,7 @@ router.post("/sms/connect", ...gate, async (req: Request, res: Response) => {
       label: trimmedLabel,
       display_phone_number: trimmedPhone,
       signing_key_id: secretId,
+      signing_key_sha256: signingKeySha256,
       connected_at: nowIso,
       disconnected_at: null,
     },
