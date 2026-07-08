@@ -234,9 +234,22 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     // An event's whole purpose is the reminder, so "approve" CLOSES it via the
     // canonical complete flow (status=archived + completed_at, recurrence spawn)
     // rather than promoting it to a verified task.
-    const isEvent = suggestions.find((s) => s.id === taskId)?.task_type === "meeting";
+    // The item may be an unverified AI suggestion OR a verified row opened from
+    // the returned list — look in both.
+    const task = suggestions.find((s) => s.id === taskId) ?? returned.find((s) => s.id === taskId);
+    const isEvent = task?.task_type === "meeting";
     removeLocal([taskId]);
-    toast.success(isEvent ? t("reminderClosed") : t("approve"));
+    // Daily method: quick → today, dated → its date, undated regular/big → pool.
+    // Say WHERE it landed so an approved task never feels lost in the collapsed pool.
+    const today = todayISO();
+    const dest = isEvent
+      ? t("reminderClosed")
+      : task?.size === "quick" || (task?.due_date && task.due_date <= today) || task?.planned_for === today
+        ? t("approvedToToday")
+        : task?.due_date
+          ? t("approvedScheduled")
+          : t("approvedToPool");
+    toast.success(dest);
     const request = isEvent
       ? api(`/api/tasks/${taskId}/complete`, { method: "POST" })
       : api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
