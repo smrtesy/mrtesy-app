@@ -277,15 +277,18 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // Today's local date — the anchor for planned_for ("היום").
   const todayStr = todayISO();
 
-  /** Where a task sits on the "היום" screen:
+  /** Where a task sits on the "היום" screen. Nothing is hidden — every active
+   *  (non-snoozed, verified) task lands in Today or the pool:
    *  - quick tasks are always in Today (do all quick daily) → LIST_QUICK
    *  - anything planned_for today (the picked medium/big) → LIST_REGULAR
-   *  - a dated task not planned for today lives in the inbox's מתוזמן → hidden
-   *  - the rest (undated medium/big) is the collapsed pool → LIST_POOL */
+   *  - a dated task that's due today/overdue, or one that just woke from snooze
+   *    to demand attention, surfaces in Today → LIST_REGULAR
+   *  - everything else (undated, or a future date not yet due) → collapsed pool. */
   const bucketOf = useCallback((task: Task): string => {
     if (task.size === "quick") return LIST_QUICK;
     if (task.planned_for === todayStr) return LIST_REGULAR;
-    if (task.due_date) return "hidden";
+    if (task.due_date && task.due_date <= todayStr) return LIST_REGULAR;
+    if (task.woke_from_snooze_at) return LIST_REGULAR;
     return LIST_POOL;
   }, [todayStr]);
 
