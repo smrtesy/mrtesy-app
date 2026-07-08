@@ -8,6 +8,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { X, Bell, Clock, Zap, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -366,6 +373,22 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
+  // Returned-task triage: change effort size in place. Picking "quick" auto-
+  // plans it for today (quick tasks always land on today's list), so it also
+  // leaves this returned set; regular/big just update the size shown.
+  function handleReturnedSizeChange(taskId: string, newSize: "quick" | "medium" | "big") {
+    const body: { size: string; planned_for?: string } = { size: newSize };
+    if (newSize === "quick") {
+      body.planned_for = todayISO();
+      setReturned((prev) => prev.filter((task) => task.id !== taskId));
+    } else {
+      setReturned((prev) => prev.map((task) => (task.id === taskId ? { ...task, size: newSize } : task)));
+    }
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
   const body = loading ? (
     <div className="space-y-3">
       {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
@@ -418,11 +441,30 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             return (
               <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
                 <button type="button" className="min-w-0 flex-1 truncate text-start text-sm" dir="auto" onClick={() => setEditTask(task)}>{rTitle}</button>
-                <Badge variant="outline" className="shrink-0 text-[10px]">{task.size === "big" ? tTasks("sizeBig") : tTasks("sizeMedium")}</Badge>
-                <Button size="sm" variant="ghost" className="h-7 gap-1 text-primary" onClick={() => handlePickToday(task.id)}>
-                  <ListPlus className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">{tTasks("desk.addToToday")}</span>
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      title={tTasks("sizeChange")}
+                      className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      {task.size === "quick" ? tTasks("sizeQuick") : task.size === "big" ? tTasks("sizeBig") : tTasks("sizeMedium")}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="center" className="min-w-[7rem]">
+                    <DropdownMenuRadioGroup
+                      value={task.size ?? "medium"}
+                      onValueChange={(v) => handleReturnedSizeChange(task.id, v as "quick" | "medium" | "big")}
+                    >
+                      <DropdownMenuRadioItem value="big">{tTasks("sizeBig")}</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="medium">{tTasks("sizeMedium")}</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="quick">{tTasks("sizeQuick")}</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePickToday(task.id)}>
+                  <ListPlus />
+                </IconButton>
                 <IconButton label={tTasks("actions.snooze")} color="amber" className="h-7 w-7" onClick={() => setSnoozeTaskId(task.id)}>
                   <Clock />
                 </IconButton>
