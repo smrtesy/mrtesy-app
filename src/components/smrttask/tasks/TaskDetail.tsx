@@ -637,14 +637,40 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
             <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
-            <IconButton
-              label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
-              color="amber"
-              className={editSize === "quick" ? "text-status-warn" : undefined}
-              onClick={() => setEditSize(editSize === "quick" ? "medium" : "quick")}
-            >
-              <Zap className={editSize === "quick" ? "fill-current" : undefined} />
-            </IconButton>
+            {/* Effort level — quick / medium / big (autosaved). */}
+            <div className="flex h-8 items-center rounded-md border p-0.5">
+              <button
+                type="button"
+                onClick={() => setEditSize("quick")}
+                className={cn(
+                  "flex h-7 items-center gap-1 rounded px-2 text-xs font-medium transition-colors",
+                  editSize === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
+                )}
+              >
+                <Zap className="h-3 w-3" />
+                {t("sizeQuick")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditSize("medium")}
+                className={cn(
+                  "h-7 rounded px-2 text-xs font-medium transition-colors",
+                  editSize === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                )}
+              >
+                {t("sizeMedium")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditSize("big")}
+                className={cn(
+                  "h-7 rounded px-2 text-xs font-medium transition-colors",
+                  editSize === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                )}
+              >
+                {t("sizeBig")}
+              </button>
+            </div>
             <IconButton
               label={tDetail("contextHome")}
               color="primary"
