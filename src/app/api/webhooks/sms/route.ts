@@ -166,10 +166,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   // failed receipts, data-SMS) so the gateway moves on.
   const event = envelope.event ?? "";
   const isIncoming = event === "sms:received" || event === "mms:received";
-  // `sms:sent-observed` is emitted by our forked gateway when the user sends an
-  // SMS manually from the phone's own messaging app (observed in
-  // content://sms/sent). Its payload carries recipient/message/sentAt/messageId,
-  // which ingestSms already maps for outgoing messages.
+  // `sms:sent-observed` / `mms:sent-observed` are emitted by our forked gateway
+  // when the user sends an SMS/MMS manually from the phone's own messaging app
+  // (observed in content://sms/sent and the content://mms sent-box). Their
+  // payload carries recipient/message/sentAt/messageId, which ingestSms already
+  // maps for outgoing messages.
   //
   // Its messageId is the Android provider row `_id`, whereas `sms:sent` (a send
   // the gateway itself performed via its API) carries the gateway's own id. If
@@ -177,7 +178,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   // arrive under both events with different ids and ingest twice; that path is
   // intentionally deferred today, so observed sends are the only outgoing source.
   const isOutgoing =
-    event === "sms:sent" || event === "mms:sent" || event === "sms:sent-observed";
+    event === "sms:sent" ||
+    event === "mms:sent" ||
+    event === "sms:sent-observed" ||
+    event === "mms:sent-observed";
   if (!isIncoming && !isOutgoing) {
     await recordWebhookDebug(db, {
       device_id: envDeviceId,
