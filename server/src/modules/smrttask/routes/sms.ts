@@ -201,6 +201,41 @@ router.get("/sms/messages", ...gate, async (req: Request, res: Response) => {
   return res.json({ messages: [...(data ?? [])].reverse(), tasks });
 });
 
+// ── Webhook diagnostic log ────────────────────────────────────────────────
+// GET /sms/webhook-log  → the most recent inbound webhook hits + their outcome
+// (ingested / ignored / dropped + reason), so the user can see exactly what
+// their phone's SMS Gateway is delivering. Includes rows we dropped before
+// resolving the account (e.g. unknown_device / bad_token) as long as the hit
+// carried one of the caller's registered device ids.
+router.get("/sms/webhook-log", ...gate, async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(String(req.query.limit ?? "50"), 10) || 50, 200);
+
+  // The caller's device ids, so device-scoped drops with no resolved user_id
+  // (unknown_device / bad_token) still surface in their own log.
+  const { data: conns } = await db
+    .from("sms_connections")
+    .select("device_id")
+    .eq("user_id", req.user!.id);
+  // Guard against PostgREST in()-list breakers; device ids are hex-like.
+  const deviceIds = (conns ?? [])
+    .map((c) => String(c.device_id ?? "").replace(/[,()*\\ ]/g, ""))
+    .filter((d) => d.length > 0);
+
+  const filter =
+    deviceIds.length > 0
+      ? `user_id.eq.${req.user!.id},device_id.in.(${deviceIds.join(",")})`
+      : `user_id.eq.${req.user!.id}`;
+
+  const { data, error } = await db
+    .from("sms_webhook_debug")
+    .select("id, created_at, event, direction, outcome, reason, message_id, peer, body_preview, device_id")
+    .or(filter)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ log: data ?? [] });
+});
+
 // ── Deactivate a device ──────────────────────────────────────────────────────
 // Body: { id: string }  (sms_connections.id)
 router.post("/sms/disconnect", ...gate, async (req: Request, res: Response) => {

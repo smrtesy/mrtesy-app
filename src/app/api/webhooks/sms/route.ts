@@ -72,6 +72,56 @@ interface ResolvedSmsConnection {
   signingKey: string | null;
 }
 
+/** What ingestSms did with a payload — surfaced to the diagnostic log. */
+interface IngestResult {
+  outcome: "ingested" | "skipped";
+  /** otp_suppressed | empty_body | missing_fields | null */
+  reason: string | null;
+  direction: "incoming" | "outgoing";
+  messageId: string;
+  peer: string;
+  bodyPreview: string;
+}
+
+/** One diagnostic row written to sms_webhook_debug for every webhook hit. */
+interface WebhookDebugRow {
+  user_id?: string | null;
+  device_id?: string | null;
+  event?: string | null;
+  direction?: string | null;
+  outcome: "ingested" | "ignored" | "dropped";
+  reason?: string | null;
+  message_id?: string | null;
+  peer?: string | null;
+  body_preview?: string | null;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Best-effort diagnostic log of a single webhook hit + its outcome. Never
+ * throws — a logging failure must not affect the webhook response. Mirrors the
+ * smrtbot / whatsapp webhook_debug pattern.
+ */
+async function recordWebhookDebug(db: SupabaseAdmin, row: WebhookDebugRow): Promise<void> {
+  try {
+    const { error } = await db.from("sms_webhook_debug").insert({
+      user_id: row.user_id ?? null,
+      device_id: row.device_id ?? null,
+      event: row.event ?? null,
+      direction: row.direction ?? null,
+      outcome: row.outcome,
+      reason: row.reason ?? null,
+      message_id: row.message_id ?? null,
+      peer: row.peer ?? null,
+      body_preview: row.body_preview ? row.body_preview.slice(0, 200) : null,
+      payload: row.payload ?? null,
+    });
+    if (error) console.error("[sms-webhook] debug insert failed:", error.message);
+  } catch (e) {
+    console.error("[sms-webhook] debug insert threw:", e instanceof Error ? e.message : e);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST — main webhook receiver
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,12 +139,26 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const raw = JSON.parse(rawBody) as SmsWebhookEnvelope;
     if (!raw || typeof raw !== "object") {
+      await recordWebhookDebug(db, {
+        outcome: "dropped",
+        reason: "shape_invalid",
+        payload: { raw: rawBody.slice(0, 500) },
+      });
       return NextResponse.json({ ok: false, error: "shape_invalid" }, { status: 200 });
     }
     envelope = raw;
   } catch {
+    await recordWebhookDebug(db, {
+      outcome: "dropped",
+      reason: "invalid_json",
+      payload: { raw: rawBody.slice(0, 500) },
+    });
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 200 });
   }
+
+  // Best-effort identifiers available before connection resolution — recorded on
+  // every diagnostic row, including the ones we drop.
+  const envDeviceId = String(envelope.deviceId ?? "").trim() || null;
 
   // Ingest received (incoming) and sent (outgoing) messages — both SMS and MMS.
   // US carriers frequently deliver even short texts as MMS, which fires the
@@ -115,18 +179,32 @@ export async function POST(request: NextRequest): Promise<Response> {
   const isOutgoing =
     event === "sms:sent" || event === "mms:sent" || event === "sms:sent-observed";
   if (!isIncoming && !isOutgoing) {
+    await recordWebhookDebug(db, {
+      device_id: envDeviceId,
+      event,
+      outcome: "ignored",
+      reason: `ignored:${event || "unknown"}`,
+      payload: envelope.payload as Record<string, unknown> | undefined,
+    });
     return NextResponse.json({ ok: true, ignored: event || "unknown" }, { status: 200 });
   }
 
   const deviceId = String(envelope.deviceId ?? "").trim();
   if (!deviceId) {
     console.warn("[sms-webhook] event with no deviceId, dropping");
+    await recordWebhookDebug(db, { event, outcome: "dropped", reason: "no_device" });
     return NextResponse.json({ ok: false, error: "no_device" }, { status: 200 });
   }
 
   const conn = await resolveConnection(db, deviceId);
   if (!conn) {
     console.warn(`[sms-webhook] no active connection for deviceId=${deviceId}, dropping`);
+    await recordWebhookDebug(db, {
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: "unknown_device",
+    });
     return NextResponse.json({ ok: false, error: "unknown_device" }, { status: 200 });
   }
 
@@ -134,20 +212,56 @@ export async function POST(request: NextRequest): Promise<Response> {
   // refuse to ingest rather than trust an unauthenticated request.
   if (!conn.signingKey) {
     console.error(`[sms-webhook] no secret for deviceId=${deviceId}, refusing unverified ingest`);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: "no_signing_key",
+    });
     return NextResponse.json({ ok: false, error: "no_signing_key" }, { status: 200 });
   }
   const authed = authenticateRequest(request, rawBody, conn.signingKey);
   if (!authed.ok) {
     console.warn(`[sms-webhook] auth failed (${authed.reason}) for deviceId=${deviceId}`);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: `auth:${authed.reason}`,
+    });
     return NextResponse.json({ ok: false, error: authed.reason }, { status: 200 });
   }
 
+  let result: IngestResult;
   try {
-    await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
+    result = await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
   } catch (err) {
     console.error("[sms-webhook] ingest error:", err);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      direction: isIncoming ? "incoming" : "outgoing",
+      outcome: "dropped",
+      reason: "ingest_failed",
+      payload: envelope.payload as Record<string, unknown> | undefined,
+    });
     return NextResponse.json({ ok: false, error: "ingest_failed" }, { status: 500 });
   }
+
+  await recordWebhookDebug(db, {
+    user_id: conn.userId,
+    device_id: deviceId,
+    event,
+    direction: result.direction,
+    outcome: result.outcome === "ingested" ? "ingested" : "dropped",
+    reason: result.reason,
+    message_id: result.messageId || null,
+    peer: result.peer || null,
+    body_preview: result.bodyPreview || null,
+  });
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }
@@ -262,7 +376,8 @@ async function ingestSms(
   deviceId: string,
   isIncoming: boolean,
   payload: SmsReceivedPayload,
-): Promise<void> {
+): Promise<IngestResult> {
+  const direction: "incoming" | "outgoing" = isIncoming ? "incoming" : "outgoing";
   const messageId = String(payload.messageId ?? "").trim();
   // The conversation peer is the OTHER party: the sender for an incoming SMS,
   // the recipient for one we sent. `phoneNumber` is the deprecated fallback.
@@ -273,7 +388,7 @@ async function ingestSms(
   const body = String(payload.message ?? payload.text ?? payload.subject ?? "");
   if (!messageId || !peer) {
     console.warn("[sms-webhook] payload missing messageId/peer, skipping");
-    return;
+    return { outcome: "skipped", reason: "missing_fields", direction, messageId, peer, bodyPreview: body };
   }
 
   const receivedAt = parseReceivedAt(payload.receivedAt ?? payload.sentAt);
@@ -307,9 +422,9 @@ async function ingestSms(
   if (smsErr) throw new Error(`sms_messages upsert: ${smsErr.message}`);
 
   // 2. OTP / verification codes never reach the AI pipeline; empty bodies have
-  //    nothing to classify.
-  if (isOtp) return;
-  if (body.trim().length === 0) return;
+  //    nothing to classify. Both are still recorded in sms_messages above.
+  if (isOtp) return { outcome: "ingested", reason: "otp_suppressed", direction, messageId, peer, bodyPreview: body };
+  if (body.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: body };
 
   const dirLabel = isIncoming ? "INCOMING" : "OUTGOING";
   const subject = isIncoming ? `SMS מ-${peer}` : `SMS ל-${peer}`;
@@ -343,6 +458,8 @@ async function ingestSms(
     { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
   );
   if (srcErr) throw new Error(`source_messages upsert: ${srcErr.message}`);
+
+  return { outcome: "ingested", reason: null, direction, messageId, peer, bodyPreview: body };
 }
 
 /**
