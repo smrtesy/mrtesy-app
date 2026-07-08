@@ -437,7 +437,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
   }
 
-  function handleSizeToggle(taskId: string, size: "quick" | "regular") {
+  function handleSizeToggle(taskId: string, size: "quick" | "medium" | "big") {
     // Marking a task "quick" (⚡) means "do it now" — pin it onto the desk's
     // מהיר – עכשיו section so it surfaces there by default instead of being
     // left in ממתינות. (Switching back to regular only changes the size; the
@@ -559,7 +559,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   /** Persist a desk column's order: write today_position 0..n to `ids` in order,
    *  and (when a row is crossing in from another list) set its size. Optimistic
    *  + pending-reconciled so a racing refetch can't undo it. */
-  async function applyDeskOrder(ids: string[], crossingId: string | null, crossingSize: "quick" | "regular" | null) {
+  async function applyDeskOrder(ids: string[], crossingId: string | null, crossingSize: "quick" | "medium" | "big" | null) {
     const posById = new Map(ids.map((id, i) => [id, i]));
     const bodyFor = (id: string): Record<string, unknown> => {
       const body: Record<string, unknown> = { today_position: posById.get(id)! };
@@ -633,7 +633,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       // מהיר sets size=quick (always sticks — quick always lives in מהיר); רגיל
       // sets size=regular, which only sticks when no near deadline pulls the
       // task into חשוב. If the drop wouldn't stick, say so instead of bouncing.
-      const size = to === LIST_QUICK ? "quick" : "regular";
+      const size = to === LIST_QUICK ? "quick" : "medium";
       if (bucketOf({ ...task, size }) !== to) {
         toast.error(t("dndDeadlineLocked"));
         return;
@@ -650,7 +650,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     // The only non-desk drop target left is חשוב, which is deadline-driven:
     // dropping a task there only sticks when it has a near deadline. If it
     // wouldn't stick, say so instead of letting it silently bounce back.
-    const patch = { today_position: null, size: "regular" as const };
+    const patch = { today_position: null, size: "medium" as const };
     if (bucketOf({ ...task, ...patch }) !== to) {
       toast.error(t("dndDeadlineLocked"));
       return;
@@ -842,7 +842,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             // "Wrong column" — flip to the OTHER size and drop from this run.
             await api(`/api/tasks/${taskId}`, {
               method: "PATCH",
-              body: { size: marathonMode === "quick" ? "regular" : "quick" },
+              body: { size: marathonMode === "quick" ? "medium" : "quick" },
             });
             fetchTasks();
           }}

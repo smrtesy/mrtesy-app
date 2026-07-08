@@ -12,8 +12,7 @@ import { Loader2, Check, Plus, X, Zap, Home, MapPin, AlignLeft, ListChecks, Pape
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { dueUrgency } from "@/lib/workdays";
+import { todayISO } from "@/lib/workdays";
 import { RecurrenceEditor, type RecurrenceModel } from "./RecurrenceEditor";
 
 interface ManualTaskInputProps {
@@ -57,14 +56,13 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const t = useTranslations("manualTask");
   const tCommon = useTranslations("common");
   const locale = useLocale();
-  const blocked = useWorkCalendar();
   const dir = locale === "he" ? "rtl" : "ltr";
 
   const [tab, setTab] = useState<"task" | "info">("task");
 
   // ── task tab state ──────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
-  const [size, setSize] = useState<"quick" | "regular">("quick");
+  const [size, setSize] = useState<"quick" | "medium" | "big">("medium");
   // "" = משרד/office (default), "home" = בית, "outside" = בחוץ.
   const [taskContext, setTaskContext] = useState<"" | "home" | "outside">("");
   const [dueDate, setDueDate] = useState("");
@@ -98,7 +96,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   const reset = useCallback(() => {
     setTab("task");
     setTitle("");
-    setSize("quick");
+    setSize("medium");
     setTaskContext("");
     setDueDate("");
     setDueTime("");
@@ -128,7 +126,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         const d = JSON.parse(raw) as Partial<{
           title: string; showDescription: boolean; description: string;
           showSubtasks: boolean; subtasks: DraftSubtask[];
-          size: "quick" | "regular"; isHome?: boolean;
+          size: "quick" | "medium" | "big"; isHome?: boolean;
           context?: "" | "home" | "outside"; dueDate: string; dueTime: string;
         }>;
         setTitle(d.title ?? "");
@@ -136,7 +134,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         setDescription(d.description ?? "");
         setShowSubtasks(!!d.showSubtasks);
         setSubtasks(Array.isArray(d.subtasks) ? d.subtasks : []);
-        setSize(d.size === "regular" ? "regular" : "quick");
+        setSize(d.size === "big" ? "big" : d.size === "quick" ? "quick" : "medium");
         // Back-compat: older drafts stored a boolean `isHome`.
         setTaskContext(d.context ?? (d.isHome ? "home" : ""));
         setDueDate(d.dueDate ?? "");
@@ -272,16 +270,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
           created_by: "user" as const,
         }));
       if (checklist.length) body.checklist = checklist;
-      // A new ⚡quick task goes straight onto the desk (pinned → "מהיר – עכשיו").
-      // A regular task is deliberately NOT pinned: it lands in "חשוב" (the
-      // unpinned-regular rule), matching "switch to regular → goes to חשוב".
-      // Either way, a far-off deadline keeps it off the desk (auto-snoozed to
-      // resurface near the deadline). Position = seconds since a fixed recent
-      // epoch: monotonic and safely inside int4.
-      const goesToWaiting = !!dueDate && dueUrgency(dueDate, blocked) === "far";
-      if (!goesToWaiting && size === "quick") {
-        body.today_position = Math.floor(Date.now() / 1000) - 1_700_000_000;
-      }
+      // Daily method: a ⚡quick task is auto-committed to today (you do all
+      // quick daily); medium/big land in the pool (no planned_for) until the
+      // user pulls them into "היום".
+      if (size === "quick") body.planned_for = todayISO();
 
       const { task: created } = await api<{ task: { id: string } }>("/api/tasks", { method: "POST", body });
 
@@ -310,7 +302,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         }
       }
 
-      toast.success(goesToWaiting ? t("createdToWaiting", { date: dueDate }) : t("created"));
+      toast.success(t("created"));
       reset();
       onCreated();
       onClose();
@@ -486,7 +478,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               </div>
             )}
 
-            {/* Quick/regular · home · attach */}
+            {/* Size: quick / medium / big · home · attach */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-lg border p-0.5">
                 <button
@@ -502,13 +494,23 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSize("regular")}
+                  onClick={() => setSize("medium")}
                   className={cn(
                     "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
-                    size === "regular" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                    size === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                   )}
                 >
-                  {t("sizeRegular")}
+                  {t("sizeMedium")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSize("big")}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
+                    size === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {t("sizeBig")}
                 </button>
               </div>
 

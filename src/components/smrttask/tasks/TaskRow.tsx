@@ -47,7 +47,7 @@ export function TaskRow({
   onSnooze?: (taskId: string) => void;
   /** Move between desk and waiting (manual pin / unpin). */
   onMove?: (taskId: string, toDesk: boolean) => void;
-  onSizeToggle?: (taskId: string, size: "quick" | "regular") => void;
+  onSizeToggle?: (taskId: string, size: "quick" | "medium" | "big") => void;
   onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
 }) {
   const t = useTranslations("tasks");
@@ -160,7 +160,7 @@ export function TaskRow({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onSizeToggle(task.id, task.size === "quick" ? "regular" : "quick");
+                onSizeToggle(task.id, task.size === "quick" ? "medium" : "quick");
               }}
               title={task.size === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
               className={cn(
