@@ -73,8 +73,10 @@ export interface Task {
   ai_model_used: string | null;
   manually_verified: boolean;
   today_position: number | null;
-  /** Desk model: quick (one bounded action) vs regular (needs prep / multi-step). */
-  size?: "quick" | "regular";
+  /** Daily-method effort tier: quick (do all daily) · medium (3/day) · big (1/day). */
+  size?: "quick" | "medium" | "big";
+  /** The day this task is committed to; planned_for === today → shown in "Today". */
+  planned_for?: string | null;
   /** Execution context — where this can be done.
    *  'home' = בית, 'outside' = בחוץ, null (or legacy 'work') = משרד/office (default). */
   context?: "home" | "work" | "outside" | null;

@@ -3296,8 +3296,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
               description: taggedDescription, task_type: taskType, priority: task.priority || "medium",
-              // CHECK constraint on tasks.size — only pass through valid values.
-              size: task.size === "quick" ? "quick" : "regular",
+              // CHECK constraint on tasks.size (quick|medium|big) — the AI knows
+              // only quick vs the neutral default; unsure → medium.
+              size: task.size === "quick" ? "quick" : "medium",
               status: "inbox", manually_verified: false,
               due_date: task.due_date,
               project_id: taskResult.projectId,

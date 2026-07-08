@@ -252,7 +252,7 @@ function AIPanelBody({
       )}
       <div>
         <span className="text-muted-foreground/70">{t("size")}: </span>
-        {task.size === "quick" ? t("sizeQuick") : t("sizeRegular")}
+        {task.size === "quick" ? t("sizeQuick") : task.size === "big" ? t("sizeBig") : t("sizeMedium")}
       </div>
       {log?.classification_reason && (
         <div>
