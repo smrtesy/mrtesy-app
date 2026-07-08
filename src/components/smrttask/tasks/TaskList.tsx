@@ -766,7 +766,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               pool.length === 0 ? (
                 <p className="py-2 text-center text-sm text-muted-foreground">{t("desk.emptyPool")}</p>
               ) : (
-                <div className="space-y-2">{pool.map((task) => renderRow(task, "waiting"))}</div>
+                // Grouped by level (spec: "לפי רמה") — big first, then regular
+                // (a null size counts as regular). Priority order kept within each.
+                <div className="space-y-4">
+                  {[
+                    { key: "big", label: t("sizeBig"), items: pool.filter((task) => task.size === "big") },
+                    { key: "regular", label: t("sizeMedium"), items: pool.filter((task) => task.size !== "big") },
+                  ].filter((g) => g.items.length > 0).map((g) => (
+                    <div key={g.key} className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">{g.label} · {g.items.length}</p>
+                      {g.items.map((task) => renderRow(task, "waiting"))}
+                    </div>
+                  ))}
+                </div>
               )
             )}
           </section>
