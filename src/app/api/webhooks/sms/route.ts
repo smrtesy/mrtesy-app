@@ -441,6 +441,153 @@ function timingSafeEqual(a: string, b: string): boolean {
 // Ingestion
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Rolling-transcript constants (mirror the WhatsApp thread builder).
+const SMS_CONVO_BUDGET = 2600;
+const SMS_MAX_MSG_CHARS = 400;
+
+function fmtTsLocal(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso ?? "").slice(0, 16);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${g("month")}-${g("day")} ${g("hour")}:${g("minute")}`;
+}
+
+async function smsUserTz(db: SupabaseAdmin, userId: string): Promise<string> {
+  const { data } = await db.from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  return String(data?.timezone ?? "").trim() || "Asia/Jerusalem";
+}
+
+/**
+ * Assemble a rolling [INCOMING]/[OUTGOING] transcript for an SMS conversation —
+ * the SMS twin of WhatsApp's refreshSourceMessageThread — so the AI classifier
+ * sees the whole thread, not one isolated message. Writes ONE per-burst
+ * source_messages row keyed sms:<peer>:<latestMessageId>, stamps
+ * metadata.chatId=<peer> (every downstream thread gate keys off chatId), and
+ * supersedes earlier still-pending SMS bursts for the same peer so only the
+ * newest transcript reaches the classifier (burst coalescing).
+ */
+async function refreshSmsSourceThread(
+  db: SupabaseAdmin,
+  userId: string,
+  peer: string,
+): Promise<void> {
+  const { data: msgs, error } = await db
+    .from("sms_messages")
+    .select("message_id, direction, body_text, received_at, is_otp")
+    .eq("user_id", userId)
+    .or(`from_phone.eq.${peer},to_phone.eq.${peer}`)
+    .order("received_at", { ascending: false })
+    .limit(20);
+  if (error) throw new Error(`sms thread query: ${error.message}`);
+  const usable = (msgs ?? []).filter(
+    (m) => !m.is_otp && String(m.body_text ?? "").trim().length > 0,
+  );
+  if (usable.length === 0) return;
+
+  const tz = await smsUserTz(db, userId);
+  const ordered = [...usable].reverse(); // oldest → newest
+
+  // Keep the NEWEST lines within the budget (drop oldest first) — the classifier
+  // reasons about the last line, so the tail must survive.
+  const lines: string[] = [];
+  let budget = SMS_CONVO_BUDGET;
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const m = ordered[i];
+    const dir = String(m.direction ?? "incoming").toUpperCase();
+    const ts = fmtTsLocal(String(m.received_at ?? ""), tz);
+    let text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
+    if (text.length > SMS_MAX_MSG_CHARS) text = text.slice(0, SMS_MAX_MSG_CHARS) + " …";
+    const line = `[${dir} ${ts}] ${text}`;
+    if (line.length > budget && lines.length > 0) break;
+    budget -= line.length;
+    lines.unshift(line);
+  }
+
+  const rawContent = [
+    `SMS conversation with: ${peer}`,
+    `[OUTGOING] = sent by the user, [INCOMING] = the other party.`,
+    `\n--- CONVERSATION (oldest to newest) ---`,
+    ...lines,
+  ].join("\n").slice(0, 3000);
+
+  // Anchor the burst on the NEWEST message in the window (like WhatsApp's
+  // last.wamid) so an out-of-order re-delivery refreshes ONE row, not a stale one.
+  const latest = ordered[ordered.length - 1];
+  const latestMessageId = String(latest.message_id ?? "");
+  if (!latestMessageId) return; // no stable key to anchor
+  const latestDirection = String(latest.direction ?? "incoming");
+  const latestReceivedAt = String(latest.received_at ?? "");
+  const subject = latestDirection === "incoming" ? `SMS מ-${peer}` : `SMS ל-${peer}`;
+  const burstId = `sms:${peer}:${latestMessageId}`;
+  const bodyText = String(latest.body_text ?? "").slice(0, 1000);
+  const metadata = {
+    chatId: peer,
+    peerPhone: peer,
+    direction: latestDirection,
+    lastDirection: latestDirection,
+    channel: "sms",
+    messageId: latestMessageId,
+  };
+
+  // ignoreDuplicates so a gateway re-delivery of the same latest message doesn't
+  // reset a row the pipeline already classified/locked (mirrors WhatsApp).
+  const { error: srcErr } = await db.from("source_messages").upsert(
+    {
+      user_id: userId,
+      source_type: "sms",
+      source_id: burstId,
+      sender: peer,
+      sender_email: null,
+      subject,
+      body_text: bodyText,
+      raw_content: rawContent,
+      received_at: latestReceivedAt,
+      source_url: `sms:${peer}`,
+      reply_to_context: peer,
+      processing_status: "pending",
+      ai_classification: null,
+      metadata,
+    },
+    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+  );
+  if (srcErr) throw new Error(`source_messages upsert: ${srcErr.message}`);
+
+  // Refresh the transcript in place ONLY while the burst is still pending and
+  // unlocked — a late-arriving message rebuilds a fuller transcript, but an
+  // already-classified or in-flight row is never reset (mirrors WhatsApp).
+  const { error: refreshErr } = await db
+    .from("source_messages")
+    .update({ body_text: bodyText, raw_content: rawContent, received_at: latestReceivedAt, metadata })
+    .eq("user_id", userId)
+    .eq("source_type", "sms")
+    .eq("source_id", burstId)
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null);
+  if (refreshErr) throw new Error(`source_messages refresh: ${refreshErr.message}`);
+
+  // Coalesce: retire earlier still-pending, unlocked SMS bursts for this peer so
+  // only the newest transcript reaches the classifier.
+  const { error: supErr } = await db
+    .from("source_messages")
+    .update({
+      processing_status: "processed",
+      ai_classification: "superseded",
+      processed_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("source_type", "sms")
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null)
+    .filter("metadata->>chatId", "eq", peer)
+    .lte("received_at", latestReceivedAt)
+    .neq("source_id", burstId);
+  if (supErr) console.warn("[sms-webhook] supersede failed:", supErr.message);
+}
+
 async function ingestSms(
   db: SupabaseAdmin,
   userId: string,
@@ -497,38 +644,11 @@ async function ingestSms(
   if (isOtp) return { outcome: "ingested", reason: "otp_suppressed", direction, messageId, peer, bodyPreview: body };
   if (body.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: body };
 
-  const dirLabel = isIncoming ? "INCOMING" : "OUTGOING";
-  const subject = isIncoming ? `SMS מ-${peer}` : `SMS ל-${peer}`;
-  const rawContent = [
-    `SMS conversation with: ${peer}`,
-    `Direction: ${dirLabel}${isIncoming ? "" : " (sent by the user)"}`,
-    `Time: ${receivedAt}`,
-    `\n--- MESSAGE ---`,
-    `[${dirLabel}] ${body.replace(/\s+/g, " ").trim()}`,
-  ].join("\n");
-
-  const { error: srcErr } = await db.from("source_messages").upsert(
-    {
-      user_id: userId,
-      source_type: "sms",
-      source_id: `sms:${messageId}`,
-      sender: peer,
-      sender_email: null,
-      subject,
-      body_text: body.slice(0, 1000),
-      raw_content: rawContent.slice(0, 3000),
-      received_at: receivedAt,
-      // Carry the exact peer so the in-app SMS reader can match the thread; also
-      // a valid sms: URI as a mobile fallback (opens the native SMS app).
-      source_url: `sms:${peer}`,
-      reply_to_context: peer,
-      processing_status: "pending",
-      ai_classification: null,
-      metadata: { peerPhone: peer, direction: isIncoming ? "incoming" : "outgoing", deviceId, messageId, channel: "sms" },
-    },
-    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
-  );
-  if (srcErr) throw new Error(`source_messages upsert: ${srcErr.message}`);
+  // Build the rolling conversation transcript for this peer and write ONE
+  // per-burst source_messages row (mirrors WhatsApp) so the classifier sees the
+  // whole thread — not this message in isolation — and can understand a reply
+  // like "Mistake, I didn't pay" in context.
+  await refreshSmsSourceThread(db, userId, peer);
 
   return { outcome: "ingested", reason: null, direction, messageId, peer, bodyPreview: body };
 }

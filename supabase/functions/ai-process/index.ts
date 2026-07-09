@@ -132,7 +132,9 @@ function buildCategoryFilter(rules: CategoryRuleRow[]): Set<string> {
 }
 
 function bodyForAI(msg: any): string {
-  if (msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo") {
+  // Conversational channels (WhatsApp + SMS) carry the rolling transcript in
+  // raw_content; everything else (email) uses body_text.
+  if (isConversational(msg)) {
     return String(msg.raw_content ?? msg.body_text ?? "");
   }
   return String(msg.body_text ?? "");
@@ -179,7 +181,9 @@ function extractMeetingBlock(body: string): string | null {
 // join URL verbatim (system-wide deep-link rule).
 function bodyForClassify(msg: any, limit: number): string {
   const full = bodyForAI(msg);
-  const isWa = msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo";
+  // Conversational channels (WhatsApp + SMS) run oldest→newest with the
+  // decision-relevant lines at the BOTTOM, so keep the TAIL; email keeps HEAD.
+  const isConvo = isConversational(msg);
   // WhatsApp transcripts run oldest→newest and the prompt reasons about the
   // LAST line, so the decision-relevant messages sit at the BOTTOM. Head-
   // truncating drops exactly them — a long thread of old OCR/audio blocks once
@@ -189,7 +193,7 @@ function bodyForClassify(msg: any, limit: number): string {
   const clipped =
     full.length <= limit
       ? full
-      : isWa
+      : isConvo
         ? "…\n" + full.slice(full.length - limit)
         : full.substring(0, limit);
   const meeting = extractMeetingBlock(full);
@@ -503,6 +507,15 @@ function isWhatsApp(msg: any): boolean {
   return msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo";
 }
 
+// WhatsApp AND SMS are two-party rolling-transcript chats — both carry a
+// [INCOMING]/[OUTGOING] conversation in raw_content and get the conversation-
+// aware handling (transcript body, chat rules, thread memory, per-matter
+// routing, follow-up defer). isWhatsApp stays for the genuinely WhatsApp-only
+// spots (self-chat echo, placeholder text, delivery-status coalescing).
+function isConversational(msg: any): boolean {
+  return isWhatsApp(msg) || msg.source_type === "sms";
+}
+
 function threadKey(msg: any): string | null {
   if (msg.source_type === "gmail" || msg.source_type === "gmail_sent") {
     const tid = msg.metadata?.threadId as string | undefined;
@@ -513,9 +526,9 @@ function threadKey(msg: any): string | null {
   // parent WhatsApp chat (which would link every voice memo to the same
   // task via related_task_id and lose 7 of 8 captures).
   if (msg.source_type === "whatsapp_echo") return null;
-  if (msg.source_type === "whatsapp") {
+  if (msg.source_type === "whatsapp" || msg.source_type === "sms") {
     const cid = msg.metadata?.chatId as string | undefined;
-    return cid ? `whatsapp:${cid}` : null;
+    return cid ? `${msg.source_type}:${cid}` : null;
   }
   return null;
 }
@@ -647,7 +660,7 @@ async function analyzeWithMemory(
       ? `\n\n(Empty thread summary so far. This may be the first or second message.)`
       : "";
 
-  const whatsappNote = isWhatsApp(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
+  const whatsappNote = isConversational(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
 
   // Per-user correction rules + a self-note marker, both per-message so the
   // cached static prefix stays warm. whatsapp_echo rows are the user's own
@@ -694,7 +707,12 @@ R1. SPAM — clearly junk EMAIL only: unsolicited mass marketing from a party
       visible body is boilerplate and the substance sits behind a link, PDF
       or secure portal — that is a real reply, one click away);
     • mail from a service the user actually uses (their carrier, bank, tools,
-      subscriptions) — that is INFORMATIONAL at worst.
+      subscriptions) — that is INFORMATIONAL at worst;
+    • a message whose visible To/recipient is NOT one of the user's own
+      addresses: the user may be BCC'd, or the mail forwarded to them. NEVER
+      mark spam merely because the recipient field differs from the user's known
+      addresses — judge by the content and relationship, not the To line. A real
+      registration / time-sensitive notice the user was BCC'd on is NOT spam.
 
 R2. ACTIONABLE — match any one of:
     a. An explicit ask, instruction or question DIRECTED AT THE USER awaiting
@@ -725,6 +743,11 @@ R2. ACTIONABLE — match any one of:
        medical test or referral pending, loan / insurance application under
        review, delivery in transit, vendor quote pending, negotiation in
        progress.
+    h. Someone announcing they will COME / ARRIVE / VISIT / DELIVER to the
+       user's home or office at a given time ("אגיע הערב אחרי שש", "אבוא מחר
+       ב-", "I'll come by at…") → ACTIONABLE: the user must be available, grant
+       access, or prepare. A heads-up about an in-person arrival is not mere
+       info even when it phrases no explicit request.
 
 R3. INFORMATIONAL — everything else; read-and-forget. Typical:
     • marketing / newsletters from the user's own providers, system / CI /
@@ -1193,7 +1216,7 @@ async function appendUpdateToTask(
   // back as a QUIET tracker, not jump into the active queue. When the revival
   // leaves the ball with the USER (state open/pending_user_action) deferToFollowup
   // is false, so reopen resurfaces it active as before.
-  const deferToFollowup = isWhatsApp(msg)
+  const deferToFollowup = isConversational(msg)
     && analysis.state === "pending_other_party"
     && classification !== "spam"
     // Never convert a recurring occurrence into a follow-up snooze — recurrence
@@ -1213,9 +1236,21 @@ async function appendUpdateToTask(
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
   } else if (opts?.reopen) {
-    updateFields.status = resurfaceStatus;
-    updateFields.completion_signal_detected = false;
-    updateFields.completion_signal_reason = null;
+    // A task the user already COMPLETED that a re-send revives must NOT jump back
+    // onto the active desk unannounced — surface it as pending_completion so the
+    // user re-confirms it's still done (the tuition-reminder case: "you brought
+    // back a task I finished yesterday without asking, and didn't even mark it
+    // for my approval"). Matters the user dismissed/archived (never "finished")
+    // resurface active as before.
+    if (existing?.status === "completed") {
+      updateFields.status = "pending_completion";
+      updateFields.completion_signal_detected = true;
+      updateFields.completion_signal_reason = analysis.reason || "המשימה סומנה כהושלמה — התקבלה הודעה חדשה בנושא, נדרש אישור מחדש";
+    } else {
+      updateFields.status = resurfaceStatus;
+      updateFields.completion_signal_detected = false;
+      updateFields.completion_signal_reason = null;
+    }
   } else if (markCompletion) {
     updateFields.status = "pending_completion";
     updateFields.completion_signal_detected = true;
@@ -1477,13 +1512,13 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // contact memory, body) goes in the user message to keep the cache warm.
   const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of a transaction the user PAID (money going out) — but NOT a benefit / refund / grant / entitlement coming TO the user, which DOES need a task\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TERSE HUMAN MESSAGE RULE (mandatory) ═══\nA short message from a HUMAN sender — a person or business writing\ndirectly, not an automated noreply/service/notification address — is\nusually business shorthand, not noise. Subject "Order" with body "More\nbedtime stories" from a retailer IS a purchase order → build the task\n("לטפל בהזמנה של <product> מ<sender>"). When a human wrote only a few\nwords, infer the obvious ask conservatively from the subject + sender +\ncontact context; do NOT return [] merely because the message is terse.\nThe EMPTY-ARRAY categories above describe AUTOMATED mail and closures —\nthey never license dropping a human's three-word request.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name. When the sender is shown as a handle ("@..."), a bare phone number, or is empty, you do NOT know their real name — do NOT invent or transliterate one (the "מי זה לויק? מאיפה לקחת את השם?" bug). Use "איש הקשר" or the phone as written, unless a real name literally appears in the body.\n• All times you write (in title or description) are in the user's LOCAL timezone, stated in the "Current date/time" line — the [INCOMING]/[OUTGOING] timestamps are already local. Never emit a UTC/server time.\n• A name, person, or thing MENTIONED IN PASSING is NOT a task. Do NOT turn "who is X?" / "לברר מי X" / "find out about Y" into a sub-task unless the user EXPLICITLY asked to find out — a name dropped in conversation ("גם ריזל אמר ש...") is context, not an action item. Never pad a title with an invented clarification step like "ולברר מי ריזל".\n• The ACTION in title_he must be one the message actually asks for or unmistakably implies. NEVER infer an unrelated action the text does not support: a "review your upcoming delivery" / "price changed" notice is NOT a request to "update payment method"; an auto-renewal footer ("renews until you cancel") is NOT a payment-method problem; a shipping update is NOT a billing task. When the message states no explicit action, keep the literal ask (לבדוק / לעיין / לעקוב) — never upgrade it to a payment / billing / cancellation action that is not written in the message. The title must describe the SAME matter as the description and never introduce a concept, product, feature, or scenario absent from the body — do NOT free-associate from the sender's brand or name (a vendor called "Dualhook" does not make the message about webhooks / "heartbeat" / a "connection" that expires); a billing email stays a billing task. If title and description would describe different things, the title is wrong — rebuild it from the description.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "size":         "quick|regular — quick = ONE bounded action with no prep work (reply, confirm, call, schedule, send, sign, pay) doable in one short sitting; regular = requires creation, preparation, gathering material, multiple steps, or depends on others (prepare, write, plan, summarize, build, compare). WHEN IN DOUBT → regular (a polluted quick-list breaks the user's quick-marathon habit; a missed quick task costs nothing).",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null",\n  "confidence":   "'high' | 'low' — your certainty this extraction is correct AND complete. Use 'low' when the message is genuinely hard to turn into a task: several intertwined actions, an unclear owner or deadline, the real content sits behind a link/PDF/attachment you could not read, or the ask is buried in a long thread. Use 'high' only when the task is unambiguous from the text in front of you."\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a transaction the USER paid (money OUT) → return []. BUT a benefit / refund / grant / subsidy / entitlement coming TO the user — especially with an amount to collect or a date to claim/use (food-stamps/EBT, grant, refund, eligibility date) → build ONE task: title "להשתמש ב<benefit>" / "לממש <benefit> עד <date>", describe the amount + date + how to use it.\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   let context = `\n\n${nowContextLine(userTz(settings))}`;
-  if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
+  if (isConversational(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
   // Outgoing email (the user is the sender): tell the task builder the
   // direction explicitly, otherwise it reads the user's own request
   // ("Please zelle $250") as a to-do for the user and reverses it (T460).
   // Mirror the gmail_sent / my_emails detection in preClassify (lines 165-166).
-  if (!isWhatsApp(msg)) {
+  if (!isConversational(msg)) {
     const senderLc = (msg.sender_email || msg.sender || "").toLowerCase();
     const myEmails = (settings.my_emails || []).map((e: string) => String(e).toLowerCase());
     const officeAddresses = (settings.office_addresses || []).map((e: string) => String(e).toLowerCase());
@@ -1923,12 +1958,14 @@ async function tagGmailReview(msg: any, classification: string): Promise<void> {
 // share one source_message_id — they fan out across burst rows the same way
 // Gmail's fan out across a thread's message rows. We therefore link by the
 // chat (metadata.chatId) sibling set, mirroring the Gmail threadId path below.
-async function whatsappChatSiblingIds(userId: string, chatId: string): Promise<string[]> {
+async function whatsappChatSiblingIds(userId: string, chatId: string, sourceType = "whatsapp"): Promise<string[]> {
+  // Gather sibling burst rows for a chat, scoped to the SAME channel — a
+  // WhatsApp chatId and an SMS peer phone could coincide, so never mix them.
   const { data, error } = await supabase
     .from("source_messages")
     .select("id")
     .eq("user_id", userId)
-    .eq("source_type", "whatsapp")
+    .eq("source_type", sourceType)
     .filter("metadata->>chatId", "eq", chatId);
   // Don't swallow the error: an empty result here makes the caller spin off a
   // NEW task instead of linking to the chat's open matter, so a transient query
@@ -1953,10 +1990,10 @@ async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: st
 
   // WhatsApp (non self-chat): link by chat sibling set — any open task born from
   // an earlier burst row in the same chat.
-  if (msg.source_type === "whatsapp") {
+  if (msg.source_type === "whatsapp" || msg.source_type === "sms") {
     const chatId = msg.metadata?.chatId as string | undefined;
     if (!chatId) return null;
-    const sibIds = await whatsappChatSiblingIds(userId, chatId);
+    const sibIds = await whatsappChatSiblingIds(userId, chatId, msg.source_type);
     if (sibIds.length === 0) return null;
     const { data: openTask, error: taskErr } = await supabase.from("tasks").select("id, updates").eq("user_id", userId).in("status", ["inbox", "in_progress"]).in("source_message_id", sibIds).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (taskErr || !openTask) return null;
@@ -2787,7 +2824,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // off a new matter even while others stay open. This replaces the legacy
   // single-slot Path 1 for WhatsApp (which collapsed every message onto one
   // task). Falls back to legacy Path 1 when the flag is off.
-  const whatsappRoutingActive = sys.whatsapp_matter_routing && isWhatsApp(msg);
+  const whatsappRoutingActive = sys.whatsapp_matter_routing && isConversational(msg);
   // Route both actionable and informational WhatsApp messages — informational
   // follow-ups (e.g. "תודה, סגרנו") must still land on their matter as an
   // update, exactly as the legacy Path 1 branch (c) did. SPAM is left alone.
@@ -2807,7 +2844,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       const chatId = msg.metadata?.chatId as string | undefined;
       const sibIds = msg.source_type === "whatsapp_echo"
         ? [msg.id]
-        : (chatId ? await whatsappChatSiblingIds(msg.user_id, chatId) : []);
+        : (chatId ? await whatsappChatSiblingIds(msg.user_id, chatId, msg.source_type) : []);
       let candidates: WhatsAppCandidate[] = [];
       if (sibIds.length > 0) {
         // Active matters (any age) — the normal continuation targets.
@@ -3085,7 +3122,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // transcript content lives in raw_content and may carry a real ask.
   // Routing/completion on EXISTING matters is unaffected (Paths 0-2 already
   // ran); a user override always bypasses.
-  if (!linkedTaskId && classification === "actionable" && !userForceActionable && isWhatsApp(msg)) {
+  if (!linkedTaskId && classification === "actionable" && !userForceActionable && isConversational(msg)) {
     const waLatest = String(msg.body_text ?? "").trim();
     if (waLatest.length > 0 && waLatest.length <= 10) {
       classification = "informational";
@@ -3281,7 +3318,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                   // completed matches (truly done) and WhatsApp re-extractions
                   // (the same ask re-mined from a rolling transcript — the
                   // T665→T685 respawn) stay suppressed.
-                  const escalation = tDup.status !== "completed" && !isWhatsApp(msg);
+                  const escalation = tDup.status !== "completed" && !isConversational(msg);
                   if (escalation) {
                     if (!resendContext) {
                       const verb = tDup.status === "dismissed" ? "דחית" : "העברת לארכיון";
@@ -3857,7 +3894,7 @@ Deno.serve(async (req) => {
         if (allMessages.length >= sys.batch_size) break;
         const remaining = sys.batch_size - allMessages.length;
         let q = supabase.from("source_messages").select("*").eq("user_id", userId).eq("processing_status", "pending").eq("source_type", st).is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER);
-        if (st === "whatsapp") q = q.lte("received_at", whatsappReadyBefore);
+        if (st === "whatsapp" || st === "sms") q = q.lte("received_at", whatsappReadyBefore);
         const { data: msgs } = await q.order("received_at", { ascending: true }).limit(remaining);
         if (msgs && msgs.length > 0) allMessages = allMessages.concat(msgs);
       }
