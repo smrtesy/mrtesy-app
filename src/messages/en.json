@@ -2719,9 +2719,11 @@
       "selectWordHint": "Select a word in the text to get spelling suggestions",
       "pause": "Pause",
       "takeNotePlaceholder": "Which word to keep from this take?",
-      "useTake": "Use this take for the line",
-      "chosenTake": "In use for the line",
-      "inUse": "in use"
+      "good": "Good",
+      "goodCount": "{count, plural, one {good take} other {# good takes}}",
+      "markGood": "Mark as good take",
+      "unmarkGood": "Unmark good take",
+      "noAudio": "No audio for this line"
     },
     "lexicon": {
       "title": "Pronunciation lexicon",

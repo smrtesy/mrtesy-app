@@ -2718,9 +2718,11 @@
       "selectWordHint": "סמן מילה בטקסט כדי לקבל הצעות כתיב",
       "pause": "השהה",
       "takeNotePlaceholder": "איזו מילה לקחת מהגרסה הזו?",
-      "useTake": "השתמש בגרסה זו לשורה",
-      "chosenTake": "הגרסה שבשימוש לשורה",
-      "inUse": "בשימוש"
+      "good": "טובה",
+      "goodCount": "{count, plural, one {הקלטה טובה} other {# הקלטות טובות}}",
+      "markGood": "סמן כהקלטה טובה",
+      "unmarkGood": "בטל סימון טוב",
+      "noAudio": "אין אודיו לשורה זו"
     },
     "lexicon": {
       "title": "מילון הגייה",
