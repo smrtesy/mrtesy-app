@@ -561,7 +561,11 @@
       "noResults": "No results",
       "naturalLanguage": "What about the bank?",
       "clear": "Clear search",
-      "snoozedUntil": "Snoozed until {when}"
+      "snoozedUntil": "Snoozed until {when}",
+      "statusArchived": "Archived",
+      "statusDismissed": "Dismissed",
+      "statusCompleted": "Completed",
+      "statusPendingCompletion": "Awaiting confirm"
     },
     "smartInput": {
       "placeholder": "Add task in natural language...",

@@ -561,7 +561,11 @@
       "noResults": "לא נמצאו תוצאות",
       "naturalLanguage": "מה עם הבנק?",
       "clear": "נקה חיפוש",
-      "snoozedUntil": "מנודנד עד {when}"
+      "snoozedUntil": "מנודנד עד {when}",
+      "statusArchived": "בארכיון",
+      "statusDismissed": "נדחתה",
+      "statusCompleted": "הושלמה",
+      "statusPendingCompletion": "ממתין לאישור"
     },
     "smartInput": {
       "placeholder": "הוסף משימה בשפה טבעית...",

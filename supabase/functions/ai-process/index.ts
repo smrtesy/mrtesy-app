@@ -2312,7 +2312,27 @@ async function findDuplicateOpenTask(
     .order("status_changed_at", { ascending: false })
     .limit(40);
 
-  const pool = [...(open ?? []), ...(closed ?? [])];
+  // VERY CONSERVATIVE recurring/snoozed guard. The pools above see only
+  // inbox/in_progress (open) and completed/archived/dismissed (closed) — a
+  // SNOOZED recurring occurrence waiting for its due date is invisible, so a
+  // self-note ("check salaries go out tomorrow", SMS) spawned a second task
+  // beside the monthly recurring "לשלם משכורות" already due the SAME day
+  // (T691 / T1302). Pull in snoozed occurrences whose due_date EXACTLY equals
+  // the probe's. Exact-date-only + the match gate below keep false-merges
+  // near-zero; no probe date → skip entirely.
+  let sameDaySnoozed: any[] = [];
+  if (probe.dueDate) {
+    const { data: sd, error: sdErr } = await supabase
+      .from("tasks")
+      .select(cols)
+      .eq("user_id", userId)
+      .eq("due_date", probe.dueDate)
+      .eq("status", "snoozed")
+      .limit(20);
+    sameDaySnoozed = sdErr ? [] : (sd ?? []);
+  }
+
+  const pool = [...(open ?? []), ...(closed ?? []), ...sameDaySnoozed];
   if (pool.length === 0) return null;
 
   // Deterministic recall: keep only tasks that share a contact OR fall within
@@ -2393,7 +2413,10 @@ async function findDuplicateOpenTask(
         serial: chosen.serial_display || "",
         confidence: parsed.confidence,
         reason: String(parsed.reason_he ?? ""),
-        closed: !["inbox", "in_progress"].includes(String(chosen.status)),
+        // snoozed matches (the same-day recurring guard above) fold like an open
+        // task — linkAndEnrichDuplicate suppresses the duplicate instead of the
+        // escalation path spawning a tagged re-creation.
+        closed: !["inbox", "in_progress", "snoozed"].includes(String(chosen.status)),
         status: String(chosen.status),
       };
     }
@@ -2904,11 +2927,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // Don't append into a ghost; let the create/link paths below handle
         // this message from scratch (and re-point thread_memory if a task is made).
       } else {
-        // Only the natural "done" states reopen on a resumed actionable turn.
-        // dismissed/archived were deliberately killed (don't auto-resurrect);
-        // snoozed is a user-intended hide — both keep their prior append
-        // behavior via branch (c) below.
-        const REOPENABLE_STATUSES = ["pending_completion", "completed"];
+        // A resumed actionable turn on a CLOSED task reopens it instead of
+        // burying the new content as a silent update. Mirrors the WhatsApp
+        // per-matter router (Path 0), which already reopens dismissed/archived.
+        // Without dismissed/archived here, a genuine email follow-up ("can you
+        // update me?") on a task the user had dismissed/archived attached
+        // SILENTLY — visible in the log ("linked to task …") but nowhere
+        // actionable (the Jack / T1134 case). snoozed stays a user-intended
+        // hide → still appends via branch (c).
+        const REOPENABLE_STATUSES = ["pending_completion", "completed", "dismissed", "archived"];
         const taskClosed = REOPENABLE_STATUSES.includes(String(linkedTask.status));
 
         if (classification === "actionable" && analysis.newMatter && (analysis.completionSignal || taskClosed)) {
