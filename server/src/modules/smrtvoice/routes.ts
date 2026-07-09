@@ -1423,7 +1423,7 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
-    .select("line_number, output_audio_path")
+    .select("id, line_number, output_audio_path")
     .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
     .eq("status", "completed")
@@ -1431,6 +1431,37 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
   if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
+
+  // Archive the SET of good takes per line (with the note in the filename) so a
+  // multi-take line comes down as every version the user marked; a line with no
+  // good take falls back to its single current output. take_number (1 = oldest)
+  // matches the UI label.
+  const { data: allTakes, error: allTakesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("line_id, output_audio_path, note, approved, created_at")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: true });
+  // Non-fatal: on error we fall back to each line's single current output.
+  if (allTakesErr) console.warn("[smrtvoice] archive take query failed:", allTakesErr.message);
+  const goodByLine = new Map<string, Array<{ path: string; note: string | null; n: number }>>();
+  const rankByLine = new Map<string, number>();
+  for (const t of (allTakes ?? []) as Array<{ line_id: string; output_audio_path: string | null; note: string | null; approved: boolean }>) {
+    const n = (rankByLine.get(t.line_id) ?? 0) + 1;
+    rankByLine.set(t.line_id, n);
+    if (t.approved && t.output_audio_path) {
+      const arr = goodByLine.get(t.line_id) ?? [];
+      arr.push({ path: t.output_audio_path, note: t.note, n });
+      goodByLine.set(t.line_id, arr);
+    }
+  }
+  // Strip characters illegal in a filename; keep Hebrew/spaces so the note stays
+  // readable. Empty note → no suffix.
+  const noteSuffix = (note: string | null): string => {
+    // eslint-disable-next-line no-control-regex
+    const clean = (note ?? "").replace(/[/\\:*?"<>|\x00-\x1f]/g, "").trim();
+    return clean ? `_${clean}` : "";
+  };
 
   try {
     const drive = await getDriveClient(req.user!.id);
@@ -1452,21 +1483,29 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
     let uploaded = 0;
     let skipped = 0;
-    for (const line of lines as Array<{ line_number: number; output_audio_path: string }>) {
-      const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(line.output_audio_path);
-      if (dlErr || !blob) {
-        skipped += 1;
-        continue;
+    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string }>) {
+      const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
+      const good = goodByLine.get(line.id) ?? [];
+      // Good takes if any (each named with its take number + note); else the
+      // single current output.
+      const files = good.length > 0
+        ? good.map((g) => ({ path: g.path, name: `${base}_v${g.n}${noteSuffix(g.note)}.wav` }))
+        : [{ path: line.output_audio_path, name: `${base}.wav` }];
+      for (const f of files) {
+        const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
+        if (dlErr || !blob) {
+          skipped += 1;
+          continue;
+        }
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        await drive.files.create({
+          requestBody: { name: f.name, parents: [folderId] },
+          media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+          fields: "id",
+          supportsAllDrives: true,
+        });
+        uploaded += 1;
       }
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      const baseName = `${script.code}_${String(line.line_number).padStart(3, "0")}.wav`;
-      await drive.files.create({
-        requestBody: { name: baseName, parents: [folderId] },
-        media: { mimeType: "audio/wav", body: Readable.from(buffer) },
-        fields: "id",
-        supportsAllDrives: true,
-      });
-      uploaded += 1;
     }
 
     if (uploaded === 0) {
@@ -1515,17 +1554,24 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
   // list can show a "N versions" badge without a per-line round trip.
   const { data: takeRows, error: takeErr } = await db
     .from("smrtvoice_line_takes")
-    .select("line_id")
+    .select("line_id, approved")
     .eq("script_id", req.params.id)
     .eq("org_id", req.org!.id);
   if (takeErr) console.warn("[smrtvoice] take_count query failed:", takeErr.message);
   const takeCounts = new Map<string, number>();
+  const approvedCounts = new Map<string, number>();
   for (const t of takeRows ?? []) {
     takeCounts.set(t.line_id, (takeCounts.get(t.line_id) ?? 0) + 1);
+    if (t.approved) approvedCounts.set(t.line_id, (approvedCounts.get(t.line_id) ?? 0) + 1);
   }
-  const lines = (data ?? []).map((l: { id: string }) => ({
+  // approved_take_count drives the "good recording" indicator, so it always
+  // agrees with what's actually marked in the takes list. If the takes query
+  // failed, fall back to the persisted line.approved column so the indicator
+  // doesn't vanish for every line on a transient error.
+  const lines = (data ?? []).map((l: { id: string; approved?: boolean }) => ({
     ...l,
     take_count: takeCounts.get(l.id) ?? 0,
+    approved_take_count: takeErr ? (l.approved ? 1 : 0) : (approvedCounts.get(l.id) ?? 0),
   }));
   res.json({ lines });
 });
@@ -1815,10 +1861,13 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
   res.json({ takes: data ?? [] });
 });
 
-// PATCH /voice/takes/:id — choose a take as the line's audio (✓) and/or jot a
-// note. `approved:true` is SINGLE-select per line: it clears the other takes,
-// marks this one, and repoints the line's output_audio_path/duration/cost at it
-// so play / download / archive all use the chosen take. `note` is independent.
+// PATCH /voice/takes/:id — mark a take as "good" (⭐) and/or jot a note.
+// `approved` is MULTI-select per line: several takes can be marked good (e.g. to
+// take part of each in editing). The line's outer indicator, sequential play,
+// download and archive all operate on the SET of good takes (see
+// /voice/lines/:id/selection). Marking never touches output_audio_path — the
+// engine owns that (the latest render, used only as a fallback), so a regenerate
+// never steals the user's selection. `note` is independent.
 router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const hasApproved = typeof body.approved === "boolean";
@@ -1829,7 +1878,7 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
 
   const { data: take, error: takeErr } = await db
     .from("smrtvoice_line_takes")
-    .select("id, line_id, output_audio_path, duration_seconds, cost_usd")
+    .select("id, line_id")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1845,43 +1894,16 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
     if (error) return res.status(500).json({ error: error.message });
   }
 
-  if (hasApproved && body.approved === true) {
-    // Single-select: clear siblings, mark this take, and make it the line's audio.
-    const { error: clearErr } = await db
-      .from("smrtvoice_line_takes")
-      .update({ approved: false })
-      .eq("line_id", take.line_id)
-      .eq("org_id", req.org!.id);
-    if (clearErr) return res.status(500).json({ error: clearErr.message });
-
+  if (hasApproved) {
+    // Toggle just THIS take (multi-select — no sibling clearing).
     const { error: setErr } = await db
       .from("smrtvoice_line_takes")
-      .update({ approved: true })
+      .update({ approved: body.approved })
       .eq("id", take.id)
       .eq("org_id", req.org!.id);
     if (setErr) return res.status(500).json({ error: setErr.message });
 
-    const { error: lineErr } = await db
-      .from("smrtvoice_lines")
-      .update({
-        output_audio_path: take.output_audio_path,
-        output_duration_seconds: take.duration_seconds,
-        generation_cost_usd: take.cost_usd,
-        approved: true,
-      })
-      .eq("id", take.line_id)
-      .eq("org_id", req.org!.id);
-    if (lineErr) return res.status(500).json({ error: lineErr.message });
-  } else if (hasApproved && body.approved === false) {
-    // Un-choose this take. Keep the line's last audio, but if no take remains
-    // chosen for the line, clear its approved indicator (the outer ✓).
-    const { error } = await db
-      .from("smrtvoice_line_takes")
-      .update({ approved: false })
-      .eq("id", take.id)
-      .eq("org_id", req.org!.id);
-    if (error) return res.status(500).json({ error: error.message });
-
+    // Keep the line's outer indicator in sync: lit iff any good take remains.
     const { count, error: countErr } = await db
       .from("smrtvoice_line_takes")
       .select("id", { count: "exact", head: true })
@@ -1890,14 +1912,12 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
       .eq("approved", true);
     if (countErr) return res.status(500).json({ error: countErr.message });
 
-    if (!count) {
-      const { error: lineErr } = await db
-        .from("smrtvoice_lines")
-        .update({ approved: false })
-        .eq("id", take.line_id)
-        .eq("org_id", req.org!.id);
-      if (lineErr) return res.status(500).json({ error: lineErr.message });
-    }
+    const { error: lineErr } = await db
+      .from("smrtvoice_lines")
+      .update({ approved: (count ?? 0) > 0 })
+      .eq("id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (lineErr) return res.status(500).json({ error: lineErr.message });
   }
 
   const { data: updated, error: readErr } = await db
@@ -1925,6 +1945,54 @@ router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => 
     .createSignedUrl(take.output_audio_path, 3600);
   if (signErr || !data) return res.status(500).json({ error: signErr?.message ?? "signing failed" });
   res.json({ audio_url: data.signedUrl });
+});
+
+// GET /voice/lines/:id/selection — the line's "good" takes (⭐), each with a
+// signed URL, its chronological take number and note, for sequential play and
+// multi-download. When no take is marked good, falls back to the line's current
+// single output (one item, fallback:true). take_number matches the "Take N"
+// label in the UI (1 = oldest).
+router.get("/voice/lines/:id/selection", async (req: Request, res: Response) => {
+  const { data: line, error: lineErr } = await db
+    .from("smrtvoice_lines")
+    .select("id, output_audio_path")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (lineErr) return res.status(500).json({ error: lineErr.message });
+  if (!line) return res.status(404).json({ error: "Line not found" });
+
+  const { data: takeRows, error: takesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, approved, note, output_audio_path, created_at")
+    .eq("line_id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: true });
+  if (takesErr) return res.status(500).json({ error: takesErr.message });
+
+  const sign = async (path: string): Promise<string | null> => {
+    const { data } = await db.storage.from("smrtvoice-audio").createSignedUrl(path, 3600);
+    return data?.signedUrl ?? null;
+  };
+
+  const ranked = (takeRows ?? []).map((t, i) => ({ ...t, take_number: i + 1 }));
+  const good = ranked.filter((t) => t.approved && t.output_audio_path);
+
+  const items: Array<{ take_id: string | null; url: string; take_number: number | null; note: string | null }> = [];
+  if (good.length > 0) {
+    for (const t of good) {
+      const url = await sign(t.output_audio_path);
+      if (url) items.push({ take_id: t.id, url, take_number: t.take_number, note: t.note });
+    }
+    // Only if at least one good take signed; otherwise fall through to the
+    // line's single output so play/download still has something.
+    if (items.length > 0) return res.json({ items, fallback: false });
+  }
+  if (line.output_audio_path) {
+    const url = await sign(line.output_audio_path);
+    if (url) items.push({ take_id: null, url, take_number: null, note: null });
+  }
+  res.json({ items, fallback: true });
 });
 
 // ============================================================

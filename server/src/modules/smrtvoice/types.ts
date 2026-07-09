@@ -189,8 +189,10 @@ export interface ScriptLine {
   redone_at: string | null;
   created_at: string;
   updated_at: string;
-  // Computed by the lines endpoint (not a column): how many takes this line has.
+  // Computed by the lines endpoint (not columns): how many takes this line has,
+  // and how many are marked "good" (drives the outer indicator).
   take_count?: number;
+  approved_take_count?: number;
 }
 
 export interface LineTake {
