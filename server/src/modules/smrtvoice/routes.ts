@@ -82,6 +82,109 @@ async function loadPronunciation(
     }));
 }
 
+type SpeakerVoice = {
+  resemble_voice_id: string;
+  model?: string | null;
+  language?: string;
+  character_id?: string | null;
+  character_name?: string | null;
+  description?: string | null;
+  personality_prompt?: string | null;
+  style_baseline_tags?: string[];
+};
+type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
+
+/**
+ * Build the speaker_map sent to the engine from a script's casting. A speaker
+ * cast to several characters (its primary character_id plus extra_character_ids)
+ * carries a `voices` array so the engine renders one take per voice; single-cast
+ * speakers keep just the primary fields. Each character's CURRENT voice / model
+ * / style is read fresh, so re-generating picks up a voice or style change with
+ * no re-cast step. Returns the map plus the raw cast rows (for the generate
+ * "every speaker must be decided" check).
+ */
+async function buildSpeakerMap(
+  scriptId: string,
+  orgId: string,
+  fallbackLang: string,
+): Promise<{
+  map: Record<string, SpeakerMapEntry>;
+  cast: Array<{ speaker_name: string; skip: boolean | null }>;
+  error?: string;
+}> {
+  const { data: cast, error: castErr } = await db
+    .from("smrtvoice_script_speakers")
+    .select("speaker_name, character_id, extra_character_ids, resemble_voice_id, skip")
+    .eq("script_id", scriptId);
+  if (castErr) return { map: {}, cast: [], error: castErr.message };
+
+  const ids = new Set<string>();
+  for (const c of cast ?? []) {
+    if (c.character_id) ids.add(c.character_id);
+    for (const e of (c.extra_character_ids ?? []) as string[]) ids.add(e);
+  }
+  const charMap = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      description: string | null;
+      resemble_voice_id: string | null;
+      resemble_model: string | null;
+      language: string;
+      personality_prompt: string | null;
+      style_baseline_tags: string[] | null;
+    }
+  >();
+  if (ids.size > 0) {
+    const { data: chars, error: charsErr } = await db
+      .from("smrtvoice_characters")
+      .select(
+        "id, name, description, resemble_voice_id, resemble_model, language, personality_prompt, style_baseline_tags",
+      )
+      .in("id", [...ids])
+      .eq("org_id", orgId);
+    if (charsErr) return { map: {}, cast: [], error: charsErr.message };
+    for (const c of chars ?? []) charMap.set(c.id, c);
+  }
+
+  const toVoice = (id: string): SpeakerVoice | null => {
+    const ch = charMap.get(id);
+    if (!ch?.resemble_voice_id) return null;
+    return {
+      resemble_voice_id: ch.resemble_voice_id,
+      model: ch.resemble_model,
+      language: ch.language,
+      character_id: id,
+      character_name: ch.name,
+      description: ch.description,
+      personality_prompt: ch.personality_prompt,
+      style_baseline_tags: ch.style_baseline_tags ?? [],
+    };
+  };
+
+  const map: Record<string, SpeakerMapEntry> = {};
+  for (const c of cast ?? []) {
+    const primary: SpeakerVoice | null = c.character_id
+      ? toVoice(c.character_id)
+      : c.resemble_voice_id
+        ? { resemble_voice_id: c.resemble_voice_id, language: fallbackLang }
+        : null;
+    if (!primary) continue;
+    const extras = ((c.extra_character_ids ?? []) as string[])
+      .map(toVoice)
+      .filter((v): v is SpeakerVoice => !!v);
+    const voices = [primary, ...extras];
+    // Only emit `voices` for a genuine multi-cast; single voices stay lean and
+    // hit the engine's unchanged single-voice path.
+    map[c.speaker_name] = voices.length > 1 ? { ...primary, voices } : primary;
+  }
+  return {
+    map,
+    cast: (cast ?? []).map((c) => ({ speaker_name: c.speaker_name, skip: c.skip })),
+  };
+}
+
 /**
  * Make a Supabase-Storage-safe object key segment. Storage rejects non-ASCII
  * (e.g. Hebrew) and some punctuation → "InvalidKey". Keep [A-Za-z0-9._-],
@@ -1095,6 +1198,7 @@ router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) 
   const list: Array<{
     speaker_name: string;
     character_id?: string | null;
+    extra_character_ids?: string[] | null;
     resemble_voice_id?: string | null;
     skip?: boolean;
   }> = Array.isArray(req.body?.speakers) ? req.body.speakers : [];
@@ -1108,6 +1212,9 @@ router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) 
       speaker_name: s.speaker_name,
       // A skipped speaker carries no voice — its lines won't be generated.
       character_id: s.skip ? null : (s.character_id ?? null),
+      // Additional characters this speaker is also recorded by (multi-voice:
+      // the line fans out to one take per voice). Cleared when skipped.
+      extra_character_ids: s.skip || !Array.isArray(s.extra_character_ids) ? [] : s.extra_character_ids,
       resemble_voice_id: s.skip ? null : (s.resemble_voice_id ?? null),
       skip: s.skip ?? false,
     }));
@@ -1159,40 +1266,14 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     }
   }
 
-  // Build the speaker_map from casting.
-  const { data: cast, error: castErr } = await db
-    .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id, skip")
-    .eq("script_id", script.id);
-  if (castErr) return res.status(500).json({ error: castErr.message });
-
-  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
-  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
-  if (charIds.length > 0) {
-    const { data: chars } = await db
-      .from("smrtvoice_characters")
-      .select("id, name, description, resemble_voice_id, resemble_model, language")
-      .in("id", charIds)
-      .eq("org_id", req.org!.id);
-    for (const c of chars ?? []) charMap.set(c.id, c);
-  }
-
-  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
-  for (const c of cast ?? []) {
-    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
-      const ch = charMap.get(c.character_id)!;
-      speakerMap[c.speaker_name] = {
-        resemble_voice_id: ch.resemble_voice_id!,
-        model: ch.resemble_model,
-        language: ch.language,
-        character_id: c.character_id,
-        character_name: ch.name,
-        description: ch.description,
-      };
-    } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
-    }
-  }
+  // Build the speaker_map from casting (a speaker cast to several characters
+  // fans out to a `voices` list — one take per voice).
+  const { map: speakerMap, cast, error: castErr } = await buildSpeakerMap(
+    script.id,
+    req.org!.id,
+    script.language ?? "he",
+  );
+  if (castErr) return res.status(500).json({ error: castErr });
   if (Object.keys(speakerMap).length === 0) {
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
@@ -1201,7 +1282,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
   // doesn't accidentally drop lines — while still allowing "cast one, skip the
   // rest" to preview a single voice. Skipped speakers' lines aren't generated.
-  const undecided = (cast ?? [])
+  const undecided = cast
     .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
     .map((c) => c.speaker_name);
   if (undecided.length > 0) {
@@ -1706,30 +1787,14 @@ async function queueRegeneration(
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
-  // Rebuild the casting map so regenerated lines use the current voices.
-  const { data: cast } = await db
-    .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id")
-    .eq("script_id", script.id);
-  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
-  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
-  if (charIds.length > 0) {
-    const { data: chars } = await db
-      .from("smrtvoice_characters")
-      .select("id, name, description, resemble_voice_id, resemble_model, language")
-      .in("id", charIds)
-      .eq("org_id", req.org!.id);
-    for (const c of chars ?? []) charMap.set(c.id, c);
-  }
-  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
-  for (const c of cast ?? []) {
-    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
-      const ch = charMap.get(c.character_id)!;
-      speakerMap[c.speaker_name] = { resemble_voice_id: ch.resemble_voice_id!, model: ch.resemble_model, language: ch.language, character_id: c.character_id, character_name: ch.name, description: ch.description };
-    } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
-    }
-  }
+  // Rebuild the casting map so regenerated lines use the current voices (and
+  // fan out to multiple voices when a speaker is cast to several characters).
+  const { map: speakerMap, error: castErr } = await buildSpeakerMap(
+    script.id,
+    req.org!.id,
+    script.language ?? "he",
+  );
+  if (castErr) return res.status(500).json({ error: castErr });
 
   // Preserve the script's generation mode — regenerating a line in an STS
   // script must re-render via speech-to-speech (with the input recording),
@@ -2033,7 +2098,7 @@ router.get("/voice/lines/:id/selection", async (req: Request, res: Response) => 
 
   const { data: takeRows, error: takesErr } = await db
     .from("smrtvoice_line_takes")
-    .select("id, approved, note, output_audio_path, created_at")
+    .select("id, approved, note, voice_label, output_audio_path, created_at")
     .eq("line_id", req.params.id)
     .eq("org_id", req.org!.id)
     .order("created_at", { ascending: true });
@@ -2047,11 +2112,19 @@ router.get("/voice/lines/:id/selection", async (req: Request, res: Response) => 
   const ranked = (takeRows ?? []).map((t, i) => ({ ...t, take_number: i + 1 }));
   const good = ranked.filter((t) => t.approved && t.output_audio_path);
 
-  const items: Array<{ take_id: string | null; url: string; take_number: number | null; note: string | null }> = [];
+  const items: Array<{
+    take_id: string | null;
+    url: string;
+    take_number: number | null;
+    note: string | null;
+    voice_label: string | null;
+  }> = [];
   if (good.length > 0) {
     for (const t of good) {
       const url = await sign(t.output_audio_path);
-      if (url) items.push({ take_id: t.id, url, take_number: t.take_number, note: t.note });
+      if (url) {
+        items.push({ take_id: t.id, url, take_number: t.take_number, note: t.note, voice_label: t.voice_label });
+      }
     }
     // Only if at least one good take signed; otherwise fall through to the
     // line's single output so play/download still has something.
@@ -2059,7 +2132,7 @@ router.get("/voice/lines/:id/selection", async (req: Request, res: Response) => 
   }
   if (line.output_audio_path) {
     const url = await sign(line.output_audio_path);
-    if (url) items.push({ take_id: null, url, take_number: null, note: null });
+    if (url) items.push({ take_id: null, url, take_number: null, note: null, voice_label: null });
   }
   res.json({ items, fallback: true });
 });
