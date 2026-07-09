@@ -2734,7 +2734,16 @@
       "goodCount": "{count, plural, one {good take} other {# good takes}}",
       "markGood": "Mark as good take",
       "unmarkGood": "Unmark good take",
-      "noAudio": "No audio for this line"
+      "noAudio": "No audio for this line",
+      "select": "Select",
+      "selectedCount": "{count} selected",
+      "archiveAction": "Archive",
+      "deleteAction": "Delete",
+      "unarchive": "Unarchive",
+      "archivedView": "Archived ({count})",
+      "backFromArchived": "Back",
+      "archivedBadge": "archived",
+      "confirmDeleteLines": "Permanently delete {count} line(s)? Includes all takes and files. Cannot be undone."
     },
     "lexicon": {
       "title": "Pronunciation lexicon",

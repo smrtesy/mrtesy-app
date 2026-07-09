@@ -2733,7 +2733,16 @@
       "goodCount": "{count, plural, one {הקלטה טובה} other {# הקלטות טובות}}",
       "markGood": "סמן כהקלטה טובה",
       "unmarkGood": "בטל סימון טוב",
-      "noAudio": "אין אודיו לשורה זו"
+      "noAudio": "אין אודיו לשורה זו",
+      "select": "בחר",
+      "selectedCount": "{count} נבחרו",
+      "archiveAction": "לארכיון",
+      "deleteAction": "מחק",
+      "unarchive": "שחזר מארכיון",
+      "archivedView": "ארכיון ({count})",
+      "backFromArchived": "חזרה",
+      "archivedBadge": "בארכיון",
+      "confirmDeleteLines": "למחוק לצמיתות {count} שורות? כולל כל הגרסאות והקבצים. לא ניתן לשחזר."
     },
     "lexicon": {
       "title": "מילון הגייה",
