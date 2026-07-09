@@ -517,9 +517,9 @@
       "pastDeadline": "אי אפשר לנדנד מעבר ליעד ({date}) — המשימה תוסתר עד אחרי הדדליין",
       "presetTomorrowNoon": "מחר 15:00",
       "presetTwoWorkdays": "עוד 2 ימי עסקים, 9:00",
-    "deadlineWarn": "התאריך שבחרת אחרי היעד ({due}). דחייה מעבר לדדליין — לשקול:",
-    "cutToDeadline": "חתוך ליום היעד",
-    "moveDeadline": "עדכן את היעד לתאריך זה"
+      "deadlineWarn": "התאריך שבחרת אחרי היעד ({due}). דחייה מעבר לדדליין — לשקול:",
+      "cutToDeadline": "חתוך ליום היעד",
+      "moveDeadline": "עדכן את היעד לתאריך זה"
     },
     "materials": {
       "title": "חומר רקע",
@@ -2440,6 +2440,9 @@
       "voice": "קול",
       "myCharacters": "הדמויות שלי",
       "stockVoices": "קולות רזמבל",
+      "myNamedVoices": "קולות רזמבל (בשם שלי)",
+      "searchVoices": "חפש קול…",
+      "closeSearch": "סגור חיפוש",
       "none": "— לא לוהק —",
       "skip": "⤳ דלג (אל תייצר)",
       "noVoiceYet": "(אין קול עדיין)",
@@ -2486,7 +2489,18 @@
       "displayNamePlaceholder": "שם תצוגה…",
       "saveName": "שמור",
       "cancelName": "ביטול",
-      "loadError": "טעינת הקולות נכשלה"
+      "loadError": "טעינת הקולות נכשלה",
+      "pause": "השהה",
+      "playAll": "נגן את כל הדוגמאות",
+      "playAllCount": "נגן הכל ({count})",
+      "stopAll": "עצור",
+      "generateMissing": "הפק דוגמאות לקולות שאין להם",
+      "generateMissingCount": "הפק דוגמאות חסרות ({count})",
+      "generatingAll": "מפיק דוגמאות… {done}/{total}",
+      "generateMissingConfirm": "להפיק דוגמאות ל-{count} קולות שאין להם? כל הפקה עולה קרדיטים ברזמבל.",
+      "generateMissingDone": "כל הדוגמאות מוכנות ({count})",
+      "generateMissingPartial": "{failed} מתוך {total} דוגמאות נכשלו",
+      "noMissing": "לכל הקולות כבר יש דוגמית"
     },
     "projects": {
       "title": "פרויקטים",

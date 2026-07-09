@@ -1,15 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Play, Trash2, Sparkles, RefreshCw, Search, Pencil, Check, X } from "lucide-react";
+import { Play, Pause, Square, ListMusic, Trash2, Sparkles, RefreshCw, Search, Pencil, Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
+import { readVoiceCache, writeVoiceCache } from "./voiceCache";
 
 interface Account {
   email: string | null;
@@ -36,7 +37,6 @@ interface Character {
 }
 
 const LANG_FLAG: Record<string, string> = { he: "🇮🇱", en: "🇺🇸" };
-const CACHE_KEY = "smrtvoice.library.v1";
 
 export function VoiceLibrary() {
   const t = useTranslations("smrtVoice.library");
@@ -51,11 +51,23 @@ export function VoiceLibrary() {
   const [vtype, setVtype] = useState<string>("");
   const [sampling, setSampling] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [playingAll, setPlayingAll] = useState(false);
+  // Batch "generate all missing samples" progress, or null when idle.
+  const [genAll, setGenAll] = useState<{ done: number; total: number } | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
   // Inline rename: { uuid, value } while editing a voice's display name.
   const [editing, setEditing] = useState<{ uuid: string; value: string } | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // A single shared <audio> so only one preview ever plays and we can pause it.
+  // resolveRef lets stopAudio() unblock the play-all loop when the user pauses.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const resolveRef = useRef<(() => void) | null>(null);
+  const cancelAllRef = useRef(false);
+  // Bumped on every stop/new-play so a clip whose signed-URL fetch is still in
+  // flight can tell it was superseded and bail instead of playing late.
+  const playTokenRef = useRef(0);
 
   const load = useCallback(async (refresh = false) => {
     setError(null);
@@ -74,15 +86,9 @@ export function VoiceLibrary() {
       const seed: Record<string, boolean> = {};
       for (const v of vs.voices ?? []) if (v.has_preview) seed[v.uuid] = true;
       setPreviews(seed);
-      // Cache for instant paint next time (stale-while-revalidate).
-      try {
-        localStorage.setItem(
-          CACHE_KEY,
-          JSON.stringify({ voices: vs.voices ?? [], account: acct, chars: cs.characters ?? [] }),
-        );
-      } catch {
-        /* quota/serialization — non-fatal */
-      }
+      // Cache for instant paint next time (stale-while-revalidate). Shared
+      // with the casting screen via voiceCache.
+      writeVoiceCache({ voices: vs.voices ?? [], account: acct, chars: cs.characters ?? [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loadError"));
     } finally {
@@ -93,21 +99,14 @@ export function VoiceLibrary() {
 
   useEffect(() => {
     // Paint last-known voices instantly, then revalidate in the background.
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      if (raw) {
-        const c = JSON.parse(raw) as { voices?: Voice[]; account?: Account | null; chars?: Character[] };
-        if (c.voices) {
-          setVoices(c.voices);
-          setAccount(c.account ?? null);
-          setChars(c.chars ?? []);
-          const seed: Record<string, boolean> = {};
-          for (const v of c.voices) if (v.has_preview) seed[v.uuid] = true;
-          setPreviews(seed);
-        }
-      }
-    } catch {
-      /* ignore cache read errors */
+    const c = readVoiceCache();
+    if (c?.voices) {
+      setVoices(c.voices as Voice[]);
+      setAccount((c.account as Account | null) ?? null);
+      setChars((c.chars as Character[] | undefined) ?? []);
+      const seed: Record<string, boolean> = {};
+      for (const v of c.voices) if (v.has_preview) seed[v.uuid] = true;
+      setPreviews(seed);
     }
     load();
   }, [load]);
@@ -186,20 +185,123 @@ export function VoiceLibrary() {
     }
   }
 
-  async function onPlay(uuid: string) {
-    setPlaying(uuid);
-    try {
-      const { audio_url } = await api<{ audio_url: string }>(
-        `/api/voice/resemble/voices/${uuid}/sample`,
-      );
-      const audio = new Audio(audio_url);
-      audio.onended = () => setPlaying(null);
-      audio.onerror = () => setPlaying(null);
-      await audio.play();
-    } catch (err) {
-      setPlaying(null);
-      toast.error(err instanceof Error ? err.message : "Unknown error");
+  // Tear down the current clip. Also resolves any pending play-all promise so
+  // the sequential loop advances/exits instead of hanging (pause() never fires
+  // "ended"), and clears "playing" so the button flips back to Play.
+  const stopAudio = useCallback(() => {
+    playTokenRef.current += 1; // invalidate any clip still fetching its URL
+    const a = audioRef.current;
+    if (a) {
+      a.onended = null;
+      a.onerror = null;
+      a.pause();
+      audioRef.current = null;
     }
+    if (resolveRef.current) {
+      const r = resolveRef.current;
+      resolveRef.current = null;
+      r();
+    }
+    setPlaying(null);
+  }, []);
+
+  // Stop playback if the user navigates away mid-clip / mid-play-all.
+  useEffect(() => () => {
+    cancelAllRef.current = true;
+    stopAudio();
+  }, [stopAudio]);
+
+  // Play one stored preview to completion. Resolves when it ends, errors, or is
+  // stopped — so play-all can await it.
+  const playOne = useCallback((uuid: string): Promise<void> => {
+    const myToken = (playTokenRef.current += 1); // claim this playback slot
+    return new Promise<void>((resolve) => {
+      api<{ audio_url: string }>(`/api/voice/resemble/voices/${uuid}/sample`)
+        .then(({ audio_url }) => {
+          // Stopped / superseded / unmounted while the URL was fetching.
+          if (playTokenRef.current !== myToken) return resolve();
+          const audio = new Audio(audio_url);
+          audioRef.current = audio;
+          resolveRef.current = resolve;
+          setPlaying(uuid);
+          const done = () => {
+            if (resolveRef.current === resolve) resolveRef.current = null;
+            if (audioRef.current === audio) audioRef.current = null;
+            setPlaying((p) => (p === uuid ? null : p));
+            resolve();
+          };
+          audio.onended = done;
+          audio.onerror = done;
+          audio.play().catch(done);
+        })
+        .catch((err) => {
+          if (playTokenRef.current === myToken) {
+            toast.error(err instanceof Error ? err.message : "Unknown error");
+          }
+          resolve();
+        });
+    });
+  }, []);
+
+  // Per-voice Play/Pause toggle. Starting a single voice cancels any play-all.
+  function onTogglePlay(uuid: string) {
+    if (playing === uuid) {
+      cancelAllRef.current = true;
+      setPlayingAll(false);
+      stopAudio();
+      return;
+    }
+    cancelAllRef.current = true; // stop a running play-all before soloing
+    setPlayingAll(false);
+    stopAudio();
+    void playOne(uuid);
+  }
+
+  // Play every currently-listed voice that has a preview, in order.
+  async function onPlayAll() {
+    if (playingAll) {
+      cancelAllRef.current = true;
+      setPlayingAll(false);
+      stopAudio();
+      return;
+    }
+    const queue = filtered.filter((v) => previews[v.uuid]);
+    if (queue.length === 0) return;
+    stopAudio(); // silence any solo clip so we don't overlap two previews
+    cancelAllRef.current = false;
+    setPlayingAll(true);
+    for (const v of queue) {
+      if (cancelAllRef.current) break;
+      await playOne(v.uuid);
+    }
+    // Natural completion: playOne already cleared "playing" on the last clip.
+    setPlayingAll(false);
+  }
+
+  // One-time backfill: generate a stored sample for every voice that lacks one.
+  // Previews persist, so this is a run-once action; each call costs credits.
+  async function onGenerateMissing() {
+    const missing = (voices ?? []).filter((v) => !previews[v.uuid]);
+    if (missing.length === 0) {
+      toast.info(t("noMissing"));
+      return;
+    }
+    if (!window.confirm(t("generateMissingConfirm", { count: missing.length }))) return;
+    setGenAll({ done: 0, total: missing.length });
+    let failed = 0;
+    for (let i = 0; i < missing.length; i++) {
+      try {
+        await api(`/api/voice/resemble/voices/${missing[i].uuid}/sample`, { method: "POST" });
+        const uuid = missing[i].uuid;
+        setPreviews((p) => ({ ...p, [uuid]: true }));
+      } catch {
+        failed++;
+      }
+      setGenAll({ done: i + 1, total: missing.length });
+    }
+    setGenAll(null);
+    if (failed > 0) toast.error(t("generateMissingPartial", { failed, total: missing.length }));
+    else toast.success(t("generateMissingDone", { count: missing.length }));
   }
 
   async function onDelete(uuid: string) {
@@ -221,6 +323,10 @@ export function VoiceLibrary() {
   const types = Array.from(
     new Set((voices ?? []).map((v) => v.voice_type ?? "").filter(Boolean)),
   );
+  // Voices across the whole account still missing a stored sample.
+  const missingCount = (voices ?? []).filter((v) => !previews[v.uuid]).length;
+  // Currently-listed voices that have a sample ready to play.
+  const playableCount = filtered.filter((v) => previews[v.uuid]).length;
 
   return (
     <div className="space-y-4">
@@ -253,6 +359,36 @@ export function VoiceLibrary() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Playback / batch actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant={playingAll ? "default" : "outline"}
+          onClick={onPlayAll}
+          disabled={playableCount === 0 || genAll !== null}
+          title={playingAll ? t("stopAll") : t("playAll")}
+        >
+          {playingAll ? <Square className="h-4 w-4 me-1" /> : <ListMusic className="h-4 w-4 me-1" />}
+          {playingAll ? t("stopAll") : t("playAllCount", { count: playableCount })}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onGenerateMissing}
+          disabled={missingCount === 0 || genAll !== null || playingAll}
+          title={t("generateMissing")}
+        >
+          {genAll !== null ? (
+            <RefreshCw className="h-4 w-4 me-1 animate-spin" />
+          ) : (
+            <Sparkles className="h-4 w-4 me-1" />
+          )}
+          {genAll !== null
+            ? t("generatingAll", { done: genAll.done, total: genAll.total })
+            : t("generateMissingCount", { count: missingCount })}
+        </Button>
+      </div>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
@@ -398,11 +534,14 @@ export function VoiceLibrary() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        title={t("play")}
-                        onClick={() => onPlay(v.uuid)}
-                        disabled={playing === v.uuid}
+                        title={playing === v.uuid ? t("pause") : t("play")}
+                        onClick={() => onTogglePlay(v.uuid)}
                       >
-                        <Play className="h-4 w-4" />
+                        {playing === v.uuid ? (
+                          <Pause className="h-4 w-4" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
                       </Button>
                     )}
                     <Button
