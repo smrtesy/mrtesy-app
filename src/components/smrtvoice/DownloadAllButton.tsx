@@ -15,6 +15,7 @@ interface Line {
   line_number: number;
   speaker_name: string;
   output_audio_path: string | null;
+  archived_at?: string | null;
 }
 
 /**
@@ -35,7 +36,7 @@ export function DownloadAllButton({ scriptId }: { scriptId: string }) {
       const { lines } = await api<{ lines: Line[] }>(
         `/api/voice/scripts/${scriptId}/lines`,
       );
-      const completed = lines.filter((l) => l.output_audio_path);
+      const completed = lines.filter((l) => l.output_audio_path && !l.archived_at);
       if (completed.length === 0) {
         toast.error("אין קבצים מוכנים להורדה");
         return;
