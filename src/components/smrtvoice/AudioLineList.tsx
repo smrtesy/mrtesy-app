@@ -15,6 +15,9 @@ import {
   BadgeCheck,
   History,
   Loader2,
+  Archive,
+  Trash2,
+  CheckSquare,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -50,6 +53,7 @@ interface Line {
   redo_requested: boolean;
   take_count?: number;
   approved_take_count?: number;
+  archived_at?: string | null;
 }
 
 interface Take {
@@ -96,6 +100,12 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
   const [newLineNumbers, setNewLineNumbers] = useState<number[]>([]);
+
+  // Bulk archive/delete selection mode + archived-lines view.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showArchived, setShowArchived] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Combined settings + edit + send-again panel (one per line).
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -168,8 +178,13 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     };
   }, [fetchLines, loadTakes, scriptId]);
 
-  const rendered = (lines ?? []).filter((l) => l.output_audio_path);
-  const redoCount = (lines ?? []).filter((l) => l.redo_requested).length;
+  // Archived lines are hidden from the normal view; the "Archived (N)" toggle
+  // swaps `rendered` to show only them.
+  const rendered = (lines ?? []).filter(
+    (l) => l.output_audio_path && (showArchived ? l.archived_at : !l.archived_at),
+  );
+  const archivedCount = (lines ?? []).filter((l) => l.output_audio_path && l.archived_at).length;
+  const redoCount = (lines ?? []).filter((l) => l.redo_requested && !l.archived_at).length;
 
   async function playUrl(url: string, id: string): Promise<void> {
     await new Promise<void>((resolve) => {
@@ -478,6 +493,43 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelect() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  // Archive (soft, reversible), unarchive, or permanently delete the selected
+  // lines. Delete cascades to the lines' takes and removes their audio.
+  async function bulkAction(action: "archive" | "unarchive" | "delete") {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (action === "delete" && !window.confirm(t("studio.confirmDeleteLines", { count: ids.length }))) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      await api(`/api/voice/scripts/${scriptId}/lines/bulk`, {
+        method: "POST",
+        body: { action, line_ids: ids },
+      });
+      exitSelect();
+      fetchLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (lines === null) return <p className="text-sm text-muted-foreground">…</p>;
 
@@ -491,33 +543,72 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{t("audio.title")}</h2>
         <div className="flex flex-wrap items-center gap-2">
-          {rendered.length > 0 &&
-            (playingAll ? (
-              <Button size="sm" variant="outline" onClick={stopPlayback}>
-                <Square className="h-4 w-4 me-1" /> {t("studio.stop")}
+          {selectMode ? (
+            <>
+              <span className="text-sm text-muted-foreground">
+                {t("studio.selectedCount", { count: selectedIds.size })}
+              </span>
+              {showArchived ? (
+                <Button size="sm" variant="outline" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("unarchive")}>
+                  <Archive className="h-4 w-4 me-1" /> {t("studio.unarchive")}
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("archive")}>
+                  <Archive className="h-4 w-4 me-1" /> {t("studio.archiveAction")}
+                </Button>
+              )}
+              <Button size="sm" variant="destructive" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("delete")}>
+                <Trash2 className="h-4 w-4 me-1" /> {t("studio.deleteAction")}
               </Button>
-            ) : (
-              <Button size="sm" variant="outline" onClick={() => playSequence(rendered)}>
-                <Play className="h-4 w-4 me-1" /> {t("studio.playAll")}
-              </Button>
-            ))}
-          {newOnes.length > 0 && !playingAll && (
-            <Button size="sm" variant="outline" onClick={() => playSequence(newOnes)}>
-              <Play className="h-4 w-4 me-1" /> {t("studio.playNew", { count: newOnes.length })}
-            </Button>
-          )}
-          {redoCount > 0 && (
-            <Button size="sm" variant="secondary" onClick={rerunRedos} disabled={rerunning}>
-              <RefreshCw className={`h-4 w-4 me-1 ${rerunning ? "animate-spin" : ""}`} />
-              {t("studio.rerunRedos", { count: redoCount })}
-            </Button>
-          )}
-          {rendered.length > 0 && <DownloadAllButton scriptId={scriptId} />}
-          {rendered.length > 0 && (
-            <Button size="sm" onClick={saveToDrive} disabled={archiving}>
-              <FolderUp className="h-4 w-4 me-1" />
-              {archiving ? t("studio.saving") : t("studio.saveToDrive")}
-            </Button>
+              <Button size="sm" variant="ghost" onClick={exitSelect}>{t("studio.cancel")}</Button>
+            </>
+          ) : (
+            <>
+              {rendered.length > 0 && (
+                <Button size="sm" variant="outline" onClick={() => setSelectMode(true)}>
+                  <CheckSquare className="h-4 w-4 me-1" /> {t("studio.select")}
+                </Button>
+              )}
+              {showArchived ? (
+                <Button size="sm" variant="outline" onClick={() => setShowArchived(false)}>
+                  {t("studio.backFromArchived")}
+                </Button>
+              ) : (
+                archivedCount > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => setShowArchived(true)}>
+                    <Archive className="h-4 w-4 me-1" /> {t("studio.archivedView", { count: archivedCount })}
+                  </Button>
+                )
+              )}
+              {!showArchived && rendered.length > 0 &&
+                (playingAll ? (
+                  <Button size="sm" variant="outline" onClick={stopPlayback}>
+                    <Square className="h-4 w-4 me-1" /> {t("studio.stop")}
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => playSequence(rendered)}>
+                    <Play className="h-4 w-4 me-1" /> {t("studio.playAll")}
+                  </Button>
+                ))}
+              {!showArchived && newOnes.length > 0 && !playingAll && (
+                <Button size="sm" variant="outline" onClick={() => playSequence(newOnes)}>
+                  <Play className="h-4 w-4 me-1" /> {t("studio.playNew", { count: newOnes.length })}
+                </Button>
+              )}
+              {!showArchived && redoCount > 0 && (
+                <Button size="sm" variant="secondary" onClick={rerunRedos} disabled={rerunning}>
+                  <RefreshCw className={`h-4 w-4 me-1 ${rerunning ? "animate-spin" : ""}`} />
+                  {t("studio.rerunRedos", { count: redoCount })}
+                </Button>
+              )}
+              {!showArchived && rendered.length > 0 && <DownloadAllButton scriptId={scriptId} />}
+              {!showArchived && rendered.length > 0 && (
+                <Button size="sm" onClick={saveToDrive} disabled={archiving}>
+                  <FolderUp className="h-4 w-4 me-1" />
+                  {archiving ? t("studio.saving") : t("studio.saveToDrive")}
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -546,21 +637,34 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
             >
               <CardContent className="p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
+                  {selectMode && (
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 shrink-0"
+                      checked={selectedIds.has(line.id)}
+                      onChange={() => toggleSelect(line.id)}
+                      aria-label={t("studio.select")}
+                    />
+                  )}
                   <div
                     className="min-w-0 flex-1 cursor-pointer"
                     role="button"
                     tabIndex={0}
-                    title={t("studio.takes")}
-                    onClick={() => toggleTakes(line.id)}
+                    title={selectMode ? undefined : t("studio.takes")}
+                    onClick={() => (selectMode ? toggleSelect(line.id) : toggleTakes(line.id))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        toggleTakes(line.id);
+                        if (selectMode) toggleSelect(line.id);
+                        else toggleTakes(line.id);
                       }
                     }}
                   >
                     <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-1.5">
                       <span>#{line.line_number} · {line.speaker_name}</span>
+                      {line.archived_at && (
+                        <span className="rounded bg-muted px-1.5 py-0.5">{t("studio.archivedBadge")}</span>
+                      )}
                       {line.output_duration_seconds ? (
                         <span>· {line.output_duration_seconds.toFixed(1)}s</span>
                       ) : null}
@@ -590,6 +694,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     </div>
                     <div className="text-sm truncate" dir="rtl">{line.text_clean}</div>
                   </div>
+                  {!selectMode && (
                   <div className="flex items-center gap-1">
                     <Button
                       size="icon"
@@ -641,6 +746,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                       </Button>
                     )}
                   </div>
+                  )}
                 </div>
 
                 {/* Combined transparency + edit + send-again panel. */}

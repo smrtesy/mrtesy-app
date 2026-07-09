@@ -187,6 +187,7 @@ export interface ScriptLine {
   redo_reason: string | null;
   redo_instructions: string | null;
   redone_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   // Computed by the lines endpoint (not columns): how many takes this line has,
