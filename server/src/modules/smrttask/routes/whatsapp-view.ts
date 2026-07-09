@@ -808,6 +808,10 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
       reply_to_wamid: reply_to_wamid ?? null,
       is_reaction: false,
       is_history: false,
+      // Meta accepted the message (we got a wamid back) = "sent". The webhook's
+      // statuses[] receipts advance this to delivered/read as they arrive.
+      status: "sent",
+      sent_at: nowIso,
       received_at: nowIso,
       raw_payload: { sent_via: "smrttask", api_payload: payload },
     },
@@ -1008,6 +1012,10 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
       media_size: buf.length,
       is_reaction: false,
       is_history: false,
+      // Meta accepted the message (we got a wamid back) = "sent". The webhook's
+      // statuses[] receipts advance this to delivered/read as they arrive.
+      status: "sent",
+      sent_at: nowIso,
       received_at: nowIso,
       raw_payload: { sent_via: "smrttask", api_payload: payload },
     },
@@ -1217,6 +1225,10 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
       media_size: oggBuf.length,
       is_reaction: false,
       is_history: false,
+      // Meta accepted the message (we got a wamid back) = "sent". The webhook's
+      // statuses[] receipts advance this to delivered/read/played as they arrive.
+      status: "sent",
+      sent_at: nowIso,
       received_at: nowIso,
       raw_payload: { sent_via: "smrttask", api_payload: payload },
     },

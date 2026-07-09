@@ -73,8 +73,10 @@ const UPDATABLE_FIELDS = new Set([
   // Cross-source duplicate suggestion — set by ai-process, cleared (→ null)
   // by the UI when the user dismisses the suggestion or merges the tasks.
   "suggested_duplicate_of",
-  // Desk model: quick/regular column + home/work execution context.
+  // Desk model: quick/medium/big tier + home/work execution context.
   "size", "context",
+  // Daily method: the day a task is committed to (planned_for = today → "Today").
+  "planned_for",
   // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
   "woke_from_snooze_at",
   // "Waiting on Claude" chip — UI sets it (→ now) when a task is handed off to
@@ -87,12 +89,12 @@ const UPDATABLE_FIELDS = new Set([
 ]);
 
 const STATUSES = ["inbox", "in_progress", "snoozed", "archived", "completed", "dismissed", "pending_completion"];
-const SIZES = ["quick", "regular"];
+const SIZES = ["quick", "medium", "big"];
 // rules_memory.rule_type CHECK constraint — must stay in sync with migration
 // 20260424000001_backend_pipeline.sql. Any insert with a value outside this
 // set fails at the DB level, so validate BEFORE inserting AI-parsed values.
 const RULE_MEMORY_RULE_TYPES = new Set(["skip", "skip_spam", "action", "style", "bot", "preference", "financial"]);
-const CONTEXTS = ["home", "work"];
+const CONTEXTS = ["home", "work", "outside"];
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 const TASK_TYPES = ["action", "project_suggestion", "brief_review", "followup", "meeting"];
 
@@ -230,8 +232,8 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
   // mine=true → personal scope: rows the user owns (user_id). Used by the
   // suggestions inbox, which is per-user rather than org-wide.
   if (mine === "true" && userId) q = q.eq("user_id", userId);
-  if (size === "quick" || size === "regular") q = q.eq("size", size);
-  if (context === "home" || context === "work") q = q.eq("context", context);
+  if (typeof size === "string" && SIZES.includes(size)) q = q.eq("size", size);
+  if (context === "home" || context === "work" || context === "outside") q = q.eq("context", context);
   if (typeof status === "string") {
     const list = status.split(",").map((s) => s.trim()).filter(Boolean);
     if (list.length === 1) q = q.eq("status", list[0]);
@@ -542,7 +544,7 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
     .update({ status: "archived", completed_at: now, status_changed_at: now })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, project_id, tags, checklist")
+    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, size, context, project_id, tags, checklist")
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
@@ -609,6 +611,9 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
           organization_id: req.org!.id,
           title: data.title, title_he: data.title_he, description: data.description,
           priority: data.priority, task_type: data.task_type ?? "action",
+          // A recurring occurrence inherits its parent's effort size and context
+          // — the daily method must not silently re-classify it to the DB default.
+          size: data.size ?? "medium", context: data.context,
           status: spawnStatus, manually_verified: true,
           snoozed_until: spawnSnoozedUntil,
           due_date: next, due_time: data.due_time,

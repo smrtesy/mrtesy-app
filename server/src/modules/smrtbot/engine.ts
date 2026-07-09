@@ -449,6 +449,7 @@ export async function handleInbound(
         title: `Missing ${env} WhatsApp credentials`,
         message: `Bot "${bot.slug}" has no ${env} phone_number_id/access_token, so it cannot reply.`,
         botId: bot.id,
+        env,
         details: { bot: bot.slug, env },
       });
       return;
@@ -591,6 +592,7 @@ export async function handleInbound(
       title: `Conversation failed for bot ${bot.slug}`,
       message: msg,
       botId: bot.id,
+      env,
       stack,
       details: { bot: bot.slug, env, phone, inbound: message },
     });

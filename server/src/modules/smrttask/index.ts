@@ -12,6 +12,7 @@ import projectsRouter from "./projects/routes";
 import remindersRouter from "./reminders/routes";
 import correctionsRouter from "./corrections/routes";
 import actionsRouter from "./routes/actions";
+import eventsRouter from "./routes/events";
 import knowledgeRouter from "./routes/knowledge";
 import syncRouter from "./routes/sync";
 import whatsappViewRouter from "./routes/whatsapp-view";
@@ -34,6 +35,7 @@ router.use(projectsRouter);
 router.use(remindersRouter);
 router.use(correctionsRouter);
 router.use("/actions", actionsRouter);
+router.use(eventsRouter);
 router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);
 // Authenticated read API powering /[locale]/whatsapp.

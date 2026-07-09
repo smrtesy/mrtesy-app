@@ -68,6 +68,8 @@ const config: Config = {
           late: "hsl(var(--status-late))",
           "late-bg": "hsl(var(--status-late-bg))",
         },
+        // WhatsApp "נקרא" — סגול-ניאון זרחי לווי הכפול של הודעה שנקראה.
+        "wa-read": "hsl(var(--wa-read))",
       },
       borderRadius: {
         lg: "var(--radius)",

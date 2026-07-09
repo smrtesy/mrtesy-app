@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
+import { isEmbeddedPane } from "@/lib/navigate";
 import { SourceMessageReader } from "./SourceMessageReader";
 
 
@@ -38,6 +39,17 @@ interface SourceLinkProps {
   source: SourceRow | SourceRow[] | null | undefined;
   /** Stop click propagation (e.g. inside a Card that has its own onClick) */
   stopPropagation?: boolean;
+  /**
+   * Called right before we surface an in-app destination that lives OUTSIDE
+   * the current view — the docked WhatsApp panel or the SMS reader. When this
+   * badge sits inside a modal dialog (e.g. the task-detail sheet), Radix locks
+   * `pointer-events` on <body> and traps focus, so the docked panel would open
+   * frozen behind the still-open modal. The host passes its close handler here
+   * so the modal is dismissed first — mirroring QuickAction's "open in
+   * WhatsApp" flow. Not called for external links (Gmail/Drive/Calendar) that
+   * open in a new tab and don't conflict with an open modal.
+   */
+  onNavigate?: () => void;
   className?: string;
 }
 
@@ -46,7 +58,7 @@ interface SourceLinkProps {
  * the source type. If the source row has a URL the badge becomes a link that
  * opens the original message/doc in a new tab.
  */
-export function SourceLink({ source, stopPropagation, className }: SourceLinkProps) {
+export function SourceLink({ source, stopPropagation, onNavigate, className }: SourceLinkProps) {
   const waPanel = useWhatsAppPanel();
   const router = useRouter();
   const { locale } = useParams() as { locale: string };
@@ -87,6 +99,24 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
         type="button"
         onClick={(e) => {
           if (stopPropagation) e.stopPropagation();
+          // Dismiss any enclosing modal first: while it's open Radix freezes
+          // <body> pointer-events + traps focus, so the docked panel would
+          // open uninteractive behind it (same guard QuickAction uses).
+          onNavigate?.();
+          // Inside a workspace pane the docked panel is force-hidden by CSS
+          // (`html[data-embed="1"] .wa-panel { display:none }` in globals.css),
+          // so openChat() would flip the panel state but render nothing — the
+          // button looks completely dead. Route the pane to the full WhatsApp
+          // reader instead, carrying the same chat + message anchor the panel
+          // would have used (the page reads chat_id/msg — WhatsAppPageClient).
+          if (isEmbeddedPane()) {
+            const params = new URLSearchParams();
+            if (phone) params.set("chat_id", phone);
+            if (focusWamid) params.set("msg", focusWamid);
+            const qs = params.toString();
+            router.push(`/${locale}/whatsapp${qs ? `?${qs}` : ""}`);
+            return;
+          }
           // Surface the conversation in the docked side-panel — keeps the
           // current list (tasks/inbox/log) in place instead of navigating away.
           // When we know the exact source message, jump straight to it.
@@ -111,6 +141,9 @@ export function SourceLink({ source, stopPropagation, className }: SourceLinkPro
         type="button"
         onClick={(e) => {
           if (stopPropagation) e.stopPropagation();
+          // Close the enclosing modal before navigating so it doesn't linger
+          // over the SMS reader (and so its dirty-refresh fires cleanly).
+          onNavigate?.();
           router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}` : `/${locale}/sms`);
         }}
         title={`${label} — open in SMS`}

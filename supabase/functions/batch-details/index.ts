@@ -184,6 +184,7 @@ Deno.serve(async (req) => {
                 .update({
                   processing_lock_at: null,
                   dead_letter: true,
+                  processing_status: "processed",
                   skip_reason: "Message not found in Gmail",
                 })
                 .eq("id", msg.id);
@@ -202,6 +203,7 @@ Deno.serve(async (req) => {
                 .update({
                   processing_lock_at: null,
                   dead_letter: true,
+                  processing_status: "processed",
                   skip_reason: "Draft message",
                 })
                 .eq("id", msg.id);
@@ -219,7 +221,7 @@ Deno.serve(async (req) => {
                 : Number.isFinite(internalMs) && internalMs > 0 ? new Date(internalMs)
                 : new Date();
 
-            await supabase
+            const { error: hydrateError } = await supabase
               .from("source_messages")
               .update({
                 source_type: isSent ? "gmail_sent" : "gmail",
@@ -237,6 +239,34 @@ Deno.serve(async (req) => {
               })
               .eq("id", msg.id);
 
+            if (hydrateError) {
+              // A UNIQUE(user_id, source_type, source_id) violation means this
+              // message is already stored under the other source_type — a
+              // duplicate that gmail-reconcile created because it only compared
+              // against source_type='gmail' rows (a SENT message lives under
+              // 'gmail_sent'). Retiring the dup here stops it looping forever as
+              // a silently-failing "processed" row. Other errors: log + release
+              // the lock so the row retries.
+              if (hydrateError.code === "23505") {
+                await supabase
+                  .from("source_messages")
+                  .update({
+                    processing_lock_at: null,
+                    dead_letter: true,
+                    processing_status: "processed",
+                    skip_reason: "Duplicate — already stored under another source_type",
+                  })
+                  .eq("id", msg.id);
+                return { id: msg.id, success: false };
+              }
+              console.error("[batch-details] hydrate update failed:", hydrateError);
+              await supabase
+                .from("source_messages")
+                .update({ processing_lock_at: null })
+                .eq("id", msg.id);
+              return { id: msg.id, success: false };
+            }
+
             return { id: msg.id, success: true };
             } catch (e) {
               const retries = (Number((msg as any).retry_count) || 0) + 1;
@@ -246,7 +276,7 @@ Deno.serve(async (req) => {
                   processing_lock_at: null,
                   retry_count: retries,
                   ...(retries >= MAX_DETAIL_RETRIES
-                    ? { dead_letter: true, skip_reason: `details_failed_${retries}x: ${(e as Error).message}`.slice(0, 300) }
+                    ? { dead_letter: true, processing_status: "processed", skip_reason: `details_failed_${retries}x: ${(e as Error).message}`.slice(0, 300) }
                     : {}),
                 })
                 .eq("id", msg.id);

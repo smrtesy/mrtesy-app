@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Smartphone, Plus, Trash2, Copy, Check, Loader2, KeyRound } from "lucide-react";
+import { Smartphone, Plus, Trash2, Copy, Check, Loader2, KeyRound, ScrollText, RefreshCw, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 interface SmsConnection {
@@ -16,6 +16,19 @@ interface SmsConnection {
   display_phone_number: string | null;
   connected_at: string;
   disconnected_at: string | null;
+}
+
+interface WebhookLogEntry {
+  id: string;
+  created_at: string;
+  event: string | null;
+  direction: string | null;
+  outcome: "ingested" | "ignored" | "dropped";
+  reason: string | null;
+  message_id: string | null;
+  peer: string | null;
+  body_preview: string | null;
+  device_id: string | null;
 }
 
 interface ConnectResult {
@@ -47,6 +60,11 @@ export function SmsDeviceManager() {
   const [result, setResult] = useState<ConnectResult | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // Webhook diagnostic log — collapsed by default (compact-UI convention).
+  const [logOpen, setLogOpen] = useState(false);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logRows, setLogRows] = useState<WebhookLogEntry[]>([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -60,6 +78,24 @@ export function SmsDeviceManager() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadLog = useCallback(async () => {
+    setLogLoading(true);
+    try {
+      const r = await api<{ log: WebhookLogEntry[] }>("/api/sms/webhook-log");
+      setLogRows(r.log ?? []);
+    } catch (e) {
+      if (e instanceof ApiError && e.status !== 401) toast.error((e as Error).message);
+    } finally {
+      setLogLoading(false);
+    }
+  }, []);
+
+  function toggleLog() {
+    const next = !logOpen;
+    setLogOpen(next);
+    if (next) loadLog();
+  }
 
   async function copy(value: string, key: string) {
     try {
@@ -224,6 +260,88 @@ export function SmsDeviceManager() {
           <li>{t("step4")}</li>
         </ol>
       </div>
+
+      {/* Webhook diagnostic log — collapsed by default; one quiet entry point
+          that expands on demand. Shows every hit our webhook received and what
+          became of it, so the user can tell whether the phone is delivering. */}
+      <div className="rounded-md border">
+        <button
+          type="button"
+          onClick={toggleLog}
+          className="flex w-full items-center justify-between gap-2 p-3 text-start"
+          aria-expanded={logOpen}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <ScrollText className="h-4 w-4 text-muted-foreground" />
+            {t("webhookLog")}
+          </span>
+          <span className="flex items-center gap-1.5">
+            {logOpen && (
+              <RefreshCw
+                className={`h-3.5 w-3.5 text-muted-foreground ${logLoading ? "animate-spin" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!logLoading) loadLog();
+                }}
+                aria-label={t("webhookLogRefresh")}
+              />
+            )}
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${logOpen ? "rotate-180" : ""}`} />
+          </span>
+        </button>
+
+        {logOpen && (
+          <div className="border-t p-3">
+            <p className="mb-2 text-xs text-muted-foreground">{t("webhookLogHint")}</p>
+            {logLoading && logRows.length === 0 ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-10 rounded" />)}
+              </div>
+            ) : logRows.length === 0 ? (
+              <p className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
+                {t("webhookLogEmpty")}
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {logRows.map((row) => (
+                  <li key={row.id} className="rounded-md border p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className={outcomeClass(row.outcome)}>{t(outcomeKey(row.outcome))}</span>
+                        {row.event && <code className="truncate rounded bg-muted px-1 py-0.5" dir="ltr">{row.event}</code>}
+                        {row.peer && <span className="truncate text-muted-foreground" dir="ltr">{row.peer}</span>}
+                      </span>
+                      <time className="shrink-0 text-[11px] text-muted-foreground" dir="ltr">
+                        {new Date(row.created_at).toLocaleString()}
+                      </time>
+                    </div>
+                    {(row.reason || row.body_preview) && (
+                      <p className="mt-1 truncate text-muted-foreground" dir="auto">
+                        {row.reason ? <span dir="ltr">{row.reason}</span> : null}
+                        {row.reason && row.body_preview ? " · " : null}
+                        {row.body_preview}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+function outcomeKey(outcome: WebhookLogEntry["outcome"]): "outcomeIngested" | "outcomeIgnored" | "outcomeDropped" {
+  if (outcome === "ingested") return "outcomeIngested";
+  if (outcome === "ignored") return "outcomeIgnored";
+  return "outcomeDropped";
+}
+
+function outcomeClass(outcome: WebhookLogEntry["outcome"]): string {
+  const base = "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ";
+  if (outcome === "ingested") return base + "bg-status-ok/10 text-status-ok";
+  if (outcome === "ignored") return base + "bg-muted text-muted-foreground";
+  return base + "bg-destructive/10 text-destructive";
 }

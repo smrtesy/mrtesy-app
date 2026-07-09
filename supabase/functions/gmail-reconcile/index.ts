@@ -74,14 +74,20 @@ async function reconcileUser(userId: string) {
   const data = await resp.json();
   const gmailIds = new Set((data.messages || []).map((m: any) => m.id));
 
-  // Get DB message IDs for the same period
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Get DB message IDs to compare against the inbox query results.
+  // Match against BOTH gmail and gmail_sent: a message the inbox query returns
+  // may already be stored as 'gmail_sent' (batch-details reclassifies SENT
+  // mail). Comparing only against 'gmail' made reconcile think those were
+  // missing and insert duplicate 'gmail' rows that could never hydrate
+  // (batch-details' reclassify UPDATE hit the UNIQUE(user,source_type,source_id)
+  // constraint and no-oped). Also drop the received_at floor: reconcile-created
+  // rows are stamped at insert time, and a real row's received_at is the mail's
+  // own (possibly older) date, so a window filter here can miss an existing row.
   const { data: dbMessages } = await supabase
     .from("source_messages")
     .select("source_id")
     .eq("user_id", userId)
-    .eq("source_type", "gmail")
-    .gte("received_at", sevenDaysAgo);
+    .in("source_type", ["gmail", "gmail_sent"]);
 
   const dbIds = new Set((dbMessages || []).map((m) => m.source_id));
 

@@ -71,11 +71,16 @@ export function ContextButton({
   locale,
   /** Optional extra action rendered at the panel footer (e.g. "dismiss & learn"). */
   footer,
+  /** Passed to the source badge: called before it opens the docked WhatsApp /
+   *  SMS reader, so a host modal (the task-detail sheet) can close first —
+   *  otherwise the panel opens frozen behind the still-open modal. */
+  onSourceNavigate,
   className,
 }: {
   task: Task;
   locale: string;
   footer?: React.ReactNode;
+  onSourceNavigate?: () => void;
   className?: string;
 }) {
   const t = useTranslations("contextPanel");
@@ -142,7 +147,7 @@ export function ContextButton({
           {error && <p className="text-status-late">{error}</p>}
 
           {kind === "ai" && trail && (
-            <AIPanelBody trail={trail} task={task} locale={locale} t={t} />
+            <AIPanelBody trail={trail} task={task} locale={locale} t={t} onSourceNavigate={onSourceNavigate} />
           )}
           {kind === "plan" && plan && (
             <PlanPanelBody plan={plan} locale={locale} t={t} />
@@ -195,12 +200,13 @@ export function ContextButton({
 }
 
 function AIPanelBody({
-  trail, task, locale, t,
+  trail, task, locale, t, onSourceNavigate,
 }: {
   trail: TrailResponse;
   task: Task;
   locale: string;
   t: ReturnType<typeof useTranslations>;
+  onSourceNavigate?: () => void;
 }) {
   const source = trail.source;
   const log = trail.log;
@@ -215,7 +221,7 @@ function AIPanelBody({
         {task.serial_display && <span className="font-mono">{task.serial_display}</span>}
         {source?.source_type && <span>· {source.source_type}</span>}
         {source?.received_at && <span>· {new Date(source.received_at).toLocaleString(dtFmt)}</span>}
-        <SourceLink source={task.source_messages ?? null} stopPropagation />
+        <SourceLink source={task.source_messages ?? null} stopPropagation onNavigate={onSourceNavigate} />
       </div>
       {source?.subject && (
         <div><span className="text-muted-foreground/70">{t("subject")}: </span>{source.subject}</div>
@@ -246,7 +252,7 @@ function AIPanelBody({
       )}
       <div>
         <span className="text-muted-foreground/70">{t("size")}: </span>
-        {task.size === "quick" ? t("sizeQuick") : t("sizeRegular")}
+        {task.size === "quick" ? t("sizeQuick") : task.size === "big" ? t("sizeBig") : t("sizeMedium")}
       </div>
       {log?.classification_reason && (
         <div>

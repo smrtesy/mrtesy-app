@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Clock, Home, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot } from "lucide-react";
+import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot, Plus, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
 import {
@@ -35,6 +35,8 @@ export function TaskRow({
   onMove,
   onSizeToggle,
   onDueChange,
+  onPlanToggle,
+  plannedToday,
 }: {
   task: Task;
   locale: string;
@@ -47,8 +49,11 @@ export function TaskRow({
   onSnooze?: (taskId: string) => void;
   /** Move between desk and waiting (manual pin / unpin). */
   onMove?: (taskId: string, toDesk: boolean) => void;
-  onSizeToggle?: (taskId: string, size: "quick" | "regular") => void;
-  onDueChange?: (taskId: string, date: string | null) => void;
+  onSizeToggle?: (taskId: string, size: "quick" | "medium" | "big") => void;
+  onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
+  /** Add to / remove from today's plan (planned_for). Not shown for quick. */
+  onPlanToggle?: (taskId: string, addToToday: boolean) => void;
+  plannedToday?: boolean;
 }) {
   const t = useTranslations("tasks");
   const tClaude = useTranslations("claude");
@@ -125,6 +130,9 @@ export function TaskRow({
           {task.context === "home" && (
             <Home className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextHome")} />
           )}
+          {task.context === "outside" && (
+            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.contextOutside")} />
+          )}
           {task.recurrence_rule && (
             <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
           )}
@@ -151,13 +159,14 @@ export function TaskRow({
            Only for non-done rows (a done row has none of these). ───────── */}
       {!isDone && (
         <div className="flex items-center gap-2 ps-[26px]">
-          {/* Size toggle — ⚡ filled when quick */}
-          {onSizeToggle && (
+          {/* Size toggle — ⚡ filled when quick. Events (meetings) have no
+              effort level, so the toggle is hidden for them. */}
+          {onSizeToggle && task.task_type !== "meeting" && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onSizeToggle(task.id, task.size === "quick" ? "regular" : "quick");
+                onSizeToggle(task.id, task.size === "quick" ? "medium" : "quick");
               }}
               title={task.size === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
               className={cn(
@@ -174,17 +183,29 @@ export function TaskRow({
           {/* Deadline chip */}
           <DueDateChip
             deadline={deadline}
+            time={task.due_date ? task.due_time : null}
             locale={locale}
             blocked={blocked}
             locked={isPlan}
             constrained={constrained}
-            onChange={onDueChange ? (d) => onDueChange(task.id, d) : undefined}
+            onChange={onDueChange ? (d, tm) => onDueChange(task.id, d, tm) : undefined}
           />
 
           <div className="flex-1" />
 
-          {/* Snooze / move — always visible but faint; full strength on hover. */}
+          {/* Plan / snooze / move — always visible but faint; full on hover. */}
           <span className="flex shrink-0 items-center gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {/* Add to / remove from today's plan (medium/big only — quick is always today). */}
+            {onPlanToggle && task.size !== "quick" && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onPlanToggle(task.id, !plannedToday); }}
+                title={plannedToday ? t("row.removeFromToday") : t("row.addToToday")}
+                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                {plannedToday ? <Minus className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+              </button>
+            )}
             {onSnooze && (
               <button
                 type="button"

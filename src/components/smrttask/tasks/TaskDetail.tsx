@@ -20,9 +20,13 @@ import {
   ExternalLink,
   X,
   Home,
+  MapPin,
   Trash2,
   ThumbsDown,
   ListPlus,
+  CalendarPlus,
+  Circle,
+  Layers,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -39,6 +43,7 @@ import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { effectiveDeadline } from "@/lib/workdays";
@@ -74,6 +79,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tActions = useTranslations("tasks.actions");
   const tMerge = useTranslations("merge");
   const tSuggestions = useTranslations("suggestions");
+  const tEvents = useTranslations("events");
   const blocked = useWorkCalendar();
 
   // Description edit
@@ -83,8 +89,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   // Task field edit — autosaved (debounced); no save buttons anywhere.
   const [editingFields, setEditingFields] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [editSize, setEditSize] = useState<"quick" | "regular">("regular");
-  const [editContext, setEditContext] = useState<"" | "home">("");
+  const [editSize, setEditSize] = useState<"quick" | "medium" | "big">("medium");
+  const [editContext, setEditContext] = useState<"" | "home" | "outside">("");
   const [editAssignedTo, setEditAssignedTo] = useState<string>("");
   // Lazily loaded when edit mode first opens
   /** Tiny "saved ✓" flash after an autosave lands. */
@@ -105,6 +111,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [addEventOpen, setAddEventOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [dismissingDup, setDismissingDup] = useState(false);
 
@@ -225,8 +232,8 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     if (!task) return;
     seedingRef.current = true;
     setEditTitle(locale === "he" ? task.title_he || task.title : task.title);
-    setEditSize(task.size === "quick" ? "quick" : "regular");
-    setEditContext(task.context === "home" ? "home" : "");
+    setEditSize(task.size === "quick" ? "quick" : task.size === "big" ? "big" : "medium");
+    setEditContext(task.context === "home" ? "home" : task.context === "outside" ? "outside" : "");
     setEditAssignedTo(task.assigned_to_user_id || "");
     setEditingFields(true);
     // Let the seeded values settle before the autosave watcher arms.
@@ -354,14 +361,20 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <div className="flex items-center gap-2">
               <div dir="ltr" className="flex min-w-0 items-center gap-1.5">
                 <SerialBadge serial={effectiveTask.serial_display} stopPropagation />
-                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation />}
+                {effectiveTask.source_messages && <SourceLink source={effectiveTask.source_messages} stopPropagation onNavigate={handleDialogClose} />}
                 <DueDateChip
                   deadline={effectiveDeadline(effectiveTask)}
+                  time={effectiveTask.due_date ? effectiveTask.due_time : null}
                   blocked={blocked}
                   locked={!!effectiveTask.plan_id}
-                  onChange={effectiveTask.plan_id ? undefined : (d) => {
-                    api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: d } })
-                      .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, due_date: d } : p); })
+                  onChange={effectiveTask.plan_id ? undefined : (d, tm) => {
+                    // A due date with a time is an event (task_type=meeting);
+                    // clearing the time reverts an event back to a plain task.
+                    const body: Record<string, unknown> = { due_date: d, due_time: tm };
+                    if (d && tm) body.task_type = "meeting";
+                    else if (effectiveTask.task_type === "meeting") body.task_type = "action";
+                    api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body })
+                      .then(() => { dirtyRef.current = true; setLiveTask((p) => p ? { ...p, ...body } as Task : p); })
                       .catch((e) => toast.error((e as Error).message));
                   }}
                 />
@@ -625,15 +638,49 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 meta:   ℹ️/📋 context · ⚡ size · 🏠 home · ⏰ snooze · 📄 info · 👤 assign
                 decide: suggestions → ✗ · 👎 · ＋ · ✓  |  tasks → 🗑 · ✓ */}
           <div className="border-t bg-background px-4 py-2 flex items-center gap-1 flex-wrap pb-[max(8px,env(safe-area-inset-bottom))]">
-            <ContextButton task={effectiveTask} locale={locale} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
-            <IconButton
-              label={editSize === "quick" ? t("row.sizeQuickHint") : t("row.sizeRegularHint")}
-              color="amber"
-              className={editSize === "quick" ? "text-status-warn" : undefined}
-              onClick={() => setEditSize(editSize === "quick" ? "regular" : "quick")}
-            >
-              <Zap className={editSize === "quick" ? "fill-current" : undefined} />
-            </IconButton>
+            <ContextButton task={effectiveTask} locale={locale} onSourceNavigate={handleDialogClose} className="h-9 w-9 md:h-8 md:w-8 [&_svg]:size-4" />
+            {/* Effort level — quick / medium / big (autosaved). Icon-only.
+                Events (meetings) have no effort level, so it's hidden for them. */}
+            {effectiveTask.task_type !== "meeting" && (
+            <div className="flex h-8 items-center rounded-md border p-0.5">
+              <button
+                type="button"
+                title={t("sizeQuick")}
+                aria-label={t("sizeQuick")}
+                onClick={() => setEditSize("quick")}
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
+                  editSize === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
+                )}
+              >
+                <Zap className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                title={t("sizeMedium")}
+                aria-label={t("sizeMedium")}
+                onClick={() => setEditSize("medium")}
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
+                  editSize === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                )}
+              >
+                <Circle className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                title={t("sizeBig")}
+                aria-label={t("sizeBig")}
+                onClick={() => setEditSize("big")}
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded transition-colors",
+                  editSize === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
+                )}
+              >
+                <Layers className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            )}
             <IconButton
               label={tDetail("contextHome")}
               color="primary"
@@ -642,6 +689,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               onClick={() => setEditContext(editContext === "home" ? "" : "home")}
             >
               <Home className={editContext === "home" ? "fill-current" : undefined} />
+            </IconButton>
+            <IconButton
+              label={tDetail("contextOutside")}
+              color="primary"
+              aria-pressed={editContext === "outside"}
+              className={editContext === "outside" ? "text-primary" : undefined}
+              onClick={() => setEditContext(editContext === "outside" ? "" : "outside")}
+            >
+              <MapPin className={editContext === "outside" ? "fill-current" : undefined} />
             </IconButton>
             <IconButton label={t("actions.snooze")} color="amber" onClick={handleSnooze}>
               <Clock />
@@ -655,6 +711,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
               assignedTo={editAssignedTo || null}
               onAssign={(uid) => setEditAssignedTo(uid ?? "")}
             />
+            <IconButton label={tEvents("addEvent")} color="primary" onClick={() => setAddEventOpen(true)}>
+              <CalendarPlus />
+            </IconButton>
             <ClaudeLauncher
               task={effectiveTask}
               locale={locale}
@@ -710,7 +769,23 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         open={snoozeOpen}
         onClose={() => setSnoozeOpen(false)}
         onConfirm={handleSnoozeConfirm}
+        dueDate={effectiveTask.due_date ?? null}
+        onUpdateDeadline={effectiveTask.plan_id ? undefined : async (newDue) => {
+          await api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: newDue } });
+          dirtyRef.current = true;
+          setLiveTask((p) => (p ? { ...p, due_date: newDue } as Task : p));
+        }}
       />
+
+      {addEventOpen && (
+        <AddEventModal
+          taskId={effectiveTask.id}
+          open={addEventOpen}
+          onClose={() => setAddEventOpen(false)}
+          onDone={() => { dirtyRef.current = true; onUpdate(); handleDialogClose(); }}
+          locale={locale}
+        />
+      )}
 
       {effectiveTask.suggested_duplicate && (
         <MergeModal

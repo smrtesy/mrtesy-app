@@ -760,6 +760,15 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
     user's part is done. (Then, if the user's reply ALSO asks the other party
     for something back, that is a new_matter — but the original "you must
     answer" task is closed.)
+  • Same for a "notify / update / tell X" task ("להודיע ל-X", "לעדכן את X",
+    "למסור ל-X <מידע>"): an [OUTGOING] line in which the user ALREADY conveys
+    that information to X → completion=true. The user's message IS the
+    notification — do NOT keep a "still needs to tell X" task alive after they
+    already told them.
+  • completion is about the matter THIS task tracks. If the message closes a
+    DIFFERENT matter in the same chat while the tracked matter is still waiting
+    on the other party, completion=false and state=pending_other_party — a
+    resolved side-matter must never mark the tracked one done.
   • If the same message also opens a NEW request, still set completion=true
     for the ORIGINAL question (one task = one open question); the new request
     is the new_matter.
@@ -769,6 +778,17 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
   • "I'll check and get back to you" is NOT completion — that is R2b
     tracking, still pending.
   • A bare "תודה" with no linked task stays INFORMATIONAL, completion=false.
+
+═══ STATE ↔ TITLE must agree ═══
+new_title_he and state describe the SAME next move — they must never contradict:
+  • state=pending_user_action / open → the title names the USER's action
+    ("לענות ל-X", "לאשר ל-X", "לשלוח ל-X <דבר>").
+  • state=pending_other_party → the user already did their part; the title is a
+    PASSIVE tracker ("ממתין לתשובת X", "מעקב מול X"), NEVER a chore the user must
+    perform. A "לחכות ל-X / ממתין ל-X" title paired with state=pending_user_action
+    is a self-contradiction — decide the real direction from the transcript and
+    make BOTH fields reflect it. (This is what lets a "waiting on them" matter be
+    deferred instead of nagging in the action queue.)
 
 ═══ WORDING of reason_he / new_summary / new_title_he ═══
 W1. Register — three levels; never upgrade one into another:
@@ -1155,10 +1175,44 @@ async function appendUpdateToTask(
   }
   const markCompletion = analysis.completionSignal && !staleCompletionForFuture;
 
+  // "Waiting for a reply is not a task." When THIS message leaves the tracked
+  // matter's next move with the OTHER party (state=pending_other_party), the task
+  // becomes a QUIET deferred follow-up — never an active card, never
+  // pending_completion — regardless of how it got here. The creation path already
+  // does this for brand-new WhatsApp matters (~line 3269); this mirror covers a
+  // task that only TRANSITIONED into a waiting state via an update: the user
+  // answered X, so the "answer X" matter is done and all that's left is waiting on
+  // X — that belongs in the 48-business-hour follow-up loop, not the action queue.
+  // It also stops a completion signal that fired on a SIBLING matter in the same
+  // WhatsApp chat from closing this task while its OWN matter is still open (the
+  // Levi case: "payment received" must not archive "waiting for Levi to open the
+  // computers", which the analyzer itself flagged pending_other_party). Scoped to
+  // WhatsApp — email has its own send-time check_followup defer.
+  // Defer takes precedence over reopen ON PURPOSE: a closed matter the router
+  // revives (opts.reopen) whose next move is now the other party's should come
+  // back as a QUIET tracker, not jump into the active queue. When the revival
+  // leaves the ball with the USER (state open/pending_user_action) deferToFollowup
+  // is false, so reopen resurfaces it active as before.
+  const deferToFollowup = isWhatsApp(msg)
+    && analysis.state === "pending_other_party"
+    && classification !== "spam"
+    // Never convert a recurring occurrence into a follow-up snooze — recurrence
+    // has its own materialise/advance lifecycle in reminders-check.
+    && !existing?.recurrence_rule
+    && !existing?.recurrence_parent_id;
+
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
   // clear any prior completion signal so it stops looking "done" in the UI.
-  if (opts?.reopen) {
+  if (deferToFollowup) {
+    const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
+    updateFields.task_type = "followup";
+    updateFields.status = "snoozed";
+    updateFields.snoozed_until = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS).toISOString();
+    // Clear any stale completion flag so it doesn't read "done" while it waits.
+    updateFields.completion_signal_detected = false;
+    updateFields.completion_signal_reason = null;
+  } else if (opts?.reopen) {
     updateFields.status = resurfaceStatus;
     updateFields.completion_signal_detected = false;
     updateFields.completion_signal_reason = null;
@@ -1181,8 +1235,11 @@ async function appendUpdateToTask(
   const { error: followupActivityError } = await supabase.from("task_activities").insert({
     user_id: msg.user_id,
     task_id: taskId,
-    activity_type: opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
-    note: analysis.reason || msg.subject || `Linked via ${msg.source_type}`,
+    activity_type: deferToFollowup ? "snoozed" : opts?.reopen ? "reopened" : markCompletion ? "completion_signal" : "thread_followup",
+    new_value: deferToFollowup ? "snoozed" : null,
+    note: deferToFollowup
+      ? `Follow-up deferred ${FOLLOWUP_LEAD_HOURS} business hours (ball in other party's court): ${(analysis.reason || msg.subject || "").slice(0, 300)}`
+      : (analysis.reason || msg.subject || `Linked via ${msg.source_type}`),
     actor: "system",
   });
   if (followupActivityError) console.error("task_activities insert failed:", followupActivityError);
@@ -1279,6 +1336,12 @@ Decide by the LAST meaningful exchange, in this priority order (first match wins
   5. Last line is [OUTGOING] casual closure ("תודה", "אוקיי", "סבבה", "מעולה")
      with nothing pending → INFORMATIONAL.
   6. Conversation appears closed and resolved → INFORMATIONAL.
+CONCRETE ERRAND OVERRIDE: a specific thing the contact asks the USER to
+get / order / buy / bring / pick up for them ("תזמין לי", "תביא", "תקנה לי",
+"can you order me…") is ACTIONABLE and stays a task until it is fulfilled or
+declined — a later casual line in the same burst (small talk, "יישר כוח", an
+unrelated topic) does NOT downgrade it to informational. This overrides the
+last-line rule above for that still-open errand.
 A personal chat is NEVER spam — junk or promo content quoted inside the
 transcript does not make the chat spam.
 The generic "outgoing → informational" rule does NOT apply to WhatsApp.`;
@@ -1363,7 +1426,7 @@ Build the task by READING the content:
 The TRACKING-TASK / QUOTED-TEXT / ONE-TASK-PER-EMAIL rules above are for
 inbound messages and DO NOT apply to Drive documents.`;
 
-const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>. Frame the\n    title as a PASSIVE tracker, never as an action the user must perform:\n    "ממתין לתשובה מ-<name> על <topic>" or "מעקב מול <name> על <topic>".\n    NEVER write "לוודא ש<name> ענה/קיבל/חוזר" — the user already did their\n    part; inventing a "make sure they got it / replied" chore is illogical\n    ("ענית לו, למה אני צריך לוודא שהוא קיבל?"). The description says the\n    user already sent it and is waiting for the other side.\n  • Last is [OUTGOING] that ANSWERS the other party's question or fulfils\n    their request (the user delivered what was asked) with nothing else\n    pending → return []. The loop is CLOSED — the user answered; do NOT\n    create a "verify they received the answer" task. Only build a task if\n    the SAME message also leaves something genuinely open.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.\nDATE ANCHOR (mandatory): the task's date is the [ts] of the message the\ntask is actually about — NEVER the current date. If the relevant message is\nfrom 9 ביוני, the task is about 9 ביוני even if you are reading it on 12\nביוני. Do not write today's date over an older matter. When an "EARLIER\nCONTEXT" / "NEW MESSAGES" split is present, build the task from the NEW\nMESSAGES section only; the earlier context is there to help you understand\nthe new lines, not to be turned into its own task.`;
+const WHATSAPP_TASK_RULES = `\n\n═══ WhatsApp transcript handling ═══\nThe body is a chat with [INCOMING <ts>] / [OUTGOING <ts>] lines.\n[INCOMING] = the OTHER side wrote. [OUTGOING] = the user wrote.\nClassify the task by the LAST line:\n  • Last is [INCOMING] → the user owes a response. Title starts with\n    "לענות ל-<name>" or "לחזור ל-<name>".\n  • Last is [OUTGOING] that asks a question / makes a request still\n    awaiting the other side's reply (the user already wrote; the OTHER\n    party now owes the answer) → the user is WAITING ON <name>. Frame the\n    title as a PASSIVE tracker, never as an action the user must perform:\n    "ממתין לתשובה מ-<name> על <topic>" or "מעקב מול <name> על <topic>".\n    NEVER write "לוודא ש<name> ענה/קיבל/חוזר" — the user already did their\n    part; inventing a "make sure they got it / replied" chore is illogical\n    ("ענית לו, למה אני צריך לוודא שהוא קיבל?"). The description says the\n    user already sent it and is waiting for the other side.\n  • Last is [OUTGOING] that ANSWERS the other party's question or fulfils\n    their request (the user delivered what was asked) with nothing else\n    pending → return []. The loop is CLOSED — the user answered; do NOT\n    create a "verify they received the answer" task. Only build a task if\n    the SAME message also leaves something genuinely open.\n  • Last is [OUTGOING] with a commitment BY THE USER (אחזור / אבדוק /\n    אשלח / אעדכן / time pledge) → the user owes a follow-through. Title\n    starts with "לעקוב מול <name>" or "להשלים מול <name> את <topic>".\n  • Last is [OUTGOING] closure / nothing pending → return [].\nDIRECTION GUARD (mandatory): "לענות ל" / "לחזור ל" mean the USER replies,\nso use them ONLY when the LAST line is [INCOMING]. If the last line is\n[OUTGOING] the user has already written — NEVER title the task\n"לענות ל-<name>"/"לחזור ל-<name>"; the other party is the one who owes the\nreply, so the user's next step is to follow up / wait, not to answer.\nNever return a task that simply re-states a past line. The task must name\nthe NEXT step the user has to take.\nDATE ANCHOR (mandatory): the task's date is the [ts] of the message the\ntask is actually about — NEVER the current date. If the relevant message is\nfrom 9 ביוני, the task is about 9 ביוני even if you are reading it on 12\nביוני. Do not write today's date over an older matter. When an "EARLIER\nCONTEXT" / "NEW MESSAGES" split is present, build the task from the NEW\nMESSAGES section only; the earlier context is there to help you understand\nthe new lines, not to be turned into its own task.\nMULTI-MATTER (mandatory): one chat can carry SEVERAL matters at once. Build the task ONLY for the matter of the LAST/newest line. Do NOT title a task from an EARLIER matter in the transcript that the user has already answered, fulfilled or closed — even if that earlier matter looks actionable in isolation (e.g. an old "what is X's phone number?" the user already sent must NOT become a task when the newest line opens a different ask like "put money in the canteen"). title_he, description and reason_he must all describe the SAME (latest) matter; if the title names a different topic than the newest line, it is wrong — rebuild it from the newest line.`;
 
 const GMAIL_SENT_TASK_RULES = `\n\n═══ SENT-EMAIL DIRECTION RULE (mandatory) ═══\nThis email was SENT BY THE USER — the From: address is the user's own.\nThe user is the SENDER, not the recipient. NEVER turn the user's own\nrequest into a to-do FOR the user.\n  • If the user ASKED the recipient to do / pay / send / transfer\n    something → the user is now WAITING ON the recipient. The next step\n    is to follow up or confirm the OTHER side acted — NOT to perform the\n    action the user requested from them. Title starts with\n    "לעקוב אחרי <נמען>" or "לוודא ש<נמען> …".\n  • If the user COMMITTED to do something themselves (אשלח / אעביר /\n    אבדוק / a time pledge) → the user owes a follow-through. Title starts\n    with the committed verb / "להשלים מול <נמען> …".\n  • If nothing is pending (closure, thank-you, pure FYI) → return [].\nDIRECTION GUARD (mandatory): money or an action the user REQUESTED from\nthe recipient flows TOWARD the user — never title it as the user\npaying / sending / transferring TO the recipient. owner_contact and any\nnamed party must be the RECIPIENT, never the user themselves.`;
 
@@ -1412,7 +1475,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // Static instructions → cached prefix (admin-editable via ai_prompts key
   // "edge_task_builder"). Dynamic context (WhatsApp rules, project brief,
   // contact memory, body) goes in the user message to keep the cache warm.
-  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of a transaction the user PAID (money going out) — but NOT a benefit / refund / grant / entitlement coming TO the user, which DOES need a task\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TERSE HUMAN MESSAGE RULE (mandatory) ═══\nA short message from a HUMAN sender — a person or business writing\ndirectly, not an automated noreply/service/notification address — is\nusually business shorthand, not noise. Subject "Order" with body "More\nbedtime stories" from a retailer IS a purchase order → build the task\n("לטפל בהזמנה של <product> מ<sender>"). When a human wrote only a few\nwords, infer the obvious ask conservatively from the subject + sender +\ncontact context; do NOT return [] merely because the message is terse.\nThe EMPTY-ARRAY categories above describe AUTOMATED mail and closures —\nthey never license dropping a human's three-word request.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name. When the sender is shown as a handle ("@..."), a bare phone number, or is empty, you do NOT know their real name — do NOT invent or transliterate one (the "מי זה לויק? מאיפה לקחת את השם?" bug). Use "איש הקשר" or the phone as written, unless a real name literally appears in the body.\n• All times you write (in title or description) are in the user's LOCAL timezone, stated in the "Current date/time" line — the [INCOMING]/[OUTGOING] timestamps are already local. Never emit a UTC/server time.\n• A name, person, or thing MENTIONED IN PASSING is NOT a task. Do NOT turn "who is X?" / "לברר מי X" / "find out about Y" into a sub-task unless the user EXPLICITLY asked to find out — a name dropped in conversation ("גם ריזל אמר ש...") is context, not an action item. Never pad a title with an invented clarification step like "ולברר מי ריזל".\n• The ACTION in title_he must be one the message actually asks for or unmistakably implies. NEVER infer an unrelated action the text does not support: a "review your upcoming delivery" / "price changed" notice is NOT a request to "update payment method"; an auto-renewal footer ("renews until you cancel") is NOT a payment-method problem; a shipping update is NOT a billing task. When the message states no explicit action, keep the literal ask (לבדוק / לעיין / לעקוב) — never upgrade it to a payment / billing / cancellation action that is not written in the message.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "size":         "quick|regular — quick = ONE bounded action with no prep work (reply, confirm, call, schedule, send, sign, pay) doable in one short sitting; regular = requires creation, preparation, gathering material, multiple steps, or depends on others (prepare, write, plan, summarize, build, compare). WHEN IN DOUBT → regular (a polluted quick-list breaks the user's quick-marathon habit; a missed quick task costs nothing).",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null",\n  "confidence":   "'high' | 'low' — your certainty this extraction is correct AND complete. Use 'low' when the message is genuinely hard to turn into a task: several intertwined actions, an unclear owner or deadline, the real content sits behind a link/PDF/attachment you could not read, or the ask is buried in a long thread. Use 'high' only when the task is unambiguous from the text in front of you."\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a transaction the USER paid (money OUT) → return []. BUT a benefit / refund / grant / subsidy / entitlement coming TO the user — especially with an amount to collect or a date to claim/use (food-stamps/EBT, grant, refund, eligibility date) → build ONE task: title "להשתמש ב<benefit>" / "לממש <benefit> עד <date>", describe the amount + date + how to use it.\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
+  const staticPrompt = settings.__prompts?.taskBuilder ?? `You are a task builder for a personal task system.\nExtract concrete actionable tasks from this message.\nReturn ONLY a JSON Array, no markdown, no commentary.\n\n═══ TRACKING-TASK RULE (mandatory, READ FIRST) ═══\nIf the message is a response from a service provider (lawyer, accountant,\ndoctor, vendor, agent, school, government office, contractor) saying:\n  • "we are looking into it"\n  • "we are working on it"\n  • "I'll get back to you"\n  • "we will update you"\n  • "we received your request"\n  • Hebrew: "אנחנו בודקים", "נחזור אליך", "נעדכן"\nthen BUILD ONE tracking task. Do NOT return []. The user asked them to\ndo something, they promised to follow up, and the user needs visibility\non that promise. Task shape:\n  title_he: "לעקוב אחרי <party> על <topic>"\n  priority: medium (low if matter trivial, high if deadline-driven)\n  description: state what the user is waiting for and from whom\n  ai_actions: include "לשלוח תזכורת" / "לחזור עליהם" actions\n\n═══ ONE-TASK-PER-EMAIL RULE (mandatory) ═══\nThe array MUST contain at MOST ONE task per email, even when the email\ndescribes several actions. Collapse multiple actions on the same topic\ninto a single task — list the sub-actions inside the description\n("• בחר כרטיס\\n• ודא חיוב ביולי\\n• אשר ל-X"). Return TWO tasks ONLY\nif:\n  - they involve different recipients, OR\n  - they have distinct deadlines, AND\n  - neither can be done as part of the other.\nWhen in doubt, return ONE task.\n\n═══ QUOTED-TEXT RULE (mandatory) ═══\nThe body may include reply history. IGNORE everything after a line that\nmatches "On <date>, <name> wrote:" or starts with ">". Treat those\nquoted blocks as ALREADY-PROCESSED context — never derive a new task\nfrom a question or commitment that appears only in the quoted history.\nDecide actionability based ONLY on the freshly-written portion of the\nlatest message.\nEXCEPTION: a "MEETING DETAILS" block (see CONTENT-SPECIFIC rule 3) is ALWAYS\nfresh, actionable content — the QUOTED-TEXT rule does NOT apply to it, even\nwhen it appears below quoted history.\n\n═══ EMPTY-ARRAY RULE ═══\nReturn [] (empty array) when the message is purely informational AND the\nTRACKING-TASK RULE above does NOT apply:\n  • Marketing / newsletter / sale / promotion\n  • Bank/payment confirmation of a transaction the user PAID (money going out) — but NOT a benefit / refund / grant / entitlement coming TO the user, which DOES need a task\n  • System receipts already handled by the recipient\n  • Build/CI/server notifications with no human follow-up\n  • The fresh portion of the message only ACKNOWLEDGES a prior\n    commitment ("Sure, thank you", "אוקיי") with nothing pending\nNEVER return [] for a "we are looking into it / will get back to you"\nmessage — see TRACKING-TASK RULE above.\n\n═══ TERSE HUMAN MESSAGE RULE (mandatory) ═══\nA short message from a HUMAN sender — a person or business writing\ndirectly, not an automated noreply/service/notification address — is\nusually business shorthand, not noise. Subject "Order" with body "More\nbedtime stories" from a retailer IS a purchase order → build the task\n("לטפל בהזמנה של <product> מ<sender>"). When a human wrote only a few\nwords, infer the obvious ask conservatively from the subject + sender +\ncontact context; do NOT return [] merely because the message is terse.\nThe EMPTY-ARRAY categories above describe AUTOMATED mail and closures —\nthey never license dropping a human's three-word request.\n\n═══ DEEP-LINK PRESERVATION RULE (mandatory, system-wide) ═══\nWhenever the source message contains a SPECIFIC URL (deep link to a\nparticular product page, document, mail thread, listing, dashboard,\ninvoice, ticket, etc.), the description MUST quote that URL VERBATIM —\nincluding query params, fragments, message IDs, doc IDs, anchors.\nNEVER strip a URL down to its bare domain. The whole point of this\nsystem is to save the user clicks: if the original message linked\ndirectly to a specific page, the task description must link to that\nsame page so the user lands where they need to be in one click.\nBAD:   "לבדוק ב-everythingbranded.com"  (bare domain — useless)\nGOOD:  "לבדוק ב-https://everythingbranded.com/products/crayons?ref=foo"\nIf the message contains multiple links to different items, list them\nall in the description. Same rule applies to ai_actions.prompt — keep\nthe exact URL in there too so the action AI has the deep link to act on.\n\n═══ GROUNDING & NATURAL HEBREW (mandatory) ═══\n• Use only names, numbers, and dates that actually appear in the message. Never invent a contact name — if the other party is "שוויגער", do not substitute a different name. When the sender is shown as a handle ("@..."), a bare phone number, or is empty, you do NOT know their real name — do NOT invent or transliterate one (the "מי זה לויק? מאיפה לקחת את השם?" bug). Use "איש הקשר" or the phone as written, unless a real name literally appears in the body.\n• All times you write (in title or description) are in the user's LOCAL timezone, stated in the "Current date/time" line — the [INCOMING]/[OUTGOING] timestamps are already local. Never emit a UTC/server time.\n• A name, person, or thing MENTIONED IN PASSING is NOT a task. Do NOT turn "who is X?" / "לברר מי X" / "find out about Y" into a sub-task unless the user EXPLICITLY asked to find out — a name dropped in conversation ("גם ריזל אמר ש...") is context, not an action item. Never pad a title with an invented clarification step like "ולברר מי ריזל".\n• The ACTION in title_he must be one the message actually asks for or unmistakably implies. NEVER infer an unrelated action the text does not support: a "review your upcoming delivery" / "price changed" notice is NOT a request to "update payment method"; an auto-renewal footer ("renews until you cancel") is NOT a payment-method problem; a shipping update is NOT a billing task. When the message states no explicit action, keep the literal ask (לבדוק / לעיין / לעקוב) — never upgrade it to a payment / billing / cancellation action that is not written in the message. The title must describe the SAME matter as the description and never introduce a concept, product, feature, or scenario absent from the body — do NOT free-associate from the sender's brand or name (a vendor called "Dualhook" does not make the message about webhooks / "heartbeat" / a "connection" that expires); a billing email stays a billing task. If title and description would describe different things, the title is wrong — rebuild it from the description.\n• Use the user's own verb; never invent an ill-fitting one (e.g. avoid "להערים" for making a call — use "לעשות"/"לקיים שיחת ועידה"). Plain Hebrew only: no calques ("התנאים עומדים") and no internal/PM jargon in user-facing text — a meeting that was in the way is "הפגישה שעיכבה", never "הפגישה בחוסם".\n• description reflects the situation AS OF THE LAST line. If a later line cancels or postpones an event that an earlier time window depended on, that window no longer holds — re-derive from the latest facts (use the current date/time and the [ts] markers); never carry a stale "narrow window" forward.\n\n═══ TASK SHAPE ═══\n{\n  "title_he":     "All-Hebrew (no English characters), starts with action verb. Transliterate foreign names phonetically.",\n  "description":  "Hebrew, 2-3 sentences: WHAT / WHO / WHEN / consequences. PRESERVE any URLs from the source verbatim — never shorten to bare domain.",\n  "priority":     "urgent|high|medium|low",\n  "size":         "quick|regular — quick = ONE bounded action with no prep work (reply, confirm, call, schedule, send, sign, pay) doable in one short sitting; regular = requires creation, preparation, gathering material, multiple steps, or depends on others (prepare, write, plan, summarize, build, compare). WHEN IN DOUBT → regular (a polluted quick-list breaks the user's quick-marathon habit; a missed quick task costs nothing).",\n  "reason_he":    "Why this task and why this priority — cite ONE concrete fact",\n  "due_date":     "YYYY-MM-DD or null",\n  "ai_actions": [\n    { "label":  "3-7 Hebrew words naming recipient or next step",\n      "prompt": "Full instruction for the AI to run, in English or Hebrew" }\n  ],\n  "owner_contact": "name + phone + email or null",\n  "confidence":   "'high' | 'low' — your certainty this extraction is correct AND complete. Use 'low' when the message is genuinely hard to turn into a task: several intertwined actions, an unclear owner or deadline, the real content sits behind a link/PDF/attachment you could not read, or the ask is buried in a long thread. Use 'high' only when the task is unambiguous from the text in front of you."\n}\n\n═══ TITLE RULES (mandatory) ═══\nVerb-first only: לענות / לאשר / להחליט / להעביר / לבדוק / להתקשר /\nלפגוש / לתאם / להזמין / להגיש / להכין / לדחות / לבטל / לחתום / לשלם.\n\nBAD:  "תיאום פגישה"     (noun, not a command)\nBAD:  "מייל מ-X"         (passive)\nGOOD: "לתאם פגישת קליטה עם אמלגמייטד בנק עד 25/5"\nGOOD: "לאשר לדינה את הזמן (שני 09:00 או רביעי 15:00)"\nLANGUAGE: title_he must contain only Hebrew characters. Transliterate: "Google" → "גוגל", "Zoom" → "זום", "Amazon" → "אמזון", "Vercel" → "ורסל".\n\n═══ DATE RULE (mandatory) ═══\nWhen stating WHEN the task/meeting/event is scheduled or due — in BOTH\ntitle_he and description — always write the absolute calendar date\n(e.g. "2 ביוני" or "ב-2/6"). NEVER use relative day-words ("היום",\n"מחר", "אתמול", "today", "tomorrow", "yesterday") to express the task's\ndate. The text is stored persistently; relative words go stale and\nbecome WRONG the next day. EXCEPTION: quoting what a person literally\nsaid ("אמר שיתקשר מחר") is allowed — that reports their words, it is\nNOT the task's scheduled date.\n\n═══ PRIORITY RULES (mandatory) ═══\nurgent : deadline today/tomorrow AND a concrete fact (amount, named\n         person, blocked system).\nhigh   : deadline within 7 days AND impacts people other than the user.\nmedium : deadline within 30 days OR routine follow-up.\nlow    : no clear deadline OR soft/optional action OR upcoming auto-renewal.\n\nNever default to urgent. If you can't cite a concrete urgency fact, drop\nto medium.\n\nAuto-system notifications (Vercel, Railway, GitHub, monitoring services)\n→ max medium, unless production is currently down.\n\n═══ CONTENT-SPECIFIC RULES ═══\n1. Subscription renewal notice ("your X plan renews on Y for $Z"):\n   priority: "low". description MUST list, in this order:\n     • מה מתחדש (service + plan)\n     • כמה ייחויב (amount + currency)\n     • מתי (date)\n     • איך לבטל / לשנות (link or step from the message)\n   ai_actions should include "draft cancel" or "review subscription".\n\n2. Bank / payment confirmation of a transaction the USER paid (money OUT) → return []. BUT a benefit / refund / grant / subsidy / entitlement coming TO the user — especially with an amount to collect or a date to claim/use (food-stamps/EBT, grant, refund, eligibility date) → build ONE task: title "להשתמש ב<benefit>" / "לממש <benefit> עד <date>", describe the amount + date + how to use it.\n\n3. Meeting / video-call invitation (a "MEETING DETAILS" block is present, or\n   the body contains a Teams / Zoom / Google Meet / Webex join link): build\n   ONE task. title_he starts with "להצטרף" / "להשתתף", names the other party,\n   and includes the meeting date/time when present (absolute date per the DATE\n   RULE). The description MUST quote the FULL join URL verbatim, plus Meeting\n   ID and Passcode when present. priority by how soon the meeting is. NEVER\n   shorten or drop the join link.\n\n═══ AI_ACTIONS RULES ═══\n2-3 actions per task. The label is the button text the user sees — it\nMUST name the recipient or the concrete next step, not the generic\naction name. The prompt is what the AI will run on click; include enough\ncontext that the AI doesn't need to re-read this message.`;
   let context = `\n\n${nowContextLine(userTz(settings))}`;
   if (isWhatsApp(msg)) context += WHATSAPP_TASK_RULES;
   if (msg.source_type === "google_drive") context += DRIVE_TASK_RULES;
@@ -1589,6 +1652,11 @@ INFO when the message:
     question) with nothing awaited back;
   • is a pure FYI, broadcast, mass mail, newsletter, receipt or automated
     notification;
+  • is a marketing / promotional / sales blast or a templated bulk message —
+    abandoned-cart or "Last Chance!" / "Dear Valued Customer/Contestant" /
+    "your <item> is waiting for you" promos — EVEN when it says "we're just
+    waiting for you to confirm/update"; that is a marketing call-to-action, not
+    a personal 1:1 message awaiting a human reply;
   • expects no reply by its nature (calendar response, unsubscribe, ack).
 When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
@@ -2244,7 +2312,27 @@ async function findDuplicateOpenTask(
     .order("status_changed_at", { ascending: false })
     .limit(40);
 
-  const pool = [...(open ?? []), ...(closed ?? [])];
+  // VERY CONSERVATIVE recurring/snoozed guard. The pools above see only
+  // inbox/in_progress (open) and completed/archived/dismissed (closed) — a
+  // SNOOZED recurring occurrence waiting for its due date is invisible, so a
+  // self-note ("check salaries go out tomorrow", SMS) spawned a second task
+  // beside the monthly recurring "לשלם משכורות" already due the SAME day
+  // (T691 / T1302). Pull in snoozed occurrences whose due_date EXACTLY equals
+  // the probe's. Exact-date-only + the match gate below keep false-merges
+  // near-zero; no probe date → skip entirely.
+  let sameDaySnoozed: any[] = [];
+  if (probe.dueDate) {
+    const { data: sd, error: sdErr } = await supabase
+      .from("tasks")
+      .select(cols)
+      .eq("user_id", userId)
+      .eq("due_date", probe.dueDate)
+      .eq("status", "snoozed")
+      .limit(20);
+    sameDaySnoozed = sdErr ? [] : (sd ?? []);
+  }
+
+  const pool = [...(open ?? []), ...(closed ?? []), ...sameDaySnoozed];
   if (pool.length === 0) return null;
 
   // Deterministic recall: keep only tasks that share a contact OR fall within
@@ -2325,7 +2413,10 @@ async function findDuplicateOpenTask(
         serial: chosen.serial_display || "",
         confidence: parsed.confidence,
         reason: String(parsed.reason_he ?? ""),
-        closed: !["inbox", "in_progress"].includes(String(chosen.status)),
+        // snoozed matches (the same-day recurring guard above) fold like an open
+        // task — linkAndEnrichDuplicate suppresses the duplicate instead of the
+        // escalation path spawning a tagged re-creation.
+        closed: !["inbox", "in_progress", "snoozed"].includes(String(chosen.status)),
         status: String(chosen.status),
       };
     }
@@ -2836,11 +2927,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // Don't append into a ghost; let the create/link paths below handle
         // this message from scratch (and re-point thread_memory if a task is made).
       } else {
-        // Only the natural "done" states reopen on a resumed actionable turn.
-        // dismissed/archived were deliberately killed (don't auto-resurrect);
-        // snoozed is a user-intended hide — both keep their prior append
-        // behavior via branch (c) below.
-        const REOPENABLE_STATUSES = ["pending_completion", "completed"];
+        // A resumed actionable turn on a CLOSED task reopens it instead of
+        // burying the new content as a silent update. Mirrors the WhatsApp
+        // per-matter router (Path 0), which already reopens dismissed/archived.
+        // Without dismissed/archived here, a genuine email follow-up ("can you
+        // update me?") on a task the user had dismissed/archived attached
+        // SILENTLY — visible in the log ("linked to task …") but nowhere
+        // actionable (the Jack / T1134 case). snoozed stays a user-intended
+        // hide → still appends via branch (c).
+        const REOPENABLE_STATUSES = ["pending_completion", "completed", "dismissed", "archived"];
         const taskClosed = REOPENABLE_STATUSES.includes(String(linkedTask.status));
 
         if (classification === "actionable" && analysis.newMatter && (analysis.completionSignal || taskClosed)) {
@@ -3004,6 +3099,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // Calling Claude here would generate "לתאם" (to schedule) tasks even
       // though the appointment already exists in the calendar.
       if (calendarForceActionable) {
+        // Dedup: an event smrtesy itself pushed to Google Calendar already has a
+        // task (its calendar_event_id equals this event's id). Re-ingesting it
+        // must NOT spawn a second "meeting" task — link to the existing one.
+        const { data: selfCreatedTask, error: selfCreatedErr } = await supabase
+          .from("tasks").select("id")
+          .eq("user_id", msg.user_id)
+          .eq("calendar_event_id", msg.source_id)
+          .maybeSingle();
+        if (selfCreatedErr) console.error("calendar self-created lookup failed:", selfCreatedErr);
+        if (selfCreatedTask) {
+          linkedTaskId = selfCreatedTask.id as string;
+          classificationReason = "calendar event created by smrtesy — linked to existing task, no duplicate";
+        } else {
         const eventDate = new Date(msg.received_at);
         const dueDateStr = eventDate.toISOString().split("T")[0];
         const eventTitle = msg.subject || "ארוע ביומן";
@@ -3036,6 +3144,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           });
           if (calendarActivityError) console.error("task_activities insert failed:", calendarActivityError);
           if (dupSuggestionTaskId) await logDuplicateSuggestion(msg.user_id, newTask.id as string, dupSuggestionTaskId);
+        }
         }
       } else {
         let projectContext: { projectId: string; brief: string } | undefined;
@@ -3214,8 +3323,9 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               user_id: msg.user_id, source_message_id: msg.id,
               title: task.title_he || msg.subject || "New task", title_he: task.title_he,
               description: taggedDescription, task_type: taskType, priority: task.priority || "medium",
-              // CHECK constraint on tasks.size — only pass through valid values.
-              size: task.size === "quick" ? "quick" : "regular",
+              // CHECK constraint on tasks.size (quick|medium|big) — the AI knows
+              // only quick vs the neutral default; unsure → medium.
+              size: task.size === "quick" ? "quick" : "medium",
               status: "inbox", manually_verified: false,
               due_date: task.due_date,
               project_id: taskResult.projectId,
