@@ -2484,7 +2484,18 @@
       "displayNamePlaceholder": "Display name…",
       "saveName": "Save",
       "cancelName": "Cancel",
-      "loadError": "Couldn't load voices"
+      "loadError": "Couldn't load voices",
+      "pause": "Pause",
+      "playAll": "Play all samples",
+      "playAllCount": "Play all ({count})",
+      "stopAll": "Stop",
+      "generateMissing": "Generate samples for voices without one",
+      "generateMissingCount": "Generate missing samples ({count})",
+      "generatingAll": "Generating samples… {done}/{total}",
+      "generateMissingConfirm": "Generate samples for {count} voices that don't have one? Each one costs Resemble credits.",
+      "generateMissingDone": "All samples ready ({count})",
+      "generateMissingPartial": "{failed} of {total} samples failed",
+      "noMissing": "Every voice already has a sample"
     },
     "projects": {
       "title": "Projects",
