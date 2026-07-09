@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
+import { readVoiceCache, writeVoiceCache } from "./voiceCache";
 
 interface Account {
   email: string | null;
@@ -36,7 +37,6 @@ interface Character {
 }
 
 const LANG_FLAG: Record<string, string> = { he: "🇮🇱", en: "🇺🇸" };
-const CACHE_KEY = "smrtvoice.library.v1";
 
 export function VoiceLibrary() {
   const t = useTranslations("smrtVoice.library");
@@ -86,15 +86,9 @@ export function VoiceLibrary() {
       const seed: Record<string, boolean> = {};
       for (const v of vs.voices ?? []) if (v.has_preview) seed[v.uuid] = true;
       setPreviews(seed);
-      // Cache for instant paint next time (stale-while-revalidate).
-      try {
-        localStorage.setItem(
-          CACHE_KEY,
-          JSON.stringify({ voices: vs.voices ?? [], account: acct, chars: cs.characters ?? [] }),
-        );
-      } catch {
-        /* quota/serialization — non-fatal */
-      }
+      // Cache for instant paint next time (stale-while-revalidate). Shared
+      // with the casting screen via voiceCache.
+      writeVoiceCache({ voices: vs.voices ?? [], account: acct, chars: cs.characters ?? [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loadError"));
     } finally {
@@ -105,21 +99,14 @@ export function VoiceLibrary() {
 
   useEffect(() => {
     // Paint last-known voices instantly, then revalidate in the background.
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      if (raw) {
-        const c = JSON.parse(raw) as { voices?: Voice[]; account?: Account | null; chars?: Character[] };
-        if (c.voices) {
-          setVoices(c.voices);
-          setAccount(c.account ?? null);
-          setChars(c.chars ?? []);
-          const seed: Record<string, boolean> = {};
-          for (const v of c.voices) if (v.has_preview) seed[v.uuid] = true;
-          setPreviews(seed);
-        }
-      }
-    } catch {
-      /* ignore cache read errors */
+    const c = readVoiceCache();
+    if (c?.voices) {
+      setVoices(c.voices as Voice[]);
+      setAccount((c.account as Account | null) ?? null);
+      setChars((c.chars as Character[] | undefined) ?? []);
+      const seed: Record<string, boolean> = {};
+      for (const v of c.voices) if (v.has_preview) seed[v.uuid] = true;
+      setPreviews(seed);
     }
     load();
   }, [load]);
