@@ -2486,7 +2486,18 @@
       "displayNamePlaceholder": "שם תצוגה…",
       "saveName": "שמור",
       "cancelName": "ביטול",
-      "loadError": "טעינת הקולות נכשלה"
+      "loadError": "טעינת הקולות נכשלה",
+      "pause": "השהה",
+      "playAll": "נגן את כל הדוגמאות",
+      "playAllCount": "נגן הכל ({count})",
+      "stopAll": "עצור",
+      "generateMissing": "הפק דוגמאות לקולות שאין להם",
+      "generateMissingCount": "הפק דוגמאות חסרות ({count})",
+      "generatingAll": "מפיק דוגמאות… {done}/{total}",
+      "generateMissingConfirm": "להפיק דוגמאות ל-{count} קולות שאין להם? כל הפקה עולה קרדיטים ברזמבל.",
+      "generateMissingDone": "כל הדוגמאות מוכנות ({count})",
+      "generateMissingPartial": "{failed} מתוך {total} דוגמאות נכשלו",
+      "noMissing": "לכל הקולות כבר יש דוגמית"
     },
     "projects": {
       "title": "פרויקטים",
@@ -2725,7 +2736,16 @@
       "goodCount": "{count, plural, one {הקלטה טובה} other {# הקלטות טובות}}",
       "markGood": "סמן כהקלטה טובה",
       "unmarkGood": "בטל סימון טוב",
-      "noAudio": "אין אודיו לשורה זו"
+      "noAudio": "אין אודיו לשורה זו",
+      "select": "בחר",
+      "selectedCount": "{count} נבחרו",
+      "archiveAction": "לארכיון",
+      "deleteAction": "מחק",
+      "unarchive": "שחזר מארכיון",
+      "archivedView": "ארכיון ({count})",
+      "backFromArchived": "חזרה",
+      "archivedBadge": "בארכיון",
+      "confirmDeleteLines": "למחוק לצמיתות {count} שורות? כולל כל הגרסאות והקבצים. לא ניתן לשחזר."
     },
     "lexicon": {
       "title": "מילון הגייה",

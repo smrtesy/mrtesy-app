@@ -1430,6 +1430,7 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     .eq("org_id", req.org!.id)
     .eq("status", "completed")
     .not("output_audio_path", "is", null)
+    .is("archived_at", null)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
   if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
@@ -1577,6 +1578,72 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
   }));
   res.json({ lines });
 });
+
+// POST /voice/scripts/:id/lines/bulk — archive (soft, reversible), unarchive,
+// or permanently delete a set of lines. Delete cascades to each line's takes
+// (FK) and best-effort removes their audio from storage.
+router.post(
+  "/voice/scripts/:id/lines/bulk",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const action = req.body?.action as string;
+    const ids: string[] = Array.isArray(req.body?.line_ids)
+      ? req.body.line_ids.filter(Boolean)
+      : [];
+    if (!["archive", "unarchive", "delete"].includes(action)) {
+      return res.status(400).json({ error: "action must be archive | unarchive | delete" });
+    }
+    if (ids.length === 0) return res.status(400).json({ error: "line_ids required" });
+
+    if (action === "archive" || action === "unarchive") {
+      const { error } = await db
+        .from("smrtvoice_lines")
+        .update({ archived_at: action === "archive" ? new Date().toISOString() : null })
+        .eq("script_id", req.params.id)
+        .eq("org_id", req.org!.id)
+        .in("id", ids);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ ok: true, action, count: ids.length });
+    }
+
+    // delete: resolve the org/script-scoped rows first (so we only touch this
+    // caller's lines), gather audio paths, clean storage, then delete the rows.
+    const { data: delLines, error: linesErr } = await db
+      .from("smrtvoice_lines")
+      .select("id, output_audio_path")
+      .eq("script_id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .in("id", ids);
+    if (linesErr) return res.status(500).json({ error: linesErr.message });
+    const lineIds = (delLines ?? []).map((l) => l.id);
+    if (lineIds.length === 0) return res.json({ ok: true, action, count: 0 });
+
+    const { data: takeRows } = await db
+      .from("smrtvoice_line_takes")
+      .select("output_audio_path")
+      .eq("org_id", req.org!.id)
+      .in("line_id", lineIds);
+
+    const paths = [
+      ...(delLines ?? []).map((l) => l.output_audio_path),
+      ...(takeRows ?? []).map((t) => t.output_audio_path),
+    ].filter((p): p is string => !!p);
+    if (paths.length > 0) {
+      const { error: rmErr } = await db.storage.from("smrtvoice-audio").remove(paths);
+      // Non-fatal: orphaned audio is harmless; deleting the rows is what matters.
+      if (rmErr) console.warn("[smrtvoice] bulk-delete storage cleanup failed:", rmErr.message);
+    }
+
+    const { error: delErr } = await db
+      .from("smrtvoice_lines")
+      .delete()
+      .eq("script_id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .in("id", lineIds);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+    res.json({ ok: true, action, count: lineIds.length });
+  },
+);
 
 const LINE_UPDATABLE = new Set([
   "text_clean",
