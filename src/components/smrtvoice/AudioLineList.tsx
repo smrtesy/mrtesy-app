@@ -65,6 +65,7 @@ interface Take {
   cost_usd: number | null;
   approved: boolean;
   note: string | null;
+  voice_label: string | null;
   created_at: string;
 }
 
@@ -242,7 +243,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   async function downloadOne(line: Line) {
     try {
       const { items } = await api<{
-        items: { url: string; take_number: number | null; note: string | null }[];
+        items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
       }>(`/api/voice/lines/${line.id}/selection`);
       if (items.length === 0) {
         toast.error(t("studio.noAudio"));
@@ -252,7 +253,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       for (const it of items) {
         const name =
           it.take_number != null
-            ? `${base}_v${it.take_number}${noteSuffix(it.note)}.wav`
+            ? `${base}_v${it.take_number}${noteSuffix(it.voice_label)}${noteSuffix(it.note)}.wav`
             : `${base}.wav`;
         await downloadBlob(it.url, name);
       }
@@ -430,7 +431,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/takes/${take.id}/audio-url`,
       );
-      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.note)}.wav`);
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.voice_label)}${noteSuffix(take.note)}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -846,6 +847,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.voice_label && (
+                                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-800" dir="rtl">{take.voice_label}</span>
+                                )}
                                 {take.approved && (
                                   <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.good")}</span>
                                 )}
