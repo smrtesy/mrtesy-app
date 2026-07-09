@@ -546,7 +546,19 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
             >
               <CardContent className="p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
+                  <div
+                    className="min-w-0 flex-1 cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    title={t("studio.takes")}
+                    onClick={() => toggleTakes(line.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleTakes(line.id);
+                      }
+                    }}
+                  >
                     <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-1.5">
                       <span>#{line.line_number} · {line.speaker_name}</span>
                       {line.output_duration_seconds ? (

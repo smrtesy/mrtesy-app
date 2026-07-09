@@ -389,7 +389,9 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
     const result = await client.getVoiceStatus(character.resemble_voice_id);
     // Self-heal the stored status so the characters list reflects "ready"
     // without anyone opening the character (Resemble upgrade finishes async).
-    const READY = new Set(["ready", "completed", "active", "done", "available"]);
+    // "finished" is Resemble's terminal state for a trained voice (the engine's
+    // own clone flow waits for it) — without it a ready voice stays "training".
+    const READY = new Set(["ready", "completed", "active", "done", "available", "finished"]);
     if (result.status && READY.has(result.status.toLowerCase())) {
       await db
         .from("smrtvoice_characters")
