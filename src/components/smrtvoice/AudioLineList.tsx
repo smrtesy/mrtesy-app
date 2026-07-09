@@ -24,6 +24,7 @@ import { api } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 
 import { DownloadAllButton } from "./DownloadAllButton";
+import { noteSuffix } from "./takeName";
 
 interface Tag {
   tag: string;
@@ -48,6 +49,7 @@ interface Line {
   approved: boolean;
   redo_requested: boolean;
   take_count?: number;
+  approved_take_count?: number;
 }
 
 interface Take {
@@ -181,13 +183,23 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     });
   }
 
+  // Play the line's "good" takes in sequence (one after another). When none are
+  // marked good, the selection endpoint falls back to the line's current audio.
   async function playOne(line: Line): Promise<void> {
-    if (!line.output_audio_path) return;
     try {
-      const { audio_url } = await api<{ audio_url: string }>(
-        `/api/voice/lines/${line.id}/audio-url`,
+      const { items } = await api<{ items: { url: string }[] }>(
+        `/api/voice/lines/${line.id}/selection`,
       );
-      await playUrl(audio_url, line.id);
+      // NOTE: do NOT reset cancelRef here — the caller owns it (playSequence
+      // sets it once for the whole run; the single Play button resets it before
+      // calling). Resetting here would swallow a Pause pressed during the
+      // between-line fetch gap of "play all".
+      if (items.length === 0) return;
+      setPlayingId(line.id);
+      for (const it of items) {
+        if (cancelRef.current) break;
+        await playUrl(it.url, line.id);
+      }
     } catch {
       /* skip a failed line and continue */
     } finally {
@@ -210,16 +222,25 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     URL.revokeObjectURL(objectUrl);
   }
 
+  // Download the line's "good" takes (each file named with its take number and
+  // note); when none are marked good, downloads the line's single current audio.
   async function downloadOne(line: Line) {
-    if (!line.output_audio_path) return;
     try {
-      const { audio_url } = await api<{ audio_url: string }>(
-        `/api/voice/lines/${line.id}/audio-url`,
-      );
-      await downloadBlob(
-        audio_url,
-        `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`,
-      );
+      const { items } = await api<{
+        items: { url: string; take_number: number | null; note: string | null }[];
+      }>(`/api/voice/lines/${line.id}/selection`);
+      if (items.length === 0) {
+        toast.error(t("studio.noAudio"));
+        return;
+      }
+      const base = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}`;
+      for (const it of items) {
+        const name =
+          it.take_number != null
+            ? `${base}_v${it.take_number}${noteSuffix(it.note)}.wav`
+            : `${base}.wav`;
+        await downloadBlob(it.url, name);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -394,28 +415,29 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/takes/${take.id}/audio-url`,
       );
-      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}.wav`);
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.note)}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
-  // Toggle this take as the line's audio (single-select). Clicking an
-  // unchosen take marks it and repoints the line; clicking the already-chosen
-  // take un-chooses it, and once no take is chosen the line's ✓ disappears.
-  async function chooseTake(take: Take) {
+  // Toggle whether this take is marked "good" (⭐). Multi-select: several takes
+  // can be good on one line (e.g. to take part of each in editing). Independent
+  // of what the engine renders — marking never changes the produced file, so a
+  // regenerate can't steal the selection. The line's play/download/archive and
+  // outer indicator all follow the set of good takes.
+  async function toggleGood(take: Take) {
     const next = !take.approved;
     setTakes((prev) => {
       const key = takesOpenId ?? "";
-      const list = (prev[key] ?? []).map((tk) => ({
-        ...tk,
-        approved: next ? tk.id === take.id : tk.id === take.id ? false : tk.approved,
-      }));
+      const list = (prev[key] ?? []).map((tk) =>
+        tk.id === take.id ? { ...tk, approved: next } : tk,
+      );
       return takesOpenId ? { ...prev, [key]: list } : prev;
     });
     try {
       await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: next } });
-      fetchLines(); // the line's audio / ✓ indicator now reflects the choice
+      fetchLines(); // refresh approved_take_count → outer indicator
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
       if (takesOpenId) loadTakes(takesOpenId);
@@ -509,12 +531,13 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
           const expanded = expandedId === line.id;
           const lineTakes = takes[line.id] ?? [];
           const takeCount = line.take_count ?? 0;
+          const goodCount = line.approved_take_count ?? 0;
           const regenerating = line.status === "processing";
           return (
             <Card
               key={line.id}
               className={
-                line.approved
+                goodCount > 0
                   ? "border-emerald-400"
                   : line.redo_requested
                     ? "border-amber-400"
@@ -541,10 +564,10 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                           {t("studio.recreating")}
                         </span>
                       )}
-                      {line.approved && (
+                      {goodCount > 0 && (
                         <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
                           <BadgeCheck className="h-3 w-3" />
-                          {t("studio.approved")}
+                          {t("studio.goodCount", { count: goodCount })}
                         </span>
                       )}
                       {line.redo_requested && (
@@ -595,7 +618,10 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     ) : (
                       <Button
                         size="icon"
-                        onClick={() => playOne(line)}
+                        onClick={() => {
+                          cancelRef.current = false;
+                          playOne(line);
+                        }}
                         disabled={playingAll}
                         title={t("studio.play")}
                       >
@@ -703,7 +729,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
                                 {take.approved && (
-                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.inUse")}</span>
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.good")}</span>
                                 )}
                                 <span>· {new Date(take.created_at).toLocaleString(locale)}</span>
                                 {take.duration_seconds ? <span>· {take.duration_seconds.toFixed(1)}s</span> : null}
@@ -719,9 +745,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                title={take.approved ? t("studio.chosenTake") : t("studio.useTake")}
+                                title={take.approved ? t("studio.unmarkGood") : t("studio.markGood")}
                                 className={take.approved ? "text-emerald-600" : undefined}
-                                onClick={() => chooseTake(take)}
+                                onClick={() => toggleGood(take)}
                               >
                                 <BadgeCheck className="h-4 w-4" />
                               </Button>
