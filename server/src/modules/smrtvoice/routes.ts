@@ -1418,7 +1418,7 @@ router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (r
   if (!script) return res.status(404).json({ error: "Script not found" });
 
   // Signal the worker via the newest still-active generate job for this script.
-  const { data: activeJob } = await db
+  const { data: activeJob, error: jobSelErr } = await db
     .from("smrtvoice_jobs")
     .select("id")
     .eq("script_id", script.id)
@@ -1428,6 +1428,9 @@ router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (r
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  // Don't clear the generating state on a lookup failure — that would hide a
+  // run we never actually signalled to stop.
+  if (jobSelErr) return res.status(500).json({ error: jobSelErr.message });
 
   if (activeJob) {
     const { error: jobErr } = await db
