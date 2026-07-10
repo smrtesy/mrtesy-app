@@ -2428,6 +2428,8 @@
       "backToFolder": "Back to folder",
       "openDoc": "Google Doc ↗",
       "parseFirst": "Parse the script first to see its speakers",
+      "useBaseline": "Use character baseline",
+      "useBaselineHint": "Adds the character's fixed style tags (slow/soft/…) to every line. Off by default — deep tag stacks can make the engine insert words or restart the sentence.",
       "stats": "Stats",
       "lines": "Lines",
       "failed": "Failed",

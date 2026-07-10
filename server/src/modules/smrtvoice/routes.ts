@@ -1242,6 +1242,10 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
+      // Per-character style baseline is opt-in (default off): stacking it on
+      // the emotion recipe destabilizes resemble-ultra. Checkbox on the
+      // generate screen; absent/false → engine skips the baseline.
+      apply_style_baseline: req.body?.apply_style_baseline === true,
       pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
@@ -1758,6 +1762,8 @@ async function queueRegeneration(
       code: script.code,
       speaker_map: speakerMap,
       line_numbers: lineNumbers,
+      // Match the generate default: baseline off unless explicitly requested.
+      apply_style_baseline: req.body?.apply_style_baseline === true,
       pronunciation: await loadPronunciation(req.org!.id),
       line_overrides: lineOverrides,
       reprocess_line_numbers: reprocessLineNumbers,
