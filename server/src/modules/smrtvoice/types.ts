@@ -136,6 +136,8 @@ export interface ScriptSpeaker {
   script_id: string;
   speaker_name: string;
   character_id: string | null;
+  // Additional characters this speaker is also recorded by (multi-voice).
+  extra_character_ids: string[];
   resemble_voice_id: string | null;
   skip: boolean;
   created_at: string;
@@ -208,6 +210,8 @@ export interface LineTake {
   cost_usd: number | null;
   approved: boolean;
   note: string | null;
+  // Character/voice name for a multi-voice take (null for single-voice takes).
+  voice_label: string | null;
   created_at: string;
 }
 

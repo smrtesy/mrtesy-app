@@ -49,13 +49,13 @@ export function DownloadAllButton({ scriptId }: { scriptId: string }) {
         // the single current output when none are marked — same as the per-line
         // download button.
         const { items } = await api<{
-          items: { url: string; take_number: number | null; note: string | null }[];
+          items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
         }>(`/api/voice/lines/${line.id}/selection`);
         const base = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}`;
         for (const it of items) {
           const name =
             it.take_number != null
-              ? `${base}_v${it.take_number}${noteSuffix(it.note)}.wav`
+              ? `${base}_v${it.take_number}${noteSuffix(it.voice_label)}${noteSuffix(it.note)}.wav`
               : `${base}.wav`;
           // Anchor-click trick to download (works because the url is signed)
           const a = document.createElement("a");

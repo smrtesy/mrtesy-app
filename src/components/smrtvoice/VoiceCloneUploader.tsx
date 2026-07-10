@@ -32,6 +32,9 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
   const t = useTranslations("smrtVoice.cloneUploader");
   const [mode, setMode] = useState<Mode>("upload");
   const [files, setFiles] = useState<File[]>([]);
+  // Gentle auto-cleanup before cloning (high-pass + trim silence + normalize).
+  // On by default; uncheck to clone the raw audio (e.g. to compare clean vs raw).
+  const [clean, setClean] = useState(true);
 
   // Progress model.
   const [phase, setPhase] = useState<Phase>("idle");
@@ -138,7 +141,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         character: { resemble_voice_id: string };
       }>(`/api/voice/characters/${characterId}/clone`, {
         method: "POST",
-        body: { sample_paths: paths },
+        body: { sample_paths: paths, clean },
       });
       setFiles([]);
       await afterClone(status, character.resemble_voice_id);
@@ -186,7 +189,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         character: { resemble_voice_id: string };
       }>(`/api/voice/characters/${characterId}/clone-from-drive`, {
         method: "POST",
-        body: { file_ids: Array.from(selected) },
+        body: { file_ids: Array.from(selected), clean },
       });
       await afterClone(status, character.resemble_voice_id);
     } catch (err) {
@@ -224,6 +227,18 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
             {t("fromDrive")}
           </Button>
         </div>
+
+        {/* Auto-cleanup toggle (on by default). */}
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={clean}
+            onChange={(e) => setClean(e.target.checked)}
+            disabled={running}
+          />
+          {t("cleanLabel")}
+        </label>
 
         {mode === "upload" ? (
           <>

@@ -146,6 +146,7 @@ class VoiceEngineClient {
     name: string;
     voice_type?: "rapid" | "pro";
     language?: string;
+    clean?: boolean;
   }): Promise<{ voice_id: string; status: string }> {
     return this.request("POST", "/voices/clone", {
       // Prefer the multi-part list (each part is split into <=12s clips
@@ -155,6 +156,8 @@ class VoiceEngineClient {
       voice_name: params.name,
       voice_type: params.voice_type ?? "rapid",
       language: params.language ?? "he",
+      // Gentle pre-clone cleanup (high-pass + silence trim + normalize).
+      clean: params.clean ?? true,
     });
   }
 

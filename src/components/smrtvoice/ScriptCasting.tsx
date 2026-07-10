@@ -14,6 +14,7 @@ import { readVoiceCache, writeVoiceCache } from "./voiceCache";
 interface Speaker {
   speaker_name: string;
   character_id: string | null;
+  extra_character_ids?: string[] | null;
   resemble_voice_id: string | null;
   skip?: boolean;
   line_count?: number;
@@ -53,6 +54,8 @@ export function ScriptCasting({
   const [stock, setStock] = useState<StockVoice[]>([]);
   // speaker_name → encoded value ("" | char:<id> | voice:<uuid>)
   const [choice, setChoice] = useState<Record<string, string>>({});
+  // speaker_name → additional character ids (multi-voice: line rendered by each)
+  const [extras, setExtras] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,13 +84,16 @@ export function ScriptCasting({
       setSpeakers(speakers);
       setCharacters(characters);
       const initial: Record<string, string> = {};
+      const initialExtras: Record<string, string[]> = {};
       for (const s of speakers) {
         if (s.skip) initial[s.speaker_name] = "skip";
         else if (s.character_id) initial[s.speaker_name] = `char:${s.character_id}`;
         else if (s.resemble_voice_id) initial[s.speaker_name] = `voice:${s.resemble_voice_id}`;
         else initial[s.speaker_name] = "";
+        initialExtras[s.speaker_name] = s.extra_character_ids ?? [];
       }
       setChoice(initial);
+      setExtras(initialExtras);
 
       // Stock voices are owner/admin-gated; degrade gracefully if forbidden.
       try {
@@ -117,16 +123,23 @@ export function ScriptCasting({
     try {
       const payload = speakers.map((s) => {
         const v = choice[s.speaker_name] ?? "";
+        // Extra voices only apply when a primary character is cast (and never
+        // include the primary itself).
+        const primaryCharId = v.startsWith("char:") ? v.slice(5) : null;
+        const extraIds =
+          v === "skip" || v === ""
+            ? []
+            : (extras[s.speaker_name] ?? []).filter((id) => id !== primaryCharId);
         if (v === "skip") {
-          return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: null, skip: true };
+          return { speaker_name: s.speaker_name, character_id: null, extra_character_ids: [], resemble_voice_id: null, skip: true };
         }
         if (v.startsWith("char:")) {
-          return { speaker_name: s.speaker_name, character_id: v.slice(5), resemble_voice_id: null, skip: false };
+          return { speaker_name: s.speaker_name, character_id: v.slice(5), extra_character_ids: extraIds, resemble_voice_id: null, skip: false };
         }
         if (v.startsWith("voice:")) {
-          return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: v.slice(6), skip: false };
+          return { speaker_name: s.speaker_name, character_id: null, extra_character_ids: extraIds, resemble_voice_id: v.slice(6), skip: false };
         }
-        return { speaker_name: s.speaker_name, character_id: null, resemble_voice_id: null, skip: false };
+        return { speaker_name: s.speaker_name, character_id: null, extra_character_ids: [], resemble_voice_id: null, skip: false };
       });
       await api(`/api/voice/scripts/${scriptId}/speakers`, {
         method: "PATCH",
@@ -268,53 +281,121 @@ export function ScriptCasting({
             const value = choice[s.speaker_name] ?? "";
             // Keep the current selection visible even if the filter hid it.
             const injectSelected = value !== "" && !visibleValues.has(value);
+            // Multi-voice extras — only when a primary voice is cast.
+            const hasVoice = value.startsWith("char:") || value.startsWith("voice:");
+            const primaryCharId = value.startsWith("char:") ? value.slice(5) : null;
+            const selectedExtras = (extras[s.speaker_name] ?? []).filter((id) => id !== primaryCharId);
+            const charName = (id: string) => {
+              const c = characters.find((x) => x.id === id);
+              return c ? (c.display_name ?? c.name) : id;
+            };
+            const addable = characters.filter(
+              (c) => c.resemble_voice_id && c.id !== primaryCharId && !selectedExtras.includes(c.id),
+            );
             return (
-              <div key={s.speaker_name} className="flex items-center gap-3">
-                <div className="w-36 shrink-0 text-sm font-medium truncate" dir="rtl">
-                  {s.speaker_name}
-                  {typeof s.line_count === "number" && (
-                    <span className="text-muted-foreground font-normal"> ({s.line_count})</span>
-                  )}
+              <div key={s.speaker_name} className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="w-36 shrink-0 text-sm font-medium truncate" dir="rtl">
+                    {s.speaker_name}
+                    {typeof s.line_count === "number" && (
+                      <span className="text-muted-foreground font-normal"> ({s.line_count})</span>
+                    )}
+                  </div>
+                  <select
+                    className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
+                    value={value}
+                    onChange={(e) => {
+                      setSaved(false);
+                      setChoice((c) => ({ ...c, [s.speaker_name]: e.target.value }));
+                    }}
+                  >
+                    <option value="">{t("none")}</option>
+                    <option value="skip">{t("skip")}</option>
+                    {injectSelected && <option value={value}>{labelForValue(value)}</option>}
+                    {filtered.mine.length > 0 && (
+                      <optgroup label={t("myCharacters")}>
+                        {filtered.mine.map((c) => (
+                          <option key={c.id} value={`char:${c.id}`}>
+                            {charLabel(c)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {filtered.named.length > 0 && (
+                      <optgroup label={t("myNamedVoices")}>
+                        {filtered.named.map((v) => (
+                          <option key={v.uuid} value={`voice:${v.uuid}`}>
+                            {voiceLabel(v)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {filtered.rest.length > 0 && (
+                      <optgroup label={t("stockVoices")}>
+                        {filtered.rest.map((v) => (
+                          <option key={v.uuid} value={`voice:${v.uuid}`}>
+                            {voiceLabel(v)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
                 </div>
-                <select
-                  className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
-                  value={value}
-                  onChange={(e) => {
-                    setSaved(false);
-                    setChoice((c) => ({ ...c, [s.speaker_name]: e.target.value }));
-                  }}
-                >
-                  <option value="">{t("none")}</option>
-                  <option value="skip">{t("skip")}</option>
-                  {injectSelected && <option value={value}>{labelForValue(value)}</option>}
-                  {filtered.mine.length > 0 && (
-                    <optgroup label={t("myCharacters")}>
-                      {filtered.mine.map((c) => (
-                        <option key={c.id} value={`char:${c.id}`}>
-                          {charLabel(c)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {filtered.named.length > 0 && (
-                    <optgroup label={t("myNamedVoices")}>
-                      {filtered.named.map((v) => (
-                        <option key={v.uuid} value={`voice:${v.uuid}`}>
-                          {voiceLabel(v)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {filtered.rest.length > 0 && (
-                    <optgroup label={t("stockVoices")}>
-                      {filtered.rest.map((v) => (
-                        <option key={v.uuid} value={`voice:${v.uuid}`}>
-                          {voiceLabel(v)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+
+                {/* Multi-voice: record this speaker's lines with extra voices too
+                    (one take per voice). Only when a primary voice is set. */}
+                {hasVoice && (
+                  <div className="flex flex-wrap items-center gap-1.5 ps-[9.5rem]" dir="rtl">
+                    <span className="text-xs text-muted-foreground">{t("alsoVoices")}</span>
+                    {selectedExtras.map((id) => (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-xs"
+                      >
+                        {charName(id)}
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label={t("removeVoice")}
+                          onClick={() => {
+                            setSaved(false);
+                            setExtras((e) => ({
+                              ...e,
+                              [s.speaker_name]: (e[s.speaker_name] ?? []).filter((x) => x !== id),
+                            }));
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                    {addable.length > 0 && (
+                      <select
+                        className="rounded-md border bg-background px-2 py-1 text-xs"
+                        value=""
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          if (!id) return;
+                          setSaved(false);
+                          setExtras((prev) => ({
+                            ...prev,
+                            [s.speaker_name]: [
+                              ...(prev[s.speaker_name] ?? []).filter((x) => x !== primaryCharId),
+                              id,
+                            ],
+                          }));
+                        }}
+                      >
+                        <option value="">+ {t("addVoice")}</option>
+                        {addable.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.display_name ?? c.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

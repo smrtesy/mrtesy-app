@@ -65,6 +65,7 @@ interface Take {
   cost_usd: number | null;
   approved: boolean;
   note: string | null;
+  voice_label: string | null;
   created_at: string;
 }
 
@@ -96,6 +97,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playingAll, setPlayingAll] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
@@ -132,6 +134,46 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const cancelRef = useRef(false);
   const resolveRef = useRef<(() => void) | null>(null);
+  // Pause/resume: pausedRef gates the play-all loop even in the gap between
+  // lines (where there's no <audio> to pause), so Pause is reliable there too.
+  const pausedRef = useRef(false);
+  const resumeWaitersRef = useRef<Array<() => void>>([]);
+
+  // Resolves immediately unless paused; while paused, parks the caller until
+  // resumePlayback()/stopPlayback() releases it.
+  function waitWhilePaused(): Promise<void> {
+    if (!pausedRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      resumeWaitersRef.current.push(resolve);
+    });
+  }
+  function pausePlayback() {
+    pausedRef.current = true;
+    setPaused(true);
+    currentAudioRef.current?.pause(); // keeps currentTime → resume continues
+  }
+  function resumePlayback() {
+    pausedRef.current = false;
+    setPaused(false);
+    currentAudioRef.current?.play().catch(() => {});
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
+  }
+
+  // Silence playback and release any parked loop when leaving the screen.
+  // Ref-only (no setState) since the component is unmounting.
+  useEffect(() => () => {
+    cancelRef.current = true;
+    pausedRef.current = false;
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    resolveRef.current?.();
+    resolveRef.current = null;
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
+  }, []);
 
   const fetchLines = useCallback(async () => {
     try {
@@ -187,15 +229,18 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const redoCount = (lines ?? []).filter((l) => l.redo_requested && !l.archived_at).length;
 
   async function playUrl(url: string, id: string): Promise<void> {
+    const audio = new Audio(url);
     await new Promise<void>((resolve) => {
       resolveRef.current = resolve;
-      const audio = new Audio(url);
       currentAudioRef.current = audio;
       setPlayingId(id);
       audio.onended = () => resolve();
       audio.onerror = () => resolve();
       audio.play().catch(() => resolve());
     });
+    // Clip finished on its own — drop the ref so a Resume pressed in the gap
+    // before the next clip doesn't replay this ended clip on top of it.
+    if (currentAudioRef.current === audio) currentAudioRef.current = null;
   }
 
   // Play the line's "good" takes in sequence (one after another). When none are
@@ -212,6 +257,8 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       if (items.length === 0) return;
       setPlayingId(line.id);
       for (const it of items) {
+        if (cancelRef.current) break;
+        await waitWhilePaused();
         if (cancelRef.current) break;
         await playUrl(it.url, line.id);
       }
@@ -242,7 +289,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   async function downloadOne(line: Line) {
     try {
       const { items } = await api<{
-        items: { url: string; take_number: number | null; note: string | null }[];
+        items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
       }>(`/api/voice/lines/${line.id}/selection`);
       if (items.length === 0) {
         toast.error(t("studio.noAudio"));
@@ -252,7 +299,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       for (const it of items) {
         const name =
           it.take_number != null
-            ? `${base}_v${it.take_number}${noteSuffix(it.note)}.wav`
+            ? `${base}_v${it.take_number}${noteSuffix(it.voice_label)}${noteSuffix(it.note)}.wav`
             : `${base}.wav`;
         await downloadBlob(it.url, name);
       }
@@ -265,21 +312,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     const playable = items.filter((l) => l.output_audio_path);
     if (playable.length === 0) return;
     cancelRef.current = false;
+    pausedRef.current = false;
+    setPaused(false);
     setPlayingAll(true);
     for (const line of playable) {
+      if (cancelRef.current) break;
+      await waitWhilePaused();
       if (cancelRef.current) break;
       await playOne(line);
     }
     setPlayingAll(false);
+    setPaused(false);
+    pausedRef.current = false;
     currentAudioRef.current = null;
   }
 
   function stopPlayback() {
     cancelRef.current = true;
+    pausedRef.current = false;
+    setPaused(false);
     currentAudioRef.current?.pause();
     currentAudioRef.current = null;
     resolveRef.current?.();
     resolveRef.current = null;
+    // Release any loop parked in the between-lines gap so it sees the cancel.
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
     setPlayingAll(false);
     setPlayingId(null);
   }
@@ -430,7 +489,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/takes/${take.id}/audio-url`,
       );
-      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.note)}.wav`);
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.voice_label)}${noteSuffix(take.note)}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -582,9 +641,26 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
               )}
               {!showArchived && rendered.length > 0 &&
                 (playingAll ? (
-                  <Button size="sm" variant="outline" onClick={stopPlayback}>
-                    <Square className="h-4 w-4 me-1" /> {t("studio.stop")}
-                  </Button>
+                  <div className="inline-flex overflow-hidden rounded-md border">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-none border-e"
+                      onClick={paused ? resumePlayback : pausePlayback}
+                      title={paused ? t("studio.resume") : t("studio.pause")}
+                    >
+                      {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-none"
+                      onClick={stopPlayback}
+                      title={t("studio.stop")}
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  </div>
                 ) : (
                   <Button size="sm" variant="outline" onClick={() => playSequence(rendered)}>
                     <Play className="h-4 w-4 me-1" /> {t("studio.playAll")}
@@ -846,6 +922,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.voice_label && (
+                                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-800" dir="rtl">{take.voice_label}</span>
+                                )}
                                 {take.approved && (
                                   <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.good")}</span>
                                 )}
