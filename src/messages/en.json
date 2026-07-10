@@ -2414,6 +2414,8 @@
       "parsing": "Parsing…",
       "generate": "Generate audio",
       "generating": "Generating…",
+      "stop": "Stop",
+      "stopping": "Stopping…",
       "queuedBanner": "Queued — starting shortly…",
       "stages": {
         "fetching": "Fetching the script",
