@@ -1046,6 +1046,9 @@ const SCRIPT_UPDATABLE = new Set([
   "google_doc_tab_title",
   "generation_mode",
   "input_recording_path",
+  // Script language ('he'/'en'): drives which pronunciation-lexicon entries
+  // apply to this script's renders (see /voice/scripts/:id/generate).
+  "language",
 ]);
 
 router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
@@ -1054,6 +1057,9 @@ router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
     if (SCRIPT_UPDATABLE.has(k)) updates[k] = v;
   }
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
+  if ("language" in updates && updates.language !== "he" && updates.language !== "en") {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
 
   const { data, error } = await db
     .from("smrtvoice_scripts")
@@ -1319,6 +1325,8 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       job_type: "generate_audio",
       adapter: settings?.default_adapter ?? "resemble",
       mode: script.generation_mode,
+      // Drives which pronunciation-lexicon entries apply (he-only / en-only).
+      language: script.language ?? "he",
       google_doc_id: script.google_doc_id ?? undefined,
       google_oauth_token: token ?? undefined,
       google_doc_tab_id: script.google_doc_tab_id ?? undefined,
@@ -1826,6 +1834,8 @@ async function queueRegeneration(
       job_type: "regenerate_line",
       adapter: settings?.default_adapter ?? "resemble",
       mode,
+      // Same script-language gating as a full generate.
+      language: script.language ?? "he",
       input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,

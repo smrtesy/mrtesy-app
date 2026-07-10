@@ -23,6 +23,7 @@ interface Script {
   code: string;
   name: string | null;
   status: string;
+  language: "he" | "en";
   google_doc_url: string | null;
   google_doc_id: string | null;
   generation_mode: "sts" | "tts";
@@ -141,6 +142,19 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
     }
   }
 
+  async function onLanguageChange(language: "he" | "en") {
+    if (!script || language === script.language) return;
+    // Optimistic: reflect immediately, roll back on failure.
+    const prev = script.language;
+    setScript({ ...script, language });
+    try {
+      await api(`/api/voice/scripts/${scriptId}`, { method: "PATCH", body: { language } });
+    } catch (err) {
+      setScript((s) => (s ? { ...s, language: prev } : s));
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!script) return <p className="text-sm text-muted-foreground">…</p>;
 
@@ -165,6 +179,19 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          {/* Script language — gates which pronunciation-lexicon entries apply
+              (a 'he' entry fires only on Hebrew scripts, 'en' only on English). */}
+          <select
+            className="rounded-md border bg-background px-2 py-1 text-sm"
+            value={script.language}
+            onChange={(e) => onLanguageChange(e.target.value as "he" | "en")}
+            disabled={busy || generating}
+            title={t("languageHint")}
+            aria-label={t("languageLabel")}
+          >
+            <option value="he">{t("languageHe")}</option>
+            <option value="en">{t("languageEn")}</option>
+          </select>
           <ProjectStatusBadge status={script.status} />
           <Button variant="ghost" size="icon" onClick={onDelete} disabled={busy} title={t("delete")}>
             <Trash2 className="h-4 w-4" />
