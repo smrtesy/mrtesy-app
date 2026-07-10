@@ -310,6 +310,8 @@ export interface CreateJobRequest {
   job_type: "generate_audio" | "regenerate_line" | "parse_script";
   adapter?: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   mode: "sts" | "tts";
+  // Script language ('he'/'en'): gates which pronunciation-lexicon entries apply.
+  language?: "he" | "en";
   google_doc_id?: string;
   google_oauth_token?: string;
   google_doc_tab_id?: string;
