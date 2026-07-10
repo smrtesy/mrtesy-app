@@ -2669,6 +2669,7 @@
       "progressTraining": "הקלון בתהליך אימון ושדרוג ל-Ultra… ({status})",
       "fromComputer": "מהמחשב",
       "fromDrive": "מ-Google Drive",
+      "cleanLabel": "ניקוי אוטומטי (הסרת רעש/שקטים + איזון ווליום)",
       "driveFolderLabel": "קישור לתיקיית Drive (עם קבצי ההקלטה)",
       "loadFiles": "טען קבצים",
       "loadingFiles": "טוען…",
