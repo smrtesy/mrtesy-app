@@ -323,6 +323,10 @@ export interface CreateJobRequest {
   line_overrides?: Array<{ line_number: number; text_for_tts: string }>;
   // regenerate_line only: line numbers to re-run through the LLM (fresh tone).
   reprocess_line_numbers?: number[];
+  // Apply the per-character style baseline tags to every line. OFF by default:
+  // stacking the baseline on top of the emotion recipe produces deep SSML tag
+  // stacks that destabilize resemble-ultra (spurious words / line restarts).
+  apply_style_baseline?: boolean;
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
