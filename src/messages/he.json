@@ -2723,6 +2723,8 @@
       "suggestWordPlaceholder": "מילה לתיקון הגייה",
       "suggestHebrew": "עברית",
       "suggestLatin": "לטינית",
+      "learnedTitle": "נלמד מהבחירות שלך",
+      "learnedStat": "עבד לקול הזה · נבחר {chosen} מתוך {total}",
       "noSuggestions": "לא נמצאו הצעות",
       "approve": "סמן כהקלטה טובה",
       "unapprove": "בטל סימון טוב",

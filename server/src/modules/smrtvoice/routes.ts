@@ -1999,6 +1999,176 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
   res.json({ takes: data ?? [] });
 });
 
+// ─── Recording-learning helpers ─────────────────────────────────────────────
+// When the user respells a word and then ⭐ that take, we learn the respelling
+// worked — scoped to the voice that produced it. Everything here is "suggestion
+// only": we record and surface; nothing auto-applies a respelling.
+
+// Strip Resemble tone tags so we compare clean spoken text. Mirrors the syntax
+// the engine composes: wrap tags <whisper>…</whisper> and inline [sigh].
+function stripToneTags(body: string): string {
+  return body
+    .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/gi, " ")
+    .replace(/\[[a-z][a-z0-9-]*\]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeWords(text: string): string[] {
+  return text.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+}
+
+// Hebrew niqqud/te'amim (U+0591–U+05C7). We never learn niqqud (it HARMS Ultra),
+// so a niqqud-only difference must not register as a respelling.
+function stripNiqqud(s: string): string {
+  return s.replace(/[֑-ׇ]/g, "");
+}
+
+// LCS token diff → {from → to} substitution spans where the ORIGINAL side is a
+// single word (the unit the user selects and the lookup keys on). A single word
+// respelled to a short phrase ("770" → "סעוון סעוונטי") is kept; adjacent
+// multi-word edits are dropped (they'd be unreachable by the single-token
+// lookup, so storing them only adds dead rows). Insert/delete-only gaps drop too.
+function diffRespellings(original: string, spoken: string): Array<{ from: string; to: string }> {
+  const a = tokenizeWords(stripNiqqud(original));
+  const b = tokenizeWords(stripNiqqud(spoken));
+  const n = a.length;
+  const m = b.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const pairs: Array<{ from: string; to: string }> = [];
+  let fromBuf: string[] = [];
+  let toBuf: string[] = [];
+  const flush = () => {
+    // One original word → a word or short phrase. Keeps single-word respellings
+    // (incl. "770" → two words) retrievable by the single-token lookup; drops
+    // merged multi-word blobs that the lookup could never reach.
+    if (fromBuf.length === 1 && toBuf.length >= 1 && toBuf.length <= 4) {
+      const from = fromBuf.join(" ");
+      const to = toBuf.join(" ");
+      if (from !== to && from.length <= 60 && to.length <= 80) pairs.push({ from, to });
+    }
+    fromBuf = [];
+    toBuf = [];
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      fromBuf.push(a[i]);
+      i++;
+    } else {
+      toBuf.push(b[j]);
+      j++;
+    }
+  }
+  while (i < n) fromBuf.push(a[i++]);
+  while (j < m) toBuf.push(b[j++]);
+  flush();
+  return pairs;
+}
+
+// The voice behind a line: its character + Resemble voice id (snapshot key for
+// learning). Null character → no voice scope (learning stays org-wide for it).
+async function resolveLineVoice(
+  orgId: string,
+  characterId: string | null,
+): Promise<{ character_id: string | null; resemble_voice_id: string | null }> {
+  if (!characterId) return { character_id: null, resemble_voice_id: null };
+  const { data } = await db
+    .from("smrtvoice_characters")
+    .select("id, resemble_voice_id")
+    .eq("id", characterId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  return {
+    character_id: data?.id ?? characterId,
+    resemble_voice_id: (data?.resemble_voice_id as string | null) ?? null,
+  };
+}
+
+// Recompute the pronunciation feedback for one line from scratch (idempotent):
+// every take's spoken text is diffed against the line's original text_clean, and
+// each respelling recorded with `chosen` = that take's ⭐. Best-effort — the
+// caller must never let a failure here break the request.
+async function syncPronunciationFeedback(orgId: string, lineId: string): Promise<void> {
+  const { data: line, error: lineErr } = await db
+    .from("smrtvoice_lines")
+    .select("id, text_clean, character_id")
+    .eq("id", lineId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (lineErr || !line || !line.text_clean) return;
+
+  const { data: takeRows, error: takesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, text_spoken, text_used, model, approved")
+    .eq("line_id", lineId)
+    .eq("org_id", orgId);
+  if (takesErr || !takeRows) return;
+
+  const voice = await resolveLineVoice(orgId, line.character_id as string | null);
+
+  // The org lexicon is applied to EVERY render automatically, so a pair that
+  // just reproduces a lexicon entry isn't something the user discovered on this
+  // take — skip it so "learned from your picks" stays the user's own edits.
+  const { data: lex } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .select("original_word, pronounced_as")
+    .eq("org_id", orgId);
+  const lexSet = new Set(
+    (lex ?? []).map((r) => `${stripNiqqud(r.original_word as string)}\u001f${stripNiqqud(r.pronounced_as as string)}`),
+  );
+
+  // Wipe this line's rows, then reinsert the current snapshot — keeps the table
+  // consistent no matter how many times a take is (un)starred.
+  const { error: delErr } = await db
+    .from("smrtvoice_pronunciation_feedback")
+    .delete()
+    .eq("line_id", lineId)
+    .eq("org_id", orgId);
+  if (delErr) return;
+
+  const seen = new Set<string>();
+  const rows: Array<Record<string, unknown>> = [];
+  for (const t of takeRows) {
+    const source =
+      (t.text_spoken as string | null) ??
+      (t.text_used ? stripToneTags(t.text_used as string) : "");
+    const spoken = source.trim();
+    if (!spoken) continue;
+    for (const p of diffRespellings(line.text_clean as string, spoken)) {
+      if (lexSet.has(`${p.from}\u001f${p.to}`)) continue; // automatic lexicon sub, not a user pick
+      const key = `${t.id}\u001f${p.from}\u001f${p.to}`;
+      if (seen.has(key)) continue; // same word respelled twice identically in one take
+      seen.add(key);
+      rows.push({
+        org_id: orgId,
+        take_id: t.id,
+        line_id: lineId,
+        character_id: voice.character_id,
+        resemble_voice_id: voice.resemble_voice_id,
+        model: (t.model as string | null) ?? null,
+        original_word: p.from,
+        pronounced_as: p.to,
+        chosen: t.approved === true,
+      });
+    }
+  }
+  if (rows.length > 0) {
+    const { error: insErr } = await db.from("smrtvoice_pronunciation_feedback").insert(rows);
+    if (insErr) console.error("pronunciation_feedback insert failed", insErr.message);
+  }
+}
+
 // PATCH /voice/takes/:id — mark a take as "good" (⭐) and/or jot a note.
 // `approved` is MULTI-select per line: several takes can be marked good (e.g. to
 // take part of each in editing). The line's outer indicator, sequential play,
@@ -2056,6 +2226,14 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
       .eq("id", take.line_id)
       .eq("org_id", req.org!.id);
     if (lineErr) return res.status(500).json({ error: lineErr.message });
+
+    // Learn from the pick: which respelling did the user keep, on which voice.
+    // Best-effort — a failure here must never break the ⭐ toggle.
+    try {
+      await syncPronunciationFeedback(req.org!.id, take.line_id);
+    } catch (e) {
+      console.error("syncPronunciationFeedback failed", e instanceof Error ? e.message : e);
+    }
   }
 
   const { data: updated, error: readErr } = await db
@@ -2500,6 +2678,49 @@ router.post("/voice/pronunciation/suggest", async (req: Request, res: Response) 
   if (!word) return res.status(400).json({ error: "word is required" });
   if (word.length > 200) return res.status(400).json({ error: "text too long (max 200 chars)" });
 
+  // Learned respellings for this exact word on this line's voice — surfaced
+  // FIRST so the user reaches for what already worked before asking the LLM.
+  type Learned = { pronounced_as: string; chosen: number; total: number };
+  let learned: Learned[] = [];
+  const lineId = (req.body?.line_id ?? "").toString().trim();
+  if (lineId) {
+    try {
+      const { data: line } = await db
+        .from("smrtvoice_lines")
+        .select("character_id")
+        .eq("id", lineId)
+        .eq("org_id", req.org!.id)
+        .maybeSingle();
+      const voice = await resolveLineVoice(req.org!.id, (line?.character_id as string | null) ?? null);
+      // Only surface learnings when we actually know the voice — otherwise the
+      // "worked for this voice" label would sit on org-wide (cross-voice) data.
+      if (voice.resemble_voice_id || voice.character_id) {
+        let fq = db
+          .from("smrtvoice_pronunciation_feedback")
+          .select("pronounced_as, chosen")
+          .eq("org_id", req.org!.id)
+          .eq("original_word", word);
+        if (voice.resemble_voice_id) fq = fq.eq("resemble_voice_id", voice.resemble_voice_id);
+        else fq = fq.eq("character_id", voice.character_id!);
+        const { data: fb } = await fq;
+        const agg = new Map<string, { chosen: number; total: number }>();
+        for (const r of fb ?? []) {
+          const e = agg.get(r.pronounced_as as string) ?? { chosen: 0, total: 0 };
+          e.total += 1;
+          if (r.chosen) e.chosen += 1;
+          agg.set(r.pronounced_as as string, e);
+        }
+        learned = [...agg.entries()]
+          .filter(([, v]) => v.chosen > 0)
+          .map(([pronounced_as, v]) => ({ pronounced_as, chosen: v.chosen, total: v.total }))
+          .sort((a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total)
+          .slice(0, 3);
+      }
+    } catch (e) {
+      console.error("learned lookup failed", e instanceof Error ? e.message : e);
+    }
+  }
+
   const system = `You help a Hebrew children's TV studio fix mispronunciations on Resemble "resemble-ultra" TTS. Ultra has NO working phoneme/IPA/<sub> support and niqqud HARMS it — the ONLY fix is respelling the text so it READS correctly.
 
 Given a Hebrew word or short phrase, propose respellings that steer the engine to the intended pronunciation:
@@ -2519,10 +2740,63 @@ Return ONLY JSON: {"hebrew": string[], "latin": string[]}`;
     const parsed = parseJsonResponse<{ hebrew?: string[]; latin?: string[] }>(content);
     const clean = (arr?: string[]) =>
       Array.from(new Set((arr ?? []).map((s) => String(s).trim()).filter(Boolean))).slice(0, 3);
-    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin) });
+    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin), learned });
   } catch (err) {
+    // The LLM leg failed, but learned respellings are still useful on their own.
+    if (learned.length > 0) return res.json({ hebrew: [], latin: [], learned });
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
+});
+
+// GET /voice/learnings — aggregated "which respelling wins" for a voice.
+// Scope by ?resemble_voice_id= or ?character_id= (or ?line_id= to resolve the
+// voice), optionally filtered to a single ?word=. Ranked by times kept (⭐).
+router.get("/voice/learnings", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const word = (req.query.word as string | undefined)?.trim() || null;
+  let resembleVoiceId = ((req.query.resemble_voice_id as string | undefined) || "").trim() || null;
+  let characterId = ((req.query.character_id as string | undefined) || "").trim() || null;
+  const lineId = ((req.query.line_id as string | undefined) || "").trim() || null;
+
+  if (!resembleVoiceId && !characterId && lineId) {
+    const { data: line } = await db
+      .from("smrtvoice_lines")
+      .select("character_id")
+      .eq("id", lineId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const voice = await resolveLineVoice(orgId, (line?.character_id as string | null) ?? null);
+    characterId = voice.character_id;
+    resembleVoiceId = voice.resemble_voice_id;
+  }
+
+  let q = db
+    .from("smrtvoice_pronunciation_feedback")
+    .select("original_word, pronounced_as, chosen")
+    .eq("org_id", orgId);
+  if (word) q = q.eq("original_word", word);
+  if (resembleVoiceId) q = q.eq("resemble_voice_id", resembleVoiceId);
+  else if (characterId) q = q.eq("character_id", characterId);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+
+  const agg = new Map<string, { original_word: string; pronounced_as: string; chosen: number; total: number }>();
+  for (const r of data ?? []) {
+    const key = `${r.original_word}\u001f${r.pronounced_as}`;
+    const e = agg.get(key) ?? {
+      original_word: r.original_word as string,
+      pronounced_as: r.pronounced_as as string,
+      chosen: 0,
+      total: 0,
+    };
+    e.total += 1;
+    if (r.chosen) e.chosen += 1;
+    agg.set(key, e);
+  }
+  const learnings = [...agg.values()].sort(
+    (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
+  );
+  res.json({ learnings, scope: { resemble_voice_id: resembleVoiceId, character_id: characterId } });
 });
 
 export default router;

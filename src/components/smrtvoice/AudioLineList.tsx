@@ -79,9 +79,16 @@ function tagsFromBody(body: string | null): string[] {
   return [...found];
 }
 
+interface LearnedSuggestion {
+  pronounced_as: string;
+  chosen: number;
+  total: number;
+}
+
 interface Suggestions {
   hebrew: string[];
   latin: string[];
+  learned?: LearnedSuggestion[];
 }
 
 /** The body last sent to Resemble — what the edit box is prefilled with. */
@@ -366,7 +373,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     selRef.current = e > s ? { start: s, end: e } : null;
   }
 
-  async function suggestForWord() {
+  async function suggestForWord(line: Line) {
     // Prefer the selected word; fall back to a single-token box.
     let query = "";
     if (selRef.current) {
@@ -387,7 +394,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     try {
       const s = await api<Suggestions>("/api/voice/pronunciation/suggest", {
         method: "POST",
-        body: { word: query },
+        body: { word: query, line_id: line.id },
       });
       setSuggestions(s);
     } catch (err) {
@@ -862,7 +869,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
 
                     {/* Word-level phonetic suggestions. */}
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" variant="ghost" onClick={suggestForWord} disabled={suggesting}>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => suggestForWord(line)} disabled={suggesting}>
                         <Sparkles className={`h-4 w-4 me-1 ${suggesting ? "animate-pulse" : ""}`} />
                         {t("studio.suggest")}
                       </Button>
@@ -870,8 +877,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     </div>
                     {suggestions && (
                       <div className="space-y-1.5 rounded-md bg-background/60 p-2">
-                        {suggestions.hebrew.length === 0 && suggestions.latin.length === 0 && (
-                          <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                        {suggestions.hebrew.length === 0 &&
+                          suggestions.latin.length === 0 &&
+                          (suggestions.learned?.length ?? 0) === 0 && (
+                            <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                          )}
+                        {(suggestions.learned?.length ?? 0) > 0 && (
+                          <div className="space-y-1">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              {t("studio.learnedTitle")}
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {suggestions.learned!.map((l, i) => (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => applySuggestion(l.pronounced_as)}
+                                  title={t("studio.learnedStat", { chosen: l.chosen, total: l.total })}
+                                  className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-sm hover:bg-primary/20"
+                                >
+                                  <code dir="auto">{l.pronounced_as}</code>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {l.chosen}/{l.total}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         )}
                         {suggestions.hebrew.length > 0 && (
                           <SuggestChips label={t("studio.suggestHebrew")} items={suggestions.hebrew} onPick={applySuggestion} />
