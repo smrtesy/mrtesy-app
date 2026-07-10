@@ -2736,6 +2736,7 @@
       "reanalyzeHint": "the LLM re-picks emotion + tone tags",
       "selectWordHint": "Select a word in the text to get spelling suggestions",
       "pause": "Pause",
+      "resume": "Resume",
       "takeNotePlaceholder": "Which word to keep from this take?",
       "good": "Good",
       "goodCount": "{count, plural, one {good take} other {# good takes}}",
