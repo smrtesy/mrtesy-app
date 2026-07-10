@@ -106,6 +106,8 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   // Bulk archive/delete selection mode + archived-lines view.
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Anchor index (in `rendered`) of the last plain click, for Shift+click range.
+  const selectAnchorRef = useRef<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -552,18 +554,35 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
-  function toggleSelect(id: string) {
+  // Select a row by its position in `rendered`. Shift+click extends the
+  // selection across the whole range from the anchor (last plain click) to this
+  // row; a plain click toggles the single row and moves the anchor.
+  function selectAt(index: number, shiftKey: boolean) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (shiftKey && selectAnchorRef.current !== null) {
+        const lo = Math.min(selectAnchorRef.current, index);
+        const hi = Math.max(selectAnchorRef.current, index);
+        for (let i = lo; i <= hi; i++) {
+          const row = rendered[i];
+          if (row) next.add(row.id);
+        }
+      } else {
+        const id = rendered[index]?.id;
+        if (id) {
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+        }
+      }
       return next;
     });
+    if (!shiftKey) selectAnchorRef.current = index;
   }
 
   function exitSelect() {
     setSelectMode(false);
     setSelectedIds(new Set());
+    selectAnchorRef.current = null;
   }
 
   // Archive (soft, reversible), unarchive, or permanently delete the selected
@@ -580,6 +599,22 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
         method: "POST",
         body: { action, line_ids: ids },
       });
+      // Reflect the change immediately. Don't rely on the re-fetch alone (it can
+      // race the just-committed write) or on realtime (logical-replication DELETE
+      // events carry only the PK, so the script_id filter drops them — the list
+      // would otherwise sit stale until a manual refresh).
+      const idSet = new Set(ids);
+      setLines((prev) =>
+        prev
+          ? action === "delete"
+            ? prev.filter((l) => !idSet.has(l.id))
+            : prev.map((l) =>
+                idSet.has(l.id)
+                  ? { ...l, archived_at: action === "archive" ? new Date().toISOString() : null }
+                  : l,
+              )
+          : prev,
+      );
       exitSelect();
       fetchLines();
     } catch (err) {
@@ -692,7 +727,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       {rendered.length === 0 ? (
         <p className="text-sm text-muted-foreground">—</p>
       ) : (
-        rendered.map((line) => {
+        rendered.map((line, index) => {
           const req = line.resemble_request ?? {};
           const model = (req.model as string | undefined) ?? null;
           const expanded = expandedId === line.id;
@@ -718,7 +753,8 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                       type="checkbox"
                       className="h-4 w-4 shrink-0"
                       checked={selectedIds.has(line.id)}
-                      onChange={() => toggleSelect(line.id)}
+                      onClick={(e) => selectAt(index, e.shiftKey)}
+                      onChange={() => {}}
                       aria-label={t("studio.select")}
                     />
                   )}
@@ -727,11 +763,11 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     role="button"
                     tabIndex={0}
                     title={selectMode ? undefined : t("studio.takes")}
-                    onClick={() => (selectMode ? toggleSelect(line.id) : toggleTakes(line.id))}
+                    onClick={(e) => (selectMode ? selectAt(index, e.shiftKey) : toggleTakes(line.id))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        if (selectMode) toggleSelect(line.id);
+                        if (selectMode) selectAt(index, e.shiftKey);
                         else toggleTakes(line.id);
                       }
                     }}
