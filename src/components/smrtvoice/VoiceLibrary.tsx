@@ -52,6 +52,7 @@ export function VoiceLibrary() {
   const [sampling, setSampling] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [playingAll, setPlayingAll] = useState(false);
+  const [paused, setPaused] = useState(false);
   // Batch "generate all missing samples" progress, or null when idle.
   const [genAll, setGenAll] = useState<{ done: number; total: number } | null>(null);
   const [previews, setPreviews] = useState<Record<string, boolean>>({});
@@ -68,6 +69,10 @@ export function VoiceLibrary() {
   // Bumped on every stop/new-play so a clip whose signed-URL fetch is still in
   // flight can tell it was superseded and bail instead of playing late.
   const playTokenRef = useRef(0);
+  // Pause/resume: pausedRef holds the play-all loop (and the pre-play fetch gap)
+  // so Pause resumes from the exact spot instead of restarting.
+  const pausedRef = useRef(false);
+  const resumeWaitersRef = useRef<Array<() => void>>([]);
 
   const load = useCallback(async (refresh = false) => {
     setError(null);
@@ -190,6 +195,8 @@ export function VoiceLibrary() {
   // "ended"), and clears "playing" so the button flips back to Play.
   const stopAudio = useCallback(() => {
     playTokenRef.current += 1; // invalidate any clip still fetching its URL
+    pausedRef.current = false;
+    setPaused(false);
     const a = audioRef.current;
     if (a) {
       a.onended = null;
@@ -202,8 +209,34 @@ export function VoiceLibrary() {
       resolveRef.current = null;
       r();
     }
+    // Release a loop parked in the between-clips fetch gap so it can exit.
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
     setPlaying(null);
   }, []);
+
+  // Resolves immediately unless paused; parks the caller until resume/stop.
+  const waitWhilePaused = useCallback((): Promise<void> => {
+    if (!pausedRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      resumeWaitersRef.current.push(resolve);
+    });
+  }, []);
+
+  function pausePlayback() {
+    pausedRef.current = true;
+    setPaused(true);
+    audioRef.current?.pause(); // keeps currentTime → resume continues
+  }
+  function resumePlayback() {
+    pausedRef.current = false;
+    setPaused(false);
+    audioRef.current?.play().catch(() => {});
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
+  }
 
   // Stop playback if the user navigates away mid-clip / mid-play-all.
   useEffect(() => () => {
@@ -217,8 +250,11 @@ export function VoiceLibrary() {
     const myToken = (playTokenRef.current += 1); // claim this playback slot
     return new Promise<void>((resolve) => {
       api<{ audio_url: string }>(`/api/voice/resemble/voices/${uuid}/sample`)
-        .then(({ audio_url }) => {
+        .then(async ({ audio_url }) => {
           // Stopped / superseded / unmounted while the URL was fetching.
+          if (playTokenRef.current !== myToken) return resolve();
+          // Hold here if paused during the fetch gap, then re-check.
+          await waitWhilePaused();
           if (playTokenRef.current !== myToken) return resolve();
           const audio = new Audio(audio_url);
           audioRef.current = audio;
@@ -241,14 +277,14 @@ export function VoiceLibrary() {
           resolve();
         });
     });
-  }, []);
+  }, [waitWhilePaused]);
 
-  // Per-voice Play/Pause toggle. Starting a single voice cancels any play-all.
+  // Per-voice button. On the live voice it pauses/resumes from the current
+  // position; on another voice it cancels any play-all and solos that one.
   function onTogglePlay(uuid: string) {
     if (playing === uuid) {
-      cancelAllRef.current = true;
-      setPlayingAll(false);
-      stopAudio();
+      if (pausedRef.current) resumePlayback();
+      else pausePlayback();
       return;
     }
     cancelAllRef.current = true; // stop a running play-all before soloing
@@ -259,23 +295,30 @@ export function VoiceLibrary() {
 
   // Play every currently-listed voice that has a preview, in order.
   async function onPlayAll() {
-    if (playingAll) {
-      cancelAllRef.current = true;
-      setPlayingAll(false);
-      stopAudio();
-      return;
-    }
     const queue = filtered.filter((v) => previews[v.uuid]);
     if (queue.length === 0) return;
     stopAudio(); // silence any solo clip so we don't overlap two previews
     cancelAllRef.current = false;
+    pausedRef.current = false;
+    setPaused(false);
     setPlayingAll(true);
     for (const v of queue) {
+      if (cancelAllRef.current) break;
+      await waitWhilePaused();
       if (cancelAllRef.current) break;
       await playOne(v.uuid);
     }
     // Natural completion: playOne already cleared "playing" on the last clip.
     setPlayingAll(false);
+    setPaused(false);
+    pausedRef.current = false;
+  }
+
+  // Toolbar Stop: end the whole play-all run.
+  function stopAll() {
+    cancelAllRef.current = true;
+    setPlayingAll(false);
+    stopAudio();
   }
 
   // One-time backfill: generate a stored sample for every voice that lacks one.
@@ -362,16 +405,39 @@ export function VoiceLibrary() {
 
       {/* Playback / batch actions */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant={playingAll ? "default" : "outline"}
-          onClick={onPlayAll}
-          disabled={playableCount === 0 || genAll !== null}
-          title={playingAll ? t("stopAll") : t("playAll")}
-        >
-          {playingAll ? <Square className="h-4 w-4 me-1" /> : <ListMusic className="h-4 w-4 me-1" />}
-          {playingAll ? t("stopAll") : t("playAllCount", { count: playableCount })}
-        </Button>
+        {playingAll ? (
+          <div className="inline-flex overflow-hidden rounded-md border">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-none border-e"
+              onClick={paused ? resumePlayback : pausePlayback}
+              title={paused ? t("play") : t("pause")}
+            >
+              {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-none"
+              onClick={stopAll}
+              title={t("stopAll")}
+            >
+              <Square className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onPlayAll}
+            disabled={playableCount === 0 || genAll !== null}
+            title={t("playAll")}
+          >
+            <ListMusic className="h-4 w-4 me-1" />
+            {t("playAllCount", { count: playableCount })}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -534,10 +600,10 @@ export function VoiceLibrary() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        title={playing === v.uuid ? t("pause") : t("play")}
+                        title={playing === v.uuid && !paused ? t("pause") : t("play")}
                         onClick={() => onTogglePlay(v.uuid)}
                       >
-                        {playing === v.uuid ? (
+                        {playing === v.uuid && !paused ? (
                           <Pause className="h-4 w-4" />
                         ) : (
                           <Play className="h-4 w-4" />
