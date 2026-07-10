@@ -48,6 +48,10 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const [script, setScript] = useState<Script | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Opt-in: apply each character's style baseline (slow/soft/…) on top of the
+  // per-line emotion tags. Off by default — deep tag stacks destabilize the
+  // TTS engine (spurious words / line restarts).
+  const [applyBaseline, setApplyBaseline] = useState(false);
   // Self-heal a script left stuck in queued/processing by a dropped completion
   // webhook: poll the engine once per mount. The endpoint is a no-op if the
   // job is genuinely still running.
@@ -111,7 +115,10 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   async function onGenerate() {
     setBusy(true);
     try {
-      await api(`/api/voice/scripts/${scriptId}/generate`, { method: "POST" });
+      await api(`/api/voice/scripts/${scriptId}/generate`, {
+        method: "POST",
+        body: { apply_style_baseline: applyBaseline },
+      });
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
@@ -205,6 +212,24 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
           </a>
         )}
       </div>
+
+      {/* Opt-in: apply the character style baseline. Off by default — deep tag
+          stacks destabilize the TTS engine (spurious words / line restarts). */}
+      {parsed && (
+        <label
+          className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
+          title={t("useBaselineHint")}
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={applyBaseline}
+            onChange={(e) => setApplyBaseline(e.target.checked)}
+            disabled={busy || generating}
+          />
+          {t("useBaseline")}
+        </label>
+      )}
 
       {/* STS input recording */}
       {script.generation_mode === "sts" && (
