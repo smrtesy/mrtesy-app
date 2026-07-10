@@ -1402,6 +1402,54 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   }
 });
 
+// POST /voice/scripts/:id/cancel — stop an in-progress generation. Flips the
+// active generate_audio job to 'cancelled' (the worker polls this by
+// voice_engine_job_id and stops launching new lines cooperatively) and clears
+// the script's generating state so the UI leaves it immediately — even if the
+// worker is slow or was never picked up. Lines already rendered are kept.
+router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, completed_lines")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+
+  // Signal the worker via the newest still-active generate job for this script.
+  const { data: activeJob } = await db
+    .from("smrtvoice_jobs")
+    .select("id")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .eq("job_type", "generate_audio")
+    .in("status", ["queued", "running"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeJob) {
+    const { error: jobErr } = await db
+      .from("smrtvoice_jobs")
+      .update({ status: "cancelled", completed_at: new Date().toISOString() })
+      .eq("id", activeJob.id)
+      .eq("org_id", req.org!.id);
+    if (jobErr) return res.status(500).json({ error: jobErr.message });
+  }
+
+  // Leave the generating state now (self-heal if the worker is dead). If the
+  // worker is alive it also writes the final audio_ready when it stops.
+  const { error: sErr } = await db
+    .from("smrtvoice_scripts")
+    .update({ status: (script.completed_lines ?? 0) > 0 ? "audio_ready" : "parsed", stage: null })
+    .eq("id", script.id)
+    .eq("org_id", req.org!.id);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  res.json({ ok: true, cancelled: !!activeJob });
+});
+
 // POST /voice/scripts/:id/sync — reconcile a script that's stuck in
 // queued/processing because its job.completed / job.failed webhook never
 // arrived. The voice-engine worker writes counts/cost/stage directly to the

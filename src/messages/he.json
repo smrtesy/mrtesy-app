@@ -2413,6 +2413,8 @@
       "parsing": "מפרסר…",
       "generate": "ייצר אודיו",
       "generating": "מייצר…",
+      "stop": "עצור",
+      "stopping": "עוצר…",
       "queuedBanner": "בתור — מתחיל בקרוב…",
       "stages": {
         "fetching": "מביא את התסריט",
