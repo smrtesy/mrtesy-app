@@ -140,6 +140,8 @@ export interface ScriptSpeaker {
   extra_character_ids: string[];
   resemble_voice_id: string | null;
   skip: boolean;
+  // Number of lines this speaker has in the parsed script (set on each parse).
+  line_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -361,6 +363,8 @@ export interface ParsedScript {
   total_lines: number;
   scenes: string[];
   speakers: string[];
+  // speaker_name -> number of lines that speaker has in the parsed script.
+  speaker_line_counts?: Record<string, number>;
   warnings: string[];
   preview: Array<{ line: number; speaker: string; text: string }>;
 }

@@ -1134,6 +1134,10 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       .eq("script_id", script.id);
     const existingSet = new Set((existing ?? []).map((s: { speaker_name: string }) => s.speaker_name));
 
+    // Per-speaker line count from the parser — the script's true line
+    // distribution, independent of generated (deletable) smrtvoice_lines.
+    const counts = result.speaker_line_counts ?? {};
+
     const rows = (result.speakers ?? [])
       .filter((sp: string) => !existingSet.has(sp))
       .map((sp: string) => ({
@@ -1142,10 +1146,24 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
         speaker_name: sp,
         character_id: inherited.get(sp)?.character_id ?? null,
         resemble_voice_id: inherited.get(sp)?.resemble_voice_id ?? null,
+        line_count: counts[sp] ?? 0,
       }));
     if (rows.length > 0) {
       const { error: insErr } = await db.from("smrtvoice_script_speakers").insert(rows);
       if (insErr) console.warn("[smrtvoice] script_speakers insert failed:", insErr.message);
+    }
+
+    // Refresh the parsed line count on speakers that already existed (new ones
+    // got it in the insert above), so every re-parse updates the counts.
+    for (const sp of result.speakers ?? []) {
+      if (!existingSet.has(sp)) continue;
+      const { error: cntErr } = await db
+        .from("smrtvoice_script_speakers")
+        .update({ line_count: counts[sp] ?? 0 })
+        .eq("script_id", script.id)
+        .eq("org_id", req.org!.id)
+        .eq("speaker_name", sp);
+      if (cntErr) console.warn("[smrtvoice] line_count update failed:", cntErr.message);
     }
 
     // Reconcile: drop speakers that no longer appear in the script — removed
@@ -1200,21 +1218,9 @@ router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) =>
     .order("speaker_name");
   if (error) return res.status(500).json({ error: error.message });
 
-  // Attach each speaker's line count (how many lines that speaker has).
-  const { data: lines } = await db
-    .from("smrtvoice_lines")
-    .select("speaker_name")
-    .eq("script_id", req.params.id)
-    .eq("org_id", req.org!.id);
-  const counts = new Map<string, number>();
-  for (const l of lines ?? []) {
-    counts.set(l.speaker_name, (counts.get(l.speaker_name) ?? 0) + 1);
-  }
-  const speakers = (data ?? []).map((s: { speaker_name: string }) => ({
-    ...s,
-    line_count: counts.get(s.speaker_name) ?? 0,
-  }));
-  res.json({ speakers });
+  // line_count is stored on the row at parse time (the script's true line
+  // distribution) — no longer derived from generated/deletable smrtvoice_lines.
+  res.json({ speakers: data ?? [] });
 });
 
 router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
