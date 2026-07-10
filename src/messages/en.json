@@ -2726,6 +2726,8 @@
       "suggestWordPlaceholder": "Word to fix",
       "suggestHebrew": "Hebrew",
       "suggestLatin": "Latin",
+      "learnedTitle": "Learned from your picks",
+      "learnedStat": "worked for this voice · kept {chosen} of {total}",
       "noSuggestions": "No suggestions found",
       "approve": "Mark as good take",
       "unapprove": "Unmark good",
