@@ -1148,6 +1148,25 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       if (insErr) console.warn("[smrtvoice] script_speakers insert failed:", insErr.message);
     }
 
+    // Reconcile: drop speakers that no longer appear in the script — removed
+    // characters and stale phantoms from earlier parses. The parse result is
+    // the source of truth for who speaks, so a re-parse cleans the casting list.
+    const parsedSet = new Set(result.speakers ?? []);
+    const staleNames = [...existingSet].filter((n) => !parsedSet.has(n));
+    // Guard: only reconcile when the parse actually returned speakers. An empty
+    // or partial parse (empty tab, transient parser miss) must NOT wipe the
+    // user's manual per-script casting — a bad parse would otherwise delete
+    // every mapping.
+    if (staleNames.length > 0 && parsedSet.size > 0) {
+      const { error: delErr } = await db
+        .from("smrtvoice_script_speakers")
+        .delete()
+        .eq("script_id", script.id)
+        .eq("org_id", req.org!.id)
+        .in("speaker_name", staleNames);
+      if (delErr) console.warn("[smrtvoice] script_speakers reconcile-delete failed:", delErr.message);
+    }
+
     const { error: updateErr } = await db
       .from("smrtvoice_scripts")
       .update({
