@@ -2670,6 +2670,7 @@
       "progressTraining": "Clone is training and upgrading to Ultra… ({status})",
       "fromComputer": "From computer",
       "fromDrive": "From Google Drive",
+      "cleanLabel": "Auto-clean (remove noise/silence + level the volume)",
       "driveFolderLabel": "Drive folder link (with the recording files)",
       "loadFiles": "Load files",
       "loadingFiles": "Loading…",

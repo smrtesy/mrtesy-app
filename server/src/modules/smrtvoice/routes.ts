@@ -439,6 +439,9 @@ router.post(
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        // Default to cleaning; pass clean:false to clone the raw audio (e.g. to
+        // A/B a raw clone against a cleaned one).
+        clean: req.body?.clean !== false,
       });
 
       const { data: updated, error: updateError } = await db
@@ -676,6 +679,7 @@ router.post(
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        clean: req.body?.clean !== false,
       });
 
       for (const path of stagedPaths) {
