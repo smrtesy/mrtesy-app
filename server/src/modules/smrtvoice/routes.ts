@@ -1153,7 +1153,11 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
     // the source of truth for who speaks, so a re-parse cleans the casting list.
     const parsedSet = new Set(result.speakers ?? []);
     const staleNames = [...existingSet].filter((n) => !parsedSet.has(n));
-    if (staleNames.length > 0) {
+    // Guard: only reconcile when the parse actually returned speakers. An empty
+    // or partial parse (empty tab, transient parser miss) must NOT wipe the
+    // user's manual per-script casting — a bad parse would otherwise delete
+    // every mapping.
+    if (staleNames.length > 0 && parsedSet.size > 0) {
       const { error: delErr } = await db
         .from("smrtvoice_script_speakers")
         .delete()
