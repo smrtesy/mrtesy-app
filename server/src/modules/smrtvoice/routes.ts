@@ -1351,7 +1351,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       adapter: settings?.default_adapter ?? "resemble",
       mode: script.generation_mode,
       // Drives which pronunciation-lexicon entries apply (he-only / en-only).
-      language: script.language ?? "he",
+      language: (script.language ?? "he") as "he" | "en",
       google_doc_id: script.google_doc_id ?? undefined,
       google_oauth_token: token ?? undefined,
       google_doc_tab_id: script.google_doc_tab_id ?? undefined,
@@ -1911,7 +1911,7 @@ async function queueRegeneration(
       adapter: settings?.default_adapter ?? "resemble",
       mode,
       // Same script-language gating as a full generate.
-      language: script.language ?? "he",
+      language: (script.language ?? "he") as "he" | "en",
       input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
