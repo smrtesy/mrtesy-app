@@ -251,6 +251,7 @@ For NEW ACTIONABLE task:
   "task": {
     "title_he": "clear specific action title in Hebrew — NOT 'Email from X'",
     "priority": "urgent|high|medium|low",
+    "size": "quick|medium",
     "due_date": "YYYY-MM-DD or null",
     "description_he": "Full context: numbers, dates, contacts, stakes, consequences",
     "contact_person": "name + phone + email if mentioned",
@@ -260,6 +261,16 @@ For NEW ACTIONABLE task:
     "checklist": ["sub-step 1","sub-step 2"]
   }
 }
+
+"size" rules — classify the effort into exactly TWO values:
+  - "quick"  = a single bounded action with no preparation: reply, approve,
+    confirm, call, schedule, send, forward. One sitting, minutes.
+  - "medium" = anything else — creating/preparing something, multi-step work,
+    or work that depends on others.
+  WHEN IN DOUBT → "medium" (this keeps the quick list trustworthy for the
+  marathon run). NEVER output "big" — "big" is a human-only decision the user
+  makes when choosing their one focus task for the day; the AI must not assign
+  it.
 
 "checklist" rules — return [] in MOST cases. Only populate when the message
 clearly enumerates DISCRETE sub-items that the user has to track separately,
