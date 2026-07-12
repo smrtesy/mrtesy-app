@@ -76,8 +76,13 @@ export function useDayTools(): UseDayTools {
       // Server merges at the tool-key level, so sending just this tool is safe.
       await api("/api/me/settings", { method: "PATCH", body: { day_tools: { [slug]: next[slug] } } });
     } catch (e) {
-      cache = prev; // roll back on failure
-      notify();
+      // Roll back only if no later write already superseded ours — otherwise a
+      // concurrent toggle's optimistic value (and its in-flight PATCH) would be
+      // clobbered by this call's stale rollback.
+      if (cache === next) {
+        cache = prev;
+        notify();
+      }
       throw e;
     }
   }, []);

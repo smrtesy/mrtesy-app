@@ -4,9 +4,8 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { DAY_TOOLS } from "@/lib/smrttask/day-tools";
+import { DAY_TOOLS, resolveTool } from "@/lib/smrttask/day-tools";
 import { useDayTools } from "@/hooks/useDayTools";
-import { resolveTool } from "@/lib/smrttask/day-tools";
 
 /**
  * "כלי היום" settings section — one quiet toggle row per day-tool. Per-tool
@@ -34,13 +33,15 @@ export function DayToolsSettings() {
       <CardContent className="space-y-4">
         {DAY_TOOLS.map((tool) => {
           const enabled = resolveTool(state, tool.slug).enabled;
+          const id = `daytool-${tool.slug}`;
           return (
             <div key={tool.slug} className="flex items-start justify-between gap-4">
               <div className="space-y-0.5">
-                <label className="text-sm font-medium" dir="auto">{t(`${tool.slug}.title`)}</label>
+                <label htmlFor={id} className="text-sm font-medium" dir="auto">{t(`${tool.slug}.title`)}</label>
                 <p className="text-xs text-muted-foreground" dir="auto">{t(`${tool.slug}.desc`)}</p>
               </div>
               <Switch
+                id={id}
                 checked={enabled}
                 disabled={loading}
                 onCheckedChange={(v) => toggle(tool.slug, v)}
