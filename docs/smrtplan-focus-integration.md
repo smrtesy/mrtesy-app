@@ -72,25 +72,34 @@ CREATE TABLE focus_sessions (
 -- + RLS + INDEX (user_id, session_date)
 ```
 
--- מיגרציה 3: שדות תכנון על משימות (בשביל בונה-התוכנית + הפצת החלטות)
+-- מיגרציה 3: שדות תכנון על משימות (בונה-התוכנית + מחקר + הפצת החלטות)
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS definition_of_done text,            -- "מבחן הזר"
   ADD COLUMN IF NOT EXISTS ai_tier  text CHECK (ai_tier IN ('full','assist','human')),
   ADD COLUMN IF NOT EXISTS ai_prompt text,                     -- פרומפט-פתיחה מוכן
   ADD COLUMN IF NOT EXISTS is_decision bool NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS affected_by uuid[] NOT NULL DEFAULT '{}';
+  ADD COLUMN IF NOT EXISTS affected_by uuid[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS external_wait_days int NOT NULL DEFAULT 0;  -- המתנה חיצונית (תחנה 8)
 -- (stages: ל-smrtplan_stages אפשר להוסיף checkpoint text לנקודת-הביקורת)
 ```
 
 - `estimated_hours` כבר קיים; אחראים/תלויות/מסירה/טיוטה קיימים. **חדש**
-  על `tasks`: חמשת שדות התכנון של הפרוטוקול (מיגרציה 3 מעלה) — הבונה
-  ממלא אותם, והם מוצגים במשימה (DoD, תג AI, פרומפט מוכן) ומשמשים את
-  הפצת ההחלטות (§10).
+  על `tasks`: שדות התכנון של הפרוטוקול (מיגרציה 3 מעלה) — הבונה ממלא
+  אותם, והם מוצגים במשימה (DoD, תג AI, פרומפט מוכן) ומשמשים את הפצת
+  ההחלטות (§10).
+- **משימות מחקר (מהדורה 2 של הפרוטוקול) — מכוסות במלואן ללא סכמה
+  נוספת.** מיפוי הפרוטוקול (§13, טבלת "מיפוי משימות מחקר"): ספייק →
+  `is_decision=true`; תזכיר החלטה → `definition_of_done`; שאלה/
+  קריטריונים/משקלים/סף/תקציב-סשנים → `description`; קריטריון-סיום/שלבי-
+  בדיקה → `checklist`; פרומפט הרתמה → `ai_prompt`; תקציב-סשנים →
+  `estimated_hours`. כל השדות האלה קיימים (מיגרציה 3 + קיימים).
+- **`external_wait_days`** (חדש) — לוכד את "ההמתנות שלא שורפות סשנים"
+  (רינדורים/תורים/ספקים) של תחנה 8; ההקרנה מציגה אותו בנפרד (§4).
 - `day_tools.planfocus = { enabled }` — מפתח ברג'יסטרי (עמודת ה-JSONB
   של day-tools, בלי מיגרציה נוספת). ראה `day-tools-plan.md §2.1`.
 
 > **מקור הסכמה הקנוני** של ה-payload לבנייה/ייבוא הוא
-> `project-planning-protocol.md §11`. שדות ה-JSON שם ממופים לעמודות:
+> `project-planning-protocol.md §13`. שדות ה-JSON שם ממופים לעמודות:
 > `definition_of_done`/`ai_tier`/`ai_prompt`/`is_decision`/`affected_by`
 > (חדשים), `estimated_hours`/`assignee`/`depends_on`/`checklist`
 > (קיימים), ו-`stage`→`stage_id`. מפתחות `key` ב-JSON נפתרים ל-uuid
@@ -137,14 +146,19 @@ ALTER TABLE tasks
 
 ```
 שעות שנותרו = Σ estimated_hours של משימות התוכנית שטרם הושלמו
-עם באפר     = שעות שנותרו × (1 + BUFFER)          // BUFFER = 0.20 (פרוטוקול §10)
+עם באפר     = שעות שנותרו × (1 + BUFFER)          // BUFFER = 0.20 (פרוטוקול §12)
 ימי-עבודה   = ceil( עם-באפר ÷ (daily_minutes ÷ 60) )
 תאריך סיום  = addWorkdays(today, ימי-עבודה, blocked)   // src/lib/workdays.ts
 ```
 
 - **הבאפר (20%) מוחל גם כאן**, לא רק בזמן התכנון — כדי שההקרנה החיה
   תיתן את אותו תאריך שהבונה הציג. הפקטור משותף עם `project-planning-
-  protocol.md §10`.
+  protocol.md §12`.
+- **המתנות חיצוניות מוצגות בנפרד** (תחנה 8): `Σ external_wait_days`
+  מוצג כשורה נפרדת ("+ ~N ימי המתנה חיצונית — רינדורים/ספקים") ולא
+  מקופל לתאריך הפוקוס, כי הוא רץ ברקע ולרוב חופף לסשנים. לתאריך
+  קלנדרי מדויק כשההמתנה על המסלול הקריטי — המנוע (`duration_days`)
+  נשאר הסמכות (תזמון עם תלויות/דדליין).
 - דו-לשוני: פורמט התאריך דרך ה-locale הקיים (he/en).
 - **מקבילי למנוע, לא מזין אותו.** תוכנית בלי דדליין → זה התאריך הראשי.
   תוכנית עם דדליין → מוצג לצד הערכת-הסיכון של המנוע ("בקצב הזה תגיע/לא").
@@ -229,8 +243,9 @@ ALTER TABLE tasks
 
 ## 9. שלבי ביצוע (צד smrtPlan)
 
-1. **תשתית:** מיגרציות `smrtplan_focus` + `focus_sessions` + RLS;
-   הרמת `zoneOf`/`byUrgency` ל-util משותף (§5).
+1. **תשתית:** מיגרציות `smrtplan_focus` + `focus_sessions` + **מיגרציה 3**
+   (שדות התכנון/מחקר + `external_wait_days`) + RLS; הרמת
+   `zoneOf`/`byUrgency` ל-util משותף (§5).
 2. **התחייבות + הקרנה:** `PUT /plan/:id/focus`, `GET /plan/:id/projection`,
    `GET /plan/focus-today`, `GET /plan/:id/focus-stage`; קלט
    `estimated_hours` + שדה דקות-ביום ב-UI (§6).
@@ -246,7 +261,7 @@ ALTER TABLE tasks
 
 ## 10. הפצת החלטות — תמיכת מערכת נדרשת ("תוכנית חיה")
 
-הפרוטוקול (`project-planning-protocol.md` §8) מגדיר משימות-החלטה
+הפרוטוקול (`project-planning-protocol.md` §10, תחנה 9) מגדיר משימות-החלטה
 שתוצאתן זורמת קדימה למשימות מושפעות. תמיכה נדרשת:
 
 - **דאטה:** `tasks.is_decision` + `tasks.affected_by` — כבר בתוך
@@ -266,5 +281,11 @@ ALTER TABLE tasks
 - **באג `kind='roster'`** ב-`POST /plans` (§3) — לא חוסם, לתיקון עתידי.
 - **ראשון = יום חופש** (שני–שישי) חל גם על ההקרנה האישית — החלטה פתוחה
   ב-`day-tools-plan.md §8.3a`.
+- **מהדורה 2 של הפרוטוקול** (מסלול מחקר + מינוף AI) נבדקה: כל
+  משימות המחקר, הספייקים, הבייק-אוף והרתמה **מכוסים בייבוא** ללא סכמה
+  נוספת (§2, מיפוי §13). התוספת היחידה שנדרשה — `external_wait_days`
+  (המתנות שלא שורפות סשנים).
+- `stages.checkpoint` — נקודת-הביקורת של שלב (סכמת §13). לא קיים
+  ב-`smrtplan_stages` היום; או עמודה חדשה או קיפול לתיאור השלב.
 - **`manager_user_id`** על `smrtplan_plans` — בשימוש ב-routes אך ה-DDL
   לא אותר בסריקה; לוודא שקיים לפני שנשענים עליו.

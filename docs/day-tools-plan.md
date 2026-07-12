@@ -347,7 +347,7 @@ completed_quick, completed_medium, completed_big, closed_at)` + RLS.
 פר-משימה. הפלט שלו עשיר יותר מ"שלבים + שעות": כל משימה נושאת גם
 `definition_of_done`, `ai_tier` (🤖/🤝/👤), `ai_prompt` מוכן, ומשימות-החלטה
 עם `affected_by`. שני המסלולים (in-app ו-ייבוא מקלוד קוד) מקבלים את אותה
-**סכמת JSON** — המקור הקנוני שלה הוא `project-planning-protocol.md §11`,
+**סכמת JSON** — המקור הקנוני שלה הוא `project-planning-protocol.md §13`,
 והמיפוי לעמודות ב-`smrtplan-focus-integration.md §2/§3`.
 
 ### 8.5 התחייבות יומית + מסך הפוקוס
@@ -398,7 +398,7 @@ completed_quick, completed_medium, completed_big, closed_at)` + RLS.
 - **סיווג AI של הפרוטוקול (🤖/🤝/👤):** נבדל מ-size של הדֶסק. הוא תכונת-
   משימה (`ai_tier`) שמוצגת כ**תג** על משימת-הפלאן + `ai_prompt` מוכן,
   ומקצרת את ה-`estimated_hours` (זמן אישור, לא זמן יצירה). **לא** הופכת
-  את המשימה ל"מהיר" בדֶסק. ("🤖 → מהיר" בפרוטוקול §9 חל על משימות
+  את המשימה ל"מהיר" בדֶסק. ("🤖 → מהיר" בפרוטוקול §11 חל על משימות
   שהולכות ישירות ל-smrtTask — טריאז' "משימה"/"פרויקט קטן" §1 — לא על
   משימות בתוך תוכנית מלאה.)
 - **תקציב AI / דו-לשוניות / org-scoping / api():** reuse מלא.
