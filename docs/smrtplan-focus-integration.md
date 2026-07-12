@@ -72,10 +72,29 @@ CREATE TABLE focus_sessions (
 -- + RLS + INDEX (user_id, session_date)
 ```
 
-- **אין** שינוי ב-`tasks`/`smrtplan_plans`/במנוע. `estimated_hours` כבר
-  קיים; אחראים/תלויות/מסירה/טיוטה קיימים.
+-- מיגרציה 3: שדות תכנון על משימות (בשביל בונה-התוכנית + הפצת החלטות)
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS definition_of_done text,            -- "מבחן הזר"
+  ADD COLUMN IF NOT EXISTS ai_tier  text CHECK (ai_tier IN ('full','assist','human')),
+  ADD COLUMN IF NOT EXISTS ai_prompt text,                     -- פרומפט-פתיחה מוכן
+  ADD COLUMN IF NOT EXISTS is_decision bool NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS affected_by uuid[] NOT NULL DEFAULT '{}';
+-- (stages: ל-smrtplan_stages אפשר להוסיף checkpoint text לנקודת-הביקורת)
+```
+
+- `estimated_hours` כבר קיים; אחראים/תלויות/מסירה/טיוטה קיימים. **חדש**
+  על `tasks`: חמשת שדות התכנון של הפרוטוקול (מיגרציה 3 מעלה) — הבונה
+  ממלא אותם, והם מוצגים במשימה (DoD, תג AI, פרומפט מוכן) ומשמשים את
+  הפצת ההחלטות (§10).
 - `day_tools.planfocus = { enabled }` — מפתח ברג'יסטרי (עמודת ה-JSONB
   של day-tools, בלי מיגרציה נוספת). ראה `day-tools-plan.md §2.1`.
+
+> **מקור הסכמה הקנוני** של ה-payload לבנייה/ייבוא הוא
+> `project-planning-protocol.md §11`. שדות ה-JSON שם ממופים לעמודות:
+> `definition_of_done`/`ai_tier`/`ai_prompt`/`is_decision`/`affected_by`
+> (חדשים), `estimated_hours`/`assignee`/`depends_on`/`checklist`
+> (קיימים), ו-`stage`→`stage_id`. מפתחות `key` ב-JSON נפתרים ל-uuid
+> בזמן היצירה (למיפוי `depends_on`/`affected_by`).
 
 ---
 
@@ -98,6 +117,10 @@ CREATE TABLE focus_sessions (
     (`estimated_hours`, `assigned_to_user_id=creator`) + `smrtplan_focus`.
   - `POST /plans/import` — מסלול ייבוא (קלוד קוד): אותו סכמת-הצעה, יוצר
     ישירות. שני המסלולים כותבים לאותו מבנה.
+  - **payload של `ai-build/commit` ו-`import` = `project-planning-protocol.md
+    §11`** (קנוני). שניהם ממפים את *כל* שדות התכנון (§2 מיגרציה 3),
+    כולל `is_decision`/`affected_by` ו-`ai_tier`/`ai_prompt`, ופותרים
+    `key`→uuid.
 
 **ללא שינוי (מנוצל כמו שהוא):**
 - `POST /plans` (`:446`), `POST /plans/:id/tasks` (`:983` — כבר מקבל
@@ -114,10 +137,14 @@ CREATE TABLE focus_sessions (
 
 ```
 שעות שנותרו = Σ estimated_hours של משימות התוכנית שטרם הושלמו
-ימי-עבודה   = ceil( שעות שנותרו ÷ (daily_minutes ÷ 60) )
+עם באפר     = שעות שנותרו × (1 + BUFFER)          // BUFFER = 0.20 (פרוטוקול §10)
+ימי-עבודה   = ceil( עם-באפר ÷ (daily_minutes ÷ 60) )
 תאריך סיום  = addWorkdays(today, ימי-עבודה, blocked)   // src/lib/workdays.ts
 ```
 
+- **הבאפר (20%) מוחל גם כאן**, לא רק בזמן התכנון — כדי שההקרנה החיה
+  תיתן את אותו תאריך שהבונה הציג. הפקטור משותף עם `project-planning-
+  protocol.md §10`.
 - דו-לשוני: פורמט התאריך דרך ה-locale הקיים (he/en).
 - **מקבילי למנוע, לא מזין אותו.** תוכנית בלי דדליין → זה התאריך הראשי.
   תוכנית עם דדליין → מוצג לצד הערכת-הסיכון של המנוע ("בקצב הזה תגיע/לא").
@@ -146,7 +173,7 @@ CREATE TABLE focus_sessions (
 |---|---|---|
 | **בונה-תוכנית AI** | חדש: `PlanAiBuilder.tsx` | נקודת כניסה מהלוח (ליד "תוכנית חדשה", `PlanBoardClient.tsx:772`); זרימת תיאור→הצעה→אישור |
 | **דיאלוג תוכנית** | `PlanEditDialog.tsx` | שדה **התחייבות יומית (דקות)** — `PUT /plan/:id/focus` |
-| **פרטי תוכנית** | `PlanEffortDetail.tsx` | קלט **`estimated_hours` פר-משימה** (היום אין! רק `duration_days` ב-`NewTaskRow:721`/`EditTaskRow:876`); תג "תאריך סיום משוער"; שיוך-מחדש כבר קיים (`:547-560`) |
+| **פרטי תוכנית** | `PlanEffortDetail.tsx` | קלט **`estimated_hours` פר-משימה** (היום אין! רק `duration_days` ב-`NewTaskRow:721`/`EditTaskRow:876`); הצגת `definition_of_done` + תג `ai_tier` + כפתור העתקת `ai_prompt`; סימון משימת-החלטה; תג "תאריך סיום משוער"; שיוך-מחדש כבר קיים (`:547-560`) |
 | **דף המשימות** | `src/components/smrttask/tasks/TaskList.tsx` | שורת-בלוק פוקוס (⏱ NN ▶) מ-`GET /plan/focus-today` |
 | **מסך סשן פוקוס** | חדש: `FocusSession.tsx` | פורק של `MarathonMode.tsx` — count-down, שלב נוכחי, צליל+חסימה |
 | **הגדרות כלי-היום** | סקשן "כלי היום" | טוגל `planfocus` |
@@ -211,6 +238,9 @@ CREATE TABLE focus_sessions (
    מסלול `POST /plans/import`.
 4. **מסך פוקוס + הצטרפות ליום:** `FocusSession.tsx`, שורת-בלוק ב-`TaskList`,
    `focus-sessions` routes, טוגל `planfocus`.
+5. **הפצת החלטות (§10):** שדות התכנון כבר במיגרציה 3; שדה-החלטה בדיאלוג
+   ההשלמה; handler ל-`task.completed` שמצמיד עדכון למושפעים; מעבר ה-AI
+   לאישור. שלב זה תלוי בבונה (שממלא `is_decision`/`affected_by`).
 
 כל שלב עצמאי, כפוף לפרוטוקול ה-pre-push המלא (build + greps + תת-סוכן).
 
@@ -219,10 +249,8 @@ CREATE TABLE focus_sessions (
 הפרוטוקול (`project-planning-protocol.md` §8) מגדיר משימות-החלטה
 שתוצאתן זורמת קדימה למשימות מושפעות. תמיכה נדרשת:
 
-- **דאטה:** `tasks.is_decision bool DEFAULT false` +
-  `tasks.affected_by uuid[]` (מזהי משימות-החלטה שחלות על המשימה) —
-  מיגרציה קטנה נוספת. הייבוא (`POST /plans/import`) ממפה את
-  `is_decision`/`affected_by` מה-JSON (מפתחות `key` → uuid בפועל).
+- **דאטה:** `tasks.is_decision` + `tasks.affected_by` — כבר בתוך
+  מיגרציה 3 (§2). הייבוא ממפה אותם מה-JSON (`key` → uuid).
 - **רובד 1 (מכני):** בהשלמת משימה עם `is_decision=true` — המערכת
   מבקשת את ההחלטה במשפט (שדה בדיאלוג ההשלמה), ומצמידה אותה כעדכון
   בולט (`updates[]` הקיים) לכל המשימות שמכילות אותה ב-`affected_by`.
