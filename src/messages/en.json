@@ -967,6 +967,23 @@
     "driveScanDepth": "Scan depth",
     "driveScanDays": "{days} days"
   },
+  "dayTools": {
+    "sectionTitle": "Day tools",
+    "sectionSubtitle": "Add-ons that sit on top of your tasks — turn each on or off to match how you work.",
+    "saveError": "Save failed, please try again",
+    "method131": {
+      "title": "Quick · 3 · 1",
+      "desc": "All quick tasks daily, plus a deliberate pick of 3 medium and 1 big."
+    },
+    "marathon": {
+      "title": "Quick marathon",
+      "desc": "A full-screen run through your quick tasks, one at a time, on a timer."
+    },
+    "planfocus": {
+      "title": "Plan focus",
+      "desc": "A fixed daily time block on a smrtPlan project, with a timed focus session."
+    }
+  },
   "settingsParameters": {
     "title": "smrtTask Parameters",
     "subtitle": "Tune classifier behaviour, project discovery, and WhatsApp sync. Leave blank to use the system default.",

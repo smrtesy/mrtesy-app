@@ -36,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { useDayTool } from "@/hooks/useDayTools";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -138,6 +139,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [contextFilter, setContextFilter] = useState<ContextFilter>("office");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
+  // Day-tool: the marathon run is a toggleable add-on (default on).
+  const marathonEnabled = useDayTool("marathon").enabled;
 
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
@@ -728,7 +731,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   {t("desk.quick")}
                   <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskQuick.length}</span>
                 </h3>
-                {deskQuick.length > 0 && (
+                {marathonEnabled && deskQuick.length > 0 && (
                   <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("quick")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
@@ -745,7 +748,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   {t("desk.picked")}
                   <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskRegular.length}</span>
                 </h3>
-                {deskRegular.length > 0 && (
+                {marathonEnabled && deskRegular.length > 0 && (
                   <Button size="sm" variant="outline" className="ms-auto h-7 gap-1 text-xs" onClick={() => setMarathonMode("regular")}>
                     <Play className="h-3 w-3" />
                     {t("desk.startRun")}
