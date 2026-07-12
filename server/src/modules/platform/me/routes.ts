@@ -24,6 +24,10 @@ const UPDATABLE_SETTINGS = new Set([
   "preferred_language", "ai_clarification_prefs",
   "initial_scan_days_back", "calendar_initial_scan_months",
   "onboarding_completed", "initial_setup_completed",
+  // Day-tools framework: per-user toggles+config for the "כלי היום" add-ons.
+  // Merged (not replaced) at the tool-key level below so one tool's PATCH
+  // never clobbers another's config.
+  "day_tools",
   // The /api/auth/google/callback writes these — allow PATCH for completeness
   "gmail_connected", "drive_connected", "whatsapp_connected", "calendar_connected",
 ]);
@@ -55,9 +59,18 @@ router.patch("/me/settings", requireAuth, async (req: Request, res: Response) =>
   // Upsert: most users have a settings row from signup, but be defensive
   const { data: existing } = await db
     .from("user_settings")
-    .select("id")
+    .select("id, day_tools")
     .eq("user_id", req.user!.id)
     .maybeSingle();
+
+  // day_tools is a JSONB map keyed by tool slug. Merge at the tool-key level
+  // so a PATCH that toggles one tool (e.g. { marathon: { enabled: false } })
+  // leaves every other tool's config untouched. A plain column write would
+  // replace the whole object and silently drop the others.
+  if (updates.day_tools && typeof updates.day_tools === "object") {
+    const prev = (existing?.day_tools as Record<string, unknown> | null) ?? {};
+    updates.day_tools = { ...prev, ...(updates.day_tools as Record<string, unknown>) };
+  }
 
   if (existing) {
     const { data, error } = await db
