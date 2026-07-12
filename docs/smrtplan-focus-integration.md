@@ -216,7 +216,7 @@ CREATE TABLE focus_sessions (
 
 ## 10. הפצת החלטות — תמיכת מערכת נדרשת ("תוכנית חיה")
 
-הפרוטוקול (`project-planning-protocol.md` §8) מגדיר משימות-החלטה
+הפרוטוקול (`project-planning-protocol.md` §10, תחנה 9) מגדיר משימות-החלטה
 שתוצאתן זורמת קדימה למשימות מושפעות. תמיכה נדרשת:
 
 - **דאטה:** `tasks.is_decision bool DEFAULT false` +
