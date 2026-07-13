@@ -474,6 +474,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       )}
                     </div>
                   )}
+                  {/* Action nuggets — one-click deep links, immediately below the
+                      description (no heading), before the updates timeline. */}
+                  {actionLinks.length > 0 && <LinkActions links={actionLinks} />}
                 </div>
 
                 {/* Updates timeline — always visible. Compact. */}
@@ -546,18 +549,6 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                   )}
                 </div>
               </div>
-
-              {/* Action nuggets — one-click buttons straight to the destination
-                  (payment / tracking / invoice / meeting), so the user never
-                  has to open the source email to find the link. */}
-              {actionLinks.length > 0 && (
-                <div>
-                  <h4 className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    {t("detail.actionLinks")}
-                  </h4>
-                  <LinkActions links={actionLinks} />
-                </div>
-              )}
 
               <Separator />
 
