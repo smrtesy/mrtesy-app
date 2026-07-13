@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut, Sparkles } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
@@ -79,6 +80,7 @@ const healthColor: Record<Health, string> = {
 
 export function PlanBoardClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
+  const paneNav = useOptionalPaneNav();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
   const [stages, setStages] = useState<BoardStage[]>([]);
@@ -156,9 +158,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   // Let the board use the full main width (and grow with the window) instead of
   // the global 896px reading cap — see globals.css [data-content-wide].
   useEffect(() => {
+    // Inside a workspace pane the container has no width cap to lift, and the
+    // body attribute would leak onto the TOP window, shifting the whole
+    // workspace (the iframe days scoped it to the pane's own document).
+    if (paneNav) return;
     document.body.setAttribute("data-content-wide", "true");
     return () => document.body.removeAttribute("data-content-wide");
-  }, []);
+  }, [paneNav]);
 
   async function recompute() {
     setRecomputing(true);
