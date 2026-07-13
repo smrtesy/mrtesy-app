@@ -22,6 +22,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskRow, type RowZone } from "./TaskRow";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
@@ -181,6 +182,26 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hasLoadedRef = useRef(false);
 
+  // ── desk cache (React Query pilot) ──────────────────────────────────────────
+  // The query cache outlives this component (gcTime in QueryProvider), so a
+  // navigation away and back paints the last desk instantly instead of a
+  // skeleton, while the normal fetch below revalidates in the background. The
+  // cache is a paint-only layer: all fetching, realtime and optimistic logic
+  // below is unchanged and remains the source of truth.
+  const queryClient = useQueryClient();
+  // Key includes the active org (subdomain cookie wins, then localStorage —
+  // same precedence as api()'s X-Org-Id) so a multi-org user switching orgs
+  // never gets a paint of the previous org's desk.
+  const DESK_CACHE_KEY = useMemo(() => {
+    let org = "default";
+    if (typeof document !== "undefined") {
+      const m = document.cookie.match(/(?:^|;\s*)smrt_org_id=([^;]+)(?:;|$)/);
+      org = m ? decodeURIComponent(m[1]) : localStorage.getItem("smrtesy.active_org_id") ?? "default";
+    }
+    return ["smrttask", "desk", org] as const;
+  }, []);
+  type DeskCache = { merged: Task[]; meta: Map<string, PlanMeta> };
+
   // ── optimistic-write reconciliation ─────────────────────────────────────────
   // A realtime change to ANY task triggers a full-list refetch ~400ms later
   // (see the subscription below). That refetch can race a write the user just
@@ -222,7 +243,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     pendingEditsRef.current.delete(taskId); // the row is leaving — no edit to re-apply
     removedRef.current.set(taskId, Date.now());
     setTasks((prev) => prev.filter((row) => row.id !== taskId));
-  }, []);
+    // Mirror into the desk cache — removedRef dies with this mount, so without
+    // this a remount within the refetch window would flash the removed row.
+    queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, (d) =>
+      d && { ...d, merged: d.merged.filter((row) => row.id !== taskId) });
+  }, [queryClient, DESK_CACHE_KEY]);
 
   // QuickAction / DriveSearch state (opened from TaskDetail)
   const [qaOpen, setQaOpen] = useState(false);
@@ -255,6 +280,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         meta.set(pt.id, { needs: pt.needs ?? [] });
         if (!present.has(pt.id) && OPEN.has(pt.status)) merged.push(pt as Task);
       }
+      // Cache the server truth BEFORE reconcilePending bakes optimistic
+      // patches into the array's elements (it assigns rows[idx] in place).
+      queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, { merged: [...merged], meta });
       setTasks(reconcilePending(merged));
       setPlanMeta(meta);
       hasLoadedRef.current = true;
@@ -266,7 +294,24 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     } finally {
       setLoading(false);
     }
-  }, [reconcilePending]);
+  }, [reconcilePending, queryClient, DESK_CACHE_KEY]);
+
+  // Paint the last known desk immediately on mount (see DESK_CACHE_KEY above).
+  // The mount effect below still runs fetchTasks, which overwrites this with
+  // fresh data as soon as it lands.
+  useEffect(() => {
+    if (hasLoadedRef.current) return;
+    const cached = queryClient.getQueryData<DeskCache>(DESK_CACHE_KEY);
+    if (cached) {
+      setTasks(reconcilePending([...cached.merged]));
+      setPlanMeta(cached.meta);
+      setLoading(false);
+      // Mark loaded so the mount fetch below revalidates in the background
+      // instead of re-raising the skeleton (its first line checks this ref).
+      hasLoadedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchCompleted = useCallback(async () => {
     try {
@@ -553,6 +598,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     if (optimistic) {
       setTasks((prev) => prev.map((task) => (task.id === taskId ? optimistic(task) : task)));
       setSelectedTask((prev) => (prev && prev.id === taskId ? optimistic(prev) : prev));
+      // Mirror into the desk cache so a remount mid-write paints the edited
+      // row, not the pre-edit one (pendingEditsRef dies with this mount).
+      queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, (d) =>
+        d && { ...d, merged: d.merged.map((row) => (row.id === taskId ? optimistic(row) : row)) });
     }
     // Hold the edit so a refetch racing this write can't bounce it back.
     pendingEditsRef.current.set(taskId, { patch: body, confirmedAt: null, at: Date.now() });
