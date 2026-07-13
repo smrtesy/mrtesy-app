@@ -5,10 +5,24 @@
  *   • req.member = { org_id, user_id, role }
  *
  * Must run AFTER requireAuth. Returns 400 if header missing, 403 if not a member.
+ *
+ * Positive results are cached in-process for 60s keyed by (orgId, userId) —
+ * membership and org details change rarely, and this removes two DB
+ * round-trips from every warm request. Denials are never cached, so a
+ * just-added member gets in immediately; a removed member (or a role change)
+ * lingers at most 60s.
  */
 
 import type { Request, Response, NextFunction } from "express";
 import { db } from "../db";
+import { TtlCache } from "../lib/ttl-cache";
+
+type OrgContext = {
+  org: { id: string; slug: string; name: string };
+  member: { org_id: string; user_id: string; role: "owner" | "admin" | "member" };
+};
+
+const orgContextCache = new TtlCache<OrgContext>(60 * 1000);
 
 export async function requireOrg(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {
@@ -18,6 +32,13 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
   const orgId = req.headers["x-org-id"];
   if (!orgId || typeof orgId !== "string") {
     return res.status(400).json({ error: "X-Org-Id header is required" });
+  }
+
+  const cached = orgContextCache.get(`${orgId}:${req.user.id}`);
+  if (cached) {
+    req.org = cached.org;
+    req.member = cached.member;
+    return next();
   }
 
   // Parallel queries: verify membership AND load org details simultaneously.
@@ -53,6 +74,8 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
     user_id: member.user_id as string,
     role: member.role as "owner" | "admin" | "member",
   };
+
+  orgContextCache.set(`${orgId}:${req.user.id}`, { org: req.org, member: req.member });
 
   next();
 }

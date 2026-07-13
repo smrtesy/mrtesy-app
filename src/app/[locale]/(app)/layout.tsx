@@ -11,6 +11,7 @@ import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
+import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 
@@ -27,7 +28,17 @@ export default async function AppLayout({
     process.env.NODE_ENV === "development";
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // getClaims() verifies the JWT's signature (locally, via cached JWKS, when
+  // the project uses asymmetric signing keys; via the auth server otherwise)
+  // — so this stays a real auth check but usually skips the network
+  // round-trip the old getUser() paid on every navigation. Note the
+  // middleware matcher skips dotted paths, so this layout cannot assume the
+  // middleware already validated the request.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+  const user = claims?.sub
+    ? { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null }
+    : null;
 
   if (!user && !devBypass) {
     redirect(`/${locale}/login`);
@@ -124,6 +135,7 @@ export default async function AppLayout({
       {/* Reliable fallback for the inline script above (which doesn't always
           execute in the App Router). */}
       <EmbedFlag />
+      <QueryProvider>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
@@ -146,6 +158,7 @@ export default async function AppLayout({
           )}
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
+      </QueryProvider>
     </div>
   );
 }
