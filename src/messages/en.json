@@ -47,6 +47,7 @@
     "recurrenceHebrew": "Every year (Hebrew date)",
     "recurrenceHebrewHint": "Repeats on the Hebrew date of the due date (e.g. every Tu BiShvat).",
     "recurrenceNeedsWeekday": "Pick at least one weekday",
+    "recurrenceNeedsDueDate": "With no due date the recurrence is counted from today. Set a due date to anchor it.",
     "timeNeedsDate": "A time needs a due date too",
     "weekdayShort": {
       "0": "Su",
@@ -775,6 +776,10 @@
     "noScheduled": "No scheduled reminders",
     "snoozedSection": "Snoozed suggestions",
     "datedSection": "Scheduled by date",
+    "recurringSection": "Recurring",
+    "editDetails": "Open to edit all details",
+    "noEndDate": "No end date",
+    "untilLabel": "until {when}",
     "kindEvent": "Event",
     "morningTitle": "Good morning 👋 start with the inbox",
     "morningHint": "Go through the items one by one — for each: pick for today · give a date · file by level · drop.",
