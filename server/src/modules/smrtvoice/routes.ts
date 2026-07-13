@@ -1123,10 +1123,12 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
 
   try {
     const client = getVoiceEngineClient();
-    const result = await client.parseScript(script.google_doc_id, token, {
-      id: script.google_doc_tab_id,
-      title: script.google_doc_tab_title,
-    });
+    const result = await client.parseScript(
+      script.google_doc_id,
+      token,
+      { id: script.google_doc_tab_id, title: script.google_doc_tab_title },
+      script.language,
+    );
 
     // Inherit casting from the project's first script (lowest seq, not this one).
     const inherited = new Map<string, { character_id: string | null; resemble_voice_id: string | null }>();
@@ -1208,13 +1210,20 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       if (delErr) console.warn("[smrtvoice] script_speakers reconcile-delete failed:", delErr.message);
     }
 
+    // Persist the tab actually read (the engine may have auto-resolved it from
+    // the script's language), so the UI always shows the real source tab.
+    const scriptUpdate: Record<string, unknown> = {
+      status: "parsed",
+      total_lines: result.total_lines,
+      script_imported_at: new Date().toISOString(),
+    };
+    if (result.selected_tab?.id) {
+      scriptUpdate.google_doc_tab_id = result.selected_tab.id;
+      scriptUpdate.google_doc_tab_title = result.selected_tab.title;
+    }
     const { error: updateErr } = await db
       .from("smrtvoice_scripts")
-      .update({
-        status: "parsed",
-        total_lines: result.total_lines,
-        script_imported_at: new Date().toISOString(),
-      })
+      .update(scriptUpdate)
       .eq("id", script.id);
     if (updateErr) return res.status(500).json({ error: updateErr.message });
 

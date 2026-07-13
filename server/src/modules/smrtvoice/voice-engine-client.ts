@@ -78,12 +78,15 @@ class VoiceEngineClient {
     googleDocId: string,
     googleOauthToken?: string,
     tab?: { id?: string | null; title?: string | null },
+    language?: string | null,
   ): Promise<ParsedScript> {
     return this.request<ParsedScript>("POST", "/parse", {
       google_doc_id: googleDocId,
       google_oauth_token: googleOauthToken,
       google_doc_tab_id: tab?.id ?? undefined,
       google_doc_tab_title: tab?.title ?? undefined,
+      // Drives auto tab-selection when no tab was chosen explicitly.
+      language: language ?? undefined,
     });
   }
 

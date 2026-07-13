@@ -26,6 +26,7 @@ interface Script {
   language: "he" | "en";
   google_doc_url: string | null;
   google_doc_id: string | null;
+  google_doc_tab_title: string | null;
   generation_mode: "sts" | "tts";
   input_recording_path: string | null;
   total_lines: number;
@@ -190,6 +191,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
             <span className="font-mono">{script.code}</span>
             {script.name ? <span className="text-muted-foreground">· {script.name}</span> : null}
           </h1>
+          {script.google_doc_tab_title ? (
+            <p className="text-xs text-muted-foreground">
+              {t("readingFromTab", { tab: script.google_doc_tab_title })}
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           {/* Script language — gates which pronunciation-lexicon entries apply
