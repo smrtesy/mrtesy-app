@@ -24,6 +24,7 @@
 
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
 import { notify } from "../../lib/platform";
@@ -2009,6 +2010,165 @@ router.patch("/focus-sessions/:id", async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "session not found" });
   res.json({ session: data });
+});
+
+// ── AI plan-builder: import path (docs project-planning-protocol §13) ────────
+// Creates a full plan from the canonical proposal JSON — the deterministic core
+// that BOTH the Claude-Code push (this endpoint) and the future in-app AI commit
+// reuse. Born as a draft (silent) so nothing reaches the team until the user
+// activates it. key→uuid is resolved in a second pass so depends_on/affected_by
+// can reference tasks declared later in the list.
+const AI_TIERS = new Set(["full", "assist", "human"]);
+
+router.post("/plans/import", requireFull, async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const uid = req.user!.id;
+  const body = req.body ?? {};
+  const planIn = body.plan ?? {};
+  const title = typeof planIn.title_he === "string" && planIn.title_he.trim() ? planIn.title_he.trim() : null;
+  if (!title) return res.status(400).json({ error: "plan.title_he is required" });
+  const tasksIn: Record<string, unknown>[] = Array.isArray(body.tasks) ? body.tasks : [];
+  if (tasksIn.length === 0) return res.status(400).json({ error: "tasks must be a non-empty array" });
+  if (tasksIn.length > 200) return res.status(400).json({ error: "tasks is limited to 200 entries" });
+  const stagesIn: Record<string, unknown>[] = Array.isArray(body.stages) ? body.stages : [];
+  const seenKeys = new Set<string>();
+  for (const t of tasksIn) {
+    if (typeof t.key !== "string" || !t.key) return res.status(400).json({ error: "each task needs a string key" });
+    if (seenKeys.has(t.key)) return res.status(400).json({ error: `duplicate task key: ${t.key}` });
+    seenKeys.add(t.key);
+    if (typeof t.title !== "string" || !t.title.trim()) return res.status(400).json({ error: `task ${String(t.key)} needs a title` });
+    if (t.ai_tier != null && !AI_TIERS.has(String(t.ai_tier))) {
+      return res.status(400).json({ error: `task ${String(t.key)}: ai_tier must be full|assist|human` });
+    }
+  }
+  let dailyMinutes: number | null = null;
+  if (body.daily_minutes != null) {
+    const m = Number(body.daily_minutes);
+    if (!Number.isInteger(m) || m <= 0) return res.status(400).json({ error: "daily_minutes must be a positive integer" });
+    dailyMinutes = m;
+  }
+
+  // 1) The plan — always draft, kind effort unless the payload says stream.
+  const kind = planIn.kind === "stream" ? "stream" : "effort";
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans")
+    .insert({
+      org_id: orgId,
+      created_by: uid,
+      title_he: title,
+      title_en: typeof planIn.title_en === "string" ? planIn.title_en : null,
+      goal: typeof planIn.goal === "string" ? planIn.goal : null,
+      group_label: typeof planIn.group_label === "string" ? planIn.group_label : null,
+      kind,
+      status: "draft",
+    })
+    .select(PLAN_FIELDS)
+    .single();
+  if (planErr || !plan) return res.status(500).json({ error: planErr?.message ?? "failed to create plan" });
+  const planId = (plan as unknown as { id: string }).id;
+
+  // 2) Stages → key→id. (No checkpoint column today; that field is ignored.)
+  const stageIdByKey = new Map<string, string>();
+  for (let i = 0; i < stagesIn.length; i++) {
+    const s = stagesIn[i];
+    const nameHe = typeof s.title === "string" ? s.title : String(s.title ?? `שלב ${i + 1}`);
+    const { data: stage, error: stErr } = await db
+      .from("smrtplan_stages")
+      .insert({ org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i })
+      .select("id")
+      .single();
+    if (stErr || !stage) return res.status(500).json({ error: stErr?.message ?? "failed to create stage" });
+    if (typeof s.key === "string" && s.key) stageIdByKey.set(s.key, (stage as { id: string }).id);
+  }
+
+  // 3) Tasks → key→id, carrying every planning field. assignee null = creator.
+  // A supplied assignee is honored only if it's a real member of this org —
+  // otherwise (typo, non-UUID, foreign user) it would 500 on the FK / uuid cast
+  // and leave the plan half-built, so we fall back to the creator.
+  const { data: memberRows } = await db.from("org_members").select("user_id").eq("org_id", orgId);
+  const memberIds = new Set(asRows(memberRows).map((m) => m.user_id as string));
+  const taskIdByKey = new Map<string, string>();
+  for (const t of tasksIn) {
+    const titleHe = (t.title as string).trim();
+    const titleEn = typeof t.title_en === "string" ? t.title_en.trim() : null;
+    const checklist = Array.isArray(t.checklist)
+      ? (t.checklist as unknown[]).filter((c) => typeof c === "string" && c).map((c) => ({
+          id: randomUUID(), title: c as string, done: false, created_at: new Date().toISOString(), completed_at: null, created_by: "ai",
+        }))
+      : [];
+    const est = t.estimated_hours != null && Number.isFinite(Number(t.estimated_hours)) && Number(t.estimated_hours) >= 0 ? Number(t.estimated_hours) : null;
+    const extWait = Number.isInteger(Number(t.external_wait_days)) && Number(t.external_wait_days) >= 0 ? Number(t.external_wait_days) : 0;
+    const assignee = typeof t.assignee === "string" && memberIds.has(t.assignee) ? t.assignee : uid;
+    const { data: task, error: tErr } = await db
+      .from("tasks")
+      .insert({
+        organization_id: orgId,
+        user_id: uid,
+        plan_id: planId,
+        stage_id: typeof t.stage === "string" ? stageIdByKey.get(t.stage) ?? null : null,
+        title: titleEn || titleHe,
+        title_he: titleHe,
+        status: "inbox",
+        is_private: false,
+        assignment_status: "accepted",
+        assigned_to_user_id: assignee,
+        description: typeof t.description === "string" ? t.description : null,
+        estimated_hours: est,
+        definition_of_done: typeof t.definition_of_done === "string" ? t.definition_of_done : null,
+        ai_tier: t.ai_tier != null ? String(t.ai_tier) : null,
+        ai_prompt: typeof t.ai_prompt === "string" ? t.ai_prompt : null,
+        is_decision: !!t.is_decision,
+        external_wait_days: extWait,
+        checklist,
+      })
+      .select("id")
+      .single();
+    if (tErr || !task) return res.status(500).json({ error: tErr?.message ?? "failed to create task" });
+    taskIdByKey.set(t.key as string, (task as { id: string }).id);
+  }
+
+  // 4) Second pass — resolve key refs now that every task has an id.
+  const depEdges: Record<string, unknown>[] = [];
+  const depSeen = new Set<string>(); // dedupe: smrtplan_dependencies is UNIQUE(from,to)
+  for (const t of tasksIn) {
+    const fromId = taskIdByKey.get(t.key as string)!;
+    // depends_on → task→task dependency edges (unknown keys / dups / self skipped).
+    if (Array.isArray(t.depends_on)) {
+      for (const dep of t.depends_on as unknown[]) {
+        const toId = typeof dep === "string" ? taskIdByKey.get(dep) : undefined;
+        if (!toId || toId === fromId) continue;
+        const edgeKey = `${fromId}|${toId}`;
+        if (depSeen.has(edgeKey)) continue;
+        depSeen.add(edgeKey);
+        depEdges.push({ org_id: orgId, from_type: "task", from_id: fromId, to_type: "task", to_id: toId, lag_days: 0 });
+      }
+    }
+    // affected_by → uuid[] on the task (decision propagation, §10).
+    if (Array.isArray(t.affected_by)) {
+      const ids = (t.affected_by as unknown[])
+        .map((k) => (typeof k === "string" ? taskIdByKey.get(k) : undefined))
+        .filter((x): x is string => !!x && x !== fromId);
+      if (ids.length) {
+        const { error: abErr } = await db.from("tasks").update({ affected_by: ids }).eq("organization_id", orgId).eq("id", fromId);
+        if (abErr) console.error("[plans/import] affected_by update failed:", abErr.message);
+      }
+    }
+  }
+  if (depEdges.length) {
+    const { error: depErr } = await db.from("smrtplan_dependencies").insert(depEdges);
+    if (depErr) return res.status(500).json({ error: depErr.message });
+  }
+
+  // 5) The creator's daily focus commitment, if provided.
+  if (dailyMinutes) {
+    const { error: fErr } = await db
+      .from("smrtplan_focus")
+      .upsert({ org_id: orgId, plan_id: planId, user_id: uid, daily_minutes: dailyMinutes, active: true, updated_at: new Date().toISOString() }, { onConflict: "plan_id,user_id" });
+    if (fErr) console.error("[plans/import] focus upsert failed:", fErr.message);
+  }
+
+  await autoRecompute(orgId);
+  res.status(201).json({ plan, tasks: taskIdByKey.size, stages: stageIdByKey.size });
 });
 
 export default router;
