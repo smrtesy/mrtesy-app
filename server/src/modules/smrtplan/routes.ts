@@ -2002,6 +2002,7 @@ router.patch("/focus-sessions/:id", async (req: Request, res: Response) => {
     .from("focus_sessions")
     .update(patch)
     .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
     .eq("user_id", req.user!.id)
     .select("*")
     .maybeSingle();

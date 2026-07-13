@@ -80,17 +80,20 @@ export function FocusSession({
   const [blocking, setBlocking] = useState(false);
   const [busy, setBusy] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+  // The in-flight create, so an exit BEFORE it resolves can still await the id
+  // and close the row (otherwise it'd be orphaned with ended_at=null).
+  const createRef = useRef<Promise<string | null> | null>(null);
   const closedRef = useRef(false);
   const firedRef = useRef(false); // the 0:00 chime/overlay fires exactly once
 
   // Open the session record + start the clock.
   useEffect(() => {
-    api<{ session: { id: string } }>("/api/focus-sessions", {
+    createRef.current = api<{ session: { id: string } }>("/api/focus-sessions", {
       method: "POST",
       body: { plan_id: planId, planned_minutes: dailyMinutes },
     })
-      .then((res) => { sessionIdRef.current = res.session.id; })
-      .catch(() => { /* the session still runs locally; only the log is lost */ });
+      .then((res) => { sessionIdRef.current = res.session.id; return res.session.id; })
+      .catch(() => null); // the session still runs locally; only the log is lost
     const iv = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => clearInterval(iv);
   }, [planId, dailyMinutes]);
@@ -118,7 +121,9 @@ export function FocusSession({
   const finish = useCallback(async (completedFull: boolean) => {
     if (closedRef.current) { onExit(); return; }
     closedRef.current = true;
-    const id = sessionIdRef.current;
+    // If the open POST hasn't resolved yet, wait for it so the row is closed
+    // rather than left orphaned (ended_at=null) — but don't hang forever.
+    const id = sessionIdRef.current ?? (createRef.current ? await createRef.current : null);
     if (id) {
       try {
         await api(`/api/focus-sessions/${id}`, {
