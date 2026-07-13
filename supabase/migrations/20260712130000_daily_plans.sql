@@ -78,12 +78,14 @@ AS $$
     completed_medium = (
       SELECT count(*) FROM tasks t
       WHERE t.id = ANY(dp.picked_task_ids)
+        AND t.user_id = dp.user_id
         AND t.size = 'medium'
         AND t.completed_at IS NOT NULL
     ),
     completed_big = (
       SELECT count(*) FROM tasks t
       WHERE t.id = ANY(dp.picked_task_ids)
+        AND t.user_id = dp.user_id
         AND t.size = 'big'
         AND t.completed_at IS NOT NULL
     ),

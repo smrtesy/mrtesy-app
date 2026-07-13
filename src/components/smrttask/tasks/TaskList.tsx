@@ -301,11 +301,15 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
    *  a future-dated task (surfaced later by the inbox's scheduled track) or a
    *  plan task that hasn't been explicitly picked for today (plan tasks flow
    *  through the inbox and live on their own board — spec: פלאן נכנסות דרך הנכנס).
-   *  A task planned_for today is always eligible and never hidden. */
+   *  A task planned_for today is always eligible and never hidden. A task that
+   *  just woke from snooze is demanding attention NOW (the auto-snooze deadline
+   *  reminder wakes it ~2 working days before its still-future due date) — it
+   *  must NOT be hidden by that future date, mirroring the pre-refactor order
+   *  where the woke check preceded the future-date hide. */
   const isHidden = useCallback((task: Task): boolean => {
     if (task.planned_for === todayStr) return false;
     if (task.plan_id) return true;
-    if (task.due_date && task.due_date > todayStr) return true;
+    if (task.due_date && task.due_date > todayStr && !task.woke_from_snooze_at) return true;
     return false;
   }, [todayStr]);
 
@@ -334,9 +338,12 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       const pickedToday = task.planned_for === todayStr;
 
       if (m131Enabled) {
-        // 4-list method: picked medium/big go to their list; everything else
-        // (including undated & overdue-not-picked) lands in the collapsed rest.
-        if (pickedToday) (task.size === "big" ? bigPicked : mediumPicked).push(task);
+        // 4-list method: medium/big picked for today — OR freshly woken from
+        // snooze (the deadline reminder must stay visible, not sink into the
+        // collapsed rest) — go to their list; everything else (undated,
+        // overdue-not-picked) lands in the collapsed rest.
+        const surfaced = pickedToday || !!task.woke_from_snooze_at;
+        if (surfaced) (task.size === "big" ? bigPicked : mediumPicked).push(task);
         else restList.push(task);
       } else {
         // Off mode (original spec §1): a regular task rises to the desk when its
@@ -401,14 +408,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
   }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr]);
 
-  // Soft daily quota (method131 ON): picked medium/big vs the configured quotas
-  // (over → gentle warning, never a block).
-  const pickedMedium = deskMedium.length;
-  const pickedBig = deskBig.length;
+  // Soft daily quota (method131 ON): only DELIBERATE picks (planned_for today)
+  // count — a task auto-surfaced by waking from snooze shows in the list but
+  // must not inflate the quota or read as "picked" in the build-day picker.
+  const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
+  const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
   // The set planned_for today — drives the build-day picker's selected state.
   const pickedIds = useMemo(
-    () => new Set([...deskMedium, ...deskBig].map((task) => task.id)),
-    [deskMedium, deskBig],
+    () => new Set(
+      [...deskMedium, ...deskBig].filter((task) => task.planned_for === todayStr).map((task) => task.id),
+    ),
+    [deskMedium, deskBig, todayStr],
   );
   // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
   // regular desk (OFF). Quick keeps its own run.
