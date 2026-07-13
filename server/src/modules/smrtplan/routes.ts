@@ -450,8 +450,11 @@ router.post("/plans", requireFull, async (req: Request, res: Response) => {
   if (!body.title_he || typeof body.title_he !== "string") {
     return res.status(400).json({ error: "title_he is required" });
   }
-  if (!body.kind || (body.kind !== "effort" && body.kind !== "stream")) {
-    return res.status(400).json({ error: "kind must be 'effort' or 'stream'" });
+  // roster is a first-class kind (migration 20260604001300 + the progress view
+  // and GET /plans/:id/tasks already handle it, and the UI offers it) — it was
+  // only ever rejected here, so a "ריכוז" plan couldn't be created.
+  if (!body.kind || !["effort", "stream", "roster"].includes(body.kind as string)) {
+    return res.status(400).json({ error: "kind must be 'effort', 'stream' or 'roster'" });
   }
   const { data, error } = await db
     .from("smrtplan_plans")
@@ -806,15 +809,16 @@ router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {
-  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date } = req.body ?? {};
+  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint } = req.body ?? {};
   if (!name_he) return res.status(400).json({ error: "name_he is required" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .insert({ org_id: req.org!.id, plan_id: req.params.id, name_he, name_en: name_en ?? null,
       sequence: sequence ?? 0, required_role: required_role ?? null,
       default_duration_days: default_duration_days != null ? Number(default_duration_days) : null,
-      start_date: start_date ?? null, end_date: end_date ?? null })
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+      start_date: start_date ?? null, end_date: end_date ?? null,
+      checkpoint: typeof checkpoint === "string" ? checkpoint : null })
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ stage: data });
@@ -1309,7 +1313,7 @@ router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response
 
 router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
-  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date"]) {
+  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date", "checkpoint"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
   // A stage's default duration drives every cell that doesn't pin its own.
@@ -1323,7 +1327,7 @@ router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   // Only a default-duration change reflows the schedule; a timeline-window /
@@ -2106,14 +2110,17 @@ async function createPlanFromProposal(orgId: string, uid: string, body: Record<s
   if (planErr || !plan) return { ok: false, status: 500, error: planErr?.message ?? "failed to create plan" };
   const planId = (plan as unknown as { id: string }).id;
 
-  // 2) Stages → key→id. (No checkpoint column today; that field is ignored.)
+  // 2) Stages → key→id, carrying the review checkpoint when the proposal has one.
   const stageIdByKey = new Map<string, string>();
   for (let i = 0; i < stagesIn.length; i++) {
     const s = stagesIn[i];
     const nameHe = typeof s.title === "string" ? s.title : String(s.title ?? `שלב ${i + 1}`);
     const { data: stage, error: stErr } = await db
       .from("smrtplan_stages")
-      .insert({ org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i })
+      .insert({
+        org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i,
+        checkpoint: typeof s.checkpoint === "string" ? s.checkpoint : null,
+      })
       .select("id")
       .single();
     if (stErr || !stage) return { ok: false, status: 500, error: stErr?.message ?? "failed to create stage" };
