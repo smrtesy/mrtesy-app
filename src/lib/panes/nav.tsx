@@ -37,9 +37,13 @@ export type PaneNavValue = {
 
 const PaneNavContext = createContext<PaneNavValue | null>(null);
 
-/** Split an href into the pane-location shape. */
+/** Split an href into the pane-location shape. Splits on the FIRST "?" (a
+ *  query value may itself contain "?") and drops any "#fragment". */
 export function parsePaneHref(href: string): PaneLocation {
-  const [pathname, search = ""] = href.split("?");
+  const noHash = href.split("#")[0];
+  const q = noHash.indexOf("?");
+  const pathname = q === -1 ? noHash : noHash.slice(0, q);
+  const search = q === -1 ? "" : noHash.slice(q + 1);
   return { pathname: pathname.replace(/\/+$/, "") || "/", search };
 }
 
