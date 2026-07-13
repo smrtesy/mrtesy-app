@@ -3064,6 +3064,8 @@
       "unassigned": "Unassigned",
       "owner": "Owner",
       "estimatedHours": "Estimated hours",
+      "dailyMinutes": "Daily commitment (minutes)",
+      "dailyMinutesHint": "How many minutes a day to invest in this plan",
       "fromCatalog": "Pick from catalog…",
       "manualDuration": "Manual duration (days)",
       "durationDays": "Duration (days)",

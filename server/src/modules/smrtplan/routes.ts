@@ -27,7 +27,7 @@ import type { Request, Response, NextFunction } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
 import { notify } from "../../lib/platform";
-import { computeOrgSchedule, releaseDependents } from "./engine";
+import { computeOrgSchedule, releaseDependents, loadBlockedDates, addWorkingDays, toISO } from "./engine";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
@@ -1706,6 +1706,213 @@ router.post("/plan/templates/:id/apply", requireFull, async (req: Request, res: 
 
   await autoRecompute(orgId);
   res.status(201).json({ plan });
+});
+
+// ── plan-focus day-tool (docs/smrtplan-focus-integration.md §3, §4) ─────────
+// Execution layer over smrtPlan: a per-person daily-minutes commitment, the
+// "current stage" (first ready task of mine), and a forward projection. None of
+// this feeds the scheduling engine — the engine still schedules backward from
+// the deadline; the projection is a separate forward estimate (§4).
+
+/** The forward-projection buffer (planning protocol §12) — the 20% is applied
+ *  here too so the live projection matches the date the builder showed. */
+const PROJECTION_BUFFER = 0.2;
+
+const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
+
+/** First ready task of mine (server mirror of the client zoneOf/byUrgency util,
+ *  which can't be imported across the client/server package boundary — §5).
+ *  A task is ready when no need is unsatisfied and it isn't in a terminal state;
+ *  order is earliest effective deadline (min of due_date, latest_finish) first,
+ *  critical breaking ties. */
+function serverCurrentStage(tasks: Row[]): Row | null {
+  const eff = (t: Row): string | null => {
+    const due = (t.due_date as string | null) ?? null;
+    const lf = (t.latest_finish as string | null) ?? null;
+    if (due && lf) return due < lf ? due : lf;
+    return due || lf || null;
+  };
+  const ready = tasks.filter(
+    (t) => !TASK_DONE.has(t.status as string)
+      && !((t.needs as { satisfied?: boolean }[] | undefined) ?? []).some((n) => !n.satisfied),
+  );
+  ready.sort((a, b) => {
+    const da = eff(a); const db_ = eff(b);
+    if (da && db_) { if (da !== db_) return da < db_ ? -1 : 1; }
+    else if (da) return -1;
+    else if (db_) return 1;
+    if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
+    return 0;
+  });
+  return ready[0] ?? null;
+}
+
+/** Fetch MY open (non-done) tasks for one plan, with needs/plan/stage attached. */
+async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<Row[]> {
+  const { data } = await db
+    .from("tasks")
+    .select(MY_TASK_FIELDS)
+    .eq("organization_id", orgId)
+    .eq("plan_id", planId)
+    .or(`assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`)
+    .not("assignment_status", "in", "(proposed,declined)");
+  return attachStageTitles(orgId, await attachPlanTitles(orgId, await attachNeedsHandoff(orgId, asRows(data))));
+}
+
+/** GET /plan/:id/focus — my daily-minutes commitment to a plan (or null). */
+router.get("/plan/:id/focus", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_focus")
+    .select("*")
+    .eq("plan_id", req.params.id)
+    .eq("user_id", req.user!.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ focus: data ?? null });
+});
+
+/** PUT /plan/:id/focus — upsert my daily-minutes commitment to a plan. */
+router.put("/plan/:id/focus", async (req: Request, res: Response) => {
+  const planId = req.params.id;
+  const body = req.body ?? {};
+  const minutes = body.daily_minutes;
+  if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes <= 0) {
+    return res.status(400).json({ error: "daily_minutes must be a positive integer" });
+  }
+  const active = body.active === undefined ? true : !!body.active;
+  // The plan must exist in this org before we attach a commitment to it.
+  const { data: plan } = await db
+    .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data, error } = await db
+    .from("smrtplan_focus")
+    .upsert(
+      {
+        org_id: req.org!.id,
+        plan_id: planId,
+        user_id: req.user!.id,
+        daily_minutes: minutes,
+        active,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "plan_id,user_id" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ focus: data });
+});
+
+/** GET /plan/:id/focus-stage — my current stage (first ready task) in a plan. */
+router.get("/plan/:id/focus-stage", async (req: Request, res: Response) => {
+  const tasks = await myPlanTasks(req.org!.id, req.user!.id, req.params.id);
+  res.json({ stage: serverCurrentStage(tasks) });
+});
+
+/** GET /plan/focus-today — my active focus plans, each with its current stage
+ *  and whether I already logged a focus session today (drives the /tasks block
+ *  row). session_date is compared in the user's own timezone. */
+router.get("/plan/focus-today", async (req: Request, res: Response) => {
+  const uid = req.user!.id;
+  const { data: focusRows, error } = await db
+    .from("smrtplan_focus")
+    .select("id, plan_id, daily_minutes, active")
+    .eq("org_id", req.org!.id)
+    .eq("user_id", uid)
+    .eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+  const rows = asRows(focusRows);
+  if (rows.length === 0) return res.json({ plans: [] });
+
+  const { data: us } = await db
+    .from("user_settings").select("timezone").eq("user_id", uid).maybeSingle();
+  const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date()); // YYYY-MM-DD
+
+  const planIds = rows.map((r) => r.plan_id as string);
+  const [{ data: planRows }, { data: sessRows }] = await Promise.all([
+    db.from("smrtplan_plans").select("id, title_he, title_en, status").eq("org_id", req.org!.id).in("id", planIds),
+    db.from("focus_sessions").select("plan_id, completed_full").eq("org_id", req.org!.id).eq("user_id", uid).eq("session_date", today).in("plan_id", planIds),
+  ]);
+  const planById = new Map(asRows(planRows).map((p) => [p.id as string, p]));
+  const doneToday = new Map<string, boolean>();
+  for (const s of asRows(sessRows)) doneToday.set(s.plan_id as string, (s.completed_full as boolean) ?? false);
+
+  const out = [];
+  for (const r of rows) {
+    const planId = r.plan_id as string;
+    const plan = planById.get(planId);
+    // A draft/archived plan shouldn't surface a daily block.
+    if (!plan || (plan.status as string) !== "active") continue;
+    const stage = serverCurrentStage(await myPlanTasks(req.org!.id, uid, planId));
+    out.push({
+      plan_id: planId,
+      plan_title_he: (plan.title_he as string) ?? null,
+      plan_title_en: (plan.title_en as string) ?? null,
+      daily_minutes: r.daily_minutes as number,
+      current_stage: stage ? { id: stage.id, title: stage.title, title_he: stage.title_he } : null,
+      logged_today: doneToday.has(planId),
+      completed_today: doneToday.get(planId) ?? false,
+    });
+  }
+  res.json({ plans: out });
+});
+
+/** GET /plan/:id/projection — forward completion estimate at my pace (§4).
+ *  Not the engine: sum remaining estimated_hours × (1+buffer) ÷ (daily_minutes/60)
+ *  → working days → addWorkingDays(today). External waits are reported
+ *  separately (they run in the background, don't burn focus sessions). */
+router.get("/plan/:id/projection", async (req: Request, res: Response) => {
+  const planId = req.params.id;
+  const { data: plan } = await db
+    .from("smrtplan_plans").select("id, end_date").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data: focus } = await db
+    .from("smrtplan_focus").select("daily_minutes").eq("plan_id", planId).eq("user_id", req.user!.id).maybeSingle();
+  const dailyMinutes = (focus?.daily_minutes as number | undefined) ?? null;
+
+  const { data: taskRows } = await db
+    .from("tasks")
+    .select("estimated_hours, external_wait_days, status")
+    .eq("organization_id", req.org!.id)
+    .eq("plan_id", planId);
+  let remainingHours = 0;
+  let externalWaitDays = 0;
+  for (const t of asRows(taskRows)) {
+    if (TASK_DONE.has(t.status as string)) continue;
+    remainingHours += Number(t.estimated_hours ?? 0) || 0;
+    externalWaitDays += Number(t.external_wait_days ?? 0) || 0;
+  }
+  const bufferedHours = remainingHours * (1 + PROJECTION_BUFFER);
+
+  // Without a daily commitment (or with no estimated hours) there's nothing to
+  // project — return the inputs so the UI can prompt to set minutes/estimates.
+  if (!dailyMinutes || bufferedHours <= 0) {
+    return res.json({
+      projected_end_date: null,
+      workdays: null,
+      remaining_hours: remainingHours,
+      buffered_hours: bufferedHours,
+      daily_minutes: dailyMinutes,
+      external_wait_days: externalWaitDays,
+      has_deadline: !!(plan.end_date as string | null),
+    });
+  }
+
+  const workdays = Math.ceil(bufferedHours / (dailyMinutes / 60));
+  const blocked = await loadBlockedDates(req.org!.id);
+  const end = addWorkingDays(new Date(), workdays, blocked);
+  res.json({
+    projected_end_date: toISO(end),
+    workdays,
+    remaining_hours: remainingHours,
+    buffered_hours: bufferedHours,
+    daily_minutes: dailyMinutes,
+    external_wait_days: externalWaitDays,
+    has_deadline: !!(plan.end_date as string | null),
+  });
 });
 
 export default router;
