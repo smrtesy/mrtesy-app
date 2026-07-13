@@ -42,6 +42,18 @@ interface Script {
 // row as it advances, so the UI can show exactly where a run is.
 const STAGE_ORDER = ["fetching", "parsing", "preprocessing", "generating"] as const;
 
+// Each pipeline stage owns a non-overlapping band of the 0–100% progress bar, so
+// the bar reflects progress across the WHOLE run instead of resetting per stage.
+// Reaching a stage sets the bar to that stage's floor; within the stage it fills
+// by the stage's own current/total. Generating (the real synthesis) owns the
+// largest band. Bands are ordered, so the bar only ever climbs.
+const STAGE_BANDS: Record<string, [number, number]> = {
+  fetching: [0, 4],
+  parsing: [4, 8],
+  preprocessing: [8, 35],
+  generating: [35, 100],
+};
+
 export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const locale = useLocale();
   const router = useRouter();
@@ -336,9 +348,34 @@ function GenerationProgress({
     ? STAGE_ORDER.indexOf(script.stage as (typeof STAGE_ORDER)[number])
     : -1;
   const hasCounts = script.stage_total > 0;
-  const pct = hasCounts
-    ? Math.min(100, Math.round((script.stage_current / script.stage_total) * 100))
-    : null;
+
+  // The bar reflects progress across the WHOLE run, not just the current stage.
+  // `stage_current/stage_total` is stage-local, so the near-instant fetch/parse
+  // stages (1-of-1) used to slam the bar to full before any audio existed, then
+  // it snapped back each time the next stage reset the denominator. STAGE_BANDS
+  // (module scope) maps each stage to its slice of the bar; within its band the
+  // bar fills by the stage's own current/total, so the bar only ever climbs.
+  const stageFrac = hasCounts
+    ? Math.min(1, script.stage_current / script.stage_total)
+    : 0;
+  let pct: number | null;
+  if (queued) {
+    // No work started yet → indeterminate pulse (pct === null).
+    pct = null;
+  } else if (isRegen) {
+    // A redo has no pipeline; show its own line count directly, 0–100%.
+    pct = hasCounts
+      ? Math.min(100, Math.round((script.stage_current / script.stage_total) * 100))
+      : null;
+  } else if (!hasCounts) {
+    // Pre-count stages (fetching/parsing report no total) → indeterminate
+    // pulse, so the bar reads as "working" rather than frozen near 0%. The
+    // determinate band bar takes over once a stage has something to measure.
+    pct = null;
+  } else {
+    const band = script.stage ? STAGE_BANDS[script.stage] : undefined;
+    pct = band ? Math.round(band[0] + (band[1] - band[0]) * stageFrac) : null;
+  }
 
   return (
     <div className="rounded-md border p-3 space-y-3">
