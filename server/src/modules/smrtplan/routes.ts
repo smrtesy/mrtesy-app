@@ -1946,4 +1946,69 @@ router.get("/plan/:id/projection", async (req: Request, res: Response) => {
   });
 });
 
+/** POST /focus-sessions — open a daily focus session for a plan.
+ *  Body: { plan_id, planned_minutes }. session_date is the user's local today. */
+router.post("/focus-sessions", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const planId = body.plan_id;
+  if (typeof planId !== "string" || !planId) {
+    return res.status(400).json({ error: "plan_id is required" });
+  }
+  const planned = body.planned_minutes;
+  if (typeof planned !== "number" || !Number.isInteger(planned) || planned < 0) {
+    return res.status(400).json({ error: "planned_minutes must be a non-negative integer" });
+  }
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (planErr) return res.status(500).json({ error: planErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data, error } = await db
+    .from("focus_sessions")
+    .insert({
+      org_id: req.org!.id,
+      plan_id: planId,
+      user_id: req.user!.id,
+      session_date: await userLocalToday(req.user!.id),
+      planned_minutes: planned,
+    })
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ session: data });
+});
+
+/** PATCH /focus-sessions/:id — close a session with what actually happened. */
+router.patch("/focus-sessions/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const patch: Record<string, unknown> = { ended_at: new Date().toISOString() };
+  if (body.actual_minutes !== undefined) {
+    const v = body.actual_minutes;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      return res.status(400).json({ error: "actual_minutes must be a non-negative integer" });
+    }
+    patch.actual_minutes = v;
+  }
+  if (body.tasks_completed !== undefined) {
+    const v = body.tasks_completed;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      return res.status(400).json({ error: "tasks_completed must be a non-negative integer" });
+    }
+    patch.tasks_completed = v;
+  }
+  if (body.completed_full !== undefined) patch.completed_full = !!body.completed_full;
+
+  const { data, error } = await db
+    .from("focus_sessions")
+    .update(patch)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .eq("user_id", req.user!.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "session not found" });
+  res.json({ session: data });
+});
+
 export default router;

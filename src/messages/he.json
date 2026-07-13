@@ -648,6 +648,13 @@
       "done": "סיימתי",
       "close": "סגור"
     },
+    "focus": {
+      "heading": "פוקוס תוכנית",
+      "minutes": "{n} דק׳",
+      "start": "התחל פוקוס",
+      "doneToday": "הושלם היום",
+      "noStage": "אין שלב מוכן"
+    },
     "contextFilter": {
       "all": "הכל",
       "home": "בית",
@@ -3321,6 +3328,17 @@
     "classConfidence": "ביטחון סיווג",
     "taskConfidence": "ביטחון כתיבת משימה",
     "rawDetails": "פרטים נוספים"
+  },
+  "focusSession": {
+    "exit": "סיום",
+    "currentStage": "השלב הנוכחי",
+    "stageDone": "סיימתי את השלב",
+    "stagesDone": "{count} שלבים הושלמו",
+    "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",
+    "timeUpTitle": "נגמרו {minutes} הדקות של היום",
+    "doneToday": "סיימתי להיום",
+    "fiveMore": "עוד 5 דקות",
+    "completed": "השלמתי"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",
