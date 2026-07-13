@@ -736,10 +736,10 @@
       "dismissed": "נדחה"
     },
     "approve": "אשר",
+    "pickToday": "בחר להיום",
     "reminderPrefix": "תזכורת: {title}",
     "reminderClosed": "התזכורת נסגרה",
     "approvedToToday": "נוסף להיום",
-    "approvedToPool": "נוסף לבריכה",
     "approvedScheduled": "נשמר כמתוזמן",
     "closeReminder": "סגור תזכורת",
     "dismiss": "דחה",

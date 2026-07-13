@@ -268,21 +268,29 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     const task = suggestions.find((s) => s.id === taskId) ?? returned.find((s) => s.id === taskId);
     const isEvent = task?.task_type === "meeting";
     removeLocal([taskId]);
-    // Daily method: quick → today, dated → its date, undated regular/big → pool.
-    // Say WHERE it landed so an approved task never feels lost in the collapsed pool.
     const today = todayISO();
-    const dest = isEvent
-      ? t("reminderClosed")
-      : task?.size === "quick" || (task?.due_date && task.due_date <= today) || task?.planned_for === today
-        ? t("approvedToToday")
-        : task?.due_date
-          ? t("approvedScheduled")
-          : t("approvedToPool");
-    toast.success(dest);
-    const request = isEvent
-      ? api(`/api/tasks/${taskId}/complete`, { method: "POST" })
-      : api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
-    request
+    if (isEvent) {
+      toast.success(t("reminderClosed"));
+      api(`/api/tasks/${taskId}/complete`, { method: "POST" })
+        .then(() => onUpdate?.())
+        .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+      return;
+    }
+    // Daily method: approve = COMMIT the task, i.e. "בחר להיום". A future-dated
+    // suggestion keeps its schedule (it floats in via the scheduled track —
+    // dragging it onto today would be wrong); everything else is PICKED FOR
+    // TODAY (planned_for=today) so it lands on the desk. Previously an undated
+    // approve only flipped manually_verified and left the row status=inbox +
+    // undated + unplanned — which is exactly the predicate the "לתכנן להיום"
+    // pool re-surfaces (fetchSuggestions: verified && !due_date && planned_for
+    // !== today), so the task reappeared on this same screen every day and read
+    // as "the suggestion came back" (T1265). planned_for=today removes it from
+    // that pool for good and commits it to today's desk.
+    const isScheduledFuture = !!task?.due_date && task.due_date > today;
+    const patch: Record<string, unknown> = { manually_verified: true };
+    if (!isScheduledFuture) patch.planned_for = today;
+    toast.success(isScheduledFuture ? t("approvedScheduled") : t("approvedToToday"));
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -830,6 +838,10 @@ function SuggestionActions({
   // An event reminder: "approve" reads as "close the reminder" (a ✓), not "add".
   const isEvent = task.task_type === "meeting";
   const isOutside = task.context === "outside";
+  // A future-dated suggestion stays scheduled on approve (it floats in via the
+  // scheduled track), so the button keeps reading "אשר". Everything else is
+  // picked for today, so it reads "בחר להיום".
+  const hasFutureDue = !!task.due_date && task.due_date > todayISO();
 
   return (
     <div className="flex gap-0.5 mt-3 items-center flex-wrap [&>button]:h-8 [&>button]:w-8">
@@ -904,7 +916,11 @@ function SuggestionActions({
           and read as approve, silently archiving suggestions one tap at a
           time (the June-2026 "suggestions vanished" incident). Completing
           belongs to the task list, after approval. */}
-      <IconButton label={isEvent ? t("closeReminder") : t("approve")} color="blue" onClick={onApprove}>
+      <IconButton
+        label={isEvent ? t("closeReminder") : hasFutureDue ? t("approve") : t("pickToday")}
+        color="blue"
+        onClick={onApprove}
+      >
         {isEvent ? <Check /> : <ListPlus />}
       </IconButton>
     </div>

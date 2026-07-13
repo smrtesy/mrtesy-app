@@ -736,10 +736,10 @@
       "dismissed": "Dismissed"
     },
     "approve": "Approve",
+    "pickToday": "Pick for today",
     "reminderPrefix": "Reminder: {title}",
     "reminderClosed": "Reminder closed",
     "approvedToToday": "Added to today",
-    "approvedToPool": "Added to the pool",
     "approvedScheduled": "Saved as scheduled",
     "closeReminder": "Close reminder",
     "dismiss": "Dismiss",
