@@ -102,9 +102,19 @@ router.post("/execute", async (req: Request, res: Response) => {
   const styleEn = rules.find((r) => r.trigger === "writing_style_en")?.action ?? "";
   const userName = promptCtx.userName;
 
+  // Deep links now live in action_links, not the description — surface their
+  // URLs to the action model so a draft can reference the exact page verbatim.
+  const actionLinksLine = Array.isArray(task.action_links)
+    ? (task.action_links as Array<{ label?: string; url?: string }>)
+        .filter((a) => a && typeof a.url === "string")
+        .map((a) => (a.label ? `${a.label}: ${a.url}` : String(a.url)))
+        .join(" | ")
+    : "";
+
   const taskContext = [
     `Task: ${task.title_he ?? task.title}`,
     `Description: ${task.description ?? ""}`,
+    `Links: ${actionLinksLine}`,
     `Contact: ${task.related_contact ?? ""} ${task.related_contact_email ?? ""} ${task.related_contact_phone ?? ""}`,
     `Priority: ${task.priority}`,
     `Due: ${task.due_date ?? ""}`,

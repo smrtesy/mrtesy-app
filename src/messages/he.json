@@ -499,6 +499,7 @@
     },
     "detail": {
       "description": "תיאור",
+      "actionLinks": "פעולות מהירות",
       "updates": "היסטוריית עדכונים",
       "generatedContent": "תוצאות שנוצרו",
       "linkedDocs": "מסמכים קשורים",
@@ -3383,6 +3384,7 @@
     "isQuick": "זה מהיר",
     "newItem": "משימה/מידע חדש",
     "overtime": "עבר הזמן המשוער למשימה ({min} דק׳)",
+    "actionLinks": "פעולות מהירות",
     "attachments": "חומרים מצורפים",
     "source": "מקור"
   },

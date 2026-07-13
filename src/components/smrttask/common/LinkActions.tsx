@@ -14,7 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { linkHost, type DetectedLink, type LinkKind } from "@/lib/smrttask/links";
+import { linkHost, type ActionNugget, type LinkKind } from "@/lib/smrttask/links";
 
 const ICONS: Record<LinkKind, LucideIcon> = {
   zoom: Video,
@@ -46,11 +46,13 @@ const LABEL_KEYS: Record<Exclude<LinkKind, "generic">, string> = {
 };
 
 /**
- * Renders one button per detected link on a task, so the user can act (join a
- * Zoom call, open a doc) straight from the card without opening it. Clicks
- * stopPropagation so they open the link rather than the card's detail sheet.
+ * Renders one button per action nugget on a task, so the user can act (join a
+ * Zoom call, open a payment page) straight from the card / run view without
+ * opening the source. A nugget's AI label wins; otherwise we fall back to the
+ * kind label or the bare host. Clicks stopPropagation so they open the link
+ * rather than the card's detail sheet.
  */
-export function LinkActions({ links }: { links: DetectedLink[] }) {
+export function LinkActions({ links }: { links: ActionNugget[] }) {
   const t = useTranslations("tasks.linkActions");
   if (links.length === 0) return null;
 
@@ -58,7 +60,11 @@ export function LinkActions({ links }: { links: DetectedLink[] }) {
     <div className="mt-3 flex flex-wrap gap-2">
       {links.map((link, i) => {
         const Icon = ICONS[link.kind];
-        const label = link.kind === "generic" ? linkHost(link.url) : t(LABEL_KEYS[link.kind]);
+        const label = link.label
+          ? link.label
+          : link.kind === "generic"
+            ? linkHost(link.url)
+            : t(LABEL_KEYS[link.kind]);
         return (
           <Button
             key={`${link.url}-${i}`}
@@ -72,7 +78,7 @@ export function LinkActions({ links }: { links: DetectedLink[] }) {
             }}
           >
             <Icon className="h-3 w-3 shrink-0" />
-            <span className="truncate" dir="ltr">{label}</span>
+            <span className="truncate" dir={link.label ? "auto" : "ltr"}>{label}</span>
           </Button>
         );
       })}

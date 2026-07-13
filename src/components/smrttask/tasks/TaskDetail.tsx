@@ -33,6 +33,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { translateActionLabel } from "@/lib/actionLabels";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
+import { taskActionNuggets } from "@/lib/smrttask/links";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
@@ -211,6 +213,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const updates = (effectiveTask.updates || []).slice(-20).reverse();
   const generated = effectiveTask.ai_generated_content || [];
   const docs = effectiveTask.linked_drive_docs || [];
+  // Action nuggets — one-click deep links (payment/tracking/etc.). Attachments
+  // (materials + drive docs) have their own sections below, so exclude them here.
+  const actionLinks = taskActionNuggets(effectiveTask);
 
   // Dismiss a medium-confidence duplicate suggestion ("not a duplicate"):
   // clears the pointer so the banner stops showing.
@@ -541,6 +546,18 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                   )}
                 </div>
               </div>
+
+              {/* Action nuggets — one-click buttons straight to the destination
+                  (payment / tracking / invoice / meeting), so the user never
+                  has to open the source email to find the link. */}
+              {actionLinks.length > 0 && (
+                <div>
+                  <h4 className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {t("detail.actionLinks")}
+                  </h4>
+                  <LinkActions links={actionLinks} />
+                </div>
+              )}
 
               <Separator />
 

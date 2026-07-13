@@ -499,6 +499,7 @@
     },
     "detail": {
       "description": "Description",
+      "actionLinks": "Quick actions",
       "updates": "Update History",
       "generatedContent": "Generated Content",
       "linkedDocs": "Linked Documents",
@@ -3384,6 +3385,7 @@
     "isQuick": "Actually quick",
     "newItem": "New task/info",
     "overtime": "Over the estimated time ({min} min)",
+    "actionLinks": "Quick actions",
     "attachments": "Attachments",
     "source": "Source"
   },
