@@ -298,6 +298,71 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
   res.json({ count: count ?? 0 });
 });
 
+// ── day-plan (מהיר·3·1 day-tool) ────────────────────────────────────────────
+// A daily_plans row records the day the user "built": the medium/big picks +
+// the quick load. The nightly rollover closes it out with the completion
+// snapshot (see 20260712130000_daily_plans.sql). Registered BEFORE GET/PATCH
+// /tasks/:id so "day-plan" isn't captured as an :id.
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** GET /tasks/day-plan?date=YYYY-MM-DD — that day's committed plan (or null). */
+router.get("/tasks/day-plan", async (req: Request, res: Response) => {
+  const date = String(req.query.date ?? "");
+  if (!ISO_DATE.test(date)) {
+    return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+  }
+  const { data, error } = await db
+    .from("daily_plans")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .eq("plan_date", date)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data ?? null });
+});
+
+/** POST /tasks/day-plan — upsert today's committed picks.
+ *  Body: { plan_date: "YYYY-MM-DD", picked_task_ids: string[], quick_total: number }.
+ *  Idempotent per (user_id, plan_date): rebuilding the day overwrites the picks
+ *  and quick_total but never the completion counts (only the rollover writes those). */
+router.post("/tasks/day-plan", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const planDate = String(body.plan_date ?? "");
+  if (!ISO_DATE.test(planDate)) {
+    return res.status(400).json({ error: "plan_date must be YYYY-MM-DD" });
+  }
+  const picked = body.picked_task_ids;
+  if (!Array.isArray(picked) || picked.some((id) => typeof id !== "string" || !id)) {
+    return res.status(400).json({ error: "picked_task_ids must be an array of task ids" });
+  }
+  if (picked.length > 100) {
+    return res.status(400).json({ error: "picked_task_ids is limited to 100 entries" });
+  }
+  const quickTotal = body.quick_total;
+  if (typeof quickTotal !== "number" || !Number.isInteger(quickTotal) || quickTotal < 0) {
+    return res.status(400).json({ error: "quick_total must be a non-negative integer" });
+  }
+
+  const { data, error } = await db
+    .from("daily_plans")
+    .upsert(
+      {
+        user_id: req.user!.id,
+        org_id: req.org!.id,
+        plan_date: planDate,
+        picked_task_ids: picked,
+        quick_total: quickTotal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,plan_date" },
+    )
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
@@ -479,6 +544,40 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
       .eq("id", req.params.id)
       .maybeSingle();
     wasVerified = prior ? prior.manually_verified === true : null;
+  }
+
+  // Recurrence edits go through the same COUNT → recurrence_until resolution as
+  // create (POST). PATCH previously skipped this, so an edited "ends after N
+  // occurrences" rule stored a bare COUNT the lazy spawn engine ignores — the
+  // series never terminated. Anchor on the incoming due_date when the same PATCH
+  // sets one; otherwise read the task's current due_date so the Nth occurrence is
+  // computed from the real start. Falls back to today when the task has none.
+  if (typeof updates.recurrence_rule === "string") {
+    let start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    if (!start) {
+      const { data: cur } = await db
+        .from("tasks")
+        .select("due_date")
+        .eq("organization_id", req.org!.id)
+        .eq("id", req.params.id)
+        .maybeSingle();
+      start = (cur?.due_date as string | null) ?? undefined;
+    }
+    const normalized = normalizeRecurrence(
+      updates.recurrence_rule,
+      start ?? new Date().toISOString().slice(0, 10),
+    );
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      // Match POST: apply the computed until whenever the caller didn't set an
+      // explicit one. The client sends recurrence_until:null for COUNT ("ends
+      // after N") rules, so `== null` (not `=== undefined`) is required — else
+      // COUNT is stripped from the rule but never converted to an end date and
+      // the series never terminates.
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
   }
 
   // Track status_changed_at

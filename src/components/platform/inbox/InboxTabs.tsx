@@ -42,18 +42,29 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const [messagesRes, scheduledRes, datedRes, projectsRes, dismissedRes, notifRes] = await Promise.all([
+    const [messagesRes, scheduledRes, datedRes, recurringRes, projectsRes, dismissedRes, notifRes] = await Promise.all([
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "inbox").eq("manually_verified", false).not("source_message_id", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
-        .eq("user_id", user.id).eq("status", "snoozed").not("snoozed_until", "is", null),
+        .eq("user_id", user.id).eq("status", "snoozed").not("snoozed_until", "is", null)
+        // Recurring tasks are counted in their own section below — exclude here
+        // to match the scheduled window's display (one task, one section).
+        .is("recurrence_rule", null),
       // Future-dated active tasks — the "scheduled by date" track. Counted into
       // the scheduled badge alongside snoozed rows. Verified only, so an
       // unverified dated suggestion (still in the Messages tab) isn't double-counted.
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("manually_verified", true)
         .not("due_date", "is", null).gt("due_date", todayISO())
-        .in("status", ["inbox", "in_progress"]),
+        .in("status", ["inbox", "in_progress"])
+        .is("recurrence_rule", null),
+      // Recurring active tasks — the recurring section of the scheduled window.
+      // Verified only: an unverified recurring suggestion still lives in the
+      // Messages tab, so counting it here too would double-count it.
+      supabase.from("tasks").select("*", { count: "exact", head: true })
+        .eq("user_id", user.id).eq("manually_verified", true)
+        .not("recurrence_rule", "is", null)
+        .in("status", ["inbox", "in_progress", "snoozed"]),
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("task_type", "project_suggestion").eq("status", "inbox"),
       supabase.from("tasks").select("*", { count: "exact", head: true })
@@ -66,7 +77,7 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
 
     setCounts({
       messages:      messagesRes.count  ?? 0,
-      scheduled:     (scheduledRes.count ?? 0) + (datedRes.count ?? 0),
+      scheduled:     (scheduledRes.count ?? 0) + (datedRes.count ?? 0) + (recurringRes.count ?? 0),
       projects:      projectsRes.count  ?? 0,
       dismissed:     dismissedRes.count ?? 0,
       notifications: notifRes.count     ?? 0,

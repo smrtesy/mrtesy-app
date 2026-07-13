@@ -47,6 +47,7 @@
     "recurrenceHebrew": "כל שנה (תאריך עברי)",
     "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
     "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
+    "recurrenceNeedsDueDate": "למשימה חוזרת ללא תאריך יעד החזרה תיחשב מהיום. קבע תאריך יעד כדי לעגן את החזרה.",
     "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
     "weekdayShort": {
       "0": "א",
@@ -202,6 +203,7 @@
     "crm": "אנשי קשר",
     "reach": "דיוור",
     "bots": "בוטים",
+    "vault": "כספת",
     "sectionBot": "smrtBot",
     "more": "עוד",
     "planBoard": "לוח",
@@ -369,7 +371,11 @@
     "chatSearchPrev": "תוצאה קודמת",
     "chatSearchNext": "תוצאה הבאה",
     "chatSearchCount": "{current} מתוך {total}",
-    "chatSearchNoMatch": "אין תוצאות"
+    "chatSearchNoMatch": "אין תוצאות",
+    "quickReply": "תשובה מהירה",
+    "quickReplyPlaceholder": "תשובה מהירה…",
+    "quickReplyQuoteLast": "כמענה להודעה האחרונה",
+    "quickReplySent": "התשובה נשלחה"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
@@ -618,15 +624,49 @@
       "startRun": "התחל ריצה",
       "today": "היום",
       "picked": "נבחרו להיום",
+      "medium": "בינוני",
+      "big": "גדול",
+      "rest": "השאר",
       "pool": "בריכה",
-      "mediumQuota": "רגיל {n}/3",
-      "bigQuota": "גדול {n}/1",
+      "mediumQuota": "בינוני {n}/{max}",
+      "bigQuota": "גדול {n}/{max}",
       "emptyToday": "היום ריק — הוסף משימות מהבריכה או צור חדשות",
       "emptyPicked": "לא נבחרו רגיל/גדול להיום — פתח את הבריכה כדי לבחור",
+      "emptyMedium": "לא נבחרו בינוניות להיום — פתח את \"בנה את היום\" כדי לבחור",
+      "emptyBig": "לא נבחרה משימה גדולה להיום",
+      "emptyRest": "אין משימות נוספות",
       "emptyPool": "הבריכה ריקה",
       "emptyQuick": "אין משימות מהירות על השולחן — סמן משימה כמהירה או צור חדשה",
       "emptyRegular": "אין משימות רגילות על השולחן",
       "emptyImportant": "אין משימות חשובות — משימות עם דדליין קרוב יופיעו כאן"
+    },
+    "buildDay": {
+      "banner": "בנה את היום — בחר 3 בינוניות ו-1 גדולה",
+      "open": "בנה את היום",
+      "title": "בנה את היום",
+      "hint": "כל המהירות נכנסות אוטומטית. בחר עד {medium} בינוניות ו-{big} גדולה למיקוד היום — זו מכסה רכה, אפשר לחרוג.",
+      "mediumHeading": "בינוני",
+      "bigHeading": "גדול",
+      "over": "חרגת מהמכסה — עדיין אפשר, רק שים לב",
+      "empty": "אין משימות בינוני/גדול לבחירה כרגע",
+      "add": "בחר להיום",
+      "remove": "הסר מהיום",
+      "done": "סיימתי",
+      "close": "סגור"
+    },
+    "focus": {
+      "heading": "פוקוס תוכנית",
+      "minutes": "{n} דק׳",
+      "start": "התחל פוקוס",
+      "doneToday": "הושלם היום",
+      "noStage": "אין שלב מוכן"
+    },
+    "decision": {
+      "title": "מה הוחלט?",
+      "hint": "זו משימת החלטה — הנוסח יצורף כעדכון לכל המשימות שתלויות בה.",
+      "placeholder": "כתוב את ההחלטה במשפט…",
+      "confirm": "סמן כהושלם",
+      "cancel": "ביטול"
     },
     "contextFilter": {
       "all": "הכל",
@@ -741,6 +781,10 @@
     "noScheduled": "אין תזכורות מתוזמנות",
     "snoozedSection": "הצעות שדחיתי",
     "datedSection": "מתוזמנות לתאריך",
+    "recurringSection": "חוזרות",
+    "editDetails": "פתח לעריכת כל הפרטים",
+    "noEndDate": "ללא תאריך סיום",
+    "untilLabel": "עד {when}",
     "kindEvent": "אירוע",
     "morningTitle": "בוקר טוב 👋 מתחילים מהנכנס",
     "morningHint": "עבור על הפריטים אחד-אחד — לכל אחד: בחר להיום · תן תאריך · תייק לפי רמה · זרוק.",
@@ -966,6 +1010,23 @@
     "deployUnreachable": "לא זמין",
     "driveScanDepth": "סריקה אחורה",
     "driveScanDays": "{days} ימים"
+  },
+  "dayTools": {
+    "sectionTitle": "כלי היום",
+    "sectionSubtitle": "כלים שיושבים מעל המשימות — הפעל או כבה לפי איך שנוח לך לעבוד.",
+    "saveError": "השמירה נכשלה, נסה שוב",
+    "method131": {
+      "title": "מהיר · 3 · 1",
+      "desc": "כל המהירות ליום, ובחירה מודעת של 3 בינוניות ו-1 גדולה."
+    },
+    "marathon": {
+      "title": "מרתון מהיר",
+      "desc": "ריצה במסך מלא על המשימות המהירות, משימה בכל פעם עם טיימר."
+    },
+    "planfocus": {
+      "title": "פוקוס תוכנית",
+      "desc": "בלוק זמן יומי קבוע על פרויקט מ-smrtPlan, עם סשן פוקוס מתוזמן."
+    }
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",
@@ -2414,6 +2475,8 @@
       "parsing": "מפרסר…",
       "generate": "ייצר אודיו",
       "generating": "מייצר…",
+      "stop": "עצור",
+      "stopping": "עוצר…",
       "queuedBanner": "בתור — מתחיל בקרוב…",
       "stages": {
         "fetching": "מביא את התסריט",
@@ -2438,7 +2501,8 @@
       "lines": "שורות",
       "failed": "נכשלו",
       "cost": "עלות",
-      "mode": "מצב"
+      "mode": "מצב",
+      "readingFromTab": "קורא מהטאב: {tab}"
     },
     "casting": {
       "title": "ליהוק",
@@ -2856,6 +2920,9 @@
   "smrtPlan": {
     "title": "לוח התכנון",
     "lead": "כל הפרויקטים, הלו\"ז, והתלויות ביניהם · לחיצה על שורה פותחת פרטים",
+    "aiBuilder": {
+      "button": "בנה עם AI"
+    },
     "today": "היום",
     "newPlan": "תוכנית חדשה",
     "recompute": "חשב מחדש",
@@ -3043,6 +3110,8 @@
       "unassigned": "לא משויך",
       "owner": "בעלים",
       "estimatedHours": "שעות מוערכות",
+      "dailyMinutes": "התחייבות יומית (דקות)",
+      "dailyMinutesHint": "כמה דקות ביום להשקיע בתוכנית",
       "fromCatalog": "בחר מהקטלוג…",
       "manualDuration": "משך ידני (ימים)",
       "durationDays": "משך (ימים)",
@@ -3232,6 +3301,51 @@
     "zoomIn": "הגדל",
     "zoomOut": "הקטן"
   },
+  "smrtVault": {
+    "title": "כספת סיסמאות",
+    "subtitle": "כל הלוגינים שלך במקום אחד, מוצפנים. הסיסמאות עצמן לעולם לא מוצגות כאן — תוסף הדפדפן ימלא אותן אוטומטית באתרים.",
+    "securityNote": "הסיסמאות נשמרות מוצפנות ולעולם לא מוצגות במסך הזה. תוסף הדפדפן של smrtVault ימלא אותן אוטומטית ישירות באתרים.",
+    "search": "חיפוש",
+    "searchPlaceholder": "חיפוש לפי שם, משתמש או כתובת…",
+    "close": "סגור",
+    "importCsv": "ייבוא מקובץ",
+    "add": "הוסף לוגין",
+    "empty": "עדיין אין לוגינים בכספת. הוסף אחד או ייבא קובץ CSV מכרום.",
+    "noMatches": "לא נמצאו תוצאות.",
+    "open": "פתח",
+    "addTitle": "לוגין חדש",
+    "editTitle": "עריכת לוגין",
+    "fieldLabel": "שם / שירות",
+    "fieldLabelPlaceholder": "למשל: בנק אמריקה",
+    "fieldUrl": "כתובת האתר",
+    "fieldUrlPlaceholder": "https://…",
+    "fieldUsername": "שם משתמש",
+    "fieldUsernamePlaceholder": "אימייל או שם משתמש",
+    "fieldPassword": "סיסמה",
+    "fieldPasswordPlaceholder": "הסיסמה תישמר מוצפנת",
+    "fieldPasswordEdit": "סיסמה חדשה",
+    "fieldPasswordEditPlaceholder": "השאר ריק כדי לא לשנות",
+    "fieldNotes": "הערות",
+    "fieldNotesPlaceholder": "הערה לא-מסווגת (לא חובה)",
+    "delete": "מחק",
+    "cancel": "ביטול",
+    "save": "שמור",
+    "saved": "נשמר",
+    "deleted": "נמחק",
+    "deleteConfirm": "למחוק את הלוגין הזה מהכספת?",
+    "labelRequired": "צריך למלא שם / שירות",
+    "passwordRequired": "צריך למלא סיסמה",
+    "importTitle": "ייבוא לוגינים מקובץ CSV",
+    "importHelp": "ייצא את הסיסמאות מכרום דרך chrome://password-manager/settings ← ייצוא סיסמאות, ואז העלה כאן את הקובץ. הקובץ מעובד בדפדפן שלך והסיסמאות נשמרות מוצפנות.",
+    "importParseError": "לא הצלחתי לקרוא את הקובץ. ודא שזה קובץ CSV תקין.",
+    "importNoPasswordColumn": "לא נמצאה עמודת סיסמה בקובץ.",
+    "importUnnamed": "ללא שם",
+    "importNoRows": "לא נמצאו שורות עם סיסמה בקובץ.",
+    "importRowsDetected": "זוהו {count} לוגינים",
+    "importDone": "הייבוא הושלם",
+    "importResult": "יובאו {imported}, דולגו {skipped}",
+    "runImport": "הפעל ייבוא"
+  },
   "smrtBotWeb": {
     "formTitle": "בואו נתחיל לדבר",
     "formSubtitle": "רק כמה פרטים קצרים ונצא לדרך",
@@ -3279,7 +3393,7 @@
     "from": "מאת",
     "classification": "סיווג",
     "size": "גודל",
-    "sizeQuick": "⚡ מהיר (הצעת AI)",
+    "sizeQuick": "⚡ מהיר",
     "sizeRegular": "רגיל",
     "sizeMedium": "רגיל",
     "sizeBig": "גדול",
@@ -3299,6 +3413,36 @@
     "classConfidence": "ביטחון סיווג",
     "taskConfidence": "ביטחון כתיבת משימה",
     "rawDetails": "פרטים נוספים"
+  },
+  "planAiBuilder": {
+    "title": "בנה תוכנית עם AI",
+    "descLabel": "תיאור הפרויקט",
+    "descPlaceholder": "מה הפרויקט? מה התוצר הסופי? מה ידוע ומה פתוח? כתוב בחופשיות.",
+    "descTooShort": "כתוב תיאור קצת יותר מפורט",
+    "minutesLabel": "דקות עבודה ליום",
+    "generate": "בנה תוכנית",
+    "generating": "בונה את התוכנית… זה ייקח כמה שניות",
+    "planTitle": "שם התוכנית",
+    "tasksCount": "{n} משימות",
+    "hoursTotal": "{n} שעות סה\"כ",
+    "stagesCount": "{n} שלבים",
+    "decision": "החלטה",
+    "reassignHint": "התוכנית תיווצר כטיוטה, כל המשימות משויכות אליך — אפשר לשייך מחדש לצוות בפרטי התוכנית.",
+    "back": "חזרה",
+    "create": "צור תוכנית",
+    "creating": "יוצר…",
+    "created": "התוכנית נוצרה כטיוטה"
+  },
+  "focusSession": {
+    "exit": "סיום",
+    "currentStage": "השלב הנוכחי",
+    "stageDone": "סיימתי את השלב",
+    "stagesDone": "{count} שלבים הושלמו",
+    "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",
+    "timeUpTitle": "נגמרו {minutes} הדקות של היום",
+    "doneToday": "סיימתי להיום",
+    "fiveMore": "עוד 5 דקות",
+    "completed": "השלמתי"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",

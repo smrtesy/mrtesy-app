@@ -30,7 +30,7 @@ const ORG_DEFAULT_HOURS_PER_DAY = 8;
 /** "at risk" threshold — kept in sync with the smrtplan_task_health view. */
 export const AT_RISK_DAYS = 3;
 
-function toISO(d: Date): string {
+export function toISO(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 function parseISO(s: string): Date {

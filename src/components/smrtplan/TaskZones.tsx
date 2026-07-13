@@ -3,53 +3,12 @@
 import { useTranslations } from "next-intl";
 import { Zap, Hourglass, CheckCircle2, Clock, ArrowRight, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TaskNeed, TaskHandoff } from "@/types/task";
 import { parseISO, gregShort, hebDate, countdownText, urgencyFor } from "@/lib/smrtplan/dates";
+// Zone logic lives in a shared util so the focus block + server focus-stage
+// endpoint stay in lockstep with this board (docs/smrtplan-focus-integration §5).
+import { type PlanZoneTask, type Zone, effectiveDeadline, byUrgency, zoneOf } from "@/lib/smrtplan/zones";
 
-export interface PlanZoneTask {
-  id: string;
-  title: string;
-  title_he: string | null;
-  status: string;
-  assigned_to_user_id: string | null;
-  due_date: string | null;
-  latest_finish: string | null;
-  is_critical: boolean | null;
-  plan_title_he: string | null;
-  plan_title_en: string | null;
-  stage_name_he?: string | null;
-  stage_name_en?: string | null;
-  needs: TaskNeed[];
-  handoff: TaskHandoff[];
-}
-
-/** The date a task must actually meet — the earlier of its own due date and the
- *  engine's latest_finish (an external constraint can pull it in). */
-function effectiveDeadline(t: PlanZoneTask): string | null {
-  if (t.due_date && t.latest_finish) return t.due_date < t.latest_finish ? t.due_date : t.latest_finish;
-  return t.due_date || t.latest_finish || null;
-}
-
-/** Urgency order: earliest effective deadline first (overdue floats to the
- *  top), undated last; critical wins a tie. */
-function byUrgency(a: PlanZoneTask, b: PlanZoneTask): number {
-  const da = effectiveDeadline(a);
-  const db = effectiveDeadline(b);
-  if (da && db) {
-    if (da !== db) return da < db ? -1 : 1;
-  } else if (da) return -1;
-  else if (db) return 1;
-  if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
-  return 0;
-}
-
-type Zone = "ready" | "blocked" | "done";
-
-export function zoneOf(t: PlanZoneTask): Zone {
-  if (t.status === "archived" || t.status === "completed" || t.status === "dismissed") return "done";
-  if ((t.needs ?? []).some((n) => !n.satisfied)) return "blocked";
-  return "ready";
-}
+export type { PlanZoneTask };
 
 const countdownClasses: Record<string, string> = {
   far: "bg-status-ok-bg text-status-ok",

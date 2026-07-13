@@ -30,6 +30,78 @@ export type RecurrenceModel = {
 
 const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
 
+/** The internal editor state a rule string decodes into. Used to seed the
+ *  editor when editing an existing task (the inverse of buildModel). */
+type SeedState = {
+  freq: RecurrenceFreq;
+  interval: number;
+  weekdays: number[];
+  monthlyMode: "day" | "nth" | "last" | "hebrew";
+  monthDay: number;
+  endsMode: "never" | "on" | "after";
+  endDate: string;
+  count: number;
+};
+
+const DEFAULT_SEED: SeedState = {
+  freq: "none", interval: 1, weekdays: [], monthlyMode: "day",
+  monthDay: 1, endsMode: "never", endDate: "", count: 5,
+};
+
+/** Decode a stored recurrence_rule (+ recurrence_until) back into editor state.
+ *  The inverse of buildModel — kept in sync with the tokens it emits. Unknown
+ *  or empty rules fall back to "no recurrence". */
+function parseRecurrence(rule: string | null | undefined, until: string | null | undefined): SeedState {
+  const seed: SeedState = { ...DEFAULT_SEED };
+  if (until) { seed.endsMode = "on"; seed.endDate = until.slice(0, 10); }
+  if (!rule) return seed;
+
+  const parts: Record<string, string> = {};
+  for (const seg of rule.split(";")) {
+    const [k, v] = seg.split("=");
+    if (k && v !== undefined) parts[k.trim().toUpperCase()] = v.trim();
+  }
+
+  switch (parts.FREQ) {
+    case "DAILY":          seed.freq = "daily"; break;
+    case "WEEKLY":         seed.freq = "weekly"; break;
+    case "MONTHLY":        seed.freq = "monthly"; break;
+    case "HEBREW_MONTHLY": seed.freq = "monthly"; seed.monthlyMode = "hebrew"; break;
+    case "YEARLY":         seed.freq = "yearly"; break;
+    case "HEBREW_YEARLY":  seed.freq = "hebrew"; break;
+    default:               return seed; // unknown → treat as none
+  }
+
+  const interval = parseInt(parts.INTERVAL ?? "", 10);
+  if (Number.isFinite(interval) && interval > 1) seed.interval = interval;
+
+  if (seed.freq === "weekly" && parts.BYDAY) {
+    seed.weekdays = parts.BYDAY.split(",")
+      .map((code) => WEEKDAY_CODES.indexOf(code.trim().toUpperCase() as (typeof WEEKDAY_CODES)[number]))
+      .filter((i) => i >= 0);
+  }
+
+  if (seed.freq === "monthly" && seed.monthlyMode !== "hebrew") {
+    if (parts.BYMONTHDAY) {
+      const md = parseInt(parts.BYMONTHDAY, 10);
+      seed.monthlyMode = "day";
+      if (Number.isFinite(md)) seed.monthDay = Math.min(31, Math.max(1, md));
+    } else if (parts.BYDAY) {
+      // "2TU" → nth weekday; "-1SU" → last weekday.
+      seed.monthlyMode = parts.BYDAY.startsWith("-1") ? "last" : "nth";
+    }
+  }
+
+  // COUNT wins over an explicit until when both are present (buildModel never
+  // emits both, but a stored rule could carry a stale COUNT).
+  const count = parseInt(parts.COUNT ?? "", 10);
+  if (Number.isFinite(count) && count >= 1) {
+    seed.endsMode = "after"; seed.count = count; seed.endDate = "";
+  }
+
+  return seed;
+}
+
 /** Locale-appropriate ordinal for the monthly "nth weekday" label. The Hebrew
  *  template wraps it as "ה-{ord}", so a bare number is correct there. */
 function ordinalLabel(n: number, locale: string): string {
@@ -54,39 +126,62 @@ interface Props {
   /** The task's due date (YYYY-MM-DD) — anchors weekday + monthly options. */
   dueDate: string;
   onChange: (model: RecurrenceModel) => void;
-  /** Bump to clear internal state (parent reset). */
+  /** Bump to clear/re-seed internal state (parent reset or task switch). */
   resetKey: number;
+  /** When editing an existing task, the stored rule to decode into the editor.
+   *  Omitted (create flow) → the editor starts empty. */
+  initialRule?: string | null;
+  /** The stored recurrence_until that pairs with initialRule. */
+  initialUntil?: string | null;
 }
 
-export function RecurrenceEditor({ dueDate, onChange, resetKey }: Props) {
+export function RecurrenceEditor({ dueDate, onChange, resetKey, initialRule, initialUntil }: Props) {
   const t = useTranslations("manualTask");
   const locale = useLocale();
 
-  const [freq, setFreq] = useState<RecurrenceFreq>("none");
-  const [interval, setIntervalN] = useState(1);
-  const [weekdays, setWeekdays] = useState<number[]>([]);
-  const [monthlyMode, setMonthlyMode] = useState<"day" | "nth" | "last" | "hebrew">("day");
-  const [monthDay, setMonthDay] = useState(1);
-  const [endsMode, setEndsMode] = useState<"never" | "on" | "after">("never");
-  const [endDate, setEndDate] = useState("");
-  const [count, setCount] = useState(5);
+  // Seed from the stored rule on first mount (edit flow); empty for create.
+  const initialSeed = parseRecurrence(initialRule, initialUntil);
+  const [freq, setFreq] = useState<RecurrenceFreq>(initialSeed.freq);
+  const [interval, setIntervalN] = useState(initialSeed.interval);
+  const [weekdays, setWeekdays] = useState<number[]>(initialSeed.weekdays);
+  const [monthlyMode, setMonthlyMode] = useState<"day" | "nth" | "last" | "hebrew">(initialSeed.monthlyMode);
+  const [monthDay, setMonthDay] = useState(initialSeed.monthDay);
+  const [endsMode, setEndsMode] = useState<"never" | "on" | "after">(initialSeed.endsMode);
+  const [endDate, setEndDate] = useState(initialSeed.endDate);
+  const [count, setCount] = useState(initialSeed.count);
 
-  // Clear everything when the parent form resets.
+  // Read the latest props inside the reset effect without making them deps —
+  // re-seeding is driven solely by the parent bumping resetKey (a task switch),
+  // never by a re-render that re-passes the same rule (which would clobber an
+  // in-progress edit right after autosave normalises the rule).
+  const seedPropsRef = useRef({ initialRule, initialUntil });
+  seedPropsRef.current = { initialRule, initialUntil };
+
+  // Re-seed when the parent resets (create form cleared, or a different task
+  // opened). parseRecurrence yields the empty state when there's no rule.
+  const firstResetRef = useRef(true);
   useEffect(() => {
-    setFreq("none");
-    setIntervalN(1);
-    setWeekdays([]);
-    setMonthlyMode("day");
-    setMonthDay(1);
-    setEndsMode("never");
-    setEndDate("");
-    setCount(5);
+    if (firstResetRef.current) { firstResetRef.current = false; return; }
+    const s = parseRecurrence(seedPropsRef.current.initialRule, seedPropsRef.current.initialUntil);
+    setFreq(s.freq);
+    setIntervalN(s.interval);
+    setWeekdays(s.weekdays);
+    setMonthlyMode(s.monthlyMode);
+    setMonthDay(s.monthDay);
+    setEndsMode(s.endsMode);
+    setEndDate(s.endDate);
+    setCount(s.count);
   }, [resetKey]);
 
   const anchor = monthlyAnchor(dueDate || new Date().toISOString().slice(0, 10));
 
   // Default the weekly day-set to the due date's weekday when first enabled.
+  // Skipped on the initial mount so an edited task's parsed weekdays/monthDay
+  // (seeded via useState) are not clobbered by the due-date anchor — this only
+  // fires when the USER later switches the frequency.
+  const didFreqMountRef = useRef(false);
   useEffect(() => {
+    if (!didFreqMountRef.current) { didFreqMountRef.current = true; return; }
     if (freq === "weekly" && weekdays.length === 0) {
       setWeekdays([anchor.weekday]);
     }

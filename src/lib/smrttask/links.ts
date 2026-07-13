@@ -22,6 +22,12 @@ export interface DetectedLink {
   kind: LinkKind;
 }
 
+export interface ActionNugget extends DetectedLink {
+  /** AI-provided short Hebrew label for the button ("מעקב ותשלום"). When absent
+   *  the UI falls back to the kind label / bare host, same as a plain link. */
+  label?: string;
+}
+
 // Bare-URL matcher. Stops before whitespace, quotes/brackets, and a trailing
 // ")" so a parenthesised "(see https://x.com/a)" doesn't swallow the paren.
 const URL_RE = /https?:\/\/[^\s<>"'`)\]]+/g;
@@ -84,6 +90,49 @@ export function extractTaskLinks(
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     out.push({ url, kind: classify(url) });
+  }
+  return out;
+}
+
+/**
+ * The task's "action nuggets" — small labeled buttons that take the user
+ * straight to a destination in one click. Source order:
+ *   1. AI-extracted `action_links` (each carries an explicit Hebrew label);
+ *   2. fallback — bare URLs still embedded in the description (older tasks
+ *      built before nuggets, or ones the builder missed);
+ *   3. when `includeAttachments`, the structured material / drive-doc URLs too.
+ * Deduped by URL in first-seen order. The card lists attachments here (one
+ * button row); the run view opts out of (3) since it shows those in its own
+ * attachments block.
+ */
+export function taskActionNuggets(
+  task: Pick<Task, "description" | "task_materials" | "linked_drive_docs" | "action_links">,
+  opts: { includeAttachments?: boolean } = {},
+): ActionNugget[] {
+  const seen = new Set<string>();
+  const out: ActionNugget[] = [];
+  const add = (rawUrl: string | undefined | null, label?: string | null) => {
+    if (!rawUrl) return;
+    // Drop a trailing sentence period/comma a regex grab can pick up (";" is
+    // valid inside query strings, so it's left alone).
+    const url = String(rawUrl).replace(/[.,]+$/, "");
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    seen.add(url);
+    const trimmed = label?.trim();
+    out.push({ url, kind: classify(url), label: trimmed ? trimmed : undefined });
+  };
+  // 1. AI nuggets. Guard the shape — the model occasionally returns a non-array.
+  if (Array.isArray(task.action_links)) {
+    for (const n of task.action_links) add(n?.url, n?.label);
+  }
+  // 2. Fallback: URLs the builder left in the body.
+  if (task.description) {
+    for (const m of task.description.matchAll(URL_RE)) add(m[0]);
+  }
+  // 3. Structured attachments (card only).
+  if (opts.includeAttachments) {
+    for (const mat of task.task_materials ?? []) add(mat.url);
+    for (const doc of task.linked_drive_docs ?? []) add(doc.url);
   }
   return out;
 }

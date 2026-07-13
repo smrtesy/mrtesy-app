@@ -94,6 +94,12 @@ type SpeakerVoice = {
 };
 type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
 
+// Fallback synthesis model when neither the character nor the org setting names
+// one. Ultra is the tested Hebrew recipe — never silently fall back to the older
+// Chatterbox default (which is what a stock voice with no model would otherwise
+// inherit from the engine's own env default).
+const DEFAULT_RESEMBLE_MODEL = "resemble-ultra";
+
 /**
  * Build the speaker_map sent to the engine from a script's casting. A speaker
  * cast to several characters (its primary character_id plus extra_character_ids)
@@ -148,12 +154,23 @@ async function buildSpeakerMap(
     for (const c of chars ?? []) charMap.set(c.id, c);
   }
 
+  // The default model for any voice that carries no per-character override.
+  // Read the org setting (resemble-ultra by default) so a stock/library voice
+  // cast directly — which has no character row, hence no model — still requests
+  // Ultra explicitly instead of inheriting the engine env's default.
+  const { data: orgSettings } = await db
+    .from("smrtvoice_settings")
+    .select("default_resemble_model")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const defaultModel = orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      model: ch.resemble_model,
+      model: ch.resemble_model ?? defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -168,7 +185,7 @@ async function buildSpeakerMap(
     const primary: SpeakerVoice | null = c.character_id
       ? toVoice(c.character_id)
       : c.resemble_voice_id
-        ? { resemble_voice_id: c.resemble_voice_id, language: fallbackLang }
+        ? { resemble_voice_id: c.resemble_voice_id, model: defaultModel, language: fallbackLang }
         : null;
     if (!primary) continue;
     const extras = ((c.extra_character_ids ?? []) as string[])
@@ -1106,10 +1123,12 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
 
   try {
     const client = getVoiceEngineClient();
-    const result = await client.parseScript(script.google_doc_id, token, {
-      id: script.google_doc_tab_id,
-      title: script.google_doc_tab_title,
-    });
+    const result = await client.parseScript(
+      script.google_doc_id,
+      token,
+      { id: script.google_doc_tab_id, title: script.google_doc_tab_title },
+      script.language,
+    );
 
     // Inherit casting from the project's first script (lowest seq, not this one).
     const inherited = new Map<string, { character_id: string | null; resemble_voice_id: string | null }>();
@@ -1191,13 +1210,20 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       if (delErr) console.warn("[smrtvoice] script_speakers reconcile-delete failed:", delErr.message);
     }
 
+    // Persist the tab actually read (the engine may have auto-resolved it from
+    // the script's language), so the UI always shows the real source tab.
+    const scriptUpdate: Record<string, unknown> = {
+      status: "parsed",
+      total_lines: result.total_lines,
+      script_imported_at: new Date().toISOString(),
+    };
+    if (result.selected_tab?.id) {
+      scriptUpdate.google_doc_tab_id = result.selected_tab.id;
+      scriptUpdate.google_doc_tab_title = result.selected_tab.title;
+    }
     const { error: updateErr } = await db
       .from("smrtvoice_scripts")
-      .update({
-        status: "parsed",
-        total_lines: result.total_lines,
-        script_imported_at: new Date().toISOString(),
-      })
+      .update(scriptUpdate)
       .eq("id", script.id);
     if (updateErr) return res.status(500).json({ error: updateErr.message });
 
@@ -1400,6 +1426,57 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to start audio generation", body: message });
     res.status(502).json({ error: message });
   }
+});
+
+// POST /voice/scripts/:id/cancel — stop an in-progress generation. Flips the
+// active generate_audio job to 'cancelled' (the worker polls this by
+// voice_engine_job_id and stops launching new lines cooperatively) and clears
+// the script's generating state so the UI leaves it immediately — even if the
+// worker is slow or was never picked up. Lines already rendered are kept.
+router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, completed_lines")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+
+  // Signal the worker via the newest still-active generate job for this script.
+  const { data: activeJob, error: jobSelErr } = await db
+    .from("smrtvoice_jobs")
+    .select("id")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .eq("job_type", "generate_audio")
+    .in("status", ["queued", "running"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  // Don't clear the generating state on a lookup failure — that would hide a
+  // run we never actually signalled to stop.
+  if (jobSelErr) return res.status(500).json({ error: jobSelErr.message });
+
+  if (activeJob) {
+    const { error: jobErr } = await db
+      .from("smrtvoice_jobs")
+      .update({ status: "cancelled", completed_at: new Date().toISOString() })
+      .eq("id", activeJob.id)
+      .eq("org_id", req.org!.id);
+    if (jobErr) return res.status(500).json({ error: jobErr.message });
+  }
+
+  // Leave the generating state now (self-heal if the worker is dead). If the
+  // worker is alive it also writes the final audio_ready when it stops.
+  const { error: sErr } = await db
+    .from("smrtvoice_scripts")
+    .update({ status: (script.completed_lines ?? 0) > 0 ? "audio_ready" : "parsed", stage: null })
+    .eq("id", script.id)
+    .eq("org_id", req.org!.id);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  res.json({ ok: true, cancelled: !!activeJob });
 });
 
 // POST /voice/scripts/:id/sync — reconcile a script that's stuck in
@@ -2482,14 +2559,17 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
   const uuid = req.params.uuid;
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("sample_text")
+    .select("sample_text, default_resemble_model")
     .eq("org_id", req.org!.id)
     .maybeSingle();
   const text = (req.body?.text as string)?.trim() || settings?.sample_text || "שלום, זו דוגמה קצרה לקול.";
+  // Preview on the same model the real generation uses, so what the user hears
+  // matches what they'll get — not whatever default the engine env carries.
+  const model = settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
 
   try {
     const client = getVoiceEngineClient();
-    const sample = await client.generateSample(uuid, text);
+    const sample = await client.generateSample(uuid, text, { model });
     // Download the synthesized clip and store it so replays are free.
     const resp = await fetch(sample.audio_url);
     if (!resp.ok) return res.status(502).json({ error: `Failed to fetch sample: ${resp.status}` });

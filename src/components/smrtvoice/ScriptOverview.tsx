@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ChevronRight, Trash2, Loader2, Check, Circle } from "lucide-react";
+import { ChevronRight, Trash2, Loader2, Check, Circle, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,7 @@ interface Script {
   language: "he" | "en";
   google_doc_url: string | null;
   google_doc_id: string | null;
+  google_doc_tab_title: string | null;
   generation_mode: "sts" | "tts";
   input_recording_path: string | null;
   total_lines: number;
@@ -49,6 +50,7 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const [script, setScript] = useState<Script | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   // Opt-in: apply each character's style baseline (slow/soft/…) on top of the
   // per-line emotion tags. Off by default — deep tag stacks destabilize the
   // TTS engine (spurious words / line restarts).
@@ -128,6 +130,18 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
     }
   }
 
+  async function onStop() {
+    setStopping(true);
+    try {
+      await api(`/api/voice/scripts/${scriptId}/cancel`, { method: "POST" });
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setStopping(false);
+    }
+  }
+
   async function onDelete() {
     if (!window.confirm(t("deleteConfirm"))) return;
     setBusy(true);
@@ -177,6 +191,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
             <span className="font-mono">{script.code}</span>
             {script.name ? <span className="text-muted-foreground">· {script.name}</span> : null}
           </h1>
+          {script.google_doc_tab_title ? (
+            <p className="text-xs text-muted-foreground">
+              {t("readingFromTab", { tab: script.google_doc_tab_title })}
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           {/* Script language — gates which pronunciation-lexicon entries apply
@@ -233,6 +252,21 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
             t("generate")
           )}
         </Button>
+        {generating && (
+          <Button variant="destructive" onClick={onStop} disabled={stopping}>
+            {stopping ? (
+              <>
+                <Loader2 className="h-4 w-4 me-1 animate-spin" />
+                {t("stopping")}
+              </>
+            ) : (
+              <>
+                <Square className="h-4 w-4 me-1" />
+                {t("stop")}
+              </>
+            )}
+          </Button>
+        )}
         {script.google_doc_url && (
           <a href={script.google_doc_url} target="_blank" rel="noreferrer" className="ms-auto">
             <Button variant="ghost">{t("openDoc")}</Button>

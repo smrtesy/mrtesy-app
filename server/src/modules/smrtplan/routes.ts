@@ -24,10 +24,12 @@
 
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
 import { notify } from "../../lib/platform";
-import { computeOrgSchedule, releaseDependents } from "./engine";
+import { computeOrgSchedule, releaseDependents, loadBlockedDates, addWorkingDays, toISO } from "./engine";
+import { simpleCall, parseJsonResponse } from "../../anthropic";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
@@ -448,8 +450,11 @@ router.post("/plans", requireFull, async (req: Request, res: Response) => {
   if (!body.title_he || typeof body.title_he !== "string") {
     return res.status(400).json({ error: "title_he is required" });
   }
-  if (!body.kind || (body.kind !== "effort" && body.kind !== "stream")) {
-    return res.status(400).json({ error: "kind must be 'effort' or 'stream'" });
+  // roster is a first-class kind (migration 20260604001300 + the progress view
+  // and GET /plans/:id/tasks already handle it, and the UI offers it) — it was
+  // only ever rejected here, so a "ריכוז" plan couldn't be created.
+  if (!body.kind || !["effort", "stream", "roster"].includes(body.kind as string)) {
+    return res.status(400).json({ error: "kind must be 'effort', 'stream' or 'roster'" });
   }
   const { data, error } = await db
     .from("smrtplan_plans")
@@ -607,7 +612,7 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  "description, has_unread_update, recurrence_rule";
+  "description, has_unread_update, recurrence_rule, is_decision";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -804,15 +809,16 @@ router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {
-  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date } = req.body ?? {};
+  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint } = req.body ?? {};
   if (!name_he) return res.status(400).json({ error: "name_he is required" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .insert({ org_id: req.org!.id, plan_id: req.params.id, name_he, name_en: name_en ?? null,
       sequence: sequence ?? 0, required_role: required_role ?? null,
       default_duration_days: default_duration_days != null ? Number(default_duration_days) : null,
-      start_date: start_date ?? null, end_date: end_date ?? null })
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+      start_date: start_date ?? null, end_date: end_date ?? null,
+      checkpoint: typeof checkpoint === "string" ? checkpoint : null })
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ stage: data });
@@ -1142,9 +1148,10 @@ router.get("/plan-tasks/:id/detail", async (req: Request, res: Response) => {
  */
 router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
   const done = !!(req.body ?? {}).done;
+  const decision = typeof (req.body ?? {}).decision === "string" ? (req.body.decision as string).trim() : "";
   const { data: task } = await db
     .from("tasks")
-    .select("id, assigned_to_user_id")
+    .select("id, assigned_to_user_id, is_decision")
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .not("plan_id", "is", null)
@@ -1169,10 +1176,42 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
     } catch (e) {
       console.error("[smrtplan] release-dependents failed:", e);
     }
+    // Decision propagation (§10 "living plan"): completing a decision task with
+    // a stated outcome attaches it as a prominent update to every task that
+    // lists this one in affected_by. Best-effort — never fails the completion.
+    if (task.is_decision && decision) {
+      try {
+        await propagateDecision(req.org!.id, req.params.id, decision, req.user!.id);
+      } catch (e) {
+        console.error("[smrtplan] decision propagation failed:", e);
+      }
+    }
   }
   await autoRecompute(req.org!.id);
   res.json({ task: data });
 });
+
+/** Fan a decision outcome forward: append it as an update to every task whose
+ *  affected_by contains the decision task (docs project-planning-protocol §10).
+ *  Read-modify-write per affected task (a handful, in practice). */
+async function propagateDecision(orgId: string, decisionTaskId: string, decision: string, uid: string): Promise<void> {
+  const { data: affected } = await db
+    .from("tasks")
+    .select("id, updates")
+    .eq("organization_id", orgId)
+    .contains("affected_by", [decisionTaskId]);
+  const now = new Date().toISOString();
+  for (const row of asRows(affected)) {
+    const entry = { id: randomUUID(), created_at: now, type: "decision", actor: "user", actor_user_id: uid, content: decision };
+    const next = [...((row.updates as unknown[]) ?? []), entry];
+    const { error } = await db
+      .from("tasks")
+      .update({ updates: next, has_unread_update: true, updated_at: now })
+      .eq("organization_id", orgId)
+      .eq("id", row.id as string);
+    if (error) console.error("[smrtplan] decision update failed for", row.id, "—", error.message);
+  }
+}
 
 /**
  * GET /plan-tasks/:id/released-dependents — the consumer tasks whose dependency
@@ -1274,7 +1313,7 @@ router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response
 
 router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
-  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date"]) {
+  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date", "checkpoint"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
   // A stage's default duration drives every cell that doesn't pin its own.
@@ -1288,7 +1327,7 @@ router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   // Only a default-duration change reflows the schedule; a timeline-window /
@@ -1706,6 +1745,582 @@ router.post("/plan/templates/:id/apply", requireFull, async (req: Request, res: 
 
   await autoRecompute(orgId);
   res.status(201).json({ plan });
+});
+
+// ── plan-focus day-tool (docs/smrtplan-focus-integration.md §3, §4) ─────────
+// Execution layer over smrtPlan: a per-person daily-minutes commitment, the
+// "current stage" (first ready task of mine), and a forward projection. None of
+// this feeds the scheduling engine — the engine still schedules backward from
+// the deadline; the projection is a separate forward estimate (§4).
+
+/** The forward-projection buffer (planning protocol §12) — the 20% is applied
+ *  here too so the live projection matches the date the builder showed. */
+const PROJECTION_BUFFER = 0.2;
+
+const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
+
+/** First ready task of mine (server mirror of the client zoneOf/byUrgency util,
+ *  which can't be imported across the client/server package boundary — §5).
+ *  A task is ready when no need is unsatisfied and it isn't in a terminal state;
+ *  order is earliest effective deadline (min of due_date, latest_finish) first,
+ *  critical breaking ties. */
+function serverCurrentStage(tasks: Row[]): Row | null {
+  const eff = (t: Row): string | null => {
+    const due = (t.due_date as string | null) ?? null;
+    const lf = (t.latest_finish as string | null) ?? null;
+    if (due && lf) return due < lf ? due : lf;
+    return due || lf || null;
+  };
+  const ready = tasks.filter(
+    (t) => !TASK_DONE.has(t.status as string)
+      && !((t.needs as { satisfied?: boolean }[] | undefined) ?? []).some((n) => !n.satisfied),
+  );
+  ready.sort((a, b) => {
+    const da = eff(a); const db_ = eff(b);
+    if (da && db_) { if (da !== db_) return da < db_ ? -1 : 1; }
+    else if (da) return -1;
+    else if (db_) return 1;
+    if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
+    return 0;
+  });
+  return ready[0] ?? null;
+}
+
+/** "My tasks" ownership filter: assigned to me, or unassigned ones I created —
+ *  the same rule as GET /plan/my-tasks. Shared so the projection scopes hours to
+ *  the SAME task set the current-stage logic walks. */
+const MINE_OR = (uid: string) => `assigned_to_user_id.eq.${uid},and(assigned_to_user_id.is.null,user_id.eq.${uid})`;
+
+/** Today's local date (YYYY-MM-DD) in the user's own timezone, so day-boundary
+ *  comparisons (session_date, the projection anchor) match what the user sees. */
+async function userLocalToday(uid: string): Promise<string> {
+  const { data: us } = await db
+    .from("user_settings").select("timezone").eq("user_id", uid).maybeSingle();
+  const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+}
+
+/** Fetch MY open (non-done) tasks for one plan, with needs/plan/stage attached. */
+async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<Row[]> {
+  const { data, error } = await db
+    .from("tasks")
+    .select(MY_TASK_FIELDS)
+    .eq("organization_id", orgId)
+    .eq("plan_id", planId)
+    .or(MINE_OR(uid))
+    .not("assignment_status", "in", "(proposed,declined)");
+  if (error) console.error("[smrtplan focus] myPlanTasks:", error.message);
+  return attachStageTitles(orgId, await attachPlanTitles(orgId, await attachNeedsHandoff(orgId, asRows(data))));
+}
+
+/** GET /plan/:id/focus — my daily-minutes commitment to a plan (or null). */
+router.get("/plan/:id/focus", async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from("smrtplan_focus")
+    .select("*")
+    .eq("plan_id", req.params.id)
+    .eq("user_id", req.user!.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ focus: data ?? null });
+});
+
+/** PUT /plan/:id/focus — upsert my daily-minutes commitment to a plan. */
+router.put("/plan/:id/focus", async (req: Request, res: Response) => {
+  const planId = req.params.id;
+  const body = req.body ?? {};
+  const minutes = body.daily_minutes;
+  if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes <= 0) {
+    return res.status(400).json({ error: "daily_minutes must be a positive integer" });
+  }
+  const active = body.active === undefined ? true : !!body.active;
+  // The plan must exist in this org before we attach a commitment to it.
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (planErr) return res.status(500).json({ error: planErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data, error } = await db
+    .from("smrtplan_focus")
+    .upsert(
+      {
+        org_id: req.org!.id,
+        plan_id: planId,
+        user_id: req.user!.id,
+        daily_minutes: minutes,
+        active,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "plan_id,user_id" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ focus: data });
+});
+
+/** GET /plan/:id/focus-stage — my current stage (first ready task) in a plan. */
+router.get("/plan/:id/focus-stage", async (req: Request, res: Response) => {
+  const tasks = await myPlanTasks(req.org!.id, req.user!.id, req.params.id);
+  res.json({ stage: serverCurrentStage(tasks) });
+});
+
+/** GET /plan/focus-today — my active focus plans, each with its current stage
+ *  and whether I already logged a focus session today (drives the /tasks block
+ *  row). session_date is compared in the user's own timezone. */
+router.get("/plan/focus-today", async (req: Request, res: Response) => {
+  const uid = req.user!.id;
+  const { data: focusRows, error } = await db
+    .from("smrtplan_focus")
+    .select("id, plan_id, daily_minutes, active")
+    .eq("org_id", req.org!.id)
+    .eq("user_id", uid)
+    .eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+  const rows = asRows(focusRows);
+  if (rows.length === 0) return res.json({ plans: [] });
+
+  const today = await userLocalToday(uid); // YYYY-MM-DD in the user's own tz
+
+  const planIds = rows.map((r) => r.plan_id as string);
+  const [planRes, sessRes] = await Promise.all([
+    db.from("smrtplan_plans").select("id, title_he, title_en, status").eq("org_id", req.org!.id).in("id", planIds),
+    db.from("focus_sessions").select("plan_id, completed_full").eq("org_id", req.org!.id).eq("user_id", uid).eq("session_date", today).in("plan_id", planIds),
+  ]);
+  if (planRes.error) return res.status(500).json({ error: planRes.error.message });
+  if (sessRes.error) return res.status(500).json({ error: sessRes.error.message });
+  const planById = new Map(asRows(planRes.data).map((p) => [p.id as string, p]));
+  // A plan may have >1 session in a day (e.g. a "+5 minutes" continuation): the
+  // day is logged if any session exists, and completed if ANY was a full run.
+  const loggedToday = new Set<string>();
+  const completedToday = new Set<string>();
+  for (const s of asRows(sessRes.data)) {
+    loggedToday.add(s.plan_id as string);
+    if ((s.completed_full as boolean) ?? false) completedToday.add(s.plan_id as string);
+  }
+
+  const out = [];
+  for (const r of rows) {
+    const planId = r.plan_id as string;
+    const plan = planById.get(planId);
+    // A draft/archived plan shouldn't surface a daily block.
+    if (!plan || (plan.status as string) !== "active") continue;
+    const stage = serverCurrentStage(await myPlanTasks(req.org!.id, uid, planId));
+    out.push({
+      plan_id: planId,
+      plan_title_he: (plan.title_he as string) ?? null,
+      plan_title_en: (plan.title_en as string) ?? null,
+      daily_minutes: r.daily_minutes as number,
+      current_stage: stage ? { id: stage.id, title: stage.title, title_he: stage.title_he, is_decision: !!stage.is_decision } : null,
+      logged_today: loggedToday.has(planId),
+      completed_today: completedToday.has(planId),
+    });
+  }
+  res.json({ plans: out });
+});
+
+/** GET /plan/:id/projection — forward completion estimate at MY pace (§4).
+ *  Not the engine: sum MY remaining estimated_hours × (1+buffer) ÷
+ *  (daily_minutes/60) → working days → addWorkingDays(today). Scoped to my own
+ *  tasks so "my hours ÷ my daily minutes" is coherent on a shared plan (dividing
+ *  everyone's hours by my pace would wildly overstate my finish). External waits
+ *  are reported separately (they run in the background, don't burn sessions). */
+router.get("/plan/:id/projection", async (req: Request, res: Response) => {
+  const planId = req.params.id;
+  const uid = req.user!.id;
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans").select("id, end_date").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (planErr) return res.status(500).json({ error: planErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data: focus } = await db
+    .from("smrtplan_focus").select("daily_minutes").eq("plan_id", planId).eq("user_id", uid).maybeSingle();
+  const dailyMinutes = (focus?.daily_minutes as number | undefined) ?? null;
+
+  const { data: taskRows, error: taskErr } = await db
+    .from("tasks")
+    .select("estimated_hours, external_wait_days, status")
+    .eq("organization_id", req.org!.id)
+    .eq("plan_id", planId)
+    .or(MINE_OR(uid))
+    .not("assignment_status", "in", "(proposed,declined)");
+  if (taskErr) return res.status(500).json({ error: taskErr.message });
+  let remainingHours = 0;
+  let externalWaitDays = 0;
+  for (const t of asRows(taskRows)) {
+    if (TASK_DONE.has(t.status as string)) continue;
+    remainingHours += Number(t.estimated_hours ?? 0) || 0;
+    externalWaitDays += Number(t.external_wait_days ?? 0) || 0;
+  }
+  const bufferedHours = remainingHours * (1 + PROJECTION_BUFFER);
+
+  // Without a daily commitment (or with no estimated hours) there's nothing to
+  // project — return the inputs so the UI can prompt to set minutes/estimates.
+  if (!dailyMinutes || bufferedHours <= 0) {
+    return res.json({
+      projected_end_date: null,
+      workdays: null,
+      remaining_hours: remainingHours,
+      buffered_hours: bufferedHours,
+      daily_minutes: dailyMinutes,
+      external_wait_days: externalWaitDays,
+      has_deadline: !!(plan.end_date as string | null),
+    });
+  }
+
+  const workdays = Math.ceil(bufferedHours / (dailyMinutes / 60));
+  const blocked = await loadBlockedDates(req.org!.id);
+  // Anchor on the user's local "today" (not server UTC) so the projected date
+  // doesn't slip a day near midnight for non-UTC users. new Date("YYYY-MM-DD")
+  // is UTC-midnight, which toISO() renders back to the same calendar date.
+  const end = addWorkingDays(new Date(await userLocalToday(uid)), workdays, blocked);
+  res.json({
+    projected_end_date: toISO(end),
+    workdays,
+    remaining_hours: remainingHours,
+    buffered_hours: bufferedHours,
+    daily_minutes: dailyMinutes,
+    external_wait_days: externalWaitDays,
+    has_deadline: !!(plan.end_date as string | null),
+  });
+});
+
+/** POST /focus-sessions — open a daily focus session for a plan.
+ *  Body: { plan_id, planned_minutes }. session_date is the user's local today. */
+router.post("/focus-sessions", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const planId = body.plan_id;
+  if (typeof planId !== "string" || !planId) {
+    return res.status(400).json({ error: "plan_id is required" });
+  }
+  const planned = body.planned_minutes;
+  if (typeof planned !== "number" || !Number.isInteger(planned) || planned < 0) {
+    return res.status(400).json({ error: "planned_minutes must be a non-negative integer" });
+  }
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (planErr) return res.status(500).json({ error: planErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data, error } = await db
+    .from("focus_sessions")
+    .insert({
+      org_id: req.org!.id,
+      plan_id: planId,
+      user_id: req.user!.id,
+      session_date: await userLocalToday(req.user!.id),
+      planned_minutes: planned,
+    })
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ session: data });
+});
+
+/** PATCH /focus-sessions/:id — close a session with what actually happened. */
+router.patch("/focus-sessions/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const patch: Record<string, unknown> = { ended_at: new Date().toISOString() };
+  if (body.actual_minutes !== undefined) {
+    const v = body.actual_minutes;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      return res.status(400).json({ error: "actual_minutes must be a non-negative integer" });
+    }
+    patch.actual_minutes = v;
+  }
+  if (body.tasks_completed !== undefined) {
+    const v = body.tasks_completed;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      return res.status(400).json({ error: "tasks_completed must be a non-negative integer" });
+    }
+    patch.tasks_completed = v;
+  }
+  if (body.completed_full !== undefined) patch.completed_full = !!body.completed_full;
+
+  const { data, error } = await db
+    .from("focus_sessions")
+    .update(patch)
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .eq("user_id", req.user!.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "session not found" });
+  res.json({ session: data });
+});
+
+// ── AI plan-builder: import path (docs project-planning-protocol §13) ────────
+// Creates a full plan from the canonical proposal JSON — the deterministic core
+// that BOTH the Claude-Code push (this endpoint) and the future in-app AI commit
+// reuse. Born as a draft (silent) so nothing reaches the team until the user
+// activates it. key→uuid is resolved in a second pass so depends_on/affected_by
+// can reference tasks declared later in the list.
+const AI_TIERS = new Set(["full", "assist", "human"]);
+
+type ImportResult =
+  | { ok: true; plan: unknown; tasks: number; stages: number }
+  | { ok: false; status: number; error: string };
+
+/** Shared creator for both the Claude-Code push (POST /plans/import) and the
+ *  in-app AI commit (POST /plans/ai-build/commit) — identical structure from an
+ *  identical §13 payload. Validates, then creates plan → stages → tasks → deps,
+ *  resolving key→uuid in a second pass. Best-effort (non-transactional). */
+async function createPlanFromProposal(orgId: string, uid: string, body: Record<string, unknown>): Promise<ImportResult> {
+  const planIn = (body.plan ?? {}) as Record<string, unknown>;
+  const title = typeof planIn.title_he === "string" && planIn.title_he.trim() ? planIn.title_he.trim() : null;
+  if (!title) return { ok: false, status: 400, error: "plan.title_he is required" };
+  const tasksIn: Record<string, unknown>[] = Array.isArray(body.tasks) ? body.tasks : [];
+  if (tasksIn.length === 0) return { ok: false, status: 400, error: "tasks must be a non-empty array" };
+  if (tasksIn.length > 200) return { ok: false, status: 400, error: "tasks is limited to 200 entries" };
+  const stagesIn: Record<string, unknown>[] = Array.isArray(body.stages) ? body.stages : [];
+  const seenKeys = new Set<string>();
+  for (const t of tasksIn) {
+    if (typeof t.key !== "string" || !t.key) return { ok: false, status: 400, error: "each task needs a string key" };
+    if (seenKeys.has(t.key)) return { ok: false, status: 400, error: `duplicate task key: ${t.key}` };
+    seenKeys.add(t.key);
+    if (typeof t.title !== "string" || !t.title.trim()) return { ok: false, status: 400, error: `task ${String(t.key)} needs a title` };
+    if (t.ai_tier != null && !AI_TIERS.has(String(t.ai_tier))) {
+      return { ok: false, status: 400, error: `task ${String(t.key)}: ai_tier must be full|assist|human` };
+    }
+  }
+  let dailyMinutes: number | null = null;
+  if (body.daily_minutes != null) {
+    const m = Number(body.daily_minutes);
+    if (!Number.isInteger(m) || m <= 0) return { ok: false, status: 400, error: "daily_minutes must be a positive integer" };
+    dailyMinutes = m;
+  }
+
+  // 1) The plan — always draft, kind effort unless the payload says stream.
+  const kind = planIn.kind === "stream" ? "stream" : "effort";
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans")
+    .insert({
+      org_id: orgId,
+      created_by: uid,
+      title_he: title,
+      title_en: typeof planIn.title_en === "string" ? planIn.title_en : null,
+      goal: typeof planIn.goal === "string" ? planIn.goal : null,
+      group_label: typeof planIn.group_label === "string" ? planIn.group_label : null,
+      kind,
+      status: "draft",
+    })
+    .select(PLAN_FIELDS)
+    .single();
+  if (planErr || !plan) return { ok: false, status: 500, error: planErr?.message ?? "failed to create plan" };
+  const planId = (plan as unknown as { id: string }).id;
+
+  // 2) Stages → key→id, carrying the review checkpoint when the proposal has one.
+  const stageIdByKey = new Map<string, string>();
+  for (let i = 0; i < stagesIn.length; i++) {
+    const s = stagesIn[i];
+    const nameHe = typeof s.title === "string" ? s.title : String(s.title ?? `שלב ${i + 1}`);
+    const { data: stage, error: stErr } = await db
+      .from("smrtplan_stages")
+      .insert({
+        org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i,
+        checkpoint: typeof s.checkpoint === "string" ? s.checkpoint : null,
+      })
+      .select("id")
+      .single();
+    if (stErr || !stage) return { ok: false, status: 500, error: stErr?.message ?? "failed to create stage" };
+    if (typeof s.key === "string" && s.key) stageIdByKey.set(s.key, (stage as { id: string }).id);
+  }
+
+  // 3) Tasks → key→id, carrying every planning field. assignee null = creator.
+  // A supplied assignee is honored only if it's a real member of this org —
+  // otherwise (typo, non-UUID, foreign user) it would 500 on the FK / uuid cast
+  // and leave the plan half-built, so we fall back to the creator.
+  const { data: memberRows } = await db.from("org_members").select("user_id").eq("org_id", orgId);
+  const memberIds = new Set(asRows(memberRows).map((m) => m.user_id as string));
+  const taskIdByKey = new Map<string, string>();
+  for (const t of tasksIn) {
+    const titleHe = (t.title as string).trim();
+    const titleEn = typeof t.title_en === "string" ? t.title_en.trim() : null;
+    const checklist = Array.isArray(t.checklist)
+      ? (t.checklist as unknown[]).filter((c) => typeof c === "string" && c).map((c) => ({
+          id: randomUUID(), title: c as string, done: false, created_at: new Date().toISOString(), completed_at: null, created_by: "ai",
+        }))
+      : [];
+    const est = t.estimated_hours != null && Number.isFinite(Number(t.estimated_hours)) && Number(t.estimated_hours) >= 0 ? Number(t.estimated_hours) : null;
+    const extWait = Number.isInteger(Number(t.external_wait_days)) && Number(t.external_wait_days) >= 0 ? Number(t.external_wait_days) : 0;
+    const assignee = typeof t.assignee === "string" && memberIds.has(t.assignee) ? t.assignee : uid;
+    const { data: task, error: tErr } = await db
+      .from("tasks")
+      .insert({
+        organization_id: orgId,
+        user_id: uid,
+        plan_id: planId,
+        stage_id: typeof t.stage === "string" ? stageIdByKey.get(t.stage) ?? null : null,
+        title: titleEn || titleHe,
+        title_he: titleHe,
+        status: "inbox",
+        is_private: false,
+        assignment_status: "accepted",
+        assigned_to_user_id: assignee,
+        description: typeof t.description === "string" ? t.description : null,
+        estimated_hours: est,
+        definition_of_done: typeof t.definition_of_done === "string" ? t.definition_of_done : null,
+        ai_tier: t.ai_tier != null ? String(t.ai_tier) : null,
+        ai_prompt: typeof t.ai_prompt === "string" ? t.ai_prompt : null,
+        is_decision: !!t.is_decision,
+        external_wait_days: extWait,
+        checklist,
+      })
+      .select("id")
+      .single();
+    if (tErr || !task) return { ok: false, status: 500, error: tErr?.message ?? "failed to create task" };
+    taskIdByKey.set(t.key as string, (task as { id: string }).id);
+  }
+
+  // 4) Second pass — resolve key refs now that every task has an id.
+  const depEdges: Record<string, unknown>[] = [];
+  const depSeen = new Set<string>(); // dedupe: smrtplan_dependencies is UNIQUE(from,to)
+  for (const t of tasksIn) {
+    const fromId = taskIdByKey.get(t.key as string)!;
+    // depends_on → task→task dependency edges (unknown keys / dups / self skipped).
+    if (Array.isArray(t.depends_on)) {
+      for (const dep of t.depends_on as unknown[]) {
+        const toId = typeof dep === "string" ? taskIdByKey.get(dep) : undefined;
+        if (!toId || toId === fromId) continue;
+        const edgeKey = `${fromId}|${toId}`;
+        if (depSeen.has(edgeKey)) continue;
+        depSeen.add(edgeKey);
+        depEdges.push({ org_id: orgId, from_type: "task", from_id: fromId, to_type: "task", to_id: toId, lag_days: 0 });
+      }
+    }
+    // affected_by → uuid[] on the task (decision propagation, §10).
+    if (Array.isArray(t.affected_by)) {
+      const ids = (t.affected_by as unknown[])
+        .map((k) => (typeof k === "string" ? taskIdByKey.get(k) : undefined))
+        .filter((x): x is string => !!x && x !== fromId);
+      if (ids.length) {
+        const { error: abErr } = await db.from("tasks").update({ affected_by: ids }).eq("organization_id", orgId).eq("id", fromId);
+        if (abErr) console.error("[plans/import] affected_by update failed:", abErr.message);
+      }
+    }
+  }
+  if (depEdges.length) {
+    const { error: depErr } = await db.from("smrtplan_dependencies").insert(depEdges);
+    if (depErr) return { ok: false, status: 500, error: depErr.message };
+  }
+
+  // 5) The creator's daily focus commitment, if provided.
+  if (dailyMinutes) {
+    const { error: fErr } = await db
+      .from("smrtplan_focus")
+      .upsert({ org_id: orgId, plan_id: planId, user_id: uid, daily_minutes: dailyMinutes, active: true, updated_at: new Date().toISOString() }, { onConflict: "plan_id,user_id" });
+    if (fErr) console.error("[plans/import] focus upsert failed:", fErr.message);
+  }
+
+  await autoRecompute(orgId);
+  return { ok: true, plan, tasks: taskIdByKey.size, stages: stageIdByKey.size };
+}
+
+router.post("/plans/import", requireFull, async (req: Request, res: Response) => {
+  const r = await createPlanFromProposal(req.org!.id, req.user!.id, req.body ?? {});
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.status(201).json({ plan: r.plan, tasks: r.tasks, stages: r.stages });
+});
+
+// ── in-app AI plan-builder (docs/smrtplan-focus-integration.md §3, §8.4) ─────
+// POST /plans/ai-build         — Sonnet proposes a §13 plan from a description
+//                                (nothing written; the user reviews first).
+// POST /plans/ai-build/commit  — creates the (possibly edited) proposal, exactly
+//                                like /plans/import.
+const PLAN_BUILD_DEFAULT_BUDGET_USD = 10;
+
+async function aiSpentToday(uid: string): Promise<number> {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const { data } = await db
+    .from("log_entries").select("ai_cost_usd").eq("user_id", uid)
+    .gte("created_at", todayStart.toISOString()).not("ai_cost_usd", "is", null);
+  return (data ?? []).reduce((s, r) => s + (Number((r as { ai_cost_usd: number | null }).ai_cost_usd) || 0), 0);
+}
+async function aiDailyBudget(uid: string): Promise<number> {
+  const { data } = await db.from("user_settings").select("daily_ai_budget_usd").eq("user_id", uid).maybeSingle();
+  const n = data?.daily_ai_budget_usd == null ? NaN : Number(data.daily_ai_budget_usd);
+  return Number.isFinite(n) && n > 0 ? n : PLAN_BUILD_DEFAULT_BUDGET_USD;
+}
+
+const PLAN_BUILD_SYSTEM = `אתה מתכנן פרויקטים. מקבל תיאור פרויקט חופשי ודקות-עבודה-ליום, ומחזיר תוכנית עבודה מפורקת לשלבים ומשימות.
+
+החזר JSON תקין בלבד — בלי טקסט לפני או אחרי, בלי code fences. הסכמה:
+{
+  "plan": { "title_he": "שם בעברית", "title_en": "English name", "goal": "התוצר במשפט", "kind": "effort" },
+  "daily_minutes": <int | null>,
+  "stages": [ { "key": "s1", "title": "שם השלב" } ],
+  "tasks": [ {
+    "key": "t1", "stage": "s1",
+    "title": "כותרת המשימה בעברית",
+    "definition_of_done": "מבחן הזר — איך יודעים שהמשימה הושלמה",
+    "description": "הקשר + צעדים + חומרים. שמור קישורים עמוקים כלשונם, מילה במילה.",
+    "estimated_hours": <number>,
+    "assignee": null,
+    "depends_on": ["t0"],
+    "is_decision": false,
+    "affected_by": [],
+    "ai_tier": "full" | "assist" | "human",
+    "ai_prompt": "פרומפט פתיחה מוכן אם ai_tier הוא full/assist, אחרת null",
+    "checklist": ["תת-משימה"]
+  } ],
+  "premortem": "הסיכון המרכזי + משימת החיסון"
+}
+
+כללים:
+- כל assignee = null (המקים ישייך מחדש). כל keys ייחודיים; depends_on/affected_by מפנים ל-keys קיימים.
+- משימות בגודל ~1–4 שעות. אומדן מבוסס פרטים, לא ניחוש.
+- שאלות פתוחות = משימות-החלטה (is_decision: true), והמשימות שתלויות בהחלטה מפנות אליהן ב-affected_by.
+- 🤖 full = ה-AI עושה לבד · 🤝 assist = ה-AI מנסח והאדם מאשר · 👤 human = אנושי. תן ai_prompt מוכן ל-full/assist.
+- שמור קישורים עמוקים (URLs) כלשונם בכל שדה טקסט — לעולם אל תקצר לדומיין.`;
+
+router.post("/plans/ai-build", requireFull, async (req: Request, res: Response) => {
+  const uid = req.user!.id;
+  const description = typeof (req.body ?? {}).description === "string" ? (req.body.description as string).trim() : "";
+  if (description.length < 10) return res.status(400).json({ error: "description is required (min 10 chars)" });
+  if (description.length > 8000) return res.status(400).json({ error: "description is too long (max 8000 chars)" });
+  const dm = (req.body ?? {}).daily_minutes;
+  const dailyMinutes = Number.isInteger(Number(dm)) && Number(dm) > 0 ? Number(dm) : null;
+
+  // Budget gate — abort before the paid call.
+  const [budget, spent] = await Promise.all([aiDailyBudget(uid), aiSpentToday(uid)]);
+  if (spent >= budget) {
+    return res.status(429).json({ error: `התקציב היומי לבינה (${budget.toFixed(2)}$) הסתיים. נוצלו ${spent.toFixed(2)}$.`, code: "BUDGET_EXCEEDED" });
+  }
+
+  const userMessage = `תיאור הפרויקט:\n${description}\n\nדקות עבודה ליום: ${dailyMinutes ?? "לא צוין"}`;
+  const startedAt = Date.now();
+  let raw: string;
+  let costUsd = 0;
+  try {
+    const out = await simpleCall("sonnet", PLAN_BUILD_SYSTEM, userMessage, 16000, { component: "smrtplan.ai-build", userId: uid });
+    raw = out.content;
+    costUsd = out.costUsd;
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : "AI call failed" });
+  }
+  // Log the spend so the daily gate counts it (mirrors the task-action path).
+  if (costUsd > 0) {
+    await db.from("log_entries").insert({
+      user_id: uid, category: "ai_action", status: "ok",
+      task_action: "plan_ai_build", ai_model_used: "claude-sonnet-4-6",
+      ai_cost_usd: costUsd, processing_duration_ms: Date.now() - startedAt,
+    }).then(({ error }) => { if (error) console.error("[plans/ai-build] cost log failed:", error.message); });
+  }
+
+  const proposal = parseJsonResponse<Record<string, unknown>>(raw);
+  if (!proposal || !proposal.plan || !Array.isArray(proposal.tasks)) {
+    return res.status(502).json({ error: "the AI returned an unparseable plan — try rephrasing" });
+  }
+  if (dailyMinutes && proposal.daily_minutes == null) proposal.daily_minutes = dailyMinutes;
+  res.json({ proposal, cost_usd: costUsd });
+});
+
+router.post("/plans/ai-build/commit", requireFull, async (req: Request, res: Response) => {
+  const r = await createPlanFromProposal(req.org!.id, req.user!.id, req.body ?? {});
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.status(201).json({ plan: r.plan, tasks: r.tasks, stages: r.stages });
 });
 
 export default router;

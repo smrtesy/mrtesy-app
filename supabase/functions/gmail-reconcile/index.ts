@@ -74,25 +74,35 @@ async function reconcileUser(userId: string) {
   const data = await resp.json();
   const gmailIds = new Set((data.messages || []).map((m: any) => m.id));
 
-  // Get DB message IDs to compare against the inbox query results.
-  // Match against BOTH gmail and gmail_sent: a message the inbox query returns
-  // may already be stored as 'gmail_sent' (batch-details reclassifies SENT
-  // mail). Comparing only against 'gmail' made reconcile think those were
-  // missing and insert duplicate 'gmail' rows that could never hydrate
-  // (batch-details' reclassify UPDATE hit the UNIQUE(user,source_type,source_id)
-  // constraint and no-oped). Also drop the received_at floor: reconcile-created
-  // rows are stamped at insert time, and a real row's received_at is the mail's
-  // own (possibly older) date, so a window filter here can miss an existing row.
-  const { data: dbMessages } = await supabase
-    .from("source_messages")
-    .select("source_id")
-    .eq("user_id", userId)
-    .in("source_type", ["gmail", "gmail_sent"]);
+  // Check existence of ONLY the message IDs the inbox query returned, across
+  // BOTH source_types (a message may already be stored as 'gmail_sent' —
+  // batch-details reclassifies SENT mail). We must NOT fetch all gmail rows and
+  // compare in memory: PostgREST caps an unbounded .select at 1000 rows, and
+  // this mailbox has >10k gmail/gmail_sent rows, so most existing rows fell
+  // outside the capped result and looked "missing" — recreating duplicate
+  // 'gmail' rows daily. Scoping by source_id keeps the result to <=500 rows and
+  // is correct regardless of table size. Chunked to keep the URL bounded.
+  const gmailIdArr = [...gmailIds] as string[];
+  const dbIds = new Set<string>();
+  for (let i = 0; i < gmailIdArr.length; i += 150) {
+    const chunk = gmailIdArr.slice(i, i + 150);
+    const { data: rows, error: existErr } = await supabase
+      .from("source_messages")
+      .select("source_id")
+      .eq("user_id", userId)
+      .in("source_type", ["gmail", "gmail_sent"])
+      .in("source_id", chunk);
+    if (existErr) {
+      // Fail safe: if we can't confirm what already exists, skip this run
+      // rather than risk re-inserting the whole window as duplicates.
+      console.error("gmail-reconcile existence check failed:", existErr);
+      return { missing: 0, error: existErr.message };
+    }
+    for (const r of rows ?? []) dbIds.add(r.source_id as string);
+  }
 
-  const dbIds = new Set((dbMessages || []).map((m) => m.source_id));
-
-  // Find missing messages (in Gmail but not in DB)
-  const missing = [...gmailIds].filter((id) => !dbIds.has(id));
+  // Find missing messages (in Gmail but not in DB under either source_type)
+  const missing = gmailIdArr.filter((id) => !dbIds.has(id));
 
   if (missing.length === 0) {
     return { missing: 0 };
