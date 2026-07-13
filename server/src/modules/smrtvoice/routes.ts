@@ -2142,6 +2142,20 @@ function stripNiqqud(s: string): string {
   return s.replace(/[֑-ׇ]/g, "");
 }
 
+// Strip punctuation (any script — commas, periods, maqaf, geresh, …) so we can
+// tell a PUNCTUATION-only edit ("שלום" → "שלום,") from a real spelling change
+// ("770" → "סעוון"). Used only to classify a learned pair, never to alter it.
+function stripPunct(s: string): string {
+  return s.replace(/[\p{P}\p{S}]/gu, "");
+}
+
+// Classify a learned (from → to) pair: 'punctuation' when the two are the same
+// word once punctuation is removed (only a comma/period/… was added or moved),
+// otherwise 'spelling' (the letters themselves changed).
+function classifyRespelling(from: string, to: string): "spelling" | "punctuation" {
+  return stripPunct(from) === stripPunct(to) ? "punctuation" : "spelling";
+}
+
 // LCS token diff → {from → to} substitution spans where the ORIGINAL side is a
 // single word (the unit the user selects and the lookup keys on). A single word
 // respelled to a short phrase ("770" → "סעוון סעוונטי") is kept; adjacent
@@ -2277,6 +2291,7 @@ async function syncPronunciationFeedback(orgId: string, lineId: string): Promise
         model: (t.model as string | null) ?? null,
         original_word: p.from,
         pronounced_as: p.to,
+        kind: classifyRespelling(p.from, p.to),
         chosen: t.approved === true,
       });
     }
@@ -2893,7 +2908,7 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
 
   let q = db
     .from("smrtvoice_pronunciation_feedback")
-    .select("original_word, pronounced_as, chosen")
+    .select("original_word, pronounced_as, kind, chosen")
     .eq("org_id", orgId);
   if (word) q = q.eq("original_word", word);
   if (resembleVoiceId) q = q.eq("resemble_voice_id", resembleVoiceId);
@@ -2901,12 +2916,17 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
   const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
 
-  const agg = new Map<string, { original_word: string; pronounced_as: string; chosen: number; total: number }>();
+  const agg = new Map<
+    string,
+    { original_word: string; pronounced_as: string; kind: string; chosen: number; total: number }
+  >();
   for (const r of data ?? []) {
+    const kind = (r.kind as string | null) ?? "spelling";
     const key = `${r.original_word}\u001f${r.pronounced_as}`;
     const e = agg.get(key) ?? {
       original_word: r.original_word as string,
       pronounced_as: r.pronounced_as as string,
+      kind,
       chosen: 0,
       total: 0,
     };
@@ -2918,6 +2938,110 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
     (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
   );
   res.json({ learnings, scope: { resemble_voice_id: resembleVoiceId, character_id: characterId } });
+});
+
+// GET /voice/insights — everything the learning system has concluded, grouped
+// by voice, for the "what did it learn" dashboard. Each voice lists its learned
+// pairs (spelling + punctuation) ranked by how often the user KEPT them (⭐), so
+// the top row per original word is the current recommendation for that voice.
+router.get("/voice/insights", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_feedback")
+    .select("original_word, pronounced_as, kind, chosen, character_id, resemble_voice_id")
+    .eq("org_id", orgId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Character names for labeling (best-effort — a missing/renamed character
+  // just falls back to its voice id). A load failure only costs the labels, so
+  // log and continue rather than 500 the whole dashboard.
+  const { data: chars, error: charsErr } = await db
+    .from("smrtvoice_characters")
+    .select("id, name, display_name, language, resemble_voice_id")
+    .eq("org_id", orgId);
+  if (charsErr) console.error("insights character lookup failed", charsErr.message);
+  const charById = new Map(
+    (chars ?? []).map((c) => [c.id as string, c as Record<string, unknown>]),
+  );
+
+  type Pair = {
+    original_word: string;
+    pronounced_as: string;
+    kind: string;
+    chosen: number;
+    total: number;
+  };
+  type Group = {
+    key: string;
+    character_id: string | null;
+    character_name: string | null;
+    resemble_voice_id: string | null;
+    language: string | null;
+    pairs: Map<string, Pair>;
+  };
+  const groups = new Map<string, Group>();
+
+  for (const r of data ?? []) {
+    const characterId = (r.character_id as string | null) ?? null;
+    const resembleVoiceId = (r.resemble_voice_id as string | null) ?? null;
+    // One bucket per voice: character if known, else the raw voice id, else a
+    // single "no voice" bucket for org-wide (character-less) history.
+    const gkey = characterId
+      ? `char:${characterId}`
+      : resembleVoiceId
+        ? `voice:${resembleVoiceId}`
+        : "none";
+    let g = groups.get(gkey);
+    if (!g) {
+      const c = characterId ? charById.get(characterId) : undefined;
+      g = {
+        key: gkey,
+        character_id: characterId,
+        character_name: c
+          ? ((c.display_name as string | null) || (c.name as string | null) || null)
+          : null,
+        resemble_voice_id: resembleVoiceId,
+        language: c ? ((c.language as string | null) ?? null) : null,
+        pairs: new Map(),
+      };
+      groups.set(gkey, g);
+    }
+    const kind = (r.kind as string | null) ?? "spelling";
+    const pkey = `${r.original_word}${r.pronounced_as}`;
+    const p = g.pairs.get(pkey) ?? {
+      original_word: r.original_word as string,
+      pronounced_as: r.pronounced_as as string,
+      kind,
+      chosen: 0,
+      total: 0,
+    };
+    p.total += 1;
+    if (r.chosen) p.chosen += 1;
+    g.pairs.set(pkey, p);
+  }
+
+  const voices = [...groups.values()]
+    .map((g) => {
+      const learnings = [...g.pairs.values()].sort(
+        (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
+      );
+      return {
+        key: g.key,
+        character_id: g.character_id,
+        character_name: g.character_name,
+        resemble_voice_id: g.resemble_voice_id,
+        language: g.language,
+        learnings,
+        chosen_total: learnings.reduce((s, p) => s + p.chosen, 0),
+        pair_count: learnings.length,
+      };
+    })
+    // Voices with confirmed picks first, then by volume; the "no voice" bucket
+    // sinks to the bottom.
+    .sort((a, b) => b.chosen_total - a.chosen_total || b.pair_count - a.pair_count);
+
+  res.json({ voices });
 });
 
 export default router;
