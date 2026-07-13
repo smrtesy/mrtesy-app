@@ -21,7 +21,7 @@
     "service_worker": "background.js"
   },
   "options_page": "options.html",
-  "permissions": ["cookies", "storage", "alarms", "scripting", "activeTab"],
+  "permissions": ["cookies", "storage", "alarms", "scripting", "activeTab", "notifications"],
   "host_permissions": ["https://*.smrtesy.com/*", "https://*.supabase.co/*"],
   "optional_host_permissions": ["https://*/*"]
 }

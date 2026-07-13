@@ -48,6 +48,22 @@
     </section>
 
     <section>
+      <h2>Capture logins as I sign in</h2>
+      <p>
+        When on, smrtVault offers to save a login to your vault right after you sign in
+        to a site — so you only store the accounts you actually use. Turning this on
+        asks permission to watch form submissions on websites; the password is sent to
+        your vault <b>only when you click “Save”</b> on the prompt, and is never stored
+        on your device.
+      </p>
+      <label class="row" style="gap: 10px; cursor: pointer">
+        <input id="captureToggle" type="checkbox" style="width: 18px; height: 18px" />
+        <span>Enable login capture</span>
+      </label>
+      <p id="captureMsg" class="ok"></p>
+    </section>
+
+    <section>
       <h2>PIN</h2>
       <p>Reset your unlock PIN. You'll be asked to create a new one next time you open the popup.</p>
       <button id="resetPin" class="sv-btn secondary w-auto">Reset PIN</button>

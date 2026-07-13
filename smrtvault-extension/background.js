@@ -196,8 +196,40 @@ async function apiGet(path) {
   return res.json();
 }
 
+async function apiSend(method, path, body) {
+  const base = await getBackendUrl();
+  if (!base) throw new Error("backend_not_configured");
+  const token = await getAccessToken();
+  if (!token) throw new Error("not_logged_in");
+  const org = await getOrgId(token, base);
+  if (!org) throw new Error("no_org");
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "X-Org-Id": org, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) {
+    await chrome.storage.session.remove("sv_session");
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || `http_${res.status}`);
+  }
+  return res.json();
+}
+
 const listCredentials = () => apiGet("/api/vault/credentials");
 const revealCredential = (id) => apiGet(`/api/vault/credentials/${encodeURIComponent(id)}/reveal`);
+const createCredential = (data) => apiSend("POST", "/api/vault/credentials", data);
+
+function hostOf(url) {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
 // ── PIN lock + auto-lock ───────────────────────────────────────────────────────
 
@@ -315,6 +347,124 @@ async function fillActiveTab(username, password) {
   }
 }
 
+// ── capture: save a login the user just typed (opt-in) ─────────────────────────
+//
+// The capture.js content script (registered only while capture is enabled) reports
+// a submitted login here. We NEVER save silently: the just-typed password is held
+// in memory (storage.session, never disk) and written to the vault only if the user
+// clicks "Save" on the notification. New (host + username) combos only — an existing
+// login is left alone (rotations are edited in the app).
+
+async function enableCapture() {
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id: "sv-capture",
+        matches: ["https://*/*"],
+        js: ["capture.js"],
+        runAt: "document_idle",
+        allFrames: false,
+      },
+    ]);
+  } catch {
+    /* maybe already registered — verified below */
+  }
+  // Reflect reality: only mark capture on if the script is actually registered
+  // (registration fails without the host permission).
+  let registered = false;
+  try {
+    const list = await chrome.scripting.getRegisteredContentScripts({ ids: ["sv-capture"] });
+    registered = list.length > 0;
+  } catch {
+    registered = false;
+  }
+  await chrome.storage.local.set({ captureEnabled: registered });
+  return registered;
+}
+
+async function disableCapture() {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: ["sv-capture"] });
+  } catch {
+    /* not registered — fine */
+  }
+  await chrome.storage.local.set({ captureEnabled: false });
+}
+
+async function handleCapture(data) {
+  try {
+    if (!data || !data.password) return;
+    // Need a live session + backend, else there's nowhere to save.
+    if (!(await getBackendUrl())) return;
+    if (!(await getAccessToken())) return;
+
+    const host = hostOf(data.url || "");
+    const username = data.username || null;
+
+    let existing = [];
+    try {
+      existing = (await listCredentials()).credentials || [];
+    } catch {
+      return; // can't verify dupes → don't nag
+    }
+    const isDupe = existing.some((c) => hostOf(c.url || "") === host && (c.username || "") === (username || ""));
+    if (isDupe) return;
+
+    const pending = (await chrome.storage.session.get("sv_pending")).sv_pending || {};
+    // Collapse repeat submits of the same new login into one prompt.
+    if (Object.values(pending).some((p) => hostOf(p.url || "") === host && (p.username || "") === (username || ""))) {
+      return;
+    }
+    const nid = "sv-cap-" + host + "-" + Math.random().toString(36).slice(2, 8);
+    pending[nid] = { label: host || "login", username, url: data.url, password: data.password };
+    await chrome.storage.session.set({ sv_pending: pending });
+
+    chrome.notifications.create(nid, {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Save login to smrtVault?",
+      message: `${username || "(no username)"} — ${host || data.url}`,
+      buttons: [{ title: "Save" }, { title: "Not now" }],
+      requireInteraction: true,
+    });
+  } catch {
+    /* capture is best-effort — never surface an error to the page/user */
+  }
+}
+
+async function resolvePending(nid, save) {
+  const pending = (await chrome.storage.session.get("sv_pending")).sv_pending || {};
+  const item = pending[nid];
+  if (!item) return;
+  delete pending[nid];
+  await chrome.storage.session.set({ sv_pending: pending });
+  if (!save) return;
+  try {
+    await createCredential({ label: item.label, username: item.username, url: item.url, password: item.password });
+    chrome.notifications.create(nid + "-ok", {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Saved to smrtVault",
+      message: item.label,
+    });
+  } catch (e) {
+    chrome.notifications.create(nid + "-err", {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Couldn't save to smrtVault",
+      message: String((e && e.message) || e),
+    });
+  }
+}
+
+chrome.notifications.onButtonClicked.addListener((nid, idx) => {
+  chrome.notifications.clear(nid);
+  resolvePending(nid, idx === 0); // button 0 = Save
+});
+chrome.notifications.onClosed.addListener((nid) => {
+  resolvePending(nid, false); // dismissed → drop the pending password
+});
+
 // ── message router (popup + options) ────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -329,6 +479,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             pinSet: await hasPin(),
             unlocked: await isUnlocked(),
             autoLockMin: await autoLockMinutes(),
+            captureEnabled: !!(await chrome.storage.local.get("captureEnabled")).captureEnabled,
           });
         }
         case "SET_PIN": {
@@ -345,6 +496,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case "LOCK":
           await lock();
+          return sendResponse({ ok: true });
+        case "CAPTURE":
+          // Fire-and-forget; ack immediately so the content script never blocks.
+          handleCapture(msg.data);
+          return sendResponse({ ok: true });
+        case "ENABLE_CAPTURE":
+          await enableCapture();
+          return sendResponse({ ok: true });
+        case "DISABLE_CAPTURE":
+          await disableCapture();
           return sendResponse({ ok: true });
         case "LIST": {
           if (!(await isUnlocked())) return sendResponse({ error: "locked" });

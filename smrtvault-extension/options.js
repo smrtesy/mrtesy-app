@@ -4,10 +4,21 @@ const backendInput = document.getElementById("backendUrl");
 const autoLockInput = document.getElementById("autoLock");
 const DEFAULT_AUTO_LOCK_MIN = 5;
 
+const captureToggle = document.getElementById("captureToggle");
+
+function send(msg) {
+  return new Promise((resolve) => chrome.runtime.sendMessage(msg, resolve));
+}
+
 async function load() {
-  const { backendUrl, autoLockMin } = await chrome.storage.local.get(["backendUrl", "autoLockMin"]);
+  const { backendUrl, autoLockMin, captureEnabled } = await chrome.storage.local.get([
+    "backendUrl",
+    "autoLockMin",
+    "captureEnabled",
+  ]);
   if (backendUrl) backendInput.value = backendUrl;
   autoLockInput.value = Number(autoLockMin) > 0 ? Number(autoLockMin) : DEFAULT_AUTO_LOCK_MIN;
+  captureToggle.checked = !!captureEnabled;
 }
 
 document.getElementById("saveBackend").addEventListener("click", async () => {
@@ -49,6 +60,39 @@ document.getElementById("saveLock").addEventListener("click", async () => {
   await chrome.storage.local.set({ autoLockMin: n });
   msg.style.color = "var(--primary)";
   msg.textContent = "Saved.";
+});
+
+captureToggle.addEventListener("change", async () => {
+  const msg = document.getElementById("captureMsg");
+  if (captureToggle.checked) {
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: ["https://*/*"] });
+    } catch {
+      granted = false;
+    }
+    if (!granted) {
+      captureToggle.checked = false;
+      msg.style.color = "var(--err)";
+      msg.textContent = "Permission to watch websites was declined — capture stays off.";
+      return;
+    }
+    await send({ type: "ENABLE_CAPTURE" });
+    msg.style.color = "var(--primary)";
+    msg.textContent = "Capture is on. Sign in to a site to try it.";
+  } else {
+    await send({ type: "DISABLE_CAPTURE" });
+    // Narrow back down: drop the broad grant. The backend-host permission was
+    // granted independently when the URL was saved, so it survives this and
+    // fill/list keep working.
+    try {
+      await chrome.permissions.remove({ origins: ["https://*/*"] });
+    } catch {
+      /* ignore */
+    }
+    msg.style.color = "var(--primary)";
+    msg.textContent = "Capture is off.";
+  }
 });
 
 document.getElementById("resetPin").addEventListener("click", async () => {

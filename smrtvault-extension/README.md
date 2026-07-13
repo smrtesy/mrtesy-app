@@ -22,6 +22,13 @@ fills them.
   field; it never touches the popup UI.
 - **Lock** — a PIN gates the popup, and the vault auto-locks after N minutes of
   inactivity (configurable). After locking, filling requires the PIN again.
+- **Capture (opt-in, off by default)** — instead of importing everything from
+  Chrome, you can let the extension notice a login as you sign in and offer to
+  save it, so only the accounts you actually use land in the vault. Enable it in
+  options (it asks permission to watch form submissions on sites). When you sign
+  in to a *new* login, a notification asks whether to save it; the password is
+  sent to the vault **only if you click Save**, is held in memory (never disk)
+  until then, and existing logins are left alone. Uses `POST /api/vault/credentials`.
 
 ## Security model (honest)
 
@@ -62,9 +69,10 @@ target site's field receives it.
 | File | Role |
 |---|---|
 | `manifest.json` | MV3 manifest (permissions: cookies, storage, alarms, scripting, activeTab) |
-| `background.js` | Service worker: auth (cookie read + refresh), backend API, PIN/auto-lock, fill injection, message router |
+| `background.js` | Service worker: auth (cookie read + refresh), backend API, PIN/auto-lock, fill injection, login capture + save, message router |
 | `popup.html/.css/.js` | Popup UI: setup states, PIN, searchable login list, fill |
-| `options.html/.js` | Backend URL + host permission, auto-lock, PIN reset |
+| `capture.js` | Content script (registered only while capture is on): detects a submitted login and reports it for a save prompt |
+| `options.html/.js` | Backend URL + host permission, auto-lock, login-capture toggle, PIN reset |
 | `icons/` | Extension icons |
 
 ## Not yet included (possible follow-ups)
