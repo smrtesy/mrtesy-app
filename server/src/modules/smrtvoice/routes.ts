@@ -1329,7 +1329,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
 
   // Build the speaker_map from casting (a speaker cast to several characters
   // fans out to a `voices` list — one take per voice).
-  const { map: speakerMap, cast, error: castErr } = await buildSpeakerMap(
+  const { map: speakerMap, error: castErr } = await buildSpeakerMap(
     script.id,
     req.org!.id,
     script.language ?? "he",
@@ -1339,19 +1339,11 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
 
-  // Every speaker must be decided: either cast to a usable voice, or explicitly
-  // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
-  // doesn't accidentally drop lines — while still allowing "cast one, skip the
-  // rest" to preview a single voice. Skipped speakers' lines aren't generated.
-  const undecided = cast
-    .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
-    .map((c) => c.speaker_name);
-  if (undecided.length > 0) {
-    return res.status(400).json({
-      error: `These speakers need a voice or "skip": ${undecided.join(", ")}`,
-      speakers: undecided,
-    });
-  }
+  // Partial casting is allowed: you no longer have to cast (or explicitly skip)
+  // every speaker to generate. Any speaker left uncast is simply not in the
+  // speaker_map, so the engine skips its lines — "cast some, run only those".
+  // The only requirement is at least one cast speaker (checked above). Skipped
+  // speakers (`skip = true`) behave identically to uncast ones.
 
   try {
     let inputAudioUrl: string | undefined;
