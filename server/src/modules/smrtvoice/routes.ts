@@ -94,6 +94,12 @@ type SpeakerVoice = {
 };
 type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
 
+// Fallback synthesis model when neither the character nor the org setting names
+// one. Ultra is the tested Hebrew recipe — never silently fall back to the older
+// Chatterbox default (which is what a stock voice with no model would otherwise
+// inherit from the engine's own env default).
+const DEFAULT_RESEMBLE_MODEL = "resemble-ultra";
+
 /**
  * Build the speaker_map sent to the engine from a script's casting. A speaker
  * cast to several characters (its primary character_id plus extra_character_ids)
@@ -148,12 +154,23 @@ async function buildSpeakerMap(
     for (const c of chars ?? []) charMap.set(c.id, c);
   }
 
+  // The default model for any voice that carries no per-character override.
+  // Read the org setting (resemble-ultra by default) so a stock/library voice
+  // cast directly — which has no character row, hence no model — still requests
+  // Ultra explicitly instead of inheriting the engine env's default.
+  const { data: orgSettings } = await db
+    .from("smrtvoice_settings")
+    .select("default_resemble_model")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const defaultModel = orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      model: ch.resemble_model,
+      model: ch.resemble_model ?? defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -168,7 +185,7 @@ async function buildSpeakerMap(
     const primary: SpeakerVoice | null = c.character_id
       ? toVoice(c.character_id)
       : c.resemble_voice_id
-        ? { resemble_voice_id: c.resemble_voice_id, language: fallbackLang }
+        ? { resemble_voice_id: c.resemble_voice_id, model: defaultModel, language: fallbackLang }
         : null;
     if (!primary) continue;
     const extras = ((c.extra_character_ids ?? []) as string[])
@@ -2518,14 +2535,17 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
   const uuid = req.params.uuid;
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("sample_text")
+    .select("sample_text, default_resemble_model")
     .eq("org_id", req.org!.id)
     .maybeSingle();
   const text = (req.body?.text as string)?.trim() || settings?.sample_text || "שלום, זו דוגמה קצרה לקול.";
+  // Preview on the same model the real generation uses, so what the user hears
+  // matches what they'll get — not whatever default the engine env carries.
+  const model = settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
 
   try {
     const client = getVoiceEngineClient();
-    const sample = await client.generateSample(uuid, text);
+    const sample = await client.generateSample(uuid, text, { model });
     // Download the synthesized clip and store it so replays are free.
     const resp = await fetch(sample.audio_url);
     if (!resp.ok) return res.status(502).json({ error: `Failed to fetch sample: ${resp.status}` });
