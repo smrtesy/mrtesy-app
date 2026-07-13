@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight, Search, X } from "lucide-react";
 import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
-import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 
 const sourceIcons: Record<string, string> = {
   gmail: "📧",
@@ -117,7 +117,7 @@ interface SourceEntry {
 export function LogPageClient({ locale }: { locale: string }) {
   const t = useTranslations("log");
   const tLog = useTranslations("logPage");
-  const waPanel = useWhatsAppPanel();
+  const openWhatsApp = useOpenWhatsAppChat();
   const supabase = createClient();
   const [logs, setLogs] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -711,10 +711,11 @@ export function LogPageClient({ locale }: { locale: string }) {
                           className="shrink-0 text-muted-foreground hover:text-primary"
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Open the conversation in the docked side-panel
-                            // rather than navigating away from the log.
-                            if (phone) waPanel.openChat(phone);
-                            else waPanel.open();
+                            // Open the conversation in the docked side-panel, or
+                            // — inside a workspace pane where that panel is
+                            // CSS-hidden — the full /whatsapp reader (the hook
+                            // picks the right one).
+                            openWhatsApp(phone || null);
                           }}
                         >
                           <ExternalLink className="h-3.5 w-3.5" />

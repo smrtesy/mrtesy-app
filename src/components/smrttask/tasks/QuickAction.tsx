@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -37,7 +37,7 @@ export function QuickAction({
   const t = useTranslations("tasks.actions");
   const tCommon = useTranslations("common");
   const { locale } = useParams<{ locale: string }>();
-  const waPanel = useWhatsAppPanel();
+  const openWhatsApp = useOpenWhatsAppChat();
 
   // WhatsApp-sourced tasks (or WhatsApp draft actions) open the draft inside
   // the built-in WhatsApp chat for editing & sending, instead of a Gmail draft.
@@ -134,9 +134,12 @@ export function QuickAction({
     }
     onDone();
     onClose();
-    // Open the conversation in the docked side-panel (with the generated
-    // draft) instead of navigating away — the task list stays in place.
-    waPanel.openChat(contactPhone, result);
+    // Open the conversation in the docked side-panel with the generated draft
+    // prefilled — the task list stays in place. Inside a workspace pane (where
+    // the docked panel is CSS-hidden) the hook routes to the full /whatsapp
+    // reader instead; the draft can't ride the URL there, but that beats the
+    // panel silently doing nothing.
+    openWhatsApp(contactPhone, { draft: result });
   }
 
   async function handleGmailDraft() {
