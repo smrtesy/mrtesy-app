@@ -3063,6 +3063,8 @@
       "unassigned": "לא משויך",
       "owner": "בעלים",
       "estimatedHours": "שעות מוערכות",
+      "dailyMinutes": "התחייבות יומית (דקות)",
+      "dailyMinutesHint": "כמה דקות ביום להשקיע בתוכנית",
       "fromCatalog": "בחר מהקטלוג…",
       "manualDuration": "משך ידני (ימים)",
       "durationDays": "משך (ימים)",
