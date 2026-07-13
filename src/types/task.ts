@@ -43,6 +43,13 @@ export interface Task {
   snooze_count: number;
   tags: string[] | null;
   ai_actions: Array<{ label: string; prompt: string }>;
+  /**
+   * Action nuggets — AI-extracted deep links (payment/tracking/invoice/meeting
+   * join, etc.) surfaced as one-click buttons instead of being pasted into the
+   * description. `label` is short Hebrew ("מעקב ותשלום"); `url` is verbatim.
+   * Written by ai-process; not user-editable. Defaults to [] on the column.
+   */
+  action_links?: Array<{ label: string; url: string }> | null;
   ai_generated_content: Array<{
     id: string;
     created_at: string;

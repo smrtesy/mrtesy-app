@@ -55,11 +55,20 @@ router.post("/events/extract", async (req: Request, res: Response) => {
 
   const { data: task, error: taskErr } = await db
     .from("tasks")
-    .select("id, title, title_he, description, due_date, due_time, source_link, source_message_id, related_contact")
+    .select("id, title, title_he, description, due_date, due_time, source_link, source_message_id, related_contact, action_links")
     .eq("id", task_id)
     .eq("user_id", userId)
     .single();
   if (taskErr || !task) return res.status(404).json({ error: "Task not found" });
+
+  // Deep links (Zoom/Teams/Meet join, etc.) now live in action_links, not the
+  // description — carry them into the calendar event so the join link survives
+  // the "add to calendar" prefill even on the model-failure fallback path.
+  const actionLinkLines: string[] = Array.isArray(task.action_links)
+    ? (task.action_links as Array<{ label?: string; url?: string }>)
+        .filter((a) => a && typeof a.url === "string")
+        .map((a) => (a.label ? `${a.label}: ${a.url}` : String(a.url)))
+    : [];
 
   let source: { subject: string | null; body_text: string | null } | null = null;
   if (task.source_message_id) {
@@ -76,7 +85,7 @@ router.post("/events/extract", async (req: Request, res: Response) => {
     title: task.title_he || task.title || "אירוע",
     date: task.due_date ?? null,
     time: task.due_time ? String(task.due_time).slice(0, 5) : null,
-    description: [task.description, task.source_link].filter(Boolean).join("\n"),
+    description: [task.description, ...actionLinkLines, task.source_link].filter(Boolean).join("\n"),
   };
 
   try {
@@ -88,6 +97,7 @@ Today is ${today}. Resolve relative dates ("מחר", "יום שלישי הקרו
       `Title: ${task.title_he || task.title || ""}`,
       `Description: ${task.description ?? ""}`,
       task.related_contact ? `Contact: ${task.related_contact}` : "",
+      actionLinkLines.length ? `Action links (keep any URL verbatim):\n${actionLinkLines.join("\n")}` : "",
       task.source_link ? `Source link: ${task.source_link}` : "",
       source?.subject ? `Source subject: ${source.subject}` : "",
       source?.body_text ? `Source body:\n${String(source.body_text).slice(0, 1500)}` : "",

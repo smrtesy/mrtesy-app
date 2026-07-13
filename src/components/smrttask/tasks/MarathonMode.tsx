@@ -18,6 +18,8 @@ import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
+import { taskActionNuggets } from "@/lib/smrttask/links";
 import type { Task } from "@/types/task";
 
 interface MarathonStats {
@@ -265,6 +267,10 @@ export function MarathonMode({
       ].filter(Boolean).join(" / ")
     : "";
   const hasAttachments = !!sourceUrl || driveDocs.length > 0 || materials.length > 0;
+  // Action nuggets — one-click deep links (payment/tracking/etc.) so the runner
+  // acts without opening the source. Attachments render in their own block
+  // below, so exclude them here to avoid a double row.
+  const actionLinks = view ? taskActionNuggets(view) : [];
   const chipCls =
     "inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border bg-secondary/60 px-2 py-0.5 text-[12px] hover:bg-accent";
 
@@ -407,6 +413,14 @@ export function MarathonMode({
 
           {description && (
             <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80" dir="auto">{description}</p>
+          )}
+
+          {/* action nuggets: one-click deep links straight to the destination */}
+          {actionLinks.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{t("actionLinks")}</h3>
+              <LinkActions links={actionLinks} />
+            </div>
           )}
 
           {/* attachments: origin deep-link + Drive docs + task materials */}
