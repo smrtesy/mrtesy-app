@@ -546,6 +546,40 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     wasVerified = prior ? prior.manually_verified === true : null;
   }
 
+  // Recurrence edits go through the same COUNT → recurrence_until resolution as
+  // create (POST). PATCH previously skipped this, so an edited "ends after N
+  // occurrences" rule stored a bare COUNT the lazy spawn engine ignores — the
+  // series never terminated. Anchor on the incoming due_date when the same PATCH
+  // sets one; otherwise read the task's current due_date so the Nth occurrence is
+  // computed from the real start. Falls back to today when the task has none.
+  if (typeof updates.recurrence_rule === "string") {
+    let start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    if (!start) {
+      const { data: cur } = await db
+        .from("tasks")
+        .select("due_date")
+        .eq("organization_id", req.org!.id)
+        .eq("id", req.params.id)
+        .maybeSingle();
+      start = (cur?.due_date as string | null) ?? undefined;
+    }
+    const normalized = normalizeRecurrence(
+      updates.recurrence_rule,
+      start ?? new Date().toISOString().slice(0, 10),
+    );
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      // Match POST: apply the computed until whenever the caller didn't set an
+      // explicit one. The client sends recurrence_until:null for COUNT ("ends
+      // after N") rules, so `== null` (not `=== undefined`) is required — else
+      // COUNT is stripped from the rule but never converted to an end date and
+      // the series never terminates.
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
   // A position-only patch (drag-reorder writes today_position to every row of

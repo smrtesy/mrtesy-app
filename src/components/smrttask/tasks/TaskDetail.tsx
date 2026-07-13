@@ -27,6 +27,7 @@ import {
   CalendarPlus,
   Circle,
   Layers,
+  Repeat,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskChecklist } from "@/components/smrttask/tasks/TaskChecklist";
 import { TaskMaterials } from "@/components/smrttask/tasks/TaskMaterials";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { RecurrenceEditor, type RecurrenceModel } from "@/components/smrttask/tasks/RecurrenceEditor";
 import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
@@ -82,6 +84,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tMerge = useTranslations("merge");
   const tSuggestions = useTranslations("suggestions");
   const tEvents = useTranslations("events");
+  const tManual = useTranslations("manualTask");
   const blocked = useWorkCalendar();
 
   // Description edit
@@ -113,6 +116,18 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const [showDocs, setShowDocs] = useState(false);
   // Snooze opens the picker dialog; actual API call lives in handleSnoozeConfirm.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  // Recurrence editor — collapsed by default (compact-UI rule). Autosaved
+  // (debounced) like the other fields. resetKey re-seeds the editor when a
+  // different task opens.
+  const [showRecurrence, setShowRecurrence] = useState(false);
+  const [recurrenceResetKey, setRecurrenceResetKey] = useState(0);
+  const recurTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  /** The RecurrenceEditor emits once on mount with the seeded model. That emit
+   *  must never trigger a save — it can differ from the stored rule for
+   *  anchor-derived monthly nth/last rules when the due date drifted. Consumed
+   *  (set true) on the first emit after each (re)open; only later, user-driven
+   *  emits persist. */
+  const recurSeededRef = useRef(false);
   const [addEventOpen, setAddEventOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [dismissingDup, setDismissingDup] = useState(false);
@@ -123,6 +138,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
    *  set, takes precedence over the prop so the user sees their note
    *  appear immediately. Cleared when the prop's task.id changes. */
   const [liveTask, setLiveTask] = useState<Task | null>(null);
+
+  // Cancel a pending recurrence autosave on unmount, mirroring the field/desc
+  // debounce timers — otherwise it could fire (and setState) after the dialog
+  // has closed and the component unmounted.
+  useEffect(() => () => { if (recurTimerRef.current) clearTimeout(recurTimerRef.current); }, []);
 
   // The editor (title + footer toggles) is ALWAYS on — there is no pencil.
   // Seed it whenever the dialog opens for a (possibly different) task.
@@ -146,6 +166,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     if (lastTaskIdRef.current !== (task?.id ?? null)) {
       lastTaskIdRef.current = task?.id ?? null;
       setLiveTask(null);
+      // Collapse + re-seed the recurrence editor for the newly-opened task so
+      // it never shows the previous task's cadence.
+      setShowRecurrence(false);
+      recurSeededRef.current = false;
+      setRecurrenceResetKey((k) => k + 1);
     }
   }, [task?.id]);
 
@@ -285,6 +310,38 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     }
+  }
+
+  /** Debounced autosave of the recurrence rule. The editor emits on every
+   *  keystroke (including its initial seed); we skip no-ops by comparing against
+   *  the stored rule, and wait for an end date when "ends on" is chosen but not
+   *  yet picked. Sends both fields so clearing/shortening also persists. */
+  function handleRecurrenceChange(model: RecurrenceModel) {
+    if (!task) return;
+    // Swallow the editor's initial seed emit — never a user edit.
+    if (!recurSeededRef.current) { recurSeededRef.current = true; return; }
+    if (model.endNeedsDate) return; // promised end with no date yet — hold
+    const curRule = effectiveTask.recurrence_rule ?? null;
+    const curUntil = effectiveTask.recurrence_until ?? null;
+    const nextRule = model.rule ?? null;
+    const nextUntil = model.until ?? null;
+    if (nextRule === curRule && nextUntil === curUntil) return; // seed / no-op
+    if (recurTimerRef.current) clearTimeout(recurTimerRef.current);
+    const taskId = task.id;
+    recurTimerRef.current = setTimeout(async () => {
+      try {
+        const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${taskId}`, {
+          method: "PATCH",
+          body: { recurrence_rule: nextRule, recurrence_until: nextUntil },
+        });
+        dirtyRef.current = true;
+        if (fresh) setLiveTask(fresh);
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Error");
+      }
+    }, 900);
   }
 
   async function handleAddUpdate() {
@@ -559,6 +616,53 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                 onChange={onUpdate}
               />
 
+              {/* Recurrence — collapsed by default (compact-UI rule). The
+                  collapsed row shows the current cadence as a badge; expanding
+                  reveals the full Google-Calendar-style editor. Autosaved.
+                  Hidden for plan tasks, whose scheduling is locked to the plan. */}
+              {!effectiveTask.plan_id && (
+                <div className="rounded border">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Arm the seed guard before the editor mounts so its
+                      // first emit is swallowed rather than saved.
+                      if (!showRecurrence) recurSeededRef.current = false;
+                      setShowRecurrence((v) => !v);
+                    }}
+                    className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Repeat className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="shrink-0">{tManual("recurrenceLabel")}</span>
+                      <Badge
+                        variant={effectiveTask.recurrence_rule ? "secondary" : "outline"}
+                        className="truncate text-[10px] font-normal"
+                      >
+                        {tManual(recurrenceSummaryKey(effectiveTask.recurrence_rule))}
+                      </Badge>
+                    </span>
+                    {showRecurrence ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+                  </button>
+                  {showRecurrence && (
+                    <div className="border-t p-3">
+                      <RecurrenceEditor
+                        dueDate={effectiveTask.due_date ?? ""}
+                        initialRule={effectiveTask.recurrence_rule}
+                        initialUntil={effectiveTask.recurrence_until}
+                        resetKey={recurrenceResetKey}
+                        onChange={handleRecurrenceChange}
+                      />
+                      {!effectiveTask.due_date && effectiveTask.recurrence_rule && (
+                        <p className="mt-2 text-[11px] text-muted-foreground" dir={dir}>
+                          {tManual("recurrenceNeedsDueDate")}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* AI action buttons ("משימות לביצוע") are hidden for now —
                   the feature still needs development. Restore from git
                   history (translateActionLabel + onQuickAction) when ready. */}
@@ -815,6 +919,18 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
       )}
     </Dialog>
   );
+}
+
+/** Map a stored recurrence_rule to a compact summary i18n key (under the
+ *  `manualTask` namespace) for the collapsed recurrence row. */
+function recurrenceSummaryKey(rule: string | null | undefined): string {
+  if (!rule) return "recurrenceNone";
+  if (rule.includes("FREQ=DAILY")) return "recurrenceDaily";
+  if (rule.includes("FREQ=WEEKLY")) return "recurrenceWeekly";
+  if (rule.includes("FREQ=MONTHLY") || rule.includes("FREQ=HEBREW_MONTHLY")) return "recurrenceMonthly";
+  if (rule.includes("FREQ=HEBREW_YEARLY")) return "recurrenceHebrew";
+  if (rule.includes("FREQ=YEARLY")) return "recurrenceYearly";
+  return "recurrenceNone";
 }
 
 // ── update timeline helpers ──────────────────────────────────────────────

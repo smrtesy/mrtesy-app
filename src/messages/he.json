@@ -47,6 +47,7 @@
     "recurrenceHebrew": "כל שנה (תאריך עברי)",
     "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
     "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
+    "recurrenceNeedsDueDate": "למשימה חוזרת ללא תאריך יעד החזרה תיחשב מהיום. קבע תאריך יעד כדי לעגן את החזרה.",
     "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
     "weekdayShort": {
       "0": "א",
@@ -776,6 +777,10 @@
     "noScheduled": "אין תזכורות מתוזמנות",
     "snoozedSection": "הצעות שדחיתי",
     "datedSection": "מתוזמנות לתאריך",
+    "recurringSection": "חוזרות",
+    "editDetails": "פתח לעריכת כל הפרטים",
+    "noEndDate": "ללא תאריך סיום",
+    "untilLabel": "עד {when}",
     "kindEvent": "אירוע",
     "morningTitle": "בוקר טוב 👋 מתחילים מהנכנס",
     "morningHint": "עבור על הפריטים אחד-אחד — לכל אחד: בחר להיום · תן תאריך · תייק לפי רמה · זרוק.",
