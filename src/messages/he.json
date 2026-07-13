@@ -2351,7 +2351,8 @@
     "nav": {
       "folders": "תיקיות",
       "characters": "דמויות",
-      "library": "ספריית קולות"
+      "library": "ספריית קולות",
+      "insights": "תובנות"
     },
     "folders": {
       "title": "תיקיות",
@@ -2774,6 +2775,24 @@
       "empty": "עדיין אין מילים במילון",
       "delete": "מחק",
       "deleteConfirm": "למחוק את המילה מהמילון?"
+    },
+    "insights": {
+      "title": "מה המערכת למדה",
+      "subtitle": "כל מה שהמערכת הסיקה מהבחירות שלך — כתיב ופיסוק שעבדו הכי טוב, לכל קול בנפרד. סמנו גרסה בכוכב (⭐) וההעדפה נלמדת אוטומטית.",
+      "empty": "עדיין לא נלמד כלום. סמנו גרסאות טובות בכוכב (⭐) בסטודיו, והמערכת תתחיל ללמוד איזה כתיב ופיסוק עובד הכי טוב לכל קול.",
+      "loadError": "טעינת התובנות נכשלה",
+      "noVoice": "ללא קול מוגדר",
+      "voiceMeta": "{words} מילים · נבחרו {chosen} פעמים",
+      "filterAll": "הכל",
+      "filterSpelling": "כתיב",
+      "filterPunctuation": "פיסוק",
+      "kindSpelling": "כתיב",
+      "kindPunctuation": "פיסוק",
+      "recommended": "מומלץ",
+      "chosenStat": "נבחר {chosen} מתוך {total}",
+      "neverChosen": "עדיין לא נבחר",
+      "noneForFilter": "אין תיקונים בקטגוריה הזו",
+      "originalHeader": "מקור"
     }
   },
   "projectCombobox": {
