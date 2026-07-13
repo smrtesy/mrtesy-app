@@ -2031,8 +2031,11 @@ router.post("/plans/import", requireFull, async (req: Request, res: Response) =>
   if (tasksIn.length === 0) return res.status(400).json({ error: "tasks must be a non-empty array" });
   if (tasksIn.length > 200) return res.status(400).json({ error: "tasks is limited to 200 entries" });
   const stagesIn: Record<string, unknown>[] = Array.isArray(body.stages) ? body.stages : [];
+  const seenKeys = new Set<string>();
   for (const t of tasksIn) {
     if (typeof t.key !== "string" || !t.key) return res.status(400).json({ error: "each task needs a string key" });
+    if (seenKeys.has(t.key)) return res.status(400).json({ error: `duplicate task key: ${t.key}` });
+    seenKeys.add(t.key);
     if (typeof t.title !== "string" || !t.title.trim()) return res.status(400).json({ error: `task ${String(t.key)} needs a title` });
     if (t.ai_tier != null && !AI_TIERS.has(String(t.ai_tier))) {
       return res.status(400).json({ error: `task ${String(t.key)}: ai_tier must be full|assist|human` });
@@ -2079,6 +2082,11 @@ router.post("/plans/import", requireFull, async (req: Request, res: Response) =>
   }
 
   // 3) Tasks → key→id, carrying every planning field. assignee null = creator.
+  // A supplied assignee is honored only if it's a real member of this org —
+  // otherwise (typo, non-UUID, foreign user) it would 500 on the FK / uuid cast
+  // and leave the plan half-built, so we fall back to the creator.
+  const { data: memberRows } = await db.from("org_members").select("user_id").eq("org_id", orgId);
+  const memberIds = new Set(asRows(memberRows).map((m) => m.user_id as string));
   const taskIdByKey = new Map<string, string>();
   for (const t of tasksIn) {
     const titleHe = (t.title as string).trim();
@@ -2088,8 +2096,9 @@ router.post("/plans/import", requireFull, async (req: Request, res: Response) =>
           id: randomUUID(), title: c as string, done: false, created_at: new Date().toISOString(), completed_at: null, created_by: "ai",
         }))
       : [];
-    const est = t.estimated_hours != null && Number.isFinite(Number(t.estimated_hours)) ? Number(t.estimated_hours) : null;
+    const est = t.estimated_hours != null && Number.isFinite(Number(t.estimated_hours)) && Number(t.estimated_hours) >= 0 ? Number(t.estimated_hours) : null;
     const extWait = Number.isInteger(Number(t.external_wait_days)) && Number(t.external_wait_days) >= 0 ? Number(t.external_wait_days) : 0;
+    const assignee = typeof t.assignee === "string" && memberIds.has(t.assignee) ? t.assignee : uid;
     const { data: task, error: tErr } = await db
       .from("tasks")
       .insert({
@@ -2102,7 +2111,7 @@ router.post("/plans/import", requireFull, async (req: Request, res: Response) =>
         status: "inbox",
         is_private: false,
         assignment_status: "accepted",
-        assigned_to_user_id: typeof t.assignee === "string" && t.assignee ? t.assignee : uid,
+        assigned_to_user_id: assignee,
         description: typeof t.description === "string" ? t.description : null,
         estimated_hours: est,
         definition_of_done: typeof t.definition_of_done === "string" ? t.definition_of_done : null,
@@ -2120,13 +2129,18 @@ router.post("/plans/import", requireFull, async (req: Request, res: Response) =>
 
   // 4) Second pass — resolve key refs now that every task has an id.
   const depEdges: Record<string, unknown>[] = [];
+  const depSeen = new Set<string>(); // dedupe: smrtplan_dependencies is UNIQUE(from,to)
   for (const t of tasksIn) {
     const fromId = taskIdByKey.get(t.key as string)!;
-    // depends_on → task→task dependency edges (unknown keys skipped).
+    // depends_on → task→task dependency edges (unknown keys / dups / self skipped).
     if (Array.isArray(t.depends_on)) {
       for (const dep of t.depends_on as unknown[]) {
         const toId = typeof dep === "string" ? taskIdByKey.get(dep) : undefined;
-        if (toId && toId !== fromId) depEdges.push({ org_id: orgId, from_type: "task", from_id: fromId, to_type: "task", to_id: toId, lag_days: 0 });
+        if (!toId || toId === fromId) continue;
+        const edgeKey = `${fromId}|${toId}`;
+        if (depSeen.has(edgeKey)) continue;
+        depSeen.add(edgeKey);
+        depEdges.push({ org_id: orgId, from_type: "task", from_id: fromId, to_type: "task", to_id: toId, lag_days: 0 });
       }
     }
     // affected_by → uuid[] on the task (decision propagation, §10).
