@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
-import { extractTaskLinks } from "@/lib/smrttask/links";
+import { taskActionNuggets } from "@/lib/smrttask/links";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
@@ -97,7 +97,7 @@ export function TaskCard({
   const t = useTranslations("tasks");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
   const isNew = !task.seen_at;
-  const links = extractTaskLinks(task);
+  const links = taskActionNuggets(task, { includeAttachments: true });
   const source = task.source_messages ?? null;
   const checklist = task.checklist ?? [];
   const checklistTotal = checklist.length;
