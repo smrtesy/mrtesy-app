@@ -72,6 +72,56 @@ interface ResolvedSmsConnection {
   signingKey: string | null;
 }
 
+/** What ingestSms did with a payload — surfaced to the diagnostic log. */
+interface IngestResult {
+  outcome: "ingested" | "skipped";
+  /** otp_suppressed | empty_body | missing_fields | null */
+  reason: string | null;
+  direction: "incoming" | "outgoing";
+  messageId: string;
+  peer: string;
+  bodyPreview: string;
+}
+
+/** One diagnostic row written to sms_webhook_debug for every webhook hit. */
+interface WebhookDebugRow {
+  user_id?: string | null;
+  device_id?: string | null;
+  event?: string | null;
+  direction?: string | null;
+  outcome: "ingested" | "ignored" | "dropped";
+  reason?: string | null;
+  message_id?: string | null;
+  peer?: string | null;
+  body_preview?: string | null;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Best-effort diagnostic log of a single webhook hit + its outcome. Never
+ * throws — a logging failure must not affect the webhook response. Mirrors the
+ * smrtbot / whatsapp webhook_debug pattern.
+ */
+async function recordWebhookDebug(db: SupabaseAdmin, row: WebhookDebugRow): Promise<void> {
+  try {
+    const { error } = await db.from("sms_webhook_debug").insert({
+      user_id: row.user_id ?? null,
+      device_id: row.device_id ?? null,
+      event: row.event ?? null,
+      direction: row.direction ?? null,
+      outcome: row.outcome,
+      reason: row.reason ?? null,
+      message_id: row.message_id ?? null,
+      peer: row.peer ?? null,
+      body_preview: row.body_preview ? row.body_preview.slice(0, 200) : null,
+      payload: row.payload ?? null,
+    });
+    if (error) console.error("[sms-webhook] debug insert failed:", error.message);
+  } catch (e) {
+    console.error("[sms-webhook] debug insert threw:", e instanceof Error ? e.message : e);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST — main webhook receiver
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,12 +139,26 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const raw = JSON.parse(rawBody) as SmsWebhookEnvelope;
     if (!raw || typeof raw !== "object") {
+      await recordWebhookDebug(db, {
+        outcome: "dropped",
+        reason: "shape_invalid",
+        payload: { raw: rawBody.slice(0, 500) },
+      });
       return NextResponse.json({ ok: false, error: "shape_invalid" }, { status: 200 });
     }
     envelope = raw;
   } catch {
+    await recordWebhookDebug(db, {
+      outcome: "dropped",
+      reason: "invalid_json",
+      payload: { raw: rawBody.slice(0, 500) },
+    });
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 200 });
   }
+
+  // Best-effort identifiers available before connection resolution — recorded on
+  // every diagnostic row, including the ones we drop.
+  const envDeviceId = String(envelope.deviceId ?? "").trim() || null;
 
   // Ingest received (incoming) and sent (outgoing) messages — both SMS and MMS.
   // US carriers frequently deliver even short texts as MMS, which fires the
@@ -102,10 +166,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   // failed receipts, data-SMS) so the gateway moves on.
   const event = envelope.event ?? "";
   const isIncoming = event === "sms:received" || event === "mms:received";
-  // `sms:sent-observed` is emitted by our forked gateway when the user sends an
-  // SMS manually from the phone's own messaging app (observed in
-  // content://sms/sent). Its payload carries recipient/message/sentAt/messageId,
-  // which ingestSms already maps for outgoing messages.
+  // `sms:sent-observed` / `mms:sent-observed` are emitted by our forked gateway
+  // when the user sends an SMS/MMS manually from the phone's own messaging app
+  // (observed in content://sms/sent and the content://mms sent-box). Their
+  // payload carries recipient/message/sentAt/messageId, which ingestSms already
+  // maps for outgoing messages.
   //
   // Its messageId is the Android provider row `_id`, whereas `sms:sent` (a send
   // the gateway itself performed via its API) carries the gateway's own id. If
@@ -113,20 +178,44 @@ export async function POST(request: NextRequest): Promise<Response> {
   // arrive under both events with different ids and ingest twice; that path is
   // intentionally deferred today, so observed sends are the only outgoing source.
   const isOutgoing =
-    event === "sms:sent" || event === "mms:sent" || event === "sms:sent-observed";
+    event === "sms:sent" ||
+    event === "mms:sent" ||
+    event === "sms:sent-observed" ||
+    event === "mms:sent-observed";
   if (!isIncoming && !isOutgoing) {
+    await recordWebhookDebug(db, {
+      device_id: envDeviceId,
+      event,
+      outcome: "ignored",
+      reason: `ignored:${event || "unknown"}`,
+      payload: envelope.payload as Record<string, unknown> | undefined,
+    });
     return NextResponse.json({ ok: true, ignored: event || "unknown" }, { status: 200 });
   }
 
   const deviceId = String(envelope.deviceId ?? "").trim();
   if (!deviceId) {
     console.warn("[sms-webhook] event with no deviceId, dropping");
+    await recordWebhookDebug(db, { event, outcome: "dropped", reason: "no_device" });
     return NextResponse.json({ ok: false, error: "no_device" }, { status: 200 });
   }
 
-  const conn = await resolveConnection(db, deviceId);
+  let conn = await resolveConnection(db, deviceId);
+  if (!conn) {
+    // A reinstall mints a new deviceId; adopt it onto the connection whose
+    // secret matches the URL token instead of dropping every message until the
+    // mapping is fixed by hand.
+    const urlToken = new URL(request.url).searchParams.get("token");
+    conn = await adoptDeviceByToken(db, deviceId, urlToken);
+  }
   if (!conn) {
     console.warn(`[sms-webhook] no active connection for deviceId=${deviceId}, dropping`);
+    await recordWebhookDebug(db, {
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: "unknown_device",
+    });
     return NextResponse.json({ ok: false, error: "unknown_device" }, { status: 200 });
   }
 
@@ -134,20 +223,56 @@ export async function POST(request: NextRequest): Promise<Response> {
   // refuse to ingest rather than trust an unauthenticated request.
   if (!conn.signingKey) {
     console.error(`[sms-webhook] no secret for deviceId=${deviceId}, refusing unverified ingest`);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: "no_signing_key",
+    });
     return NextResponse.json({ ok: false, error: "no_signing_key" }, { status: 200 });
   }
   const authed = authenticateRequest(request, rawBody, conn.signingKey);
   if (!authed.ok) {
     console.warn(`[sms-webhook] auth failed (${authed.reason}) for deviceId=${deviceId}`);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      outcome: "dropped",
+      reason: `auth:${authed.reason}`,
+    });
     return NextResponse.json({ ok: false, error: authed.reason }, { status: 200 });
   }
 
+  let result: IngestResult;
   try {
-    await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
+    result = await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
   } catch (err) {
     console.error("[sms-webhook] ingest error:", err);
+    await recordWebhookDebug(db, {
+      user_id: conn.userId,
+      device_id: deviceId,
+      event,
+      direction: isIncoming ? "incoming" : "outgoing",
+      outcome: "dropped",
+      reason: "ingest_failed",
+      payload: envelope.payload as Record<string, unknown> | undefined,
+    });
     return NextResponse.json({ ok: false, error: "ingest_failed" }, { status: 500 });
   }
+
+  await recordWebhookDebug(db, {
+    user_id: conn.userId,
+    device_id: deviceId,
+    event,
+    direction: result.direction,
+    outcome: result.outcome === "ingested" ? "ingested" : "dropped",
+    reason: result.reason,
+    message_id: result.messageId || null,
+    peer: result.peer || null,
+    body_preview: result.bodyPreview || null,
+  });
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }
@@ -189,6 +314,66 @@ async function resolveConnection(
   if (!signingKey) signingKey = process.env.SMS_GATEWAY_SIGNING_KEY ?? null;
 
   return { userId, signingKey };
+}
+
+/**
+ * deviceId auto-heal. Reinstalling the SMS Gateway app mints a fresh deviceId,
+ * which orphans the registered connection — every webhook then drops as
+ * unknown_device until the mapping is fixed by hand. Since the URL token IS the
+ * connection's bearer secret, a webhook presenting a token that matches an
+ * active connection is already authorized for it, so we adopt the new deviceId
+ * onto that connection and proceed. deviceId is only a routing hint; the token
+ * is the credential, so this grants nothing a valid token didn't already.
+ *
+ * Matched by the token's SHA-256 against the stored `signing_key_sha256` — a
+ * single indexed lookup, so an unauthenticated unknown-device flood can't
+ * amplify into per-connection Vault reads. The plaintext key is still read from
+ * Vault once, for a defence-in-depth constant-time compare before adopting.
+ */
+async function adoptDeviceByToken(
+  db: SupabaseAdmin,
+  deviceId: string,
+  token: string | null,
+): Promise<ResolvedSmsConnection | null> {
+  if (!token) return null;
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const { data, error } = await db
+    .from("sms_connections")
+    .select("id, user_id, signing_key_id")
+    .eq("signing_key_sha256", tokenHash)
+    .is("disconnected_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[sms-webhook] adoptDeviceByToken query failed:", error.message);
+    return null;
+  }
+  if (!data) return null;
+
+  // Confirm the real key from Vault matches (guards against a hash collision or
+  // a stale hash), in constant time, before repointing the connection.
+  const secretId = (data.signing_key_id as string | null | undefined) ?? null;
+  if (!secretId) return null;
+  const { data: secret, error: vaultErr } = await db.rpc("vault_read_secret", {
+    secret_id: secretId,
+  });
+  if (vaultErr || typeof secret !== "string" || !timingSafeEqual(token, secret)) {
+    return null;
+  }
+
+  const { error: updErr } = await db
+    .from("sms_connections")
+    .update({ device_id: deviceId })
+    .eq("id", data.id as string);
+  if (updErr) {
+    console.error("[sms-webhook] adoptDeviceByToken update failed:", updErr.message);
+    return null;
+  }
+  console.warn(
+    `[sms-webhook] adopted new deviceId=${deviceId} onto connection ${data.id} via token match`,
+  );
+  return { userId: data.user_id as string, signingKey: secret };
 }
 
 /**
@@ -256,13 +441,161 @@ function timingSafeEqual(a: string, b: string): boolean {
 // Ingestion
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Rolling-transcript constants (mirror the WhatsApp thread builder).
+const SMS_CONVO_BUDGET = 2600;
+const SMS_MAX_MSG_CHARS = 400;
+
+function fmtTsLocal(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso ?? "").slice(0, 16);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${g("month")}-${g("day")} ${g("hour")}:${g("minute")}`;
+}
+
+async function smsUserTz(db: SupabaseAdmin, userId: string): Promise<string> {
+  const { data } = await db.from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  return String(data?.timezone ?? "").trim() || "Asia/Jerusalem";
+}
+
+/**
+ * Assemble a rolling [INCOMING]/[OUTGOING] transcript for an SMS conversation —
+ * the SMS twin of WhatsApp's refreshSourceMessageThread — so the AI classifier
+ * sees the whole thread, not one isolated message. Writes ONE per-burst
+ * source_messages row keyed sms:<peer>:<latestMessageId>, stamps
+ * metadata.chatId=<peer> (every downstream thread gate keys off chatId), and
+ * supersedes earlier still-pending SMS bursts for the same peer so only the
+ * newest transcript reaches the classifier (burst coalescing).
+ */
+async function refreshSmsSourceThread(
+  db: SupabaseAdmin,
+  userId: string,
+  peer: string,
+): Promise<void> {
+  const { data: msgs, error } = await db
+    .from("sms_messages")
+    .select("message_id, direction, body_text, received_at, is_otp")
+    .eq("user_id", userId)
+    .or(`from_phone.eq.${peer},to_phone.eq.${peer}`)
+    .order("received_at", { ascending: false })
+    .limit(20);
+  if (error) throw new Error(`sms thread query: ${error.message}`);
+  const usable = (msgs ?? []).filter(
+    (m) => !m.is_otp && String(m.body_text ?? "").trim().length > 0,
+  );
+  if (usable.length === 0) return;
+
+  const tz = await smsUserTz(db, userId);
+  const ordered = [...usable].reverse(); // oldest → newest
+
+  // Keep the NEWEST lines within the budget (drop oldest first) — the classifier
+  // reasons about the last line, so the tail must survive.
+  const lines: string[] = [];
+  let budget = SMS_CONVO_BUDGET;
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const m = ordered[i];
+    const dir = String(m.direction ?? "incoming").toUpperCase();
+    const ts = fmtTsLocal(String(m.received_at ?? ""), tz);
+    let text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
+    if (text.length > SMS_MAX_MSG_CHARS) text = text.slice(0, SMS_MAX_MSG_CHARS) + " …";
+    const line = `[${dir} ${ts}] ${text}`;
+    if (line.length > budget && lines.length > 0) break;
+    budget -= line.length;
+    lines.unshift(line);
+  }
+
+  const rawContent = [
+    `SMS conversation with: ${peer}`,
+    `[OUTGOING] = sent by the user, [INCOMING] = the other party.`,
+    `\n--- CONVERSATION (oldest to newest) ---`,
+    ...lines,
+  ].join("\n").slice(0, 3000);
+
+  // Anchor the burst on the NEWEST message in the window (like WhatsApp's
+  // last.wamid) so an out-of-order re-delivery refreshes ONE row, not a stale one.
+  const latest = ordered[ordered.length - 1];
+  const latestMessageId = String(latest.message_id ?? "");
+  if (!latestMessageId) return; // no stable key to anchor
+  const latestDirection = String(latest.direction ?? "incoming");
+  const latestReceivedAt = String(latest.received_at ?? "");
+  const subject = latestDirection === "incoming" ? `SMS מ-${peer}` : `SMS ל-${peer}`;
+  const burstId = `sms:${peer}:${latestMessageId}`;
+  const bodyText = String(latest.body_text ?? "").slice(0, 1000);
+  const metadata = {
+    chatId: peer,
+    peerPhone: peer,
+    direction: latestDirection,
+    lastDirection: latestDirection,
+    channel: "sms",
+    messageId: latestMessageId,
+  };
+
+  // ignoreDuplicates so a gateway re-delivery of the same latest message doesn't
+  // reset a row the pipeline already classified/locked (mirrors WhatsApp).
+  const { error: srcErr } = await db.from("source_messages").upsert(
+    {
+      user_id: userId,
+      source_type: "sms",
+      source_id: burstId,
+      sender: peer,
+      sender_email: null,
+      subject,
+      body_text: bodyText,
+      raw_content: rawContent,
+      received_at: latestReceivedAt,
+      source_url: `sms:${peer}`,
+      reply_to_context: peer,
+      processing_status: "pending",
+      ai_classification: null,
+      metadata,
+    },
+    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+  );
+  if (srcErr) throw new Error(`source_messages upsert: ${srcErr.message}`);
+
+  // Refresh the transcript in place ONLY while the burst is still pending and
+  // unlocked — a late-arriving message rebuilds a fuller transcript, but an
+  // already-classified or in-flight row is never reset (mirrors WhatsApp).
+  const { error: refreshErr } = await db
+    .from("source_messages")
+    .update({ body_text: bodyText, raw_content: rawContent, received_at: latestReceivedAt, metadata })
+    .eq("user_id", userId)
+    .eq("source_type", "sms")
+    .eq("source_id", burstId)
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null);
+  if (refreshErr) throw new Error(`source_messages refresh: ${refreshErr.message}`);
+
+  // Coalesce: retire earlier still-pending, unlocked SMS bursts for this peer so
+  // only the newest transcript reaches the classifier.
+  const { error: supErr } = await db
+    .from("source_messages")
+    .update({
+      processing_status: "processed",
+      ai_classification: "superseded",
+      processed_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("source_type", "sms")
+    .eq("processing_status", "pending")
+    .is("processing_lock_at", null)
+    .filter("metadata->>chatId", "eq", peer)
+    .lte("received_at", latestReceivedAt)
+    .neq("source_id", burstId);
+  if (supErr) console.warn("[sms-webhook] supersede failed:", supErr.message);
+}
+
 async function ingestSms(
   db: SupabaseAdmin,
   userId: string,
   deviceId: string,
   isIncoming: boolean,
   payload: SmsReceivedPayload,
-): Promise<void> {
+): Promise<IngestResult> {
+  const direction: "incoming" | "outgoing" = isIncoming ? "incoming" : "outgoing";
   const messageId = String(payload.messageId ?? "").trim();
   // The conversation peer is the OTHER party: the sender for an incoming SMS,
   // the recipient for one we sent. `phoneNumber` is the deprecated fallback.
@@ -273,7 +606,7 @@ async function ingestSms(
   const body = String(payload.message ?? payload.text ?? payload.subject ?? "");
   if (!messageId || !peer) {
     console.warn("[sms-webhook] payload missing messageId/peer, skipping");
-    return;
+    return { outcome: "skipped", reason: "missing_fields", direction, messageId, peer, bodyPreview: body };
   }
 
   const receivedAt = parseReceivedAt(payload.receivedAt ?? payload.sentAt);
@@ -307,42 +640,17 @@ async function ingestSms(
   if (smsErr) throw new Error(`sms_messages upsert: ${smsErr.message}`);
 
   // 2. OTP / verification codes never reach the AI pipeline; empty bodies have
-  //    nothing to classify.
-  if (isOtp) return;
-  if (body.trim().length === 0) return;
+  //    nothing to classify. Both are still recorded in sms_messages above.
+  if (isOtp) return { outcome: "ingested", reason: "otp_suppressed", direction, messageId, peer, bodyPreview: body };
+  if (body.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: body };
 
-  const dirLabel = isIncoming ? "INCOMING" : "OUTGOING";
-  const subject = isIncoming ? `SMS מ-${peer}` : `SMS ל-${peer}`;
-  const rawContent = [
-    `SMS conversation with: ${peer}`,
-    `Direction: ${dirLabel}${isIncoming ? "" : " (sent by the user)"}`,
-    `Time: ${receivedAt}`,
-    `\n--- MESSAGE ---`,
-    `[${dirLabel}] ${body.replace(/\s+/g, " ").trim()}`,
-  ].join("\n");
+  // Build the rolling conversation transcript for this peer and write ONE
+  // per-burst source_messages row (mirrors WhatsApp) so the classifier sees the
+  // whole thread — not this message in isolation — and can understand a reply
+  // like "Mistake, I didn't pay" in context.
+  await refreshSmsSourceThread(db, userId, peer);
 
-  const { error: srcErr } = await db.from("source_messages").upsert(
-    {
-      user_id: userId,
-      source_type: "sms",
-      source_id: `sms:${messageId}`,
-      sender: peer,
-      sender_email: null,
-      subject,
-      body_text: body.slice(0, 1000),
-      raw_content: rawContent.slice(0, 3000),
-      received_at: receivedAt,
-      // Carry the exact peer so the in-app SMS reader can match the thread; also
-      // a valid sms: URI as a mobile fallback (opens the native SMS app).
-      source_url: `sms:${peer}`,
-      reply_to_context: peer,
-      processing_status: "pending",
-      ai_classification: null,
-      metadata: { peerPhone: peer, direction: isIncoming ? "incoming" : "outgoing", deviceId, messageId, channel: "sms" },
-    },
-    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
-  );
-  if (srcErr) throw new Error(`source_messages upsert: ${srcErr.message}`);
+  return { outcome: "ingested", reason: null, direction, messageId, peer, bodyPreview: body };
 }
 
 /**

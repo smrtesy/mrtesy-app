@@ -8,9 +8,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, Pause, Trash2, BellRing, Pencil } from "lucide-react";
+import { Clock, Pause, Trash2, BellRing, Pencil, CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { todayISO } from "@/lib/workdays";
 
 interface ReminderRow {
   id: string;
@@ -31,12 +32,24 @@ interface SnoozedTaskRow {
   manually_verified: boolean | null;
 }
 
+interface DatedTaskRow {
+  id: string;
+  title: string | null;
+  title_he: string | null;
+  due_date: string | null;
+  due_time: string | null;
+  priority: string | null;
+  task_type: string | null;
+  manually_verified: boolean | null;
+}
+
 export function ScheduledSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const supabase = createClient();
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [snoozed, setSnoozed] = useState<SnoozedTaskRow[]>([]);
+  const [dated, setDated] = useState<DatedTaskRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
 
@@ -72,8 +85,25 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
           .order("status_changed_at", { ascending: false })
           .limit(200);
         setSnoozed((snoozedRows as SnoozedTaskRow[] | null) ?? []);
+
+        // Dated but not snoozed — the daily method's "scheduled" track. Anything
+        // with a FUTURE due date sits here and floats into "היום" on its day
+        // (a due-today/overdue task already shows on the Today screen). Snoozed
+        // rows are excluded here since they render in their own section above.
+        const { data: datedRows } = await supabase
+          .from("tasks")
+          .select("id, title, title_he, due_date, due_time, priority, task_type, manually_verified")
+          .eq("user_id", user.id)
+          .eq("manually_verified", true)
+          .not("due_date", "is", null)
+          .gt("due_date", todayISO())
+          .in("status", ["inbox", "in_progress"])
+          .order("due_date", { ascending: true })
+          .limit(200);
+        setDated((datedRows as DatedTaskRow[] | null) ?? []);
       } else {
         setSnoozed([]);
+        setDated([]);
       }
     } finally {
       setLoading(false);
@@ -144,7 +174,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     );
   }
 
-  if (reminders.length === 0 && snoozed.length === 0) {
+  if (reminders.length === 0 && snoozed.length === 0 && dated.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Clock className="mx-auto h-8 w-8 mb-2 opacity-50" />
@@ -157,6 +187,47 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-6">
+      {dated.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("datedSection")} ({dated.length})
+          </h3>
+          <div className="space-y-3">
+            {dated.map((task) => {
+              const title = (locale === "he" && task.title_he ? task.title_he : task.title) || "";
+              const whenLabel = task.due_date
+                ? new Date(`${task.due_date}T${task.due_time || "00:00"}:00`).toLocaleDateString(dtFmt, {
+                    day: "numeric", month: "short", ...(task.due_time ? { hour: "2-digit", minute: "2-digit" } : {}),
+                  })
+                : "";
+              return (
+                <Card key={task.id}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-2">
+                      <div className="mt-1 rounded-full bg-primary/10 p-1.5 shrink-0">
+                        <CalendarClock className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">{whenLabel}</Badge>
+                          {task.task_type === "meeting" && (
+                            <Badge variant="secondary" className="text-[10px]">{t("kindEvent")}</Badge>
+                          )}
+                          {task.priority && (
+                            <Badge variant="secondary" className="text-[10px]">{tTasks(`priority.${task.priority}`)}</Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {snoozed.length > 0 && (
         <section className="space-y-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

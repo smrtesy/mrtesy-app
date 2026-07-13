@@ -9,6 +9,33 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+// Gmail's API intermittently returns transient 5xx / 429 blips (a single 503
+// on 2026-07-08 counted as a full sync failure and pushed an alert to the user
+// even though the very next cron run succeeded). Retry those in-process with
+// exponential backoff so a momentary server-side hiccup doesn't inflate the
+// failure counter or spam a notification. Non-retryable statuses (400/401/403/
+// 404) are returned immediately for the caller's existing handling. Network
+// errors (fetch itself throwing) are retried too, then rethrown if they persist.
+const GMAIL_RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+async function gmailFetch(url: string, token: string, maxRetries = 3): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (resp.ok || !GMAIL_RETRYABLE_STATUSES.has(resp.status) || attempt >= maxRetries) {
+        return resp;
+      }
+    } catch (e) {
+      // Network-level failure (DNS, connection reset, TLS). Retry until the cap,
+      // then let the caller see the throw exactly as before this helper existed.
+      if (attempt >= maxRetries) throw e;
+    }
+    // 500ms, 1s, 2s (capped). Bounded so several retrying calls in one run stay
+    // well within the edge function execution budget.
+    await new Promise((r) => setTimeout(r, Math.min(500 * 2 ** attempt, 2000)));
+  }
+}
+
 async function notifyDisconnect(userId: string, reason: string) {
   const { data: membership } = await supabase
     .from("org_members")
@@ -221,9 +248,9 @@ async function gmailHistorySync(userId: string, token: string, historyId: string
 
   do {
     const pageParam = pageToken ? `&pageToken=${pageToken}` : "";
-    const resp = await fetch(
+    const resp = await gmailFetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=${historyId}&historyTypes=messageAdded${pageParam}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+      token
     );
 
     if (!resp.ok) {
@@ -266,9 +293,15 @@ async function gmailHistorySync(userId: string, token: string, historyId: string
 }
 
 async function fetchMessageDetails(token: string, messageId: string) {
-  const resp = await fetch(
+  // Lower retry cap here: this runs sequentially over up to 2000 messages per
+  // run, so the full 3-retry backoff (3.5s) could stack toward the edge
+  // function wall-clock budget under intermittent degradation. One retry
+  // (≤500ms) still absorbs a single-message blip; a sustained outage fails
+  // earlier at the history/profile fetch (which keep the full retry budget).
+  const resp = await gmailFetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    token,
+    1
   );
   if (!resp.ok) return null;
   return await resp.json();
@@ -499,9 +532,9 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     // no new messages. Fall back to the profile endpoint so we always get a
     // valid checkpoint and last_synced_at is updated on every run.
     if (!newCheckpoint) {
-      const profileResp = await fetch(
+      const profileResp = await gmailFetch(
         "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-        { headers: { Authorization: `Bearer ${token}` } }
+        token
       );
       if (profileResp.ok) {
         const profile = await profileResp.json();
@@ -525,9 +558,9 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     let pageToken: string | undefined = undefined;
     do {
       const pageParam = pageToken ? `&pageToken=${pageToken}` : "";
-      const resp = await fetch(
+      const resp = await gmailFetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=500${pageParam}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        token
       );
       if (!resp.ok) break;
       const data = await resp.json();
@@ -535,9 +568,9 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
       pageToken = data.nextPageToken;
     } while (pageToken && messageIds.length < 2000);
     // Get current historyId as checkpoint
-    const profileResp = await fetch(
+    const profileResp = await gmailFetch(
       "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-      { headers: { Authorization: `Bearer ${token}` } }
+      token
     );
     if (profileResp.ok) {
       const profile = await profileResp.json();

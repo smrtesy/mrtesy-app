@@ -14,6 +14,9 @@ export interface ReportErrorParams {
   title: string;
   message?: string;
   botId?: string | null;
+  /** Bot env this error belongs to. "test" errors are logged but never raise a
+   *  notification — operators only want inbox/push pings for LIVE numbers. */
+  env?: "test" | "live" | null;
   details?: Record<string, unknown>;
   stack?: string;
   link?: string;
@@ -30,6 +33,11 @@ export async function reportError(orgId: string, p: ReportErrorParams): Promise<
     stack: p.stack ?? null,
   });
   if (error) console.error("[smrtbot/reportError] persist failed:", error.message);
+
+  // Test-env bots are sandbox numbers. Keep the persisted log (still visible in
+  // the Errors panel for debugging) but do NOT raise an inbox/push notification —
+  // operators only want to be pinged for LIVE numbers. (User request 2026-07-09.)
+  if (p.env === "test") return;
 
   // Pack the full context into the notification body so the inbox's existing
   // "copy for AI" button captures everything for pasting into Claude Code.

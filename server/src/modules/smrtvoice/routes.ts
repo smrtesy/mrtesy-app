@@ -82,6 +82,109 @@ async function loadPronunciation(
     }));
 }
 
+type SpeakerVoice = {
+  resemble_voice_id: string;
+  model?: string | null;
+  language?: string;
+  character_id?: string | null;
+  character_name?: string | null;
+  description?: string | null;
+  personality_prompt?: string | null;
+  style_baseline_tags?: string[];
+};
+type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
+
+/**
+ * Build the speaker_map sent to the engine from a script's casting. A speaker
+ * cast to several characters (its primary character_id plus extra_character_ids)
+ * carries a `voices` array so the engine renders one take per voice; single-cast
+ * speakers keep just the primary fields. Each character's CURRENT voice / model
+ * / style is read fresh, so re-generating picks up a voice or style change with
+ * no re-cast step. Returns the map plus the raw cast rows (for the generate
+ * "every speaker must be decided" check).
+ */
+async function buildSpeakerMap(
+  scriptId: string,
+  orgId: string,
+  fallbackLang: string,
+): Promise<{
+  map: Record<string, SpeakerMapEntry>;
+  cast: Array<{ speaker_name: string; skip: boolean | null }>;
+  error?: string;
+}> {
+  const { data: cast, error: castErr } = await db
+    .from("smrtvoice_script_speakers")
+    .select("speaker_name, character_id, extra_character_ids, resemble_voice_id, skip")
+    .eq("script_id", scriptId);
+  if (castErr) return { map: {}, cast: [], error: castErr.message };
+
+  const ids = new Set<string>();
+  for (const c of cast ?? []) {
+    if (c.character_id) ids.add(c.character_id);
+    for (const e of (c.extra_character_ids ?? []) as string[]) ids.add(e);
+  }
+  const charMap = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      description: string | null;
+      resemble_voice_id: string | null;
+      resemble_model: string | null;
+      language: string;
+      personality_prompt: string | null;
+      style_baseline_tags: string[] | null;
+    }
+  >();
+  if (ids.size > 0) {
+    const { data: chars, error: charsErr } = await db
+      .from("smrtvoice_characters")
+      .select(
+        "id, name, description, resemble_voice_id, resemble_model, language, personality_prompt, style_baseline_tags",
+      )
+      .in("id", [...ids])
+      .eq("org_id", orgId);
+    if (charsErr) return { map: {}, cast: [], error: charsErr.message };
+    for (const c of chars ?? []) charMap.set(c.id, c);
+  }
+
+  const toVoice = (id: string): SpeakerVoice | null => {
+    const ch = charMap.get(id);
+    if (!ch?.resemble_voice_id) return null;
+    return {
+      resemble_voice_id: ch.resemble_voice_id,
+      model: ch.resemble_model,
+      language: ch.language,
+      character_id: id,
+      character_name: ch.name,
+      description: ch.description,
+      personality_prompt: ch.personality_prompt,
+      style_baseline_tags: ch.style_baseline_tags ?? [],
+    };
+  };
+
+  const map: Record<string, SpeakerMapEntry> = {};
+  for (const c of cast ?? []) {
+    const primary: SpeakerVoice | null = c.character_id
+      ? toVoice(c.character_id)
+      : c.resemble_voice_id
+        ? { resemble_voice_id: c.resemble_voice_id, language: fallbackLang }
+        : null;
+    if (!primary) continue;
+    const extras = ((c.extra_character_ids ?? []) as string[])
+      .map(toVoice)
+      .filter((v): v is SpeakerVoice => !!v);
+    const voices = [primary, ...extras];
+    // Only emit `voices` for a genuine multi-cast; single voices stay lean and
+    // hit the engine's unchanged single-voice path.
+    map[c.speaker_name] = voices.length > 1 ? { ...primary, voices } : primary;
+  }
+  return {
+    map,
+    cast: (cast ?? []).map((c) => ({ speaker_name: c.speaker_name, skip: c.skip })),
+  };
+}
+
 /**
  * Make a Supabase-Storage-safe object key segment. Storage rejects non-ASCII
  * (e.g. Hebrew) and some punctuation → "InvalidKey". Keep [A-Za-z0-9._-],
@@ -336,6 +439,9 @@ router.post(
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        // Default to cleaning; pass clean:false to clone the raw audio (e.g. to
+        // A/B a raw clone against a cleaned one).
+        clean: req.body?.clean !== false,
       });
 
       const { data: updated, error: updateError } = await db
@@ -389,7 +495,9 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
     const result = await client.getVoiceStatus(character.resemble_voice_id);
     // Self-heal the stored status so the characters list reflects "ready"
     // without anyone opening the character (Resemble upgrade finishes async).
-    const READY = new Set(["ready", "completed", "active", "done", "available"]);
+    // "finished" is Resemble's terminal state for a trained voice (the engine's
+    // own clone flow waits for it) — without it a ready voice stays "training".
+    const READY = new Set(["ready", "completed", "active", "done", "available", "finished"]);
     if (result.status && READY.has(result.status.toLowerCase())) {
       await db
         .from("smrtvoice_characters")
@@ -571,6 +679,7 @@ router.post(
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        clean: req.body?.clean !== false,
       });
 
       for (const path of stagedPaths) {
@@ -937,6 +1046,9 @@ const SCRIPT_UPDATABLE = new Set([
   "google_doc_tab_title",
   "generation_mode",
   "input_recording_path",
+  // Script language ('he'/'en'): drives which pronunciation-lexicon entries
+  // apply to this script's renders (see /voice/scripts/:id/generate).
+  "language",
 ]);
 
 router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
@@ -945,6 +1057,9 @@ router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
     if (SCRIPT_UPDATABLE.has(k)) updates[k] = v;
   }
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
+  if ("language" in updates && updates.language !== "he" && updates.language !== "en") {
+    return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
 
   const { data, error } = await db
     .from("smrtvoice_scripts")
@@ -1025,6 +1140,10 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       .eq("script_id", script.id);
     const existingSet = new Set((existing ?? []).map((s: { speaker_name: string }) => s.speaker_name));
 
+    // Per-speaker line count from the parser — the script's true line
+    // distribution, independent of generated (deletable) smrtvoice_lines.
+    const counts = result.speaker_line_counts ?? {};
+
     const rows = (result.speakers ?? [])
       .filter((sp: string) => !existingSet.has(sp))
       .map((sp: string) => ({
@@ -1033,10 +1152,43 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
         speaker_name: sp,
         character_id: inherited.get(sp)?.character_id ?? null,
         resemble_voice_id: inherited.get(sp)?.resemble_voice_id ?? null,
+        line_count: counts[sp] ?? 0,
       }));
     if (rows.length > 0) {
       const { error: insErr } = await db.from("smrtvoice_script_speakers").insert(rows);
       if (insErr) console.warn("[smrtvoice] script_speakers insert failed:", insErr.message);
+    }
+
+    // Refresh the parsed line count on speakers that already existed (new ones
+    // got it in the insert above), so every re-parse updates the counts.
+    for (const sp of result.speakers ?? []) {
+      if (!existingSet.has(sp)) continue;
+      const { error: cntErr } = await db
+        .from("smrtvoice_script_speakers")
+        .update({ line_count: counts[sp] ?? 0 })
+        .eq("script_id", script.id)
+        .eq("org_id", req.org!.id)
+        .eq("speaker_name", sp);
+      if (cntErr) console.warn("[smrtvoice] line_count update failed:", cntErr.message);
+    }
+
+    // Reconcile: drop speakers that no longer appear in the script — removed
+    // characters and stale phantoms from earlier parses. The parse result is
+    // the source of truth for who speaks, so a re-parse cleans the casting list.
+    const parsedSet = new Set(result.speakers ?? []);
+    const staleNames = [...existingSet].filter((n) => !parsedSet.has(n));
+    // Guard: only reconcile when the parse actually returned speakers. An empty
+    // or partial parse (empty tab, transient parser miss) must NOT wipe the
+    // user's manual per-script casting — a bad parse would otherwise delete
+    // every mapping.
+    if (staleNames.length > 0 && parsedSet.size > 0) {
+      const { error: delErr } = await db
+        .from("smrtvoice_script_speakers")
+        .delete()
+        .eq("script_id", script.id)
+        .eq("org_id", req.org!.id)
+        .in("speaker_name", staleNames);
+      if (delErr) console.warn("[smrtvoice] script_speakers reconcile-delete failed:", delErr.message);
     }
 
     const { error: updateErr } = await db
@@ -1072,27 +1224,16 @@ router.get("/voice/scripts/:id/speakers", async (req: Request, res: Response) =>
     .order("speaker_name");
   if (error) return res.status(500).json({ error: error.message });
 
-  // Attach each speaker's line count (how many lines that speaker has).
-  const { data: lines } = await db
-    .from("smrtvoice_lines")
-    .select("speaker_name")
-    .eq("script_id", req.params.id)
-    .eq("org_id", req.org!.id);
-  const counts = new Map<string, number>();
-  for (const l of lines ?? []) {
-    counts.set(l.speaker_name, (counts.get(l.speaker_name) ?? 0) + 1);
-  }
-  const speakers = (data ?? []).map((s: { speaker_name: string }) => ({
-    ...s,
-    line_count: counts.get(s.speaker_name) ?? 0,
-  }));
-  res.json({ speakers });
+  // line_count is stored on the row at parse time (the script's true line
+  // distribution) — no longer derived from generated/deletable smrtvoice_lines.
+  res.json({ speakers: data ?? [] });
 });
 
 router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) => {
   const list: Array<{
     speaker_name: string;
     character_id?: string | null;
+    extra_character_ids?: string[] | null;
     resemble_voice_id?: string | null;
     skip?: boolean;
   }> = Array.isArray(req.body?.speakers) ? req.body.speakers : [];
@@ -1106,6 +1247,9 @@ router.patch("/voice/scripts/:id/speakers", async (req: Request, res: Response) 
       speaker_name: s.speaker_name,
       // A skipped speaker carries no voice — its lines won't be generated.
       character_id: s.skip ? null : (s.character_id ?? null),
+      // Additional characters this speaker is also recorded by (multi-voice:
+      // the line fans out to one take per voice). Cleared when skipped.
+      extra_character_ids: s.skip || !Array.isArray(s.extra_character_ids) ? [] : s.extra_character_ids,
       resemble_voice_id: s.skip ? null : (s.resemble_voice_id ?? null),
       skip: s.skip ?? false,
     }));
@@ -1157,40 +1301,14 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     }
   }
 
-  // Build the speaker_map from casting.
-  const { data: cast, error: castErr } = await db
-    .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id, skip")
-    .eq("script_id", script.id);
-  if (castErr) return res.status(500).json({ error: castErr.message });
-
-  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
-  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
-  if (charIds.length > 0) {
-    const { data: chars } = await db
-      .from("smrtvoice_characters")
-      .select("id, name, description, resemble_voice_id, resemble_model, language")
-      .in("id", charIds)
-      .eq("org_id", req.org!.id);
-    for (const c of chars ?? []) charMap.set(c.id, c);
-  }
-
-  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
-  for (const c of cast ?? []) {
-    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
-      const ch = charMap.get(c.character_id)!;
-      speakerMap[c.speaker_name] = {
-        resemble_voice_id: ch.resemble_voice_id!,
-        model: ch.resemble_model,
-        language: ch.language,
-        character_id: c.character_id,
-        character_name: ch.name,
-        description: ch.description,
-      };
-    } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
-    }
-  }
+  // Build the speaker_map from casting (a speaker cast to several characters
+  // fans out to a `voices` list — one take per voice).
+  const { map: speakerMap, cast, error: castErr } = await buildSpeakerMap(
+    script.id,
+    req.org!.id,
+    script.language ?? "he",
+  );
+  if (castErr) return res.status(500).json({ error: castErr });
   if (Object.keys(speakerMap).length === 0) {
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
@@ -1199,7 +1317,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
   // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
   // doesn't accidentally drop lines — while still allowing "cast one, skip the
   // rest" to preview a single voice. Skipped speakers' lines aren't generated.
-  const undecided = (cast ?? [])
+  const undecided = cast
     .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
     .map((c) => c.speaker_name);
   if (undecided.length > 0) {
@@ -1232,6 +1350,8 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       job_type: "generate_audio",
       adapter: settings?.default_adapter ?? "resemble",
       mode: script.generation_mode,
+      // Drives which pronunciation-lexicon entries apply (he-only / en-only).
+      language: (script.language ?? "he") as "he" | "en",
       google_doc_id: script.google_doc_id ?? undefined,
       google_oauth_token: token ?? undefined,
       google_doc_tab_id: script.google_doc_tab_id ?? undefined,
@@ -1240,6 +1360,10 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
+      // Per-character style baseline is opt-in (default off): stacking it on
+      // the emotion recipe destabilizes resemble-ultra. Checkbox on the
+      // generate screen; absent/false → engine skips the baseline.
+      apply_style_baseline: req.body?.apply_style_baseline === true,
       pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
@@ -1276,6 +1400,57 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to start audio generation", body: message });
     res.status(502).json({ error: message });
   }
+});
+
+// POST /voice/scripts/:id/cancel — stop an in-progress generation. Flips the
+// active generate_audio job to 'cancelled' (the worker polls this by
+// voice_engine_job_id and stops launching new lines cooperatively) and clears
+// the script's generating state so the UI leaves it immediately — even if the
+// worker is slow or was never picked up. Lines already rendered are kept.
+router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+  const { data: script, error: scriptErr } = await db
+    .from("smrtvoice_scripts")
+    .select("id, completed_lines")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (scriptErr) return res.status(500).json({ error: scriptErr.message });
+  if (!script) return res.status(404).json({ error: "Script not found" });
+
+  // Signal the worker via the newest still-active generate job for this script.
+  const { data: activeJob, error: jobSelErr } = await db
+    .from("smrtvoice_jobs")
+    .select("id")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .eq("job_type", "generate_audio")
+    .in("status", ["queued", "running"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  // Don't clear the generating state on a lookup failure — that would hide a
+  // run we never actually signalled to stop.
+  if (jobSelErr) return res.status(500).json({ error: jobSelErr.message });
+
+  if (activeJob) {
+    const { error: jobErr } = await db
+      .from("smrtvoice_jobs")
+      .update({ status: "cancelled", completed_at: new Date().toISOString() })
+      .eq("id", activeJob.id)
+      .eq("org_id", req.org!.id);
+    if (jobErr) return res.status(500).json({ error: jobErr.message });
+  }
+
+  // Leave the generating state now (self-heal if the worker is dead). If the
+  // worker is alive it also writes the final audio_ready when it stops.
+  const { error: sErr } = await db
+    .from("smrtvoice_scripts")
+    .update({ status: (script.completed_lines ?? 0) > 0 ? "audio_ready" : "parsed", stage: null })
+    .eq("id", script.id)
+    .eq("org_id", req.org!.id);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  res.json({ ok: true, cancelled: !!activeJob });
 });
 
 // POST /voice/scripts/:id/sync — reconcile a script that's stuck in
@@ -1423,14 +1598,46 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
-    .select("line_number, output_audio_path")
+    .select("id, line_number, output_audio_path")
     .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
     .eq("status", "completed")
     .not("output_audio_path", "is", null)
+    .is("archived_at", null)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
   if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
+
+  // Archive the SET of good takes per line (with the note in the filename) so a
+  // multi-take line comes down as every version the user marked; a line with no
+  // good take falls back to its single current output. take_number (1 = oldest)
+  // matches the UI label.
+  const { data: allTakes, error: allTakesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("line_id, output_audio_path, note, approved, created_at")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: true });
+  // Non-fatal: on error we fall back to each line's single current output.
+  if (allTakesErr) console.warn("[smrtvoice] archive take query failed:", allTakesErr.message);
+  const goodByLine = new Map<string, Array<{ path: string; note: string | null; n: number }>>();
+  const rankByLine = new Map<string, number>();
+  for (const t of (allTakes ?? []) as Array<{ line_id: string; output_audio_path: string | null; note: string | null; approved: boolean }>) {
+    const n = (rankByLine.get(t.line_id) ?? 0) + 1;
+    rankByLine.set(t.line_id, n);
+    if (t.approved && t.output_audio_path) {
+      const arr = goodByLine.get(t.line_id) ?? [];
+      arr.push({ path: t.output_audio_path, note: t.note, n });
+      goodByLine.set(t.line_id, arr);
+    }
+  }
+  // Strip characters illegal in a filename; keep Hebrew/spaces so the note stays
+  // readable. Empty note → no suffix.
+  const noteSuffix = (note: string | null): string => {
+    // eslint-disable-next-line no-control-regex
+    const clean = (note ?? "").replace(/[/\\:*?"<>|\x00-\x1f]/g, "").trim();
+    return clean ? `_${clean}` : "";
+  };
 
   try {
     const drive = await getDriveClient(req.user!.id);
@@ -1452,21 +1659,29 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
     let uploaded = 0;
     let skipped = 0;
-    for (const line of lines as Array<{ line_number: number; output_audio_path: string }>) {
-      const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(line.output_audio_path);
-      if (dlErr || !blob) {
-        skipped += 1;
-        continue;
+    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string }>) {
+      const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
+      const good = goodByLine.get(line.id) ?? [];
+      // Good takes if any (each named with its take number + note); else the
+      // single current output.
+      const files = good.length > 0
+        ? good.map((g) => ({ path: g.path, name: `${base}_v${g.n}${noteSuffix(g.note)}.wav` }))
+        : [{ path: line.output_audio_path, name: `${base}.wav` }];
+      for (const f of files) {
+        const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
+        if (dlErr || !blob) {
+          skipped += 1;
+          continue;
+        }
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        await drive.files.create({
+          requestBody: { name: f.name, parents: [folderId] },
+          media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+          fields: "id",
+          supportsAllDrives: true,
+        });
+        uploaded += 1;
       }
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      const baseName = `${script.code}_${String(line.line_number).padStart(3, "0")}.wav`;
-      await drive.files.create({
-        requestBody: { name: baseName, parents: [folderId] },
-        media: { mimeType: "audio/wav", body: Readable.from(buffer) },
-        fields: "id",
-        supportsAllDrives: true,
-      });
-      uploaded += 1;
     }
 
     if (uploaded === 0) {
@@ -1515,20 +1730,93 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
   // list can show a "N versions" badge without a per-line round trip.
   const { data: takeRows, error: takeErr } = await db
     .from("smrtvoice_line_takes")
-    .select("line_id")
+    .select("line_id, approved")
     .eq("script_id", req.params.id)
     .eq("org_id", req.org!.id);
   if (takeErr) console.warn("[smrtvoice] take_count query failed:", takeErr.message);
   const takeCounts = new Map<string, number>();
+  const approvedCounts = new Map<string, number>();
   for (const t of takeRows ?? []) {
     takeCounts.set(t.line_id, (takeCounts.get(t.line_id) ?? 0) + 1);
+    if (t.approved) approvedCounts.set(t.line_id, (approvedCounts.get(t.line_id) ?? 0) + 1);
   }
-  const lines = (data ?? []).map((l: { id: string }) => ({
+  // approved_take_count drives the "good recording" indicator, so it always
+  // agrees with what's actually marked in the takes list. If the takes query
+  // failed, fall back to the persisted line.approved column so the indicator
+  // doesn't vanish for every line on a transient error.
+  const lines = (data ?? []).map((l: { id: string; approved?: boolean }) => ({
     ...l,
     take_count: takeCounts.get(l.id) ?? 0,
+    approved_take_count: takeErr ? (l.approved ? 1 : 0) : (approvedCounts.get(l.id) ?? 0),
   }));
   res.json({ lines });
 });
+
+// POST /voice/scripts/:id/lines/bulk — archive (soft, reversible), unarchive,
+// or permanently delete a set of lines. Delete cascades to each line's takes
+// (FK) and best-effort removes their audio from storage.
+router.post(
+  "/voice/scripts/:id/lines/bulk",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const action = req.body?.action as string;
+    const ids: string[] = Array.isArray(req.body?.line_ids)
+      ? req.body.line_ids.filter(Boolean)
+      : [];
+    if (!["archive", "unarchive", "delete"].includes(action)) {
+      return res.status(400).json({ error: "action must be archive | unarchive | delete" });
+    }
+    if (ids.length === 0) return res.status(400).json({ error: "line_ids required" });
+
+    if (action === "archive" || action === "unarchive") {
+      const { error } = await db
+        .from("smrtvoice_lines")
+        .update({ archived_at: action === "archive" ? new Date().toISOString() : null })
+        .eq("script_id", req.params.id)
+        .eq("org_id", req.org!.id)
+        .in("id", ids);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ ok: true, action, count: ids.length });
+    }
+
+    // delete: resolve the org/script-scoped rows first (so we only touch this
+    // caller's lines), gather audio paths, clean storage, then delete the rows.
+    const { data: delLines, error: linesErr } = await db
+      .from("smrtvoice_lines")
+      .select("id, output_audio_path")
+      .eq("script_id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .in("id", ids);
+    if (linesErr) return res.status(500).json({ error: linesErr.message });
+    const lineIds = (delLines ?? []).map((l) => l.id);
+    if (lineIds.length === 0) return res.json({ ok: true, action, count: 0 });
+
+    const { data: takeRows } = await db
+      .from("smrtvoice_line_takes")
+      .select("output_audio_path")
+      .eq("org_id", req.org!.id)
+      .in("line_id", lineIds);
+
+    const paths = [
+      ...(delLines ?? []).map((l) => l.output_audio_path),
+      ...(takeRows ?? []).map((t) => t.output_audio_path),
+    ].filter((p): p is string => !!p);
+    if (paths.length > 0) {
+      const { error: rmErr } = await db.storage.from("smrtvoice-audio").remove(paths);
+      // Non-fatal: orphaned audio is harmless; deleting the rows is what matters.
+      if (rmErr) console.warn("[smrtvoice] bulk-delete storage cleanup failed:", rmErr.message);
+    }
+
+    const { error: delErr } = await db
+      .from("smrtvoice_lines")
+      .delete()
+      .eq("script_id", req.params.id)
+      .eq("org_id", req.org!.id)
+      .in("id", lineIds);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+    res.json({ ok: true, action, count: lineIds.length });
+  },
+);
 
 const LINE_UPDATABLE = new Set([
   "text_clean",
@@ -1591,30 +1879,14 @@ async function queueRegeneration(
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
-  // Rebuild the casting map so regenerated lines use the current voices.
-  const { data: cast } = await db
-    .from("smrtvoice_script_speakers")
-    .select("speaker_name, character_id, resemble_voice_id")
-    .eq("script_id", script.id);
-  const charIds = (cast ?? []).map((c) => c.character_id).filter(Boolean) as string[];
-  const charMap = new Map<string, { resemble_voice_id: string | null; resemble_model: string | null; language: string; name: string; description: string | null }>();
-  if (charIds.length > 0) {
-    const { data: chars } = await db
-      .from("smrtvoice_characters")
-      .select("id, name, description, resemble_voice_id, resemble_model, language")
-      .in("id", charIds)
-      .eq("org_id", req.org!.id);
-    for (const c of chars ?? []) charMap.set(c.id, c);
-  }
-  const speakerMap: Record<string, { resemble_voice_id: string; model?: string | null; language?: string; character_id?: string | null; character_name?: string | null; description?: string | null }> = {};
-  for (const c of cast ?? []) {
-    if (c.character_id && charMap.get(c.character_id)?.resemble_voice_id) {
-      const ch = charMap.get(c.character_id)!;
-      speakerMap[c.speaker_name] = { resemble_voice_id: ch.resemble_voice_id!, model: ch.resemble_model, language: ch.language, character_id: c.character_id, character_name: ch.name, description: ch.description };
-    } else if (c.resemble_voice_id) {
-      speakerMap[c.speaker_name] = { resemble_voice_id: c.resemble_voice_id, language: script.language ?? "he" };
-    }
-  }
+  // Rebuild the casting map so regenerated lines use the current voices (and
+  // fan out to multiple voices when a speaker is cast to several characters).
+  const { map: speakerMap, error: castErr } = await buildSpeakerMap(
+    script.id,
+    req.org!.id,
+    script.language ?? "he",
+  );
+  if (castErr) return res.status(500).json({ error: castErr });
 
   // Preserve the script's generation mode — regenerating a line in an STS
   // script must re-render via speech-to-speech (with the input recording),
@@ -1638,11 +1910,15 @@ async function queueRegeneration(
       job_type: "regenerate_line",
       adapter: settings?.default_adapter ?? "resemble",
       mode,
+      // Same script-language gating as a full generate.
+      language: (script.language ?? "he") as "he" | "en",
       input_audio_url: inputAudioUrl,
       llm_model: settings?.default_llm_model ?? undefined,
       code: script.code,
       speaker_map: speakerMap,
       line_numbers: lineNumbers,
+      // Match the generate default: baseline off unless explicitly requested.
+      apply_style_baseline: req.body?.apply_style_baseline === true,
       pronunciation: await loadPronunciation(req.org!.id),
       line_overrides: lineOverrides,
       reprocess_line_numbers: reprocessLineNumbers,
@@ -1815,10 +2091,183 @@ router.get("/voice/lines/:id/takes", async (req: Request, res: Response) => {
   res.json({ takes: data ?? [] });
 });
 
-// PATCH /voice/takes/:id — choose a take as the line's audio (✓) and/or jot a
-// note. `approved:true` is SINGLE-select per line: it clears the other takes,
-// marks this one, and repoints the line's output_audio_path/duration/cost at it
-// so play / download / archive all use the chosen take. `note` is independent.
+// ─── Recording-learning helpers ─────────────────────────────────────────────
+// When the user respells a word and then ⭐ that take, we learn the respelling
+// worked — scoped to the voice that produced it. Everything here is "suggestion
+// only": we record and surface; nothing auto-applies a respelling.
+
+// Strip Resemble tone tags so we compare clean spoken text. Mirrors the syntax
+// the engine composes: wrap tags <whisper>…</whisper> and inline [sigh].
+function stripToneTags(body: string): string {
+  return body
+    .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?>/gi, " ")
+    .replace(/\[[a-z][a-z0-9-]*\]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeWords(text: string): string[] {
+  return text.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+}
+
+// Hebrew niqqud/te'amim (U+0591–U+05C7). We never learn niqqud (it HARMS Ultra),
+// so a niqqud-only difference must not register as a respelling.
+function stripNiqqud(s: string): string {
+  return s.replace(/[֑-ׇ]/g, "");
+}
+
+// LCS token diff → {from → to} substitution spans where the ORIGINAL side is a
+// single word (the unit the user selects and the lookup keys on). A single word
+// respelled to a short phrase ("770" → "סעוון סעוונטי") is kept; adjacent
+// multi-word edits are dropped (they'd be unreachable by the single-token
+// lookup, so storing them only adds dead rows). Insert/delete-only gaps drop too.
+function diffRespellings(original: string, spoken: string): Array<{ from: string; to: string }> {
+  const a = tokenizeWords(stripNiqqud(original));
+  const b = tokenizeWords(stripNiqqud(spoken));
+  const n = a.length;
+  const m = b.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const pairs: Array<{ from: string; to: string }> = [];
+  let fromBuf: string[] = [];
+  let toBuf: string[] = [];
+  const flush = () => {
+    // One original word → a word or short phrase. Keeps single-word respellings
+    // (incl. "770" → two words) retrievable by the single-token lookup; drops
+    // merged multi-word blobs that the lookup could never reach.
+    if (fromBuf.length === 1 && toBuf.length >= 1 && toBuf.length <= 4) {
+      const from = fromBuf.join(" ");
+      const to = toBuf.join(" ");
+      if (from !== to && from.length <= 60 && to.length <= 80) pairs.push({ from, to });
+    }
+    fromBuf = [];
+    toBuf = [];
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      fromBuf.push(a[i]);
+      i++;
+    } else {
+      toBuf.push(b[j]);
+      j++;
+    }
+  }
+  while (i < n) fromBuf.push(a[i++]);
+  while (j < m) toBuf.push(b[j++]);
+  flush();
+  return pairs;
+}
+
+// The voice behind a line: its character + Resemble voice id (snapshot key for
+// learning). Null character → no voice scope (learning stays org-wide for it).
+async function resolveLineVoice(
+  orgId: string,
+  characterId: string | null,
+): Promise<{ character_id: string | null; resemble_voice_id: string | null }> {
+  if (!characterId) return { character_id: null, resemble_voice_id: null };
+  const { data } = await db
+    .from("smrtvoice_characters")
+    .select("id, resemble_voice_id")
+    .eq("id", characterId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  return {
+    character_id: data?.id ?? characterId,
+    resemble_voice_id: (data?.resemble_voice_id as string | null) ?? null,
+  };
+}
+
+// Recompute the pronunciation feedback for one line from scratch (idempotent):
+// every take's spoken text is diffed against the line's original text_clean, and
+// each respelling recorded with `chosen` = that take's ⭐. Best-effort — the
+// caller must never let a failure here break the request.
+async function syncPronunciationFeedback(orgId: string, lineId: string): Promise<void> {
+  const { data: line, error: lineErr } = await db
+    .from("smrtvoice_lines")
+    .select("id, text_clean, character_id")
+    .eq("id", lineId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (lineErr || !line || !line.text_clean) return;
+
+  const { data: takeRows, error: takesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, text_spoken, text_used, model, approved")
+    .eq("line_id", lineId)
+    .eq("org_id", orgId);
+  if (takesErr || !takeRows) return;
+
+  const voice = await resolveLineVoice(orgId, line.character_id as string | null);
+
+  // The org lexicon is applied to EVERY render automatically, so a pair that
+  // just reproduces a lexicon entry isn't something the user discovered on this
+  // take — skip it so "learned from your picks" stays the user's own edits.
+  const { data: lex } = await db
+    .from("smrtvoice_pronunciation_lexicon")
+    .select("original_word, pronounced_as")
+    .eq("org_id", orgId);
+  const lexSet = new Set(
+    (lex ?? []).map((r) => `${stripNiqqud(r.original_word as string)}\u001f${stripNiqqud(r.pronounced_as as string)}`),
+  );
+
+  // Wipe this line's rows, then reinsert the current snapshot — keeps the table
+  // consistent no matter how many times a take is (un)starred.
+  const { error: delErr } = await db
+    .from("smrtvoice_pronunciation_feedback")
+    .delete()
+    .eq("line_id", lineId)
+    .eq("org_id", orgId);
+  if (delErr) return;
+
+  const seen = new Set<string>();
+  const rows: Array<Record<string, unknown>> = [];
+  for (const t of takeRows) {
+    const source =
+      (t.text_spoken as string | null) ??
+      (t.text_used ? stripToneTags(t.text_used as string) : "");
+    const spoken = source.trim();
+    if (!spoken) continue;
+    for (const p of diffRespellings(line.text_clean as string, spoken)) {
+      if (lexSet.has(`${p.from}\u001f${p.to}`)) continue; // automatic lexicon sub, not a user pick
+      const key = `${t.id}\u001f${p.from}\u001f${p.to}`;
+      if (seen.has(key)) continue; // same word respelled twice identically in one take
+      seen.add(key);
+      rows.push({
+        org_id: orgId,
+        take_id: t.id,
+        line_id: lineId,
+        character_id: voice.character_id,
+        resemble_voice_id: voice.resemble_voice_id,
+        model: (t.model as string | null) ?? null,
+        original_word: p.from,
+        pronounced_as: p.to,
+        chosen: t.approved === true,
+      });
+    }
+  }
+  if (rows.length > 0) {
+    const { error: insErr } = await db.from("smrtvoice_pronunciation_feedback").insert(rows);
+    if (insErr) console.error("pronunciation_feedback insert failed", insErr.message);
+  }
+}
+
+// PATCH /voice/takes/:id — mark a take as "good" (⭐) and/or jot a note.
+// `approved` is MULTI-select per line: several takes can be marked good (e.g. to
+// take part of each in editing). The line's outer indicator, sequential play,
+// download and archive all operate on the SET of good takes (see
+// /voice/lines/:id/selection). Marking never touches output_audio_path — the
+// engine owns that (the latest render, used only as a fallback), so a regenerate
+// never steals the user's selection. `note` is independent.
 router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const hasApproved = typeof body.approved === "boolean";
@@ -1829,7 +2278,7 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
 
   const { data: take, error: takeErr } = await db
     .from("smrtvoice_line_takes")
-    .select("id, line_id, output_audio_path, duration_seconds, cost_usd")
+    .select("id, line_id")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -1845,43 +2294,16 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
     if (error) return res.status(500).json({ error: error.message });
   }
 
-  if (hasApproved && body.approved === true) {
-    // Single-select: clear siblings, mark this take, and make it the line's audio.
-    const { error: clearErr } = await db
-      .from("smrtvoice_line_takes")
-      .update({ approved: false })
-      .eq("line_id", take.line_id)
-      .eq("org_id", req.org!.id);
-    if (clearErr) return res.status(500).json({ error: clearErr.message });
-
+  if (hasApproved) {
+    // Toggle just THIS take (multi-select — no sibling clearing).
     const { error: setErr } = await db
       .from("smrtvoice_line_takes")
-      .update({ approved: true })
+      .update({ approved: body.approved })
       .eq("id", take.id)
       .eq("org_id", req.org!.id);
     if (setErr) return res.status(500).json({ error: setErr.message });
 
-    const { error: lineErr } = await db
-      .from("smrtvoice_lines")
-      .update({
-        output_audio_path: take.output_audio_path,
-        output_duration_seconds: take.duration_seconds,
-        generation_cost_usd: take.cost_usd,
-        approved: true,
-      })
-      .eq("id", take.line_id)
-      .eq("org_id", req.org!.id);
-    if (lineErr) return res.status(500).json({ error: lineErr.message });
-  } else if (hasApproved && body.approved === false) {
-    // Un-choose this take. Keep the line's last audio, but if no take remains
-    // chosen for the line, clear its approved indicator (the outer ✓).
-    const { error } = await db
-      .from("smrtvoice_line_takes")
-      .update({ approved: false })
-      .eq("id", take.id)
-      .eq("org_id", req.org!.id);
-    if (error) return res.status(500).json({ error: error.message });
-
+    // Keep the line's outer indicator in sync: lit iff any good take remains.
     const { count, error: countErr } = await db
       .from("smrtvoice_line_takes")
       .select("id", { count: "exact", head: true })
@@ -1890,13 +2312,19 @@ router.patch("/voice/takes/:id", async (req: Request, res: Response) => {
       .eq("approved", true);
     if (countErr) return res.status(500).json({ error: countErr.message });
 
-    if (!count) {
-      const { error: lineErr } = await db
-        .from("smrtvoice_lines")
-        .update({ approved: false })
-        .eq("id", take.line_id)
-        .eq("org_id", req.org!.id);
-      if (lineErr) return res.status(500).json({ error: lineErr.message });
+    const { error: lineErr } = await db
+      .from("smrtvoice_lines")
+      .update({ approved: (count ?? 0) > 0 })
+      .eq("id", take.line_id)
+      .eq("org_id", req.org!.id);
+    if (lineErr) return res.status(500).json({ error: lineErr.message });
+
+    // Learn from the pick: which respelling did the user keep, on which voice.
+    // Best-effort — a failure here must never break the ⭐ toggle.
+    try {
+      await syncPronunciationFeedback(req.org!.id, take.line_id);
+    } catch (e) {
+      console.error("syncPronunciationFeedback failed", e instanceof Error ? e.message : e);
     }
   }
 
@@ -1925,6 +2353,62 @@ router.get("/voice/takes/:id/audio-url", async (req: Request, res: Response) => 
     .createSignedUrl(take.output_audio_path, 3600);
   if (signErr || !data) return res.status(500).json({ error: signErr?.message ?? "signing failed" });
   res.json({ audio_url: data.signedUrl });
+});
+
+// GET /voice/lines/:id/selection — the line's "good" takes (⭐), each with a
+// signed URL, its chronological take number and note, for sequential play and
+// multi-download. When no take is marked good, falls back to the line's current
+// single output (one item, fallback:true). take_number matches the "Take N"
+// label in the UI (1 = oldest).
+router.get("/voice/lines/:id/selection", async (req: Request, res: Response) => {
+  const { data: line, error: lineErr } = await db
+    .from("smrtvoice_lines")
+    .select("id, output_audio_path")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (lineErr) return res.status(500).json({ error: lineErr.message });
+  if (!line) return res.status(404).json({ error: "Line not found" });
+
+  const { data: takeRows, error: takesErr } = await db
+    .from("smrtvoice_line_takes")
+    .select("id, approved, note, voice_label, output_audio_path, created_at")
+    .eq("line_id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: true });
+  if (takesErr) return res.status(500).json({ error: takesErr.message });
+
+  const sign = async (path: string): Promise<string | null> => {
+    const { data } = await db.storage.from("smrtvoice-audio").createSignedUrl(path, 3600);
+    return data?.signedUrl ?? null;
+  };
+
+  const ranked = (takeRows ?? []).map((t, i) => ({ ...t, take_number: i + 1 }));
+  const good = ranked.filter((t) => t.approved && t.output_audio_path);
+
+  const items: Array<{
+    take_id: string | null;
+    url: string;
+    take_number: number | null;
+    note: string | null;
+    voice_label: string | null;
+  }> = [];
+  if (good.length > 0) {
+    for (const t of good) {
+      const url = await sign(t.output_audio_path);
+      if (url) {
+        items.push({ take_id: t.id, url, take_number: t.take_number, note: t.note, voice_label: t.voice_label });
+      }
+    }
+    // Only if at least one good take signed; otherwise fall through to the
+    // line's single output so play/download still has something.
+    if (items.length > 0) return res.json({ items, fallback: false });
+  }
+  if (line.output_audio_path) {
+    const url = await sign(line.output_audio_path);
+    if (url) items.push({ take_id: null, url, take_number: null, note: null, voice_label: null });
+  }
+  res.json({ items, fallback: true });
 });
 
 // ============================================================
@@ -2286,6 +2770,49 @@ router.post("/voice/pronunciation/suggest", async (req: Request, res: Response) 
   if (!word) return res.status(400).json({ error: "word is required" });
   if (word.length > 200) return res.status(400).json({ error: "text too long (max 200 chars)" });
 
+  // Learned respellings for this exact word on this line's voice — surfaced
+  // FIRST so the user reaches for what already worked before asking the LLM.
+  type Learned = { pronounced_as: string; chosen: number; total: number };
+  let learned: Learned[] = [];
+  const lineId = (req.body?.line_id ?? "").toString().trim();
+  if (lineId) {
+    try {
+      const { data: line } = await db
+        .from("smrtvoice_lines")
+        .select("character_id")
+        .eq("id", lineId)
+        .eq("org_id", req.org!.id)
+        .maybeSingle();
+      const voice = await resolveLineVoice(req.org!.id, (line?.character_id as string | null) ?? null);
+      // Only surface learnings when we actually know the voice — otherwise the
+      // "worked for this voice" label would sit on org-wide (cross-voice) data.
+      if (voice.resemble_voice_id || voice.character_id) {
+        let fq = db
+          .from("smrtvoice_pronunciation_feedback")
+          .select("pronounced_as, chosen")
+          .eq("org_id", req.org!.id)
+          .eq("original_word", word);
+        if (voice.resemble_voice_id) fq = fq.eq("resemble_voice_id", voice.resemble_voice_id);
+        else fq = fq.eq("character_id", voice.character_id!);
+        const { data: fb } = await fq;
+        const agg = new Map<string, { chosen: number; total: number }>();
+        for (const r of fb ?? []) {
+          const e = agg.get(r.pronounced_as as string) ?? { chosen: 0, total: 0 };
+          e.total += 1;
+          if (r.chosen) e.chosen += 1;
+          agg.set(r.pronounced_as as string, e);
+        }
+        learned = [...agg.entries()]
+          .filter(([, v]) => v.chosen > 0)
+          .map(([pronounced_as, v]) => ({ pronounced_as, chosen: v.chosen, total: v.total }))
+          .sort((a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total)
+          .slice(0, 3);
+      }
+    } catch (e) {
+      console.error("learned lookup failed", e instanceof Error ? e.message : e);
+    }
+  }
+
   const system = `You help a Hebrew children's TV studio fix mispronunciations on Resemble "resemble-ultra" TTS. Ultra has NO working phoneme/IPA/<sub> support and niqqud HARMS it — the ONLY fix is respelling the text so it READS correctly.
 
 Given a Hebrew word or short phrase, propose respellings that steer the engine to the intended pronunciation:
@@ -2305,10 +2832,63 @@ Return ONLY JSON: {"hebrew": string[], "latin": string[]}`;
     const parsed = parseJsonResponse<{ hebrew?: string[]; latin?: string[] }>(content);
     const clean = (arr?: string[]) =>
       Array.from(new Set((arr ?? []).map((s) => String(s).trim()).filter(Boolean))).slice(0, 3);
-    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin) });
+    res.json({ hebrew: clean(parsed?.hebrew), latin: clean(parsed?.latin), learned });
   } catch (err) {
+    // The LLM leg failed, but learned respellings are still useful on their own.
+    if (learned.length > 0) return res.json({ hebrew: [], latin: [], learned });
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
+});
+
+// GET /voice/learnings — aggregated "which respelling wins" for a voice.
+// Scope by ?resemble_voice_id= or ?character_id= (or ?line_id= to resolve the
+// voice), optionally filtered to a single ?word=. Ranked by times kept (⭐).
+router.get("/voice/learnings", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const word = (req.query.word as string | undefined)?.trim() || null;
+  let resembleVoiceId = ((req.query.resemble_voice_id as string | undefined) || "").trim() || null;
+  let characterId = ((req.query.character_id as string | undefined) || "").trim() || null;
+  const lineId = ((req.query.line_id as string | undefined) || "").trim() || null;
+
+  if (!resembleVoiceId && !characterId && lineId) {
+    const { data: line } = await db
+      .from("smrtvoice_lines")
+      .select("character_id")
+      .eq("id", lineId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const voice = await resolveLineVoice(orgId, (line?.character_id as string | null) ?? null);
+    characterId = voice.character_id;
+    resembleVoiceId = voice.resemble_voice_id;
+  }
+
+  let q = db
+    .from("smrtvoice_pronunciation_feedback")
+    .select("original_word, pronounced_as, chosen")
+    .eq("org_id", orgId);
+  if (word) q = q.eq("original_word", word);
+  if (resembleVoiceId) q = q.eq("resemble_voice_id", resembleVoiceId);
+  else if (characterId) q = q.eq("character_id", characterId);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+
+  const agg = new Map<string, { original_word: string; pronounced_as: string; chosen: number; total: number }>();
+  for (const r of data ?? []) {
+    const key = `${r.original_word}\u001f${r.pronounced_as}`;
+    const e = agg.get(key) ?? {
+      original_word: r.original_word as string,
+      pronounced_as: r.pronounced_as as string,
+      chosen: 0,
+      total: 0,
+    };
+    e.total += 1;
+    if (r.chosen) e.chosen += 1;
+    agg.set(key, e);
+  }
+  const learnings = [...agg.values()].sort(
+    (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
+  );
+  res.json({ learnings, scope: { resemble_voice_id: resembleVoiceId, character_id: characterId } });
 });
 
 export default router;

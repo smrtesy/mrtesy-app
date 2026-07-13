@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { ChevronRight, Trash2, Loader2, Check, Circle } from "lucide-react";
+import { ChevronRight, Trash2, Loader2, Check, Circle, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,7 @@ interface Script {
   code: string;
   name: string | null;
   status: string;
+  language: "he" | "en";
   google_doc_url: string | null;
   google_doc_id: string | null;
   generation_mode: "sts" | "tts";
@@ -48,6 +49,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   const [script, setScript] = useState<Script | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  // Opt-in: apply each character's style baseline (slow/soft/…) on top of the
+  // per-line emotion tags. Off by default — deep tag stacks destabilize the
+  // TTS engine (spurious words / line restarts).
+  const [applyBaseline, setApplyBaseline] = useState(false);
   // Self-heal a script left stuck in queued/processing by a dropped completion
   // webhook: poll the engine once per mount. The endpoint is a no-op if the
   // job is genuinely still running.
@@ -111,12 +117,27 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
   async function onGenerate() {
     setBusy(true);
     try {
-      await api(`/api/voice/scripts/${scriptId}/generate`, { method: "POST" });
+      await api(`/api/voice/scripts/${scriptId}/generate`, {
+        method: "POST",
+        body: { apply_style_baseline: applyBaseline },
+      });
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onStop() {
+    setStopping(true);
+    try {
+      await api(`/api/voice/scripts/${scriptId}/cancel`, { method: "POST" });
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -131,6 +152,19 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
       setBusy(false);
+    }
+  }
+
+  async function onLanguageChange(language: "he" | "en") {
+    if (!script || language === script.language) return;
+    // Optimistic: reflect immediately, roll back on failure.
+    const prev = script.language;
+    setScript({ ...script, language });
+    try {
+      await api(`/api/voice/scripts/${scriptId}`, { method: "PATCH", body: { language } });
+    } catch (err) {
+      setScript((s) => (s ? { ...s, language: prev } : s));
+      toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
@@ -158,6 +192,19 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          {/* Script language — gates which pronunciation-lexicon entries apply
+              (a 'he' entry fires only on Hebrew scripts, 'en' only on English). */}
+          <select
+            className="rounded-md border bg-background px-2 py-1 text-sm"
+            value={script.language}
+            onChange={(e) => onLanguageChange(e.target.value as "he" | "en")}
+            disabled={busy || generating}
+            title={t("languageHint")}
+            aria-label={t("languageLabel")}
+          >
+            <option value="he">{t("languageHe")}</option>
+            <option value="en">{t("languageEn")}</option>
+          </select>
           <ProjectStatusBadge status={script.status} />
           <Button variant="ghost" size="icon" onClick={onDelete} disabled={busy} title={t("delete")}>
             <Trash2 className="h-4 w-4" />
@@ -199,12 +246,45 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
             t("generate")
           )}
         </Button>
+        {generating && (
+          <Button variant="destructive" onClick={onStop} disabled={stopping}>
+            {stopping ? (
+              <>
+                <Loader2 className="h-4 w-4 me-1 animate-spin" />
+                {t("stopping")}
+              </>
+            ) : (
+              <>
+                <Square className="h-4 w-4 me-1" />
+                {t("stop")}
+              </>
+            )}
+          </Button>
+        )}
         {script.google_doc_url && (
           <a href={script.google_doc_url} target="_blank" rel="noreferrer" className="ms-auto">
             <Button variant="ghost">{t("openDoc")}</Button>
           </a>
         )}
       </div>
+
+      {/* Opt-in: apply the character style baseline. Off by default — deep tag
+          stacks destabilize the TTS engine (spurious words / line restarts). */}
+      {parsed && (
+        <label
+          className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
+          title={t("useBaselineHint")}
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={applyBaseline}
+            onChange={(e) => setApplyBaseline(e.target.checked)}
+            disabled={busy || generating}
+          />
+          {t("useBaseline")}
+        </label>
+      )}
 
       {/* STS input recording */}
       {script.generation_mode === "sts" && (

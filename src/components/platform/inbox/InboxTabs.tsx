@@ -6,6 +6,7 @@ import { SuggestionTabs } from "@/components/smrttask/suggestions/SuggestionTabs
 import { NotificationsList } from "@/components/platform/inbox/NotificationsList";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { todayISO } from "@/lib/workdays";
 
 interface Props {
   locale: string;
@@ -41,11 +42,18 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const [messagesRes, scheduledRes, projectsRes, dismissedRes, notifRes] = await Promise.all([
+    const [messagesRes, scheduledRes, datedRes, projectsRes, dismissedRes, notifRes] = await Promise.all([
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "inbox").eq("manually_verified", false).not("source_message_id", "is", null),
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("status", "snoozed").not("snoozed_until", "is", null),
+      // Future-dated active tasks — the "scheduled by date" track. Counted into
+      // the scheduled badge alongside snoozed rows. Verified only, so an
+      // unverified dated suggestion (still in the Messages tab) isn't double-counted.
+      supabase.from("tasks").select("*", { count: "exact", head: true })
+        .eq("user_id", user.id).eq("manually_verified", true)
+        .not("due_date", "is", null).gt("due_date", todayISO())
+        .in("status", ["inbox", "in_progress"]),
       supabase.from("tasks").select("*", { count: "exact", head: true })
         .eq("user_id", user.id).eq("task_type", "project_suggestion").eq("status", "inbox"),
       supabase.from("tasks").select("*", { count: "exact", head: true })
@@ -58,7 +66,7 @@ export function InboxTabs({ locale, hasSmrtTask }: Props) {
 
     setCounts({
       messages:      messagesRes.count  ?? 0,
-      scheduled:     scheduledRes.count ?? 0,
+      scheduled:     (scheduledRes.count ?? 0) + (datedRes.count ?? 0),
       projects:      projectsRes.count  ?? 0,
       dismissed:     dismissedRes.count ?? 0,
       notifications: notifRes.count     ?? 0,

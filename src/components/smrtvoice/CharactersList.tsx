@@ -42,7 +42,7 @@ export function CharactersList() {
               .catch(() => null),
           ),
         );
-        const READY = new Set(["ready", "completed", "active", "done", "available"]);
+        const READY = new Set(["ready", "completed", "active", "done", "available", "finished"]);
         if (results.some((s) => s && READY.has(s.toLowerCase()))) {
           const { characters: fresh } = await api<{ characters: Character[] }>("/api/voice/characters");
           setCharacters(fresh);

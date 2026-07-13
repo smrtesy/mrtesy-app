@@ -149,6 +149,9 @@ export interface Task {
   deletion_requested?: boolean | null;
   /** Private (owner-only) vs organizational. Default true so existing tasks stay private. */
   is_private?: boolean | null;
+  /** A decision task: on completion its stated outcome propagates to the tasks
+   *  that list it in affected_by (docs project-planning-protocol §10). */
+  is_decision?: boolean | null;
   /**
    * "What's needed to start" — the inbound task→task dependencies, resolved by the
    * backend from smrtplan_dependencies. Each entry is a provider task this task waits on.

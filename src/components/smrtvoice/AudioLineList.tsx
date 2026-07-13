@@ -15,6 +15,9 @@ import {
   BadgeCheck,
   History,
   Loader2,
+  Archive,
+  Trash2,
+  CheckSquare,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +27,7 @@ import { api } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 
 import { DownloadAllButton } from "./DownloadAllButton";
+import { noteSuffix } from "./takeName";
 
 interface Tag {
   tag: string;
@@ -48,6 +52,8 @@ interface Line {
   approved: boolean;
   redo_requested: boolean;
   take_count?: number;
+  approved_take_count?: number;
+  archived_at?: string | null;
 }
 
 interface Take {
@@ -59,6 +65,7 @@ interface Take {
   cost_usd: number | null;
   approved: boolean;
   note: string | null;
+  voice_label: string | null;
   created_at: string;
 }
 
@@ -72,9 +79,16 @@ function tagsFromBody(body: string | null): string[] {
   return [...found];
 }
 
+interface LearnedSuggestion {
+  pronounced_as: string;
+  chosen: number;
+  total: number;
+}
+
 interface Suggestions {
   hebrew: string[];
   latin: string[];
+  learned?: LearnedSuggestion[];
 }
 
 /** The body last sent to Resemble — what the edit box is prefilled with. */
@@ -90,10 +104,19 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playingAll, setPlayingAll] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
   const [newLineNumbers, setNewLineNumbers] = useState<number[]>([]);
+
+  // Bulk archive/delete selection mode + archived-lines view.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Anchor index (in `rendered`) of the last plain click, for Shift+click range.
+  const selectAnchorRef = useRef<number | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Combined settings + edit + send-again panel (one per line).
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -120,6 +143,46 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const cancelRef = useRef(false);
   const resolveRef = useRef<(() => void) | null>(null);
+  // Pause/resume: pausedRef gates the play-all loop even in the gap between
+  // lines (where there's no <audio> to pause), so Pause is reliable there too.
+  const pausedRef = useRef(false);
+  const resumeWaitersRef = useRef<Array<() => void>>([]);
+
+  // Resolves immediately unless paused; while paused, parks the caller until
+  // resumePlayback()/stopPlayback() releases it.
+  function waitWhilePaused(): Promise<void> {
+    if (!pausedRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      resumeWaitersRef.current.push(resolve);
+    });
+  }
+  function pausePlayback() {
+    pausedRef.current = true;
+    setPaused(true);
+    currentAudioRef.current?.pause(); // keeps currentTime → resume continues
+  }
+  function resumePlayback() {
+    pausedRef.current = false;
+    setPaused(false);
+    currentAudioRef.current?.play().catch(() => {});
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
+  }
+
+  // Silence playback and release any parked loop when leaving the screen.
+  // Ref-only (no setState) since the component is unmounting.
+  useEffect(() => () => {
+    cancelRef.current = true;
+    pausedRef.current = false;
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    resolveRef.current?.();
+    resolveRef.current = null;
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
+  }, []);
 
   const fetchLines = useCallback(async () => {
     try {
@@ -166,28 +229,48 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     };
   }, [fetchLines, loadTakes, scriptId]);
 
-  const rendered = (lines ?? []).filter((l) => l.output_audio_path);
-  const redoCount = (lines ?? []).filter((l) => l.redo_requested).length;
+  // Archived lines are hidden from the normal view; the "Archived (N)" toggle
+  // swaps `rendered` to show only them.
+  const rendered = (lines ?? []).filter(
+    (l) => l.output_audio_path && (showArchived ? l.archived_at : !l.archived_at),
+  );
+  const archivedCount = (lines ?? []).filter((l) => l.output_audio_path && l.archived_at).length;
+  const redoCount = (lines ?? []).filter((l) => l.redo_requested && !l.archived_at).length;
 
   async function playUrl(url: string, id: string): Promise<void> {
+    const audio = new Audio(url);
     await new Promise<void>((resolve) => {
       resolveRef.current = resolve;
-      const audio = new Audio(url);
       currentAudioRef.current = audio;
       setPlayingId(id);
       audio.onended = () => resolve();
       audio.onerror = () => resolve();
       audio.play().catch(() => resolve());
     });
+    // Clip finished on its own — drop the ref so a Resume pressed in the gap
+    // before the next clip doesn't replay this ended clip on top of it.
+    if (currentAudioRef.current === audio) currentAudioRef.current = null;
   }
 
+  // Play the line's "good" takes in sequence (one after another). When none are
+  // marked good, the selection endpoint falls back to the line's current audio.
   async function playOne(line: Line): Promise<void> {
-    if (!line.output_audio_path) return;
     try {
-      const { audio_url } = await api<{ audio_url: string }>(
-        `/api/voice/lines/${line.id}/audio-url`,
+      const { items } = await api<{ items: { url: string }[] }>(
+        `/api/voice/lines/${line.id}/selection`,
       );
-      await playUrl(audio_url, line.id);
+      // NOTE: do NOT reset cancelRef here — the caller owns it (playSequence
+      // sets it once for the whole run; the single Play button resets it before
+      // calling). Resetting here would swallow a Pause pressed during the
+      // between-line fetch gap of "play all".
+      if (items.length === 0) return;
+      setPlayingId(line.id);
+      for (const it of items) {
+        if (cancelRef.current) break;
+        await waitWhilePaused();
+        if (cancelRef.current) break;
+        await playUrl(it.url, line.id);
+      }
     } catch {
       /* skip a failed line and continue */
     } finally {
@@ -210,16 +293,25 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     URL.revokeObjectURL(objectUrl);
   }
 
+  // Download the line's "good" takes (each file named with its take number and
+  // note); when none are marked good, downloads the line's single current audio.
   async function downloadOne(line: Line) {
-    if (!line.output_audio_path) return;
     try {
-      const { audio_url } = await api<{ audio_url: string }>(
-        `/api/voice/lines/${line.id}/audio-url`,
-      );
-      await downloadBlob(
-        audio_url,
-        `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}.wav`,
-      );
+      const { items } = await api<{
+        items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
+      }>(`/api/voice/lines/${line.id}/selection`);
+      if (items.length === 0) {
+        toast.error(t("studio.noAudio"));
+        return;
+      }
+      const base = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}`;
+      for (const it of items) {
+        const name =
+          it.take_number != null
+            ? `${base}_v${it.take_number}${noteSuffix(it.voice_label)}${noteSuffix(it.note)}.wav`
+            : `${base}.wav`;
+        await downloadBlob(it.url, name);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
@@ -229,21 +321,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     const playable = items.filter((l) => l.output_audio_path);
     if (playable.length === 0) return;
     cancelRef.current = false;
+    pausedRef.current = false;
+    setPaused(false);
     setPlayingAll(true);
     for (const line of playable) {
+      if (cancelRef.current) break;
+      await waitWhilePaused();
       if (cancelRef.current) break;
       await playOne(line);
     }
     setPlayingAll(false);
+    setPaused(false);
+    pausedRef.current = false;
     currentAudioRef.current = null;
   }
 
   function stopPlayback() {
     cancelRef.current = true;
+    pausedRef.current = false;
+    setPaused(false);
     currentAudioRef.current?.pause();
     currentAudioRef.current = null;
     resolveRef.current?.();
     resolveRef.current = null;
+    // Release any loop parked in the between-lines gap so it sees the cancel.
+    const waiters = resumeWaitersRef.current;
+    resumeWaitersRef.current = [];
+    waiters.forEach((w) => w());
     setPlayingAll(false);
     setPlayingId(null);
   }
@@ -271,7 +375,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     selRef.current = e > s ? { start: s, end: e } : null;
   }
 
-  async function suggestForWord() {
+  async function suggestForWord(line: Line) {
     // Prefer the selected word; fall back to a single-token box.
     let query = "";
     if (selRef.current) {
@@ -292,7 +396,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     try {
       const s = await api<Suggestions>("/api/voice/pronunciation/suggest", {
         method: "POST",
-        body: { word: query },
+        body: { word: query, line_id: line.id },
       });
       setSuggestions(s);
     } catch (err) {
@@ -394,28 +498,29 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       const { audio_url } = await api<{ audio_url: string }>(
         `/api/voice/takes/${take.id}/audio-url`,
       );
-      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}.wav`);
+      await downloadBlob(audio_url, `${String(lineNumber).padStart(3, "0")}_take${n}${noteSuffix(take.voice_label)}${noteSuffix(take.note)}.wav`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     }
   }
 
-  // Toggle this take as the line's audio (single-select). Clicking an
-  // unchosen take marks it and repoints the line; clicking the already-chosen
-  // take un-chooses it, and once no take is chosen the line's ✓ disappears.
-  async function chooseTake(take: Take) {
+  // Toggle whether this take is marked "good" (⭐). Multi-select: several takes
+  // can be good on one line (e.g. to take part of each in editing). Independent
+  // of what the engine renders — marking never changes the produced file, so a
+  // regenerate can't steal the selection. The line's play/download/archive and
+  // outer indicator all follow the set of good takes.
+  async function toggleGood(take: Take) {
     const next = !take.approved;
     setTakes((prev) => {
       const key = takesOpenId ?? "";
-      const list = (prev[key] ?? []).map((tk) => ({
-        ...tk,
-        approved: next ? tk.id === take.id : tk.id === take.id ? false : tk.approved,
-      }));
+      const list = (prev[key] ?? []).map((tk) =>
+        tk.id === take.id ? { ...tk, approved: next } : tk,
+      );
       return takesOpenId ? { ...prev, [key]: list } : prev;
     });
     try {
       await api(`/api/voice/takes/${take.id}`, { method: "PATCH", body: { approved: next } });
-      fetchLines(); // the line's audio / ✓ indicator now reflects the choice
+      fetchLines(); // refresh approved_take_count → outer indicator
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
       if (takesOpenId) loadTakes(takesOpenId);
@@ -456,6 +561,76 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
     }
   }
 
+  // Select a row by its position in `rendered`. Shift+click extends the
+  // selection across the whole range from the anchor (last plain click) to this
+  // row; a plain click toggles the single row and moves the anchor.
+  function selectAt(index: number, shiftKey: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && selectAnchorRef.current !== null) {
+        const lo = Math.min(selectAnchorRef.current, index);
+        const hi = Math.max(selectAnchorRef.current, index);
+        for (let i = lo; i <= hi; i++) {
+          const row = rendered[i];
+          if (row) next.add(row.id);
+        }
+      } else {
+        const id = rendered[index]?.id;
+        if (id) {
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+        }
+      }
+      return next;
+    });
+    if (!shiftKey) selectAnchorRef.current = index;
+  }
+
+  function exitSelect() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    selectAnchorRef.current = null;
+  }
+
+  // Archive (soft, reversible), unarchive, or permanently delete the selected
+  // lines. Delete cascades to the lines' takes and removes their audio.
+  async function bulkAction(action: "archive" | "unarchive" | "delete") {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (action === "delete" && !window.confirm(t("studio.confirmDeleteLines", { count: ids.length }))) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      await api(`/api/voice/scripts/${scriptId}/lines/bulk`, {
+        method: "POST",
+        body: { action, line_ids: ids },
+      });
+      // Reflect the change immediately. Don't rely on the re-fetch alone (it can
+      // race the just-committed write) or on realtime (logical-replication DELETE
+      // events carry only the PK, so the script_id filter drops them — the list
+      // would otherwise sit stale until a manual refresh).
+      const idSet = new Set(ids);
+      setLines((prev) =>
+        prev
+          ? action === "delete"
+            ? prev.filter((l) => !idSet.has(l.id))
+            : prev.map((l) =>
+                idSet.has(l.id)
+                  ? { ...l, archived_at: action === "archive" ? new Date().toISOString() : null }
+                  : l,
+              )
+          : prev,
+      );
+      exitSelect();
+      fetchLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (lines === null) return <p className="text-sm text-muted-foreground">…</p>;
 
@@ -469,33 +644,89 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{t("audio.title")}</h2>
         <div className="flex flex-wrap items-center gap-2">
-          {rendered.length > 0 &&
-            (playingAll ? (
-              <Button size="sm" variant="outline" onClick={stopPlayback}>
-                <Square className="h-4 w-4 me-1" /> {t("studio.stop")}
+          {selectMode ? (
+            <>
+              <span className="text-sm text-muted-foreground">
+                {t("studio.selectedCount", { count: selectedIds.size })}
+              </span>
+              {showArchived ? (
+                <Button size="sm" variant="outline" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("unarchive")}>
+                  <Archive className="h-4 w-4 me-1" /> {t("studio.unarchive")}
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("archive")}>
+                  <Archive className="h-4 w-4 me-1" /> {t("studio.archiveAction")}
+                </Button>
+              )}
+              <Button size="sm" variant="destructive" disabled={bulkBusy || selectedIds.size === 0} onClick={() => bulkAction("delete")}>
+                <Trash2 className="h-4 w-4 me-1" /> {t("studio.deleteAction")}
               </Button>
-            ) : (
-              <Button size="sm" variant="outline" onClick={() => playSequence(rendered)}>
-                <Play className="h-4 w-4 me-1" /> {t("studio.playAll")}
-              </Button>
-            ))}
-          {newOnes.length > 0 && !playingAll && (
-            <Button size="sm" variant="outline" onClick={() => playSequence(newOnes)}>
-              <Play className="h-4 w-4 me-1" /> {t("studio.playNew", { count: newOnes.length })}
-            </Button>
-          )}
-          {redoCount > 0 && (
-            <Button size="sm" variant="secondary" onClick={rerunRedos} disabled={rerunning}>
-              <RefreshCw className={`h-4 w-4 me-1 ${rerunning ? "animate-spin" : ""}`} />
-              {t("studio.rerunRedos", { count: redoCount })}
-            </Button>
-          )}
-          {rendered.length > 0 && <DownloadAllButton scriptId={scriptId} />}
-          {rendered.length > 0 && (
-            <Button size="sm" onClick={saveToDrive} disabled={archiving}>
-              <FolderUp className="h-4 w-4 me-1" />
-              {archiving ? t("studio.saving") : t("studio.saveToDrive")}
-            </Button>
+              <Button size="sm" variant="ghost" onClick={exitSelect}>{t("studio.cancel")}</Button>
+            </>
+          ) : (
+            <>
+              {rendered.length > 0 && (
+                <Button size="sm" variant="outline" onClick={() => setSelectMode(true)}>
+                  <CheckSquare className="h-4 w-4 me-1" /> {t("studio.select")}
+                </Button>
+              )}
+              {showArchived ? (
+                <Button size="sm" variant="outline" onClick={() => setShowArchived(false)}>
+                  {t("studio.backFromArchived")}
+                </Button>
+              ) : (
+                archivedCount > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => setShowArchived(true)}>
+                    <Archive className="h-4 w-4 me-1" /> {t("studio.archivedView", { count: archivedCount })}
+                  </Button>
+                )
+              )}
+              {!showArchived && rendered.length > 0 &&
+                (playingAll ? (
+                  <div className="inline-flex overflow-hidden rounded-md border">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-none border-e"
+                      onClick={paused ? resumePlayback : pausePlayback}
+                      title={paused ? t("studio.resume") : t("studio.pause")}
+                    >
+                      {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-none"
+                      onClick={stopPlayback}
+                      title={t("studio.stop")}
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => playSequence(rendered)}>
+                    <Play className="h-4 w-4 me-1" /> {t("studio.playAll")}
+                  </Button>
+                ))}
+              {!showArchived && newOnes.length > 0 && !playingAll && (
+                <Button size="sm" variant="outline" onClick={() => playSequence(newOnes)}>
+                  <Play className="h-4 w-4 me-1" /> {t("studio.playNew", { count: newOnes.length })}
+                </Button>
+              )}
+              {!showArchived && redoCount > 0 && (
+                <Button size="sm" variant="secondary" onClick={rerunRedos} disabled={rerunning}>
+                  <RefreshCw className={`h-4 w-4 me-1 ${rerunning ? "animate-spin" : ""}`} />
+                  {t("studio.rerunRedos", { count: redoCount })}
+                </Button>
+              )}
+              {!showArchived && rendered.length > 0 && <DownloadAllButton scriptId={scriptId} />}
+              {!showArchived && rendered.length > 0 && (
+                <Button size="sm" onClick={saveToDrive} disabled={archiving}>
+                  <FolderUp className="h-4 w-4 me-1" />
+                  {archiving ? t("studio.saving") : t("studio.saveToDrive")}
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -503,18 +734,19 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       {rendered.length === 0 ? (
         <p className="text-sm text-muted-foreground">—</p>
       ) : (
-        rendered.map((line) => {
+        rendered.map((line, index) => {
           const req = line.resemble_request ?? {};
           const model = (req.model as string | undefined) ?? null;
           const expanded = expandedId === line.id;
           const lineTakes = takes[line.id] ?? [];
           const takeCount = line.take_count ?? 0;
+          const goodCount = line.approved_take_count ?? 0;
           const regenerating = line.status === "processing";
           return (
             <Card
               key={line.id}
               className={
-                line.approved
+                goodCount > 0
                   ? "border-emerald-400"
                   : line.redo_requested
                     ? "border-amber-400"
@@ -523,9 +755,35 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
             >
               <CardContent className="p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
+                  {selectMode && (
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 shrink-0"
+                      checked={selectedIds.has(line.id)}
+                      onClick={(e) => selectAt(index, e.shiftKey)}
+                      onChange={() => {}}
+                      aria-label={t("studio.select")}
+                    />
+                  )}
+                  <div
+                    className="min-w-0 flex-1 cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    title={selectMode ? undefined : t("studio.takes")}
+                    onClick={(e) => (selectMode ? selectAt(index, e.shiftKey) : toggleTakes(line.id))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        if (selectMode) selectAt(index, e.shiftKey);
+                        else toggleTakes(line.id);
+                      }
+                    }}
+                  >
                     <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-1.5">
                       <span>#{line.line_number} · {line.speaker_name}</span>
+                      {line.archived_at && (
+                        <span className="rounded bg-muted px-1.5 py-0.5">{t("studio.archivedBadge")}</span>
+                      )}
                       {line.output_duration_seconds ? (
                         <span>· {line.output_duration_seconds.toFixed(1)}s</span>
                       ) : null}
@@ -541,10 +799,10 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                           {t("studio.recreating")}
                         </span>
                       )}
-                      {line.approved && (
+                      {goodCount > 0 && (
                         <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
                           <BadgeCheck className="h-3 w-3" />
-                          {t("studio.approved")}
+                          {t("studio.goodCount", { count: goodCount })}
                         </span>
                       )}
                       {line.redo_requested && (
@@ -555,6 +813,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     </div>
                     <div className="text-sm truncate" dir="rtl">{line.text_clean}</div>
                   </div>
+                  {!selectMode && (
                   <div className="flex items-center gap-1">
                     <Button
                       size="icon"
@@ -595,7 +854,10 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     ) : (
                       <Button
                         size="icon"
-                        onClick={() => playOne(line)}
+                        onClick={() => {
+                          cancelRef.current = false;
+                          playOne(line);
+                        }}
                         disabled={playingAll}
                         title={t("studio.play")}
                       >
@@ -603,6 +865,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                       </Button>
                     )}
                   </div>
+                  )}
                 </div>
 
                 {/* Combined transparency + edit + send-again panel. */}
@@ -642,7 +905,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
 
                     {/* Word-level phonetic suggestions. */}
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" variant="ghost" onClick={suggestForWord} disabled={suggesting}>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => suggestForWord(line)} disabled={suggesting}>
                         <Sparkles className={`h-4 w-4 me-1 ${suggesting ? "animate-pulse" : ""}`} />
                         {t("studio.suggest")}
                       </Button>
@@ -650,8 +913,33 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                     </div>
                     {suggestions && (
                       <div className="space-y-1.5 rounded-md bg-background/60 p-2">
-                        {suggestions.hebrew.length === 0 && suggestions.latin.length === 0 && (
-                          <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                        {suggestions.hebrew.length === 0 &&
+                          suggestions.latin.length === 0 &&
+                          (suggestions.learned?.length ?? 0) === 0 && (
+                            <span className="text-muted-foreground">{t("studio.noSuggestions")}</span>
+                          )}
+                        {(suggestions.learned?.length ?? 0) > 0 && (
+                          <div className="space-y-1">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              {t("studio.learnedTitle")}
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {suggestions.learned!.map((l, i) => (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => applySuggestion(l.pronounced_as)}
+                                  title={t("studio.learnedStat", { chosen: l.chosen, total: l.total })}
+                                  className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-sm hover:bg-primary/20"
+                                >
+                                  <code dir="auto">{l.pronounced_as}</code>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {l.chosen}/{l.total}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         )}
                         {suggestions.hebrew.length > 0 && (
                           <SuggestChips label={t("studio.suggestHebrew")} items={suggestions.hebrew} onPick={applySuggestion} />
@@ -702,8 +990,11 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <span>{t("studio.takeLabel", { n: lineTakes.length - idx })}</span>
+                                {take.voice_label && (
+                                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-800" dir="rtl">{take.voice_label}</span>
+                                )}
                                 {take.approved && (
-                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.inUse")}</span>
+                                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{t("studio.good")}</span>
                                 )}
                                 <span>· {new Date(take.created_at).toLocaleString(locale)}</span>
                                 {take.duration_seconds ? <span>· {take.duration_seconds.toFixed(1)}s</span> : null}
@@ -719,9 +1010,9 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                title={take.approved ? t("studio.chosenTake") : t("studio.useTake")}
+                                title={take.approved ? t("studio.unmarkGood") : t("studio.markGood")}
                                 className={take.approved ? "text-emerald-600" : undefined}
-                                onClick={() => chooseTake(take)}
+                                onClick={() => toggleGood(take)}
                               >
                                 <BadgeCheck className="h-4 w-4" />
                               </Button>

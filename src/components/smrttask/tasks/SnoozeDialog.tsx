@@ -17,6 +17,13 @@ interface Props {
   onConfirm: (untilIso: string) => Promise<void> | void;
   /** Optional title override; defaults to the snooze action label. */
   title?: string;
+  /** The snoozed task's due date (YYYY-MM-DD), if any. When the chosen snooze
+   *  lands AFTER it, the dialog warns and offers to cut back to the deadline or
+   *  move the deadline itself — instead of silently deferring past it. */
+  dueDate?: string | null;
+  /** Move the task's deadline to a new date (YYYY-MM-DD). Providing it enables
+   *  the "update the deadline" shortcut inside the past-deadline warning. */
+  onUpdateDeadline?: (newDueDate: string) => Promise<void> | void;
 }
 
 /**
@@ -29,7 +36,7 @@ interface Props {
  * needs *some* concrete moment to resurface, and shipping without a time
  * input would force the same hardcoded 09:00 the user is trying to escape.
  */
-export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
+export function SnoozeDialog({ open, onClose, onConfirm, title, dueDate, onUpdateDeadline }: Props) {
   const t = useTranslations("tasks.snooze");
   const tCommon = useTranslations("common");
   const blocked = useWorkCalendar();
@@ -37,10 +44,12 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
   const [time, setTime] = useState("09:00");
   const [submitting, setSubmitting] = useState(false);
 
-  // The snooze is never capped by the task's deadline — the user decides when
-  // they want to see the task again, even past its due date. (A deadline cap
-  // used to clamp overdue tasks to a moment already in the past, which woke
-  // them immediately and made every snooze a no-op.)
+  // The snooze is never hard-capped by the deadline — the user may still defer
+  // past a due date (a cap once clamped overdue tasks to a past moment, waking
+  // them instantly). But deferring PAST the deadline is never silent: when the
+  // picked day is after `dueDate` we warn and offer to cut back or move it.
+  const pastDeadline = (target: string) => !!dueDate && !!target && target > dueDate;
+  const warn = pastDeadline(date);
 
   // Re-seed each time the dialog opens so reopening after a previous
   // snooze doesn't keep the stale date around.
@@ -65,6 +74,14 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
   })();
 
   async function applyPreset(d: Date, hour: number) {
+    const dstr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    // A preset that lands past the deadline must NOT apply silently — drop it
+    // into the picker so the past-deadline warning surfaces and the user decides.
+    if (pastDeadline(dstr)) {
+      setDate(dstr);
+      setTime(`${String(hour).padStart(2, "0")}:00`);
+      return;
+    }
     const when = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0);
     setSubmitting(true);
     try {
@@ -149,6 +166,37 @@ export function SnoozeDialog({ open, onClose, onConfirm, title }: Props) {
               />
             </div>
           </div>
+
+          {/* Past-deadline guard — warn, don't silently defer past the due date.
+              Offer to cut back to the deadline day or move the deadline itself. */}
+          {warn && (
+            <div className="space-y-2 rounded-md border border-status-warn/40 bg-status-warn-bg/50 p-2.5 text-xs">
+              <p className="font-medium text-status-warn">{t("deadlineWarn", { due: dueDate ?? "" })}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" disabled={submitting} onClick={() => setDate(dueDate!)}>
+                  {t("cutToDeadline")}
+                </Button>
+                {onUpdateDeadline && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={submitting}
+                    onClick={async () => {
+                      setSubmitting(true);
+                      try {
+                        await onUpdateDeadline(date);
+                        onClose();
+                      } finally {
+                        setSubmitting(false);
+                      }
+                    }}
+                  >
+                    {t("moveDeadline")}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">

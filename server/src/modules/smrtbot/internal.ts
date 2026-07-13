@@ -65,6 +65,7 @@ router.post("/api/bot/internal/inbound", async (req: Request, res: Response) => 
       title: "Inbound handler crashed",
       message: msg,
       botId: (bot as BotRow).id,
+      env: env === "test" ? "test" : "live",
       stack,
       details: { inbound: message },
     });

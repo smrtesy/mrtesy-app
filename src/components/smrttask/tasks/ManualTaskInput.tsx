@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Circle, Layers, ListPlus, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -63,6 +63,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // ── task tab state ──────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
   const [size, setSize] = useState<"quick" | "medium" | "big">("medium");
+  // Daily method: medium/big default to the pool; this toggle opts one into
+  // "היום" at creation time. Quick tasks are always today, so it's moot for them.
+  const [addToToday, setAddToToday] = useState(false);
   // "" = משרד/office (default), "home" = בית, "outside" = בחוץ.
   const [taskContext, setTaskContext] = useState<"" | "home" | "outside">("");
   const [dueDate, setDueDate] = useState("");
@@ -97,6 +100,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setTab("task");
     setTitle("");
     setSize("medium");
+    setAddToToday(false);
     setTaskContext("");
     setDueDate("");
     setDueTime("");
@@ -275,8 +279,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       if (checklist.length) body.checklist = checklist;
       // Daily method: a ⚡quick task is auto-committed to today (you do all
       // quick daily); medium/big land in the pool (no planned_for) until the
-      // user pulls them into "היום".
-      if (size === "quick") body.planned_for = todayISO();
+      // user pulls them into "היום" — or opts in now via the "להיום" toggle.
+      // A dated task is scheduled (floats in at its time), so the toggle is
+      // ignored when a due date is set.
+      if (size === "quick" || (addToToday && !dueDate)) body.planned_for = todayISO();
 
       const { task: created } = await api<{ task: { id: string } }>("/api/tasks", { method: "POST", body });
 
@@ -486,36 +492,58 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               <div className="flex rounded-lg border p-0.5">
                 <button
                   type="button"
+                  title={t("sizeQuick")}
+                  aria-label={t("sizeQuick")}
                   onClick={() => setSize("quick")}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
                     size === "quick" ? "bg-status-warn-bg text-status-warn" : "text-muted-foreground",
                   )}
                 >
-                  <Zap className="h-3.5 w-3.5" />
-                  {t("sizeQuick")}
+                  <Zap className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
+                  title={t("sizeMedium")}
+                  aria-label={t("sizeMedium")}
                   onClick={() => setSize("medium")}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
                     size === "medium" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                   )}
                 >
-                  {t("sizeMedium")}
+                  <Circle className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
+                  title={t("sizeBig")}
+                  aria-label={t("sizeBig")}
                   onClick={() => setSize("big")}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-sm font-medium transition-colors",
+                    "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
                     size === "big" ? "bg-primary text-primary-foreground" : "text-muted-foreground",
                   )}
                 >
-                  {t("sizeBig")}
+                  <Layers className="h-4 w-4" />
                 </button>
               </div>
+
+              {/* Daily method: medium/big default to the pool — opt into "היום" here.
+                  Hidden for quick (always today) and for dated tasks (scheduled). */}
+              {size !== "quick" && !dueDate && (
+                <button
+                  type="button"
+                  onClick={() => setAddToToday((v) => !v)}
+                  className={cn(
+                    "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
+                    addToToday ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
+                  )}
+                  aria-pressed={addToToday}
+                >
+                  <ListPlus className="h-3.5 w-3.5" />
+                  {t("addToToday")}
+                </button>
+              )}
 
               <button
                 type="button"

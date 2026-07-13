@@ -119,7 +119,11 @@ export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchPro
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(60);
-      if (!archive) q = q.neq("status", "archived");
+      // "Archive" hides the two set-aside states: archived AND dismissed.
+      // Without excluding dismissed, a dismissed task (e.g. T1134) leaked into
+      // results even with the toggle OFF — the user couldn't tell why a task
+      // they'd killed kept surfacing.
+      if (!archive) q = q.not("status", "in", "(archived,dismissed)");
       return q;
     };
 
@@ -308,6 +312,16 @@ function ResultCard({
         day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit",
       })
     : null;
+  // A hit that isn't in the active list explains itself with a state badge, so
+  // the user isn't confused why a searched task is nowhere on their desk
+  // (snoozed keeps its own "until when" chip above). archived/dismissed only
+  // appear when "include archive" is on.
+  const statusBadge = ({
+    archived: t("statusArchived"),
+    dismissed: t("statusDismissed"),
+    completed: t("statusCompleted"),
+    pending_completion: t("statusPendingCompletion"),
+  } as Record<string, string>)[task.status] ?? null;
 
   return (
     <button
@@ -328,6 +342,11 @@ function ResultCard({
           <span className="inline-flex items-center gap-0.5 rounded-md bg-status-warn-bg px-1.5 py-0.5 text-[10px] font-medium text-status-warn">
             <Clock className="h-3 w-3" />
             {t("snoozedUntil", { when: snoozedUntil })}
+          </span>
+        )}
+        {statusBadge && (
+          <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {statusBadge}
           </span>
         )}
         {due && <span className="text-[10px] text-muted-foreground">{due}</span>}

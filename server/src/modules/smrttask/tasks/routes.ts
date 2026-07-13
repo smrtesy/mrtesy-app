@@ -298,6 +298,71 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
   res.json({ count: count ?? 0 });
 });
 
+// ── day-plan (מהיר·3·1 day-tool) ────────────────────────────────────────────
+// A daily_plans row records the day the user "built": the medium/big picks +
+// the quick load. The nightly rollover closes it out with the completion
+// snapshot (see 20260712130000_daily_plans.sql). Registered BEFORE GET/PATCH
+// /tasks/:id so "day-plan" isn't captured as an :id.
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** GET /tasks/day-plan?date=YYYY-MM-DD — that day's committed plan (or null). */
+router.get("/tasks/day-plan", async (req: Request, res: Response) => {
+  const date = String(req.query.date ?? "");
+  if (!ISO_DATE.test(date)) {
+    return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+  }
+  const { data, error } = await db
+    .from("daily_plans")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .eq("plan_date", date)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data ?? null });
+});
+
+/** POST /tasks/day-plan — upsert today's committed picks.
+ *  Body: { plan_date: "YYYY-MM-DD", picked_task_ids: string[], quick_total: number }.
+ *  Idempotent per (user_id, plan_date): rebuilding the day overwrites the picks
+ *  and quick_total but never the completion counts (only the rollover writes those). */
+router.post("/tasks/day-plan", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const planDate = String(body.plan_date ?? "");
+  if (!ISO_DATE.test(planDate)) {
+    return res.status(400).json({ error: "plan_date must be YYYY-MM-DD" });
+  }
+  const picked = body.picked_task_ids;
+  if (!Array.isArray(picked) || picked.some((id) => typeof id !== "string" || !id)) {
+    return res.status(400).json({ error: "picked_task_ids must be an array of task ids" });
+  }
+  if (picked.length > 100) {
+    return res.status(400).json({ error: "picked_task_ids is limited to 100 entries" });
+  }
+  const quickTotal = body.quick_total;
+  if (typeof quickTotal !== "number" || !Number.isInteger(quickTotal) || quickTotal < 0) {
+    return res.status(400).json({ error: "quick_total must be a non-negative integer" });
+  }
+
+  const { data, error } = await db
+    .from("daily_plans")
+    .upsert(
+      {
+        user_id: req.user!.id,
+        org_id: req.org!.id,
+        plan_date: planDate,
+        picked_task_ids: picked,
+        quick_total: quickTotal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,plan_date" },
+    )
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
@@ -544,7 +609,7 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
     .update({ status: "archived", completed_at: now, status_changed_at: now })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, project_id, tags, checklist")
+    .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, size, context, project_id, tags, checklist")
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: "task not found in this org" });
@@ -611,6 +676,9 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
           organization_id: req.org!.id,
           title: data.title, title_he: data.title_he, description: data.description,
           priority: data.priority, task_type: data.task_type ?? "action",
+          // A recurring occurrence inherits its parent's effort size and context
+          // — the daily method must not silently re-classify it to the DB default.
+          size: data.size ?? "medium", context: data.context,
           status: spawnStatus, manually_verified: true,
           snoozed_until: spawnSnoozedUntil,
           due_date: next, due_time: data.due_time,

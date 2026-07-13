@@ -136,8 +136,12 @@ export interface ScriptSpeaker {
   script_id: string;
   speaker_name: string;
   character_id: string | null;
+  // Additional characters this speaker is also recorded by (multi-voice).
+  extra_character_ids: string[];
   resemble_voice_id: string | null;
   skip: boolean;
+  // Number of lines this speaker has in the parsed script (set on each parse).
+  line_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -187,10 +191,13 @@ export interface ScriptLine {
   redo_reason: string | null;
   redo_instructions: string | null;
   redone_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
-  // Computed by the lines endpoint (not a column): how many takes this line has.
+  // Computed by the lines endpoint (not columns): how many takes this line has,
+  // and how many are marked "good" (drives the outer indicator).
   take_count?: number;
+  approved_take_count?: number;
 }
 
 export interface LineTake {
@@ -205,6 +212,8 @@ export interface LineTake {
   cost_usd: number | null;
   approved: boolean;
   note: string | null;
+  // Character/voice name for a multi-voice take (null for single-voice takes).
+  voice_label: string | null;
   created_at: string;
 }
 
@@ -301,6 +310,8 @@ export interface CreateJobRequest {
   job_type: "generate_audio" | "regenerate_line" | "parse_script";
   adapter?: "resemble" | "chatterbox_local" | "chatterbox_runpod";
   mode: "sts" | "tts";
+  // Script language ('he'/'en'): gates which pronunciation-lexicon entries apply.
+  language?: "he" | "en";
   google_doc_id?: string;
   google_oauth_token?: string;
   google_doc_tab_id?: string;
@@ -316,6 +327,10 @@ export interface CreateJobRequest {
   line_overrides?: Array<{ line_number: number; text_for_tts: string }>;
   // regenerate_line only: line numbers to re-run through the LLM (fresh tone).
   reprocess_line_numbers?: number[];
+  // Apply the per-character style baseline tags to every line. OFF by default:
+  // stacking the baseline on top of the emotion recipe produces deep SSML tag
+  // stacks that destabilize resemble-ultra (spurious words / line restarts).
+  apply_style_baseline?: boolean;
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
@@ -350,6 +365,8 @@ export interface ParsedScript {
   total_lines: number;
   scenes: string[];
   speakers: string[];
+  // speaker_name -> number of lines that speaker has in the parsed script.
+  speaker_line_counts?: Record<string, number>;
   warnings: string[];
   preview: Array<{ line: number; speaker: string; text: string }>;
 }

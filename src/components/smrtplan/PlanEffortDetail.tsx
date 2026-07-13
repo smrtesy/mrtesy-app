@@ -675,6 +675,9 @@ function NewTaskRow({
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [dur, setDur] = useState("");
+  // Effort estimate in hours — the forward projection (§4) and the AI builder's
+  // daily split both read this; the engine derives duration_days from it.
+  const [estHours, setEstHours] = useState("");
   const [status, setStatus] = useState("inbox");
   const [assignee, setAssignee] = useState("");
   const [busy, setBusy] = useState(false);
@@ -688,6 +691,7 @@ function NewTaskRow({
           title_he: title.trim(),
           due_date: due || null,
           duration_days: dur ? Number(dur) : null,
+          estimated_hours: estHours ? Number(estHours) : null,
           status,
           assigned_to_user_id: assignee || null,
           stage_id: stageId,
@@ -720,6 +724,8 @@ function NewTaskRow({
       <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={due} onChange={setDue} />
       <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
         onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
+      <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("estimatedHours")} value={estHours}
+        onChange={(e) => setEstHours(e.target.value)} title={te("estimatedHours")} />
       <button onClick={save} disabled={busy || !title.trim()}
         className="rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:opacity-50">
         {te("save")}
@@ -756,6 +762,7 @@ function EditTaskRow({
   const [due, setDue] = useState(task.due_date ?? "");
   // dur is the MANUAL override only — blank means "let the engine compute it".
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
+  const [estHours, setEstHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   // Dependency picker value is typed: "task:<id>" or "plan:<id>" (a capability).
@@ -795,6 +802,7 @@ function EditTaskRow({
           // a filled manual duration pins it; otherwise the engine owns it.
           duration_days: dur ? Number(dur) : null,
           duration_manual: !!dur,
+          estimated_hours: estHours ? Number(estHours) : null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -871,10 +879,12 @@ function EditTaskRow({
         </select>
       </div>
 
-      {/* duration in working days */}
+      {/* duration (manual override, working days) + effort estimate (hours) */}
       <div className="flex flex-wrap items-center gap-2">
         <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
           value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
+        <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("estimatedHours")}
+          value={estHours} onChange={(e) => setEstHours(e.target.value)} title={te("estimatedHours")} />
       </div>
 
       {/* subtasks (checklist) — same editor as the regular tasks desk; persists
