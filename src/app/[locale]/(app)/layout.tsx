@@ -11,6 +11,7 @@ import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
+import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 
@@ -134,6 +135,7 @@ export default async function AppLayout({
       {/* Reliable fallback for the inline script above (which doesn't always
           execute in the App Router). */}
       <EmbedFlag />
+      <QueryProvider>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
@@ -156,6 +158,7 @@ export default async function AppLayout({
           )}
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
+      </QueryProvider>
     </div>
   );
 }
