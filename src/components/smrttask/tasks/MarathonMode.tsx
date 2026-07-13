@@ -17,7 +17,7 @@ import { effectiveDeadline } from "@/lib/workdays";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { taskActionNuggets } from "@/lib/smrttask/links";
 import type { Task } from "@/types/task";
@@ -64,7 +64,8 @@ export function MarathonMode({
   const t = useTranslations("marathon");
   const tTasks = useTranslations("tasks");
   const tDetail = useTranslations("taskDetailExt");
-  const waPanel = useWhatsAppPanel();
+  const tWa = useTranslations("whatsappPage");
+  const openWhatsApp = useOpenWhatsAppChat();
   const blocked = useWorkCalendar();
   // Snapshot the queue at start: list refetches during the run must not
   // reshuffle what the runner sees.
@@ -239,13 +240,25 @@ export function MarathonMode({
   const checklist = detail?.checklist ?? [];
   const materials = detail?.task_materials ?? [];
   const driveDocs = (detail?.linked_drive_docs ?? []).filter((d) => !!d.url);
+  // Fall through to the list row per-field (detail is the fuller record, but a
+  // null field on it shouldn't mask a value the list row already carried).
   const sourceUrl = detail?.source_messages?.source_url ?? current?.source_messages?.source_url ?? null;
-  // WhatsApp sources open in the in-app docked panel (consistent with the task
-  // lists / log) instead of launching the external WhatsApp client.
+  const sourceId = detail?.source_messages?.source_id ?? current?.source_messages?.source_id ?? null;
+  // WhatsApp sources open in the in-app reader (consistent with the task lists /
+  // log) instead of launching the external WhatsApp client.
   const isWaSource = sourceUrl ? /wa\.me\//.test(sourceUrl) : false;
   const sourceWaPhone = isWaSource
     ? ((sourceUrl ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "")
     : "";
+  // Burst/echo source id is `wa:<chatId>:<wamid>` — pull the wamid so we can
+  // jump straight to the originating message (wamids never contain ':', so the
+  // tail after the second colon is safe). Legacy `wa:<chatId>` rows carry none.
+  const sourceWaWamid = (() => {
+    const sid = sourceId ?? "";
+    if (!isWaSource || !sid.startsWith("wa:")) return null;
+    const idx = sid.indexOf(":", 3);
+    return idx > 0 ? sid.slice(idx + 1) || null : null;
+  })();
   // Plan tasks carry their plan/stage on the desk row — the "where this lives".
   const planLabel = current?.plan_id
     ? [
@@ -415,8 +428,14 @@ export function MarathonMode({
                     <button
                       type="button"
                       onClick={() => {
-                        if (sourceWaPhone) waPanel.openChat(sourceWaPhone);
-                        else waPanel.open();
+                        // preservePane: inside a workspace pane, open WhatsApp
+                        // in a NEW pane beside the run instead of navigating this
+                        // one away (which would abandon the marathon session).
+                        openWhatsApp(sourceWaPhone || null, {
+                          focusWamid: sourceWaWamid,
+                          preservePane: true,
+                          paneLabel: tWa("title"),
+                        });
                       }}
                       className={chipCls}
                     >
