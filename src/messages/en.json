@@ -2413,7 +2413,8 @@
     "nav": {
       "folders": "Folders",
       "characters": "Characters",
-      "library": "Voice library"
+      "library": "Voice library",
+      "insights": "Insights"
     },
     "folders": {
       "title": "Folders",
@@ -2839,6 +2840,24 @@
       "empty": "No words in the lexicon yet",
       "delete": "Delete",
       "deleteConfirm": "Delete this word from the lexicon?"
+    },
+    "insights": {
+      "title": "What the system learned",
+      "subtitle": "Everything the system concluded from your picks — the spelling and punctuation that worked best, per voice. Star a take (⭐) and the preference is learned automatically.",
+      "empty": "Nothing learned yet. Star good takes (⭐) in the studio and the system will start learning which spelling and punctuation works best for each voice.",
+      "loadError": "Failed to load insights",
+      "noVoice": "No voice set",
+      "voiceMeta": "{words} words · kept {chosen} times",
+      "filterAll": "All",
+      "filterSpelling": "Spelling",
+      "filterPunctuation": "Punctuation",
+      "kindSpelling": "Spelling",
+      "kindPunctuation": "Punctuation",
+      "recommended": "Recommended",
+      "chosenStat": "kept {chosen} of {total}",
+      "neverChosen": "not kept yet",
+      "noneForFilter": "No fixes in this category",
+      "originalHeader": "Original"
     }
   },
   "projectCombobox": {

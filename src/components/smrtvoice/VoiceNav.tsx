@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { Folder, Users, Library } from "lucide-react";
+import { Folder, Users, Library, Lightbulb } from "lucide-react";
 
 /**
  * Compact in-app sub-nav for smrtVoice: Folders · Characters · Voice library.
@@ -18,6 +18,7 @@ export function VoiceNav() {
     { href: `/${locale}/voice`, label: t("folders"), Icon: Folder, match: /\/voice$|\/voice\/(projects|scripts)(\/|$)/ },
     { href: `/${locale}/voice/characters`, label: t("characters"), Icon: Users, match: /\/voice\/characters(\/|$)/ },
     { href: `/${locale}/voice/library`, label: t("library"), Icon: Library, match: /\/voice\/library(\/|$)/ },
+    { href: `/${locale}/voice/insights`, label: t("insights"), Icon: Lightbulb, match: /\/voice\/insights(\/|$)/ },
   ];
 
   return (
