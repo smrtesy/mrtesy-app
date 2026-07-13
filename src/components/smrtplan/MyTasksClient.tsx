@@ -44,7 +44,10 @@ export function MyTasksClient({ locale }: { locale: string }) {
   // endpoint is allowed for the task's assignee even without full access.
   // Completing a decision task first captures its outcome (propagated forward).
   async function toggle(id: string, done: boolean, decision?: string) {
-    if (done && !decision) {
+    // Guard on absence, not falsiness: the dialog's confirm passes decision as a
+    // (possibly empty) string, which must complete — only an undefined decision
+    // (the initial checkbox click) opens the capture dialog.
+    if (done && decision === undefined) {
       const tk = tasks.find((x) => x.id === id);
       if (tk?.is_decision) { setDecisionTask(tk); return; }
     }

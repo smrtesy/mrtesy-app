@@ -2287,7 +2287,7 @@ router.post("/plans/ai-build", requireFull, async (req: Request, res: Response) 
   let raw: string;
   let costUsd = 0;
   try {
-    const out = await simpleCall("sonnet", PLAN_BUILD_SYSTEM, userMessage, 8192, { component: "smrtplan.ai-build", userId: uid });
+    const out = await simpleCall("sonnet", PLAN_BUILD_SYSTEM, userMessage, 16000, { component: "smrtplan.ai-build", userId: uid });
     raw = out.content;
     costUsd = out.costUsd;
   } catch (e) {
