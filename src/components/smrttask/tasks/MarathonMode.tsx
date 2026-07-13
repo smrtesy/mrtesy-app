@@ -415,13 +415,8 @@ export function MarathonMode({
             <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80" dir="auto">{description}</p>
           )}
 
-          {/* action nuggets: one-click deep links straight to the destination */}
-          {actionLinks.length > 0 && (
-            <div className="space-y-1.5">
-              <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{t("actionLinks")}</h3>
-              <LinkActions links={actionLinks} />
-            </div>
-          )}
+          {/* action nuggets: one-click deep links, right under the description (no heading) */}
+          {actionLinks.length > 0 && <LinkActions links={actionLinks} />}
 
           {/* attachments: origin deep-link + Drive docs + task materials */}
           {hasAttachments && (
