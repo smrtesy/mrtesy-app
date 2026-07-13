@@ -369,6 +369,8 @@ export interface ParsedScript {
   speaker_line_counts?: Record<string, number>;
   warnings: string[];
   preview: Array<{ line: number; speaker: string; text: string }>;
+  // Which tab the engine actually read from, so the UI can always show it.
+  selected_tab?: { id: string; title: string } | null;
 }
 
 export interface WebhookPayload {

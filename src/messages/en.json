@@ -2501,7 +2501,8 @@
       "lines": "Lines",
       "failed": "Failed",
       "cost": "Cost",
-      "mode": "Mode"
+      "mode": "Mode",
+      "readingFromTab": "Reading from tab: {tab}"
     },
     "casting": {
       "title": "Casting",
@@ -2899,7 +2900,9 @@
     "outcomeDropped": "Dropped"
   },
   "smrtPlan": {
-    "aiBuilder": { "button": "Build with AI" },
+    "aiBuilder": {
+      "button": "Build with AI"
+    },
     "title": "Planning board",
     "lead": "Every project, the timeline, and the dependencies between them · click a row for details",
     "today": "Today",

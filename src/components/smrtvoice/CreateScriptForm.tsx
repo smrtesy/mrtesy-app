@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
@@ -21,6 +21,20 @@ import { DriveFolderPicker } from "./DriveFolderPicker";
 interface Tab {
   id: string;
   title: string;
+}
+
+const HEBREW_RE = /[֐-׿]/;
+
+/**
+ * Default tab for a script, driven by its language: an English script reads
+ * the "Narration" tab, a Hebrew script a tab whose title has any Hebrew
+ * letter. Cross-falls-back, then to the first tab — mirrors the engine.
+ */
+function pickDefaultTab(tabs: Tab[], language: "he" | "en"): string {
+  const narration = tabs.find((t) => t.title.toLowerCase().includes("narration"));
+  const hebrew = tabs.find((t) => HEBREW_RE.test(t.title));
+  const ordered = language === "en" ? [narration, hebrew] : [hebrew, narration];
+  return (ordered.find(Boolean) ?? tabs[0])?.id ?? "";
 }
 interface DriveDoc {
   id: string;
@@ -53,6 +67,12 @@ export function CreateScriptForm({
   const [docFolder, setDocFolder] = useState("");
   const [driveDocs, setDriveDocs] = useState<DriveDoc[] | null>(null);
   const [loadingDocs, setLoadingDocs] = useState(false);
+
+  // Re-apply the language-appropriate default tab when the language changes
+  // (the user can still override it in the dropdown afterwards).
+  useEffect(() => {
+    if (tabs.length) setTabId(pickDefaultTab(tabs, language));
+  }, [language, tabs]);
 
   function reset() {
     setName("");
@@ -99,8 +119,7 @@ export function CreateScriptForm({
         body: { google_doc_url: googleDocUrl },
       });
       setTabs(tabs);
-      const hebrew = tabs.find((tab) => /[֐-׿]/.test(tab.title));
-      setTabId((hebrew ?? tabs[0])?.id ?? "");
+      setTabId(pickDefaultTab(tabs, language));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {

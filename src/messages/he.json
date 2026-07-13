@@ -2500,7 +2500,8 @@
       "lines": "שורות",
       "failed": "נכשלו",
       "cost": "עלות",
-      "mode": "מצב"
+      "mode": "מצב",
+      "readingFromTab": "קורא מהטאב: {tab}"
     },
     "casting": {
       "title": "ליהוק",
@@ -2900,7 +2901,9 @@
   "smrtPlan": {
     "title": "לוח התכנון",
     "lead": "כל הפרויקטים, הלו\"ז, והתלויות ביניהם · לחיצה על שורה פותחת פרטים",
-    "aiBuilder": { "button": "בנה עם AI" },
+    "aiBuilder": {
+      "button": "בנה עם AI"
+    },
     "today": "היום",
     "newPlan": "תוכנית חדשה",
     "recompute": "חשב מחדש",
