@@ -371,7 +371,11 @@
     "chatSearchPrev": "Previous match",
     "chatSearchNext": "Next match",
     "chatSearchCount": "{current} of {total}",
-    "chatSearchNoMatch": "No matches"
+    "chatSearchNoMatch": "No matches",
+    "quickReply": "Quick reply",
+    "quickReplyPlaceholder": "Quick reply…",
+    "quickReplyQuoteLast": "Reply to last message",
+    "quickReplySent": "Reply sent"
   },
   "auth": {
     "signInWithGoogle": "Sign in with Google",
