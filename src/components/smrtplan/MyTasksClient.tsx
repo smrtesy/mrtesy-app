@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
 import { TaskDetailDialog } from "./TaskDetailDialog";
+import { DecisionDialog } from "@/components/smrttask/tasks/DecisionDialog";
 
 export function MyTasksClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
@@ -13,6 +14,7 @@ export function MyTasksClient({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(true);
   const [canEdit, setCanEdit] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const [decisionTask, setDecisionTask] = useState<PlanZoneTask | null>(null);
   const today = new Date();
 
   const load = useCallback(async () => {
@@ -40,10 +42,15 @@ export function MyTasksClient({ locale }: { locale: string }) {
 
   // ✓ completes (releases dependents server-side); un-✓ reopens. The /done
   // endpoint is allowed for the task's assignee even without full access.
-  async function toggle(id: string, done: boolean) {
+  // Completing a decision task first captures its outcome (propagated forward).
+  async function toggle(id: string, done: boolean, decision?: string) {
+    if (done && !decision) {
+      const tk = tasks.find((x) => x.id === id);
+      if (tk?.is_decision) { setDecisionTask(tk); return; }
+    }
     setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, status: done ? "completed" : "inbox" } : x)));
     try {
-      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done } });
+      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done, ...(decision ? { decision } : {}) } });
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
@@ -85,6 +92,17 @@ export function MyTasksClient({ locale }: { locale: string }) {
         locale={locale}
         canEdit={canEdit}
         onChanged={() => void load()}
+      />
+
+      <DecisionDialog
+        open={!!decisionTask}
+        taskTitle={decisionTask ? (locale === "en" ? decisionTask.title : decisionTask.title_he || decisionTask.title) : ""}
+        onClose={() => setDecisionTask(null)}
+        onConfirm={(decision) => {
+          const tk = decisionTask;
+          setDecisionTask(null);
+          if (tk) void toggle(tk.id, true, decision);
+        }}
       />
     </div>
   );

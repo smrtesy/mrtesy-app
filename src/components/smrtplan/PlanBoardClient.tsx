@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut, Sparkles } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
@@ -16,6 +16,7 @@ import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanTableView } from "./PlanTableView";
 import { PlanEditDialog } from "./PlanEditDialog";
+import { PlanAiBuilder } from "./PlanAiBuilder";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { PlanSettingsHub } from "./PlanSettingsHub";
 
@@ -88,6 +89,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
+  const [aiBuilderOpen, setAiBuilderOpen] = useState(false);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [templates, setTemplates] = useState<{ id: string; name_he: string }[]>([]);
@@ -772,6 +774,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             <ControlButton onClick={() => { setEditorPlan(null); setEditorOpen(true); }}>
               <Plus className="h-3.5 w-3.5" /> {t("edit.newPlan")}
             </ControlButton>
+            <ControlButton onClick={() => setAiBuilderOpen(true)}>
+              <Sparkles className="h-3.5 w-3.5" /> {t("aiBuilder.button")}
+            </ControlButton>
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
             </ControlButton>
@@ -1404,6 +1409,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       )}
 
       <PlanEditDialog plan={editorPlan} open={editorOpen} onClose={() => setEditorOpen(false)} onSaved={reloadBoard} />
+      <PlanAiBuilder open={aiBuilderOpen} onClose={() => setAiBuilderOpen(false)} onCreated={() => reloadBoard()} />
       <MilestoneEditor
         milestones={milestones}
         plans={plans}

@@ -30,6 +30,7 @@ import { MarathonMode } from "./MarathonMode";
 import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
 import { BuildDayBanner } from "./BuildDayBanner";
+import { DecisionDialog } from "./DecisionDialog";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
@@ -159,6 +160,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [contextFilter, setContextFilter] = useState<ContextFilter>("office");
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
+  const [decisionTask, setDecisionTask] = useState<Task | null>(null);
   const [buildDayOpen, setBuildDayOpen] = useState(false);
   // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
   const planfocusEnabled = useDayTool("planfocus").enabled;
@@ -475,9 +477,12 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   // ── actions ────────────────────────────────────────────────────────────────
 
-  const completeTask = useCallback(async (task: Task) => {
+  const completeTask = useCallback(async (task: Task, decision?: string) => {
     if (task.plan_id) {
-      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: true } });
+      await api(`/api/plan-tasks/${task.id}/done`, {
+        method: "PATCH",
+        body: { done: true, ...(decision ? { decision } : {}) },
+      });
     } else {
       await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
     }
@@ -492,12 +497,22 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }, []);
 
   async function handleToggleDone(task: Task, done: boolean) {
+    // A decision plan task first asks for its outcome (which propagates to the
+    // tasks it affects); the actual completion runs on the dialog's confirm.
+    if (done && task.plan_id && task.is_decision) {
+      setDecisionTask(task);
+      return;
+    }
+    await runToggleDone(task, done);
+  }
+
+  async function runToggleDone(task: Task, done: boolean, decision?: string) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
     if (done) optimisticRemove(task.id);
     try {
       if (done) {
-        await completeTask(task);
+        await completeTask(task, decision);
         undoToast({
           message: t("actions.complete"),
           undoLabel: t("row.undo"),
@@ -1106,6 +1121,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         open={dsOpen}
         onClose={() => setDsOpen(false)}
         onDone={fetchTasks}
+      />
+
+      <DecisionDialog
+        open={!!decisionTask}
+        taskTitle={decisionTask ? (locale === "he" && decisionTask.title_he ? decisionTask.title_he : decisionTask.title) : ""}
+        onClose={() => setDecisionTask(null)}
+        onConfirm={(decision) => {
+          const tk = decisionTask;
+          setDecisionTask(null);
+          if (tk) void runToggleDone(tk, true, decision);
+        }}
       />
 
       <SnoozeDialog

@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { DecisionDialog } from "./DecisionDialog";
 
 /** A ready plan task — the "current stage" (from GET /plan/:id/focus-stage). */
 interface FocusStage {
   id: string;
   title: string;
   title_he: string | null;
+  is_decision?: boolean | null;
 }
 
 function fmtClock(totalSeconds: number): string {
@@ -78,6 +80,7 @@ export function FocusSession({
   const [stage, setStage] = useState<FocusStage | null>(null);
   const [tasksCompleted, setTasksCompleted] = useState(0);
   const [blocking, setBlocking] = useState(false);
+  const [decisionOpen, setDecisionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   // The in-flight create, so an exit BEFORE it resolves can still await the id
@@ -140,12 +143,22 @@ export function FocusSession({
   }, [elapsed, tasksCompleted, onExit]);
 
   /** Tick the current stage done → the engine releases its dependents → the
-   *  next ready stage surfaces on reload. */
+   *  next ready stage surfaces on reload. A decision stage first asks for its
+   *  outcome (propagated to the tasks it affects). */
   async function completeStage() {
+    if (!stage || busy) return;
+    if (stage.is_decision) { setDecisionOpen(true); return; }
+    await doCompleteStage();
+  }
+
+  async function doCompleteStage(decision?: string) {
     if (!stage || busy) return;
     setBusy(true);
     try {
-      await api(`/api/plan-tasks/${stage.id}/done`, { method: "PATCH", body: { done: true } });
+      await api(`/api/plan-tasks/${stage.id}/done`, {
+        method: "PATCH",
+        body: { done: true, ...(decision ? { decision } : {}) },
+      });
       setTasksCompleted((n) => n + 1);
       await loadStage();
     } catch (e) {
@@ -224,6 +237,13 @@ export function FocusSession({
           </div>
         </div>
       )}
+
+      <DecisionDialog
+        open={decisionOpen}
+        taskTitle={stageTitle ?? ""}
+        onClose={() => setDecisionOpen(false)}
+        onConfirm={(decision) => { setDecisionOpen(false); void doCompleteStage(decision); }}
+      />
     </div>
   );
 }
