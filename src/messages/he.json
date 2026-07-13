@@ -171,7 +171,9 @@
   "tabsWorkspace": {
     "close": "סגור טאב",
     "focusPane": "מקד טאב זה",
-    "resizePane": "שנה רוחב"
+    "resizePane": "שנה רוחב",
+    "paneError": "משהו השתבש בטאב הזה",
+    "paneReload": "טען מחדש"
   },
   "nav": {
     "tasks": "משימות",

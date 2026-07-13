@@ -171,7 +171,9 @@
   "tabsWorkspace": {
     "close": "Close tab",
     "focusPane": "Focus this tab",
-    "resizePane": "Resize"
+    "resizePane": "Resize",
+    "paneError": "Something went wrong in this tab",
+    "paneReload": "Reload"
   },
   "nav": {
     "tasks": "Tasks",
