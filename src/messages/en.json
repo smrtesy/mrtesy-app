@@ -648,6 +648,13 @@
       "done": "Done",
       "close": "Close"
     },
+    "focus": {
+      "heading": "Plan focus",
+      "minutes": "{n} min",
+      "start": "Start focus",
+      "doneToday": "Done today",
+      "noStage": "No stage ready"
+    },
     "contextFilter": {
       "all": "All",
       "home": "Home",
@@ -3322,6 +3329,17 @@
     "classConfidence": "Classification confidence",
     "taskConfidence": "Task-writing confidence",
     "rawDetails": "Additional details"
+  },
+  "focusSession": {
+    "exit": "End",
+    "currentStage": "Current stage",
+    "stageDone": "Stage done",
+    "stagesDone": "{count} stages done",
+    "noStage": "No stage ready right now — every stage is blocked or complete.",
+    "timeUpTitle": "Your {minutes} minutes for today are up",
+    "doneToday": "Done for today",
+    "fiveMore": "5 more minutes",
+    "completed": "Completed"
   },
   "marathon": {
     "progress": "{done} of {total}",

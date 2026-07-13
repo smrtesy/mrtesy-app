@@ -27,6 +27,7 @@ import { TaskRow, type RowZone } from "./TaskRow";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
+import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
 import { BuildDayBanner } from "./BuildDayBanner";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
@@ -50,7 +51,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Sun } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Sun, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -61,6 +62,17 @@ type ContextFilter = "all" | "home" | "office" | "outside";
 /** Plan metadata (needs/blocked state) for MY plan tasks, keyed by task id. */
 interface PlanMeta {
   needs: TaskNeed[];
+}
+
+/** One active plan-focus commitment for today (GET /plan/focus-today). */
+interface FocusTodayPlan {
+  plan_id: string;
+  plan_title_he: string | null;
+  plan_title_en: string | null;
+  daily_minutes: number;
+  current_stage: { id: string; title: string; title_he: string | null } | null;
+  logged_today: boolean;
+  completed_today: boolean;
 }
 
 /** Sortable wrapper for a desk row: grip handle + dnd-kit transform. */
@@ -148,6 +160,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [buildDayOpen, setBuildDayOpen] = useState(false);
+  // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
+  const planfocusEnabled = useDayTool("planfocus").enabled;
+  const [focusPlans, setFocusPlans] = useState<FocusTodayPlan[]>([]);
+  const [focusRun, setFocusRun] = useState<FocusTodayPlan | null>(null);
   // Day-tool: the marathon run is a toggleable add-on (default on).
   const marathonEnabled = useDayTool("marathon").enabled;
   // Day-tool: מהיר·3·1 gates the whole desk shape. ON → the 4-list day method
@@ -258,6 +274,21 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       // non-fatal
     }
   }, []);
+
+  // Plan-focus blocks for today — only when the tool is on (and smrtPlan is
+  // enabled for the org; a 4xx just yields an empty list). Refetched alongside
+  // the desk so ticking a stage inside a session updates the block on return.
+  const fetchFocusToday = useCallback(async () => {
+    if (!planfocusEnabled) { setFocusPlans([]); return; }
+    try {
+      const { plans } = await api<{ plans: FocusTodayPlan[] }>("/api/plan/focus-today");
+      setFocusPlans(plans ?? []);
+    } catch {
+      setFocusPlans([]);
+    }
+  }, [planfocusEnabled]);
+
+  useEffect(() => { fetchFocusToday(); }, [fetchFocusToday]);
 
   useEffect(() => {
     fetchTasks();
@@ -822,6 +853,41 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             onSnooze={(id) => setSnoozeTaskId(id)}
           />
 
+          {/* ── Plan-focus blocks — a separate section (⏱ NN ▶), independent of
+              method131; one row per active focus commitment (§8.7). ── */}
+          {planfocusEnabled && focusPlans.length > 0 && (
+            <section className="space-y-2">
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{t("focus.heading")}</h2>
+              <div className="space-y-1.5">
+                {focusPlans.map((fp) => {
+                  const planTitle = (locale === "he" ? fp.plan_title_he || fp.plan_title_en : fp.plan_title_en || fp.plan_title_he) ?? "";
+                  const stageTitle = fp.current_stage
+                    ? (locale === "he" && fp.current_stage.title_he ? fp.current_stage.title_he : fp.current_stage.title)
+                    : null;
+                  return (
+                    <div key={fp.plan_id} className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2">
+                      <span className="flex items-center gap-1 text-sm font-medium tabular-nums text-muted-foreground" dir="ltr">
+                        <Timer className="h-4 w-4" /> {t("focus.minutes", { n: fp.daily_minutes })}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium" dir="auto">{planTitle}</p>
+                        <p className="truncate text-xs text-muted-foreground" dir="auto">{stageTitle ?? t("focus.noStage")}</p>
+                      </div>
+                      {fp.completed_today ? (
+                        <span className="whitespace-nowrap text-xs font-medium text-status-ok">{t("focus.doneToday")}</span>
+                      ) : (
+                        <Button size="sm" className="h-8 gap-1 text-xs" onClick={() => setFocusRun(fp)}>
+                          <Play className="h-3 w-3" />
+                          {t("focus.start")}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
           {/* ── היום — quick always; then the day method's picked/regular lists ── */}
           <section className="space-y-4">
@@ -998,6 +1064,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             fetchTasks();
           }}
           onExit={() => { setMarathonMode(null); fetchTasks(); }}
+        />
+      )}
+
+      {focusRun && (
+        <FocusSession
+          key={focusRun.plan_id}
+          planId={focusRun.plan_id}
+          planTitle={(locale === "he" ? focusRun.plan_title_he || focusRun.plan_title_en : focusRun.plan_title_en || focusRun.plan_title_he) ?? ""}
+          dailyMinutes={focusRun.daily_minutes}
+          locale={locale}
+          onExit={() => { setFocusRun(null); fetchTasks(); fetchFocusToday(); }}
         />
       )}
 
