@@ -371,7 +371,11 @@
     "chatSearchPrev": "תוצאה קודמת",
     "chatSearchNext": "תוצאה הבאה",
     "chatSearchCount": "{current} מתוך {total}",
-    "chatSearchNoMatch": "אין תוצאות"
+    "chatSearchNoMatch": "אין תוצאות",
+    "quickReply": "תשובה מהירה",
+    "quickReplyPlaceholder": "תשובה מהירה…",
+    "quickReplyQuoteLast": "כמענה להודעה האחרונה",
+    "quickReplySent": "התשובה נשלחה"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",

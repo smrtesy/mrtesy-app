@@ -38,7 +38,7 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
   const { data, error } = await db
     .from("whatsapp_messages")
     .select(
-      "chat_id, direction, body_text, media_ocr_text, audio_transcript, received_at, from_phone, from_name, message_type, is_history",
+      "chat_id, wamid, direction, body_text, media_ocr_text, audio_transcript, received_at, from_phone, from_name, message_type, is_history, is_reaction",
     )
     .eq("user_id", req.user!.id)
     .order("received_at", { ascending: false })
@@ -106,8 +106,13 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
   type Row = NonNullable<typeof data>[number];
   const latestAny = new Map<string, Row>();
   const latestIncoming = new Map<string, Row>();
+  // Newest NON-reaction message per chat — the sensible quick-reply quote
+  // target. Reactions are stored as their own rows, so `latestAny` can be a
+  // reaction (an emoji tap), which is a poor thing to quote.
+  const latestReal = new Map<string, Row>();
   for (const row of data ?? []) {
     if (!latestAny.has(row.chat_id)) latestAny.set(row.chat_id, row);
+    if (!row.is_reaction && !latestReal.has(row.chat_id)) latestReal.set(row.chat_id, row);
     if (row.direction === "incoming" && !latestIncoming.has(row.chat_id)) {
       latestIncoming.set(row.chat_id, row);
     }
@@ -142,6 +147,13 @@ router.get("/whatsapp/threads", ...gate, async (req: Request, res: Response) => 
       last_message_at: m.received_at,
       last_direction: m.direction,
       last_message_type: m.message_type,
+      // wamid of the newest real (non-reaction) message — the default target
+      // the quick-reply composer quotes when "reply to last message" is checked.
+      last_wamid: latestReal.get(chatId)?.wamid ?? null,
+      // received_at of the newest INCOMING message — lets the client compute
+      // the 24h free-form send window (Meta rule) without a second request,
+      // mirroring ThreadView's client-side window check.
+      last_incoming_at: inc?.received_at ?? null,
       // Fall back to transcript/OCR so audio + caption-less images don't
       // show as empty preview lines in the chat list.
       last_body_text: m.body_text || m.audio_transcript || m.media_ocr_text || null,

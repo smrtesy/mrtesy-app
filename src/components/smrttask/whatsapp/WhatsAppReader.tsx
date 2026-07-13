@@ -423,6 +423,13 @@ export function WhatsAppReader({
               selectedChatId={selectedChatId}
               onSelect={setSelectedChatId}
               emptyLabel={query.trim() ? t("searchNoResults") : t("noThreads")}
+              // Quick reply sent straight from the list: refresh the thread
+              // list so the new outgoing message becomes the row preview, and
+              // refresh the open conversation too if it happens to be this one.
+              onQuickReplySent={(chatId) => {
+                loadThreads({ background: true });
+                if (chatId === selectedChatIdRef.current) loadMessages(chatId);
+              }}
             />
           </div>
         </div>
