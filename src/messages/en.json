@@ -655,6 +655,13 @@
       "doneToday": "Done today",
       "noStage": "No stage ready"
     },
+    "decision": {
+      "title": "What was decided?",
+      "hint": "This is a decision task — the outcome is attached as an update to every task that depends on it.",
+      "placeholder": "State the decision in a sentence…",
+      "confirm": "Mark complete",
+      "cancel": "Cancel"
+    },
     "contextFilter": {
       "all": "All",
       "home": "Home",
@@ -2882,6 +2889,7 @@
     "outcomeDropped": "Dropped"
   },
   "smrtPlan": {
+    "aiBuilder": { "button": "Build with AI" },
     "title": "Planning board",
     "lead": "Every project, the timeline, and the dependencies between them · click a row for details",
     "today": "Today",
@@ -3329,6 +3337,25 @@
     "classConfidence": "Classification confidence",
     "taskConfidence": "Task-writing confidence",
     "rawDetails": "Additional details"
+  },
+  "planAiBuilder": {
+    "title": "Build a plan with AI",
+    "descLabel": "Project description",
+    "descPlaceholder": "What's the project? What's the end result? What's known and what's open? Write freely.",
+    "descTooShort": "Give a slightly more detailed description",
+    "minutesLabel": "Work minutes per day",
+    "generate": "Build plan",
+    "generating": "Building the plan… this takes a few seconds",
+    "planTitle": "Plan name",
+    "tasksCount": "{n} tasks",
+    "hoursTotal": "{n} hours total",
+    "stagesCount": "{n} stages",
+    "decision": "decision",
+    "reassignHint": "The plan is created as a draft with every task assigned to you — reassign to teammates in the plan detail.",
+    "back": "Back",
+    "create": "Create plan",
+    "creating": "Creating…",
+    "created": "Plan created as a draft"
   },
   "focusSession": {
     "exit": "End",
