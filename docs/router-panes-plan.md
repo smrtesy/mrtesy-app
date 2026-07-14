@@ -1,7 +1,28 @@
 # Router-based panes — migration plan (replacing iframe panes)
 
-Status: **planned** (approved direction; implementation not started)
+Status: **implemented** (phases 0–3 shipped 2026-07-14).
 Owner: Claude sessions; each phase runs the full pre-push protocol.
+
+## Outcome (what actually shipped)
+
+- 16 screens render as component panes: tasks, inbox, log, whatsapp (+
+  autoreply), sms, knowledge, crm, vault, plan (board/team/repository),
+  voice (+ characters), bots, reach.
+- **Permanent iframe screens** (deliberate): `/projects` (user-scoped
+  server queries with no matching API endpoint), `/settings` (tabs ARE
+  sibling routes), `/admin` (super-admin only, low traffic), and every
+  detail route (`/bots/[id]`, `/voice/projects/[id]`, `/reach/campaigns/[id]`,
+  `/projects/[id]` …). The iframe fallback is therefore a permanent part of
+  the architecture, NOT transitional — the `?embed`/`data-embed` CSS layer
+  and the postMessage bridge stay. §Phase 3's "teardown" did not apply.
+- The inbox pane gates its smrtTask UI client-side via the pre-existing
+  `GET /api/org/apps` registry endpoint (cached, org-scoped query key).
+- **Rule for new screens** (also in CLAUDE.md): a new sidebar screen must be
+  registered in `src/lib/panes/registry.tsx`, use `useScreen*` hooks and
+  `PaneLink` from `src/lib/panes/nav.tsx` instead of next/navigation and
+  next/link, never write `document.body`/`html` attributes without a
+  `useOptionalPaneNav()` guard, and avoid viewport units for height (use
+  `h-full` inside panes).
 
 ## 1. Goal and UX contract
 
