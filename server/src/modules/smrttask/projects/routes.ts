@@ -26,12 +26,13 @@ import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { simpleCall } from "../../../anthropic";
 
 const router = Router();
 
 // Every project route requires auth + active org + smrtTask enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 const UPDATABLE_PROJECT_FIELDS = new Set([
   "name", "name_he", "color", "keywords", "key_contacts",
