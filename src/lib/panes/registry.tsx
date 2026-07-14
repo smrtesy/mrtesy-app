@@ -17,10 +17,16 @@
 
 import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Plus } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ExternalLink, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
+import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
+import { MorningStartBanner } from "@/components/smrttask/suggestions/MorningStart";
+import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 import { LogPageClient } from "@/app/[locale]/(app)/(smrttask)/log/LogPageClient";
 import { TasksPageClient } from "@/components/smrttask/tasks/TasksPageClient";
@@ -95,6 +101,55 @@ function VaultPane() {
 function TasksPane() {
   const t = useTranslations("tasks");
   return <TasksPageClient title={t("title")} />;
+}
+
+/** Active org for cache keys — same precedence as api()'s X-Org-Id
+ *  (subdomain cookie, then localStorage). Prevents a multi-org user from
+ *  being served the previous org's cached data after switching. */
+function activeOrgKey(): string {
+  if (typeof document === "undefined") return "default";
+  const m = document.cookie.match(/(?:^|;\s*)smrt_org_id=([^;]+)(?:;|$)/);
+  return m ? decodeURIComponent(m[1]) : localStorage.getItem("smrtesy.active_org_id") ?? "default";
+}
+
+function InboxPane({ locale }: { locale: string }) {
+  const t = useTranslations("inbox");
+  const tNav = useTranslations("nav");
+  // The routed page resolves the smrtTask entitlement server-side; the pane
+  // asks the backend once and caches it (entitlements change rarely).
+  const { data } = useQuery({
+    queryKey: ["org-apps", activeOrgKey()],
+    queryFn: () => api<{ apps: string[] }>("/api/org/apps"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const hasSmrtTask = (data?.apps ?? []).includes("smrttask");
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <OpenTabLink
+          href={`/${locale}/log`}
+          label={tNav("log")}
+          aria-label={t("openLog")}
+          title={t("openLog")}
+          className="text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </OpenTabLink>
+        {hasSmrtTask && (
+          <div className="ms-auto">
+            <CorrectionsExportButton refreshKey={0} />
+          </div>
+        )}
+      </div>
+      {hasSmrtTask && <MorningStartBanner />}
+      {/* Hold the tabs until the entitlement is known — mounting with
+          hasSmrtTask=false and flipping would flash/reset the tab set. The
+          query is cached, so reopening the pane renders immediately. */}
+      {data ? <InboxTabs locale={locale} hasSmrtTask={hasSmrtTask} /> : null}
+    </div>
+  );
 }
 
 function WhatsAppPane() {
@@ -176,6 +231,7 @@ function ReachPane() {
 
 const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/tasks", render: () => <TasksPane /> },
+  { match: (p) => p === "/inbox", render: (locale) => <InboxPane locale={locale} /> },
   { match: (p) => p === "/whatsapp", render: () => <WhatsAppPane />, fullHeight: true },
   { match: (p) => p === "/sms", render: () => <SmsPane />, fullHeight: true },
   { match: (p) => p === "/knowledge", render: () => <KnowledgeCenter /> },

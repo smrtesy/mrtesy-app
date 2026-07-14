@@ -127,15 +127,26 @@ export function useScreenRouter(): {
  */
 export function PaneLink(props: React.ComponentProps<typeof Link>) {
   const pane = useContext(PaneNavContext);
-  if (!pane) return <Link {...props} />;
-
-  // Strip Link-only props (prefetch/scroll) so they don't land on the <a>.
-  const { href, replace, onClick, ...rest } = props;
-  delete (rest as Record<string, unknown>).prefetch;
-  delete (rest as Record<string, unknown>).scroll;
   // String hrefs only — the object form keeps just `pathname` (no callers
   // pass query/hash objects; pass a string if you need them).
-  const target = typeof href === "string" ? href : (href.pathname ?? "/");
+  const rawHref = props.href;
+  const target = typeof rawHref === "string" ? rawHref : (rawHref.pathname ?? "/");
+  // External URLs (https://mail.google.com/…, mailto:, tel:) must never be
+  // pushed into a pane — they'd become a broken iframe. From a pane, open
+  // them in a new browser tab; elsewhere Link handles them as a full nav.
+  const isExternal = /^[a-z][a-z0-9+.-]*:|^\/\//i.test(target);
+
+  if (!pane) return <Link {...props} />;
+
+  // Strip Link-only props (href/prefetch/scroll) so they don't land on the <a>.
+  const { replace, onClick, ...rest } = props;
+  delete (rest as Record<string, unknown>).href;
+  delete (rest as Record<string, unknown>).prefetch;
+  delete (rest as Record<string, unknown>).scroll;
+
+  if (isExternal) {
+    return <a {...rest} href={target} target="_blank" rel="noopener noreferrer" onClick={onClick} />;
+  }
   return (
     <a
       {...rest}
