@@ -1239,7 +1239,10 @@
     "addEmployee": "הוסף עובד",
     "emailSet": "האימייל נשמר",
     "noEmailBadge": "ללא אימייל",
-    "setEmailPlaceholder": "הוסף אימייל לכניסה…"
+    "setEmailPlaceholder": "הוסף אימייל לכניסה…",
+    "projectOnlyToggle": "עובד פרויקטים בלבד",
+    "projectOnlyHint": "רואה ב-smrtTask רק משימות שהוקצו לו (מפלאן או ממשתמש אחר) + צפייה בתוכנית. בלי חיבור מקורות, תיבה, פרויקטים או סריקה.",
+    "projectOnlyBadge": "פרויקטים בלבד"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",

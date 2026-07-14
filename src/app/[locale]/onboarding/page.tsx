@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Mail, Calendar } from "lucide-react";
+import { Mail, Calendar, Loader2 } from "lucide-react";
 import { api, setActiveOrgId, ApiError } from "@/lib/api/client";
 import { navigateTop } from "@/lib/navigate";
 
@@ -13,6 +13,9 @@ export default function OnboardingStep1() {
   const t = useTranslations("onboarding");
   const { locale } = useParams();
   const router = useRouter();
+  // Gate rendering until we've decided whether this is a project-only worker
+  // (who skips the whole source-connection + scan flow) or a full user.
+  const [ready, setReady] = useState(false);
 
   // Defensive: if the user somehow reached this step without an org
   // (e.g. older account from before this onboarding flow existed), bounce
@@ -30,11 +33,36 @@ export default function OnboardingStep1() {
         }
         // Make sure an active org is selected so the next API calls carry X-Org-Id.
         setActiveOrgId(orgs[0].id);
+
+        // Project-only ("lite") worker: they have no data sources to connect and
+        // nothing to scan. Skip the entire connect+scan onboarding — mark it done
+        // and drop them straight into their task list. This is what fixes an
+        // invited worker being pushed through the sync screen (and hitting the
+        // permission error on "scan"). If the access check fails (e.g. no
+        // smrtTask grant at all) we fall through to the normal flow.
+        try {
+          const { access_level } = await api<{ access_level: string }>("/api/tasks/access");
+          if (access_level === "lite") {
+            await api("/api/me/settings", {
+              method: "PATCH",
+              body: { onboarding_completed: true },
+              noOrg: true,
+            });
+            router.replace(`/${locale}/tasks`);
+            return;
+          }
+        } catch (accessErr) {
+          if (!(accessErr instanceof ApiError && accessErr.status === 403)) {
+            console.error("[onboarding] access check failed:", accessErr);
+          }
+        }
+        setReady(true);
       } catch (e) {
         // If auth check failed, the middleware will already redirect to /login.
         if (!(e instanceof ApiError && e.status === 401)) {
           console.error("[onboarding] org check failed:", e);
         }
+        setReady(true);
       }
     })();
   }, [router, locale]);
@@ -45,6 +73,18 @@ export default function OnboardingStep1() {
 
   function handleSkip() {
     router.push(`/${locale}/onboarding/drive`);
+  }
+
+  // Hold the UI until we know whether to skip the flow entirely (lite worker),
+  // so a project-only worker never sees the "connect Gmail" step flash by.
+  if (!ready) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center py-16">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </CardContent>
+      </Card>
+    );
   }
 
   return (

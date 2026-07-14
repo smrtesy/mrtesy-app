@@ -1239,7 +1239,10 @@
     "addEmployee": "Add employee",
     "emailSet": "Email saved",
     "noEmailBadge": "No email",
-    "setEmailPlaceholder": "Add login email…"
+    "setEmailPlaceholder": "Add login email…",
+    "projectOnlyToggle": "Project-only worker",
+    "projectOnlyHint": "In smrtTask they see only tasks assigned to them (from a plan or another user) + a read-only plan view. No source connections, inbox, projects or scan.",
+    "projectOnlyBadge": "Project-only"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",
