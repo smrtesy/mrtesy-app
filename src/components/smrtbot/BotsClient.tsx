@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 import { useLocale, useTranslations } from "next-intl";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -61,7 +61,7 @@ export function BotsClient() {
       {bots !== null && bots.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {bots.map((bot) => (
-            <Link key={bot.id} href={`/${locale}/bots/${bot.id}`}>
+            <PaneLink key={bot.id} href={`/${locale}/bots/${bot.id}`}>
               <Card className="h-full transition-colors hover:border-primary">
                 <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
                   <CardTitle className="text-base">{bot.name}</CardTitle>
@@ -82,7 +82,7 @@ export function BotsClient() {
                   )}
                 </CardContent>
               </Card>
-            </Link>
+            </PaneLink>
           ))}
         </div>
       )}

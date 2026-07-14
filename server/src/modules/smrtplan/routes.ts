@@ -29,6 +29,7 @@ import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
 import { notify } from "../../lib/platform";
 import { computeOrgSchedule, releaseDependents, loadBlockedDates, addWorkingDays, toISO } from "./engine";
+import { enforceDebriefOnComplete } from "./debrief";
 import { simpleCall, parseJsonResponse } from "../../anthropic";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
@@ -450,8 +451,11 @@ router.post("/plans", requireFull, async (req: Request, res: Response) => {
   if (!body.title_he || typeof body.title_he !== "string") {
     return res.status(400).json({ error: "title_he is required" });
   }
-  if (!body.kind || (body.kind !== "effort" && body.kind !== "stream")) {
-    return res.status(400).json({ error: "kind must be 'effort' or 'stream'" });
+  // roster is a first-class kind (migration 20260604001300 + the progress view
+  // and GET /plans/:id/tasks already handle it, and the UI offers it) — it was
+  // only ever rejected here, so a "ריכוז" plan couldn't be created.
+  if (!body.kind || !["effort", "stream", "roster"].includes(body.kind as string)) {
+    return res.status(400).json({ error: "kind must be 'effort', 'stream' or 'roster'" });
   }
   const { data, error } = await db
     .from("smrtplan_plans")
@@ -609,7 +613,7 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  "description, has_unread_update, recurrence_rule, is_decision";
+  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -806,15 +810,16 @@ router.post("/plan-cells", requireFull, async (req: Request, res: Response) => {
 });
 
 router.post("/plans/:id/stages", requireFull, async (req: Request, res: Response) => {
-  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date } = req.body ?? {};
+  const { name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint } = req.body ?? {};
   if (!name_he) return res.status(400).json({ error: "name_he is required" });
   const { data, error } = await db
     .from("smrtplan_stages")
     .insert({ org_id: req.org!.id, plan_id: req.params.id, name_he, name_en: name_en ?? null,
       sequence: sequence ?? 0, required_role: required_role ?? null,
       default_duration_days: default_duration_days != null ? Number(default_duration_days) : null,
-      start_date: start_date ?? null, end_date: end_date ?? null })
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+      start_date: start_date ?? null, end_date: end_date ?? null,
+      checkpoint: typeof checkpoint === "string" ? checkpoint : null })
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ stage: data });
@@ -1019,7 +1024,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 const PLAN_TASK_WRITABLE = new Set([
   "title", "title_he", "description", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
-  "task_materials", "stage_id",
+  "task_materials", "stage_id", "requires_debrief",
 ]);
 
 // Lightweight validation for task_materials (links/notes attached to a task),
@@ -1072,6 +1077,14 @@ router.patch("/plan-tasks/:id", requireFull, async (req: Request, res: Response)
     if (curErr) return res.status(500).json({ error: curErr.message });
     if (!cur) return res.status(404).json({ error: "task not found" });
     wasDone = TASK_DONE_STATUSES.has(cur.status as string);
+    // A generic status-flip into a COMPLETION status is a completion too —
+    // enforce the research-task debrief here as well, before the write, so this
+    // path can't bypass the gate (acceptance #1). Completion = completed/archived;
+    // dismissing a research task does NOT require a debrief.
+    if (!wasDone && (patch.status === "completed" || patch.status === "archived")) {
+      const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+      if (block) return res.status(block.status).json({ error: block.error });
+    }
   }
   // Scope to a task that actually belongs to a plan in this org.
   const { data, error } = await db
@@ -1156,6 +1169,13 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
   const level = await resolveAccessLevel(req);
   const allowed = level === "full" || (task.assigned_to_user_id as string | null) === req.user!.id || (await isSuperAdmin(req.user!));
   if (!allowed) return res.status(403).json({ error: "not allowed to complete this task" });
+  // Research tasks (requires_debrief) can only be completed with a valid debrief.
+  // Enforced before the status write so there is never a completion without a
+  // saved debrief. Only on the done transition — reopening (done=false) is free.
+  if (done) {
+    const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+    if (block) return res.status(block.status).json({ error: block.error });
+  }
   const { data, error } = await db
     .from("tasks")
     .update({ status: done ? "completed" : "inbox" })
@@ -1309,7 +1329,7 @@ router.delete("/plan-tasks/:id", requireFull, async (req: Request, res: Response
 
 router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response) => {
   const patch: Record<string, unknown> = {};
-  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date"]) {
+  for (const k of ["name_he", "name_en", "sequence", "required_role", "start_date", "end_date", "checkpoint"]) {
     if (k in (req.body ?? {})) patch[k] = req.body[k];
   }
   // A stage's default duration drives every cell that doesn't pin its own.
@@ -1323,7 +1343,7 @@ router.patch("/plan-stages/:id", requireFull, async (req: Request, res: Response
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
-    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date")
+    .select("id, plan_id, name_he, name_en, sequence, required_role, default_duration_days, start_date, end_date, checkpoint")
     .single();
   if (error) return res.status(500).json({ error: error.message });
   // Only a default-duration change reflows the schedule; a timeline-window /
@@ -1830,23 +1850,47 @@ router.put("/plan/:id/focus", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "daily_minutes must be a positive integer" });
   }
   const active = body.active === undefined ? true : !!body.active;
+  // Personal work week (0=Sun..6=Sat). Optional: absent → left unchanged on
+  // upsert (so the org default Mon–Fri stays in effect). null → cleared back to
+  // the default. An array → validated to unique day-of-week numbers.
+  let workdays: number[] | null | undefined = undefined;
+  if ("workdays" in body) {
+    if (body.workdays === null) {
+      workdays = null;
+    } else if (Array.isArray(body.workdays)) {
+      const days = body.workdays as unknown[];
+      const clean = new Set<number>();
+      for (const d of days) {
+        if (typeof d !== "number" || !Number.isInteger(d) || d < 0 || d > 6) {
+          return res.status(400).json({ error: "workdays must be integers 0–6 (0=Sunday)" });
+        }
+        clean.add(d);
+      }
+      workdays = [...clean].sort((a, b) => a - b);
+    } else {
+      return res.status(400).json({ error: "workdays must be an array of integers 0–6, or null" });
+    }
+  }
   // The plan must exist in this org before we attach a commitment to it.
   const { data: plan, error: planErr } = await db
     .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
   if (planErr) return res.status(500).json({ error: planErr.message });
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
+  const upsertRow: Record<string, unknown> = {
+    org_id: req.org!.id,
+    plan_id: planId,
+    user_id: req.user!.id,
+    daily_minutes: minutes,
+    active,
+    updated_at: new Date().toISOString(),
+  };
+  if (workdays !== undefined) upsertRow.workdays = workdays;
+
   const { data, error } = await db
     .from("smrtplan_focus")
     .upsert(
-      {
-        org_id: req.org!.id,
-        plan_id: planId,
-        user_id: req.user!.id,
-        daily_minutes: minutes,
-        active,
-        updated_at: new Date().toISOString(),
-      },
+      upsertRow,
       { onConflict: "plan_id,user_id" },
     )
     .select("*")
@@ -1981,6 +2025,119 @@ router.get("/plan/:id/projection", async (req: Request, res: Response) => {
   });
 });
 
+// ── manager daily-pulse (debrief-enforcement brief §2) ──────────────────────
+const PULSE_DEFAULT_DAYS = 14;
+const PULSE_MAX_DAYS = 60;
+const PULSE_DEFAULT_WORKDAYS = [1, 2, 3, 4, 5]; // Mon–Fri (0=Sun..6=Sat)
+
+function pulsePrevISO(dateISO: string): string {
+  return toISO(new Date(new Date(dateISO).getTime() - 24 * 60 * 60 * 1000));
+}
+/** Personal working day = in the mask (or Mon–Fri default) AND not a holiday. */
+function pulseIsWorkday(dateISO: string, mask: number[] | null, blocked: Set<string>): boolean {
+  const dow = new Date(dateISO).getUTCDay();
+  const m = mask && mask.length ? mask : PULSE_DEFAULT_WORKDAYS;
+  if (!m.includes(dow)) return false;
+  return !blocked.has(dateISO);
+}
+
+/**
+ * GET /plan/:id/pulse?days=N — manager view of who did their daily focus task.
+ * For each active focus commitment on the plan, returns the last N calendar days
+ * (each flagged workday/done/debriefed against that performer's personal work
+ * week + holidays) and the current consecutive missed-workday streak. Planner-only.
+ */
+router.get("/plan/:id/pulse", requireFull, async (req: Request, res: Response) => {
+  const planId = req.params.id;
+  const nDays = Math.min(PULSE_MAX_DAYS, Math.max(1, Number.parseInt(String(req.query.days ?? ""), 10) || PULSE_DEFAULT_DAYS));
+
+  const { data: plan, error: planErr } = await db
+    .from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("id", planId).maybeSingle();
+  if (planErr) return res.status(500).json({ error: planErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data: focusRows, error: fErr } = await db
+    .from("smrtplan_focus")
+    .select("id, user_id, workdays, daily_minutes")
+    .eq("org_id", req.org!.id)
+    .eq("plan_id", planId)
+    .eq("active", true);
+  if (fErr) return res.status(500).json({ error: fErr.message });
+  const commitments = asRows(focusRows);
+  if (commitments.length === 0) return res.json({ assignees: [] });
+
+  const blocked = await loadBlockedDates(req.org!.id);
+
+  // Plan task ids → to attribute debriefs (task_debriefs is keyed by task_id).
+  const { data: planTasks } = await db
+    .from("tasks").select("id").eq("organization_id", req.org!.id).eq("plan_id", planId);
+  const taskIds = asRows(planTasks).map((t) => t.id as string);
+
+  // Per-performer display name (frontend can still override via its member map).
+  const uids = [...new Set(commitments.map((c) => c.user_id as string))];
+  const { data: members } = await db.from("org_members").select("user_id, display_name").eq("org_id", req.org!.id).in("user_id", uids);
+  const nameByUser = new Map(asRows(members).map((m) => [m.user_id as string, (m.display_name as string | null) ?? null]));
+
+  const assignees = [];
+  for (const c of commitments) {
+    const uid = c.user_id as string;
+    const mask = Array.isArray(c.workdays) ? (c.workdays as number[]) : null;
+    const localToday = await userLocalToday(uid);
+
+    // Build the day window [start .. localToday] (newest first for display).
+    const dates: string[] = [];
+    let d = localToday;
+    for (let i = 0; i < nDays; i++) { dates.push(d); d = pulsePrevISO(d); }
+    const windowStart = dates[dates.length - 1];
+
+    const [sessRes, debriefRes] = await Promise.all([
+      db.from("focus_sessions")
+        .select("session_date, completed_full, tasks_completed")
+        .eq("org_id", req.org!.id).eq("plan_id", planId).eq("user_id", uid)
+        .gte("session_date", windowStart).lte("session_date", localToday),
+      taskIds.length
+        ? db.from("task_debriefs").select("created_at").eq("org_id", req.org!.id).eq("user_id", uid).in("task_id", taskIds).gte("created_at", `${windowStart}T00:00:00.000Z`)
+        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    ]);
+    const done = new Set<string>();
+    for (const s of asRows(sessRes.data)) {
+      if ((s.completed_full as boolean) === true || Number(s.tasks_completed ?? 0) > 0) done.add(s.session_date as string);
+    }
+    const debriefed = new Set<string>();
+    for (const b of asRows((debriefRes as { data: unknown }).data)) {
+      debriefed.add(toISO(new Date(b.created_at as string)));
+    }
+
+    const days = dates.map((date) => ({
+      date,
+      workday: pulseIsWorkday(date, mask, blocked),
+      done: done.has(date),
+      debriefed: debriefed.has(date),
+      is_today: date === localToday,
+    }));
+    // Streak = consecutive missed personal workdays ending at the last day that
+    // has actually ended. Today is skipped while still open (it can be completed),
+    // matching the engine alert — so a manager opening this in the morning doesn't
+    // see today counted as "missed".
+    let streak = 0;
+    for (const day of days) {
+      if (!day.workday) continue;
+      if (day.is_today && !day.done) continue;
+      if (day.done) break;
+      streak++;
+    }
+    assignees.push({
+      user_id: uid,
+      display_name: nameByUser.get(uid) ?? null,
+      daily_minutes: (c.daily_minutes as number) ?? null,
+      workdays: mask,
+      streak_missed: streak,
+      days,
+    });
+  }
+  res.json({ assignees });
+});
+
 /** POST /focus-sessions — open a daily focus session for a plan.
  *  Body: { plan_id, planned_minutes }. session_date is the user's local today. */
 router.post("/focus-sessions", async (req: Request, res: Response) => {
@@ -2106,14 +2263,17 @@ async function createPlanFromProposal(orgId: string, uid: string, body: Record<s
   if (planErr || !plan) return { ok: false, status: 500, error: planErr?.message ?? "failed to create plan" };
   const planId = (plan as unknown as { id: string }).id;
 
-  // 2) Stages → key→id. (No checkpoint column today; that field is ignored.)
+  // 2) Stages → key→id, carrying the review checkpoint when the proposal has one.
   const stageIdByKey = new Map<string, string>();
   for (let i = 0; i < stagesIn.length; i++) {
     const s = stagesIn[i];
     const nameHe = typeof s.title === "string" ? s.title : String(s.title ?? `שלב ${i + 1}`);
     const { data: stage, error: stErr } = await db
       .from("smrtplan_stages")
-      .insert({ org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i })
+      .insert({
+        org_id: orgId, plan_id: planId, name_he: nameHe, name_en: null, sequence: i,
+        checkpoint: typeof s.checkpoint === "string" ? s.checkpoint : null,
+      })
       .select("id")
       .single();
     if (stErr || !stage) return { ok: false, status: 500, error: stErr?.message ?? "failed to create stage" };
@@ -2157,6 +2317,7 @@ async function createPlanFromProposal(orgId: string, uid: string, body: Record<s
         ai_tier: t.ai_tier != null ? String(t.ai_tier) : null,
         ai_prompt: typeof t.ai_prompt === "string" ? t.ai_prompt : null,
         is_decision: !!t.is_decision,
+        requires_debrief: !!t.requires_debrief,
         external_wait_days: extWait,
         checklist,
       })

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useScreenSearchParams, useScreenRouter, useScreenPathname } from "@/lib/panes/nav";
 import {
   DndContext,
   closestCorners,
@@ -22,6 +22,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskRow, type RowZone } from "./TaskRow";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
@@ -31,6 +32,7 @@ import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
 import { BuildDayBanner } from "./BuildDayBanner";
 import { DecisionDialog } from "./DecisionDialog";
+import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
@@ -140,9 +142,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const t = useTranslations("tasks");
   const tNav = useTranslations("nav");
   const supabase = createClient();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
+  // Pane-aware: inside a tabs-workspace pane these read/write the pane's own
+  // location; as a routed page they are exactly next/navigation.
+  const searchParams = useScreenSearchParams();
+  const router = useScreenRouter();
+  const pathname = useScreenPathname();
   const blocked = useWorkCalendar();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -161,6 +165,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [decisionTask, setDecisionTask] = useState<Task | null>(null);
+  const [debriefTask, setDebriefTask] = useState<Task | null>(null);
   const [buildDayOpen, setBuildDayOpen] = useState(false);
   // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
   const planfocusEnabled = useDayTool("planfocus").enabled;
@@ -180,6 +185,26 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const focusedRef = useRef<string | null>(null);
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hasLoadedRef = useRef(false);
+
+  // ── desk cache (React Query pilot) ──────────────────────────────────────────
+  // The query cache outlives this component (gcTime in QueryProvider), so a
+  // navigation away and back paints the last desk instantly instead of a
+  // skeleton, while the normal fetch below revalidates in the background. The
+  // cache is a paint-only layer: all fetching, realtime and optimistic logic
+  // below is unchanged and remains the source of truth.
+  const queryClient = useQueryClient();
+  // Key includes the active org (subdomain cookie wins, then localStorage —
+  // same precedence as api()'s X-Org-Id) so a multi-org user switching orgs
+  // never gets a paint of the previous org's desk.
+  const DESK_CACHE_KEY = useMemo(() => {
+    let org = "default";
+    if (typeof document !== "undefined") {
+      const m = document.cookie.match(/(?:^|;\s*)smrt_org_id=([^;]+)(?:;|$)/);
+      org = m ? decodeURIComponent(m[1]) : localStorage.getItem("smrtesy.active_org_id") ?? "default";
+    }
+    return ["smrttask", "desk", org] as const;
+  }, []);
+  type DeskCache = { merged: Task[]; meta: Map<string, PlanMeta> };
 
   // ── optimistic-write reconciliation ─────────────────────────────────────────
   // A realtime change to ANY task triggers a full-list refetch ~400ms later
@@ -222,7 +247,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     pendingEditsRef.current.delete(taskId); // the row is leaving — no edit to re-apply
     removedRef.current.set(taskId, Date.now());
     setTasks((prev) => prev.filter((row) => row.id !== taskId));
-  }, []);
+    // Mirror into the desk cache — removedRef dies with this mount, so without
+    // this a remount within the refetch window would flash the removed row.
+    queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, (d) =>
+      d && { ...d, merged: d.merged.filter((row) => row.id !== taskId) });
+  }, [queryClient, DESK_CACHE_KEY]);
 
   // QuickAction / DriveSearch state (opened from TaskDetail)
   const [qaOpen, setQaOpen] = useState(false);
@@ -255,6 +284,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         meta.set(pt.id, { needs: pt.needs ?? [] });
         if (!present.has(pt.id) && OPEN.has(pt.status)) merged.push(pt as Task);
       }
+      // Cache the server truth BEFORE reconcilePending bakes optimistic
+      // patches into the array's elements (it assigns rows[idx] in place).
+      queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, { merged: [...merged], meta });
       setTasks(reconcilePending(merged));
       setPlanMeta(meta);
       hasLoadedRef.current = true;
@@ -266,7 +298,24 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     } finally {
       setLoading(false);
     }
-  }, [reconcilePending]);
+  }, [reconcilePending, queryClient, DESK_CACHE_KEY]);
+
+  // Paint the last known desk immediately on mount (see DESK_CACHE_KEY above).
+  // The mount effect below still runs fetchTasks, which overwrites this with
+  // fresh data as soon as it lands.
+  useEffect(() => {
+    if (hasLoadedRef.current) return;
+    const cached = queryClient.getQueryData<DeskCache>(DESK_CACHE_KEY);
+    if (cached) {
+      setTasks(reconcilePending([...cached.merged]));
+      setPlanMeta(cached.meta);
+      setLoading(false);
+      // Mark loaded so the mount fetch below revalidates in the background
+      // instead of re-raising the skeleton (its first line checks this ref).
+      hasLoadedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchCompleted = useCallback(async () => {
     try {
@@ -477,14 +526,14 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   // ── actions ────────────────────────────────────────────────────────────────
 
-  const completeTask = useCallback(async (task: Task, decision?: string) => {
+  const completeTask = useCallback(async (task: Task, decision?: string, debrief?: DebriefPayload) => {
     if (task.plan_id) {
       await api(`/api/plan-tasks/${task.id}/done`, {
         method: "PATCH",
-        body: { done: true, ...(decision ? { decision } : {}) },
+        body: { done: true, ...(decision ? { decision } : {}), ...(debrief ? { debrief } : {}) },
       });
     } else {
-      await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+      await api(`/api/tasks/${task.id}/complete`, { method: "POST", body: { ...(debrief ? { debrief } : {}) } });
     }
   }, []);
 
@@ -497,8 +546,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }, []);
 
   async function handleToggleDone(task: Task, done: boolean) {
-    // A decision plan task first asks for its outcome (which propagates to the
-    // tasks it affects); the actual completion runs on the dialog's confirm.
+    // A research task first captures its mandatory debrief; a decision task first
+    // asks for its outcome. Either way the real completion runs on the dialog's
+    // confirm. The debrief (the enforced one) takes priority when both apply.
+    if (done && task.requires_debrief) {
+      setDebriefTask(task);
+      return;
+    }
     if (done && task.plan_id && task.is_decision) {
       setDecisionTask(task);
       return;
@@ -506,13 +560,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     await runToggleDone(task, done);
   }
 
-  async function runToggleDone(task: Task, done: boolean, decision?: string) {
+  async function runToggleDone(task: Task, done: boolean, decision?: string, debrief?: DebriefPayload) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
     if (done) optimisticRemove(task.id);
     try {
       if (done) {
-        await completeTask(task, decision);
+        await completeTask(task, decision, debrief);
         undoToast({
           message: t("actions.complete"),
           undoLabel: t("row.undo"),
@@ -553,6 +607,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     if (optimistic) {
       setTasks((prev) => prev.map((task) => (task.id === taskId ? optimistic(task) : task)));
       setSelectedTask((prev) => (prev && prev.id === taskId ? optimistic(prev) : prev));
+      // Mirror into the desk cache so a remount mid-write paints the edited
+      // row, not the pre-edit one (pendingEditsRef dies with this mount).
+      queryClient.setQueryData<DeskCache>(DESK_CACHE_KEY, (d) =>
+        d && { ...d, merged: d.merged.map((row) => (row.id === taskId ? optimistic(row) : row)) });
     }
     // Hold the edit so a refetch racing this write can't bounce it back.
     pendingEditsRef.current.set(taskId, { patch: body, confirmedAt: null, at: Date.now() });
@@ -1131,6 +1189,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
           const tk = decisionTask;
           setDecisionTask(null);
           if (tk) void runToggleDone(tk, true, decision);
+        }}
+      />
+
+      <DebriefDialog
+        open={!!debriefTask}
+        taskTitle={debriefTask ? (locale === "he" && debriefTask.title_he ? debriefTask.title_he : debriefTask.title) : ""}
+        onClose={() => setDebriefTask(null)}
+        onConfirm={(debrief) => {
+          const tk = debriefTask;
+          setDebriefTask(null);
+          if (tk) void runToggleDone(tk, true, undefined, debrief);
         }}
       />
 

@@ -94,6 +94,12 @@ type SpeakerVoice = {
 };
 type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
 
+// Fallback synthesis model when neither the character nor the org setting names
+// one. Ultra is the tested Hebrew recipe — never silently fall back to the older
+// Chatterbox default (which is what a stock voice with no model would otherwise
+// inherit from the engine's own env default).
+const DEFAULT_RESEMBLE_MODEL = "resemble-ultra";
+
 /**
  * Build the speaker_map sent to the engine from a script's casting. A speaker
  * cast to several characters (its primary character_id plus extra_character_ids)
@@ -148,12 +154,23 @@ async function buildSpeakerMap(
     for (const c of chars ?? []) charMap.set(c.id, c);
   }
 
+  // The default model for any voice that carries no per-character override.
+  // Read the org setting (resemble-ultra by default) so a stock/library voice
+  // cast directly — which has no character row, hence no model — still requests
+  // Ultra explicitly instead of inheriting the engine env's default.
+  const { data: orgSettings } = await db
+    .from("smrtvoice_settings")
+    .select("default_resemble_model")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const defaultModel = orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      model: ch.resemble_model,
+      model: ch.resemble_model ?? defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -168,7 +185,7 @@ async function buildSpeakerMap(
     const primary: SpeakerVoice | null = c.character_id
       ? toVoice(c.character_id)
       : c.resemble_voice_id
-        ? { resemble_voice_id: c.resemble_voice_id, language: fallbackLang }
+        ? { resemble_voice_id: c.resemble_voice_id, model: defaultModel, language: fallbackLang }
         : null;
     if (!primary) continue;
     const extras = ((c.extra_character_ids ?? []) as string[])
@@ -1106,10 +1123,12 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
 
   try {
     const client = getVoiceEngineClient();
-    const result = await client.parseScript(script.google_doc_id, token, {
-      id: script.google_doc_tab_id,
-      title: script.google_doc_tab_title,
-    });
+    const result = await client.parseScript(
+      script.google_doc_id,
+      token,
+      { id: script.google_doc_tab_id, title: script.google_doc_tab_title },
+      script.language,
+    );
 
     // Inherit casting from the project's first script (lowest seq, not this one).
     const inherited = new Map<string, { character_id: string | null; resemble_voice_id: string | null }>();
@@ -1191,13 +1210,20 @@ router.post("/voice/scripts/:id/parse", async (req: Request, res: Response) => {
       if (delErr) console.warn("[smrtvoice] script_speakers reconcile-delete failed:", delErr.message);
     }
 
+    // Persist the tab actually read (the engine may have auto-resolved it from
+    // the script's language), so the UI always shows the real source tab.
+    const scriptUpdate: Record<string, unknown> = {
+      status: "parsed",
+      total_lines: result.total_lines,
+      script_imported_at: new Date().toISOString(),
+    };
+    if (result.selected_tab?.id) {
+      scriptUpdate.google_doc_tab_id = result.selected_tab.id;
+      scriptUpdate.google_doc_tab_title = result.selected_tab.title;
+    }
     const { error: updateErr } = await db
       .from("smrtvoice_scripts")
-      .update({
-        status: "parsed",
-        total_lines: result.total_lines,
-        script_imported_at: new Date().toISOString(),
-      })
+      .update(scriptUpdate)
       .eq("id", script.id);
     if (updateErr) return res.status(500).json({ error: updateErr.message });
 
@@ -1303,7 +1329,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
 
   // Build the speaker_map from casting (a speaker cast to several characters
   // fans out to a `voices` list — one take per voice).
-  const { map: speakerMap, cast, error: castErr } = await buildSpeakerMap(
+  const { map: speakerMap, error: castErr } = await buildSpeakerMap(
     script.id,
     req.org!.id,
     script.language ?? "he",
@@ -1313,19 +1339,11 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
     return res.status(400).json({ error: "Cast at least one speaker to a voice before generating" });
   }
 
-  // Every speaker must be decided: either cast to a usable voice, or explicitly
-  // skipped. Block only the *undecided* ones (not cast, not skipped) so the user
-  // doesn't accidentally drop lines — while still allowing "cast one, skip the
-  // rest" to preview a single voice. Skipped speakers' lines aren't generated.
-  const undecided = cast
-    .filter((c) => !speakerMap[c.speaker_name] && !c.skip)
-    .map((c) => c.speaker_name);
-  if (undecided.length > 0) {
-    return res.status(400).json({
-      error: `These speakers need a voice or "skip": ${undecided.join(", ")}`,
-      speakers: undecided,
-    });
-  }
+  // Partial casting is allowed: you no longer have to cast (or explicitly skip)
+  // every speaker to generate. Any speaker left uncast is simply not in the
+  // speaker_map, so the engine skips its lines — "cast some, run only those".
+  // The only requirement is at least one cast speaker (checked above). Skipped
+  // speakers (`skip = true`) behave identically to uncast ones.
 
   try {
     let inputAudioUrl: string | undefined;
@@ -2116,6 +2134,20 @@ function stripNiqqud(s: string): string {
   return s.replace(/[֑-ׇ]/g, "");
 }
 
+// Strip punctuation (any script — commas, periods, maqaf, geresh, …) so we can
+// tell a PUNCTUATION-only edit ("שלום" → "שלום,") from a real spelling change
+// ("770" → "סעוון"). Used only to classify a learned pair, never to alter it.
+function stripPunct(s: string): string {
+  return s.replace(/[\p{P}\p{S}]/gu, "");
+}
+
+// Classify a learned (from → to) pair: 'punctuation' when the two are the same
+// word once punctuation is removed (only a comma/period/… was added or moved),
+// otherwise 'spelling' (the letters themselves changed).
+function classifyRespelling(from: string, to: string): "spelling" | "punctuation" {
+  return stripPunct(from) === stripPunct(to) ? "punctuation" : "spelling";
+}
+
 // LCS token diff → {from → to} substitution spans where the ORIGINAL side is a
 // single word (the unit the user selects and the lookup keys on). A single word
 // respelled to a short phrase ("770" → "סעוון סעוונטי") is kept; adjacent
@@ -2251,6 +2283,7 @@ async function syncPronunciationFeedback(orgId: string, lineId: string): Promise
         model: (t.model as string | null) ?? null,
         original_word: p.from,
         pronounced_as: p.to,
+        kind: classifyRespelling(p.from, p.to),
         chosen: t.approved === true,
       });
     }
@@ -2518,14 +2551,17 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
   const uuid = req.params.uuid;
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("sample_text")
+    .select("sample_text, default_resemble_model")
     .eq("org_id", req.org!.id)
     .maybeSingle();
   const text = (req.body?.text as string)?.trim() || settings?.sample_text || "שלום, זו דוגמה קצרה לקול.";
+  // Preview on the same model the real generation uses, so what the user hears
+  // matches what they'll get — not whatever default the engine env carries.
+  const model = settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
 
   try {
     const client = getVoiceEngineClient();
-    const sample = await client.generateSample(uuid, text);
+    const sample = await client.generateSample(uuid, text, { model });
     // Download the synthesized clip and store it so replays are free.
     const resp = await fetch(sample.audio_url);
     if (!resp.ok) return res.status(502).json({ error: `Failed to fetch sample: ${resp.status}` });
@@ -2864,7 +2900,7 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
 
   let q = db
     .from("smrtvoice_pronunciation_feedback")
-    .select("original_word, pronounced_as, chosen")
+    .select("original_word, pronounced_as, kind, chosen")
     .eq("org_id", orgId);
   if (word) q = q.eq("original_word", word);
   if (resembleVoiceId) q = q.eq("resemble_voice_id", resembleVoiceId);
@@ -2872,12 +2908,17 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
   const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
 
-  const agg = new Map<string, { original_word: string; pronounced_as: string; chosen: number; total: number }>();
+  const agg = new Map<
+    string,
+    { original_word: string; pronounced_as: string; kind: string; chosen: number; total: number }
+  >();
   for (const r of data ?? []) {
+    const kind = (r.kind as string | null) ?? "spelling";
     const key = `${r.original_word}\u001f${r.pronounced_as}`;
     const e = agg.get(key) ?? {
       original_word: r.original_word as string,
       pronounced_as: r.pronounced_as as string,
+      kind,
       chosen: 0,
       total: 0,
     };
@@ -2889,6 +2930,110 @@ router.get("/voice/learnings", async (req: Request, res: Response) => {
     (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
   );
   res.json({ learnings, scope: { resemble_voice_id: resembleVoiceId, character_id: characterId } });
+});
+
+// GET /voice/insights — everything the learning system has concluded, grouped
+// by voice, for the "what did it learn" dashboard. Each voice lists its learned
+// pairs (spelling + punctuation) ranked by how often the user KEPT them (⭐), so
+// the top row per original word is the current recommendation for that voice.
+router.get("/voice/insights", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data, error } = await db
+    .from("smrtvoice_pronunciation_feedback")
+    .select("original_word, pronounced_as, kind, chosen, character_id, resemble_voice_id")
+    .eq("org_id", orgId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Character names for labeling (best-effort — a missing/renamed character
+  // just falls back to its voice id). A load failure only costs the labels, so
+  // log and continue rather than 500 the whole dashboard.
+  const { data: chars, error: charsErr } = await db
+    .from("smrtvoice_characters")
+    .select("id, name, display_name, language, resemble_voice_id")
+    .eq("org_id", orgId);
+  if (charsErr) console.error("insights character lookup failed", charsErr.message);
+  const charById = new Map(
+    (chars ?? []).map((c) => [c.id as string, c as Record<string, unknown>]),
+  );
+
+  type Pair = {
+    original_word: string;
+    pronounced_as: string;
+    kind: string;
+    chosen: number;
+    total: number;
+  };
+  type Group = {
+    key: string;
+    character_id: string | null;
+    character_name: string | null;
+    resemble_voice_id: string | null;
+    language: string | null;
+    pairs: Map<string, Pair>;
+  };
+  const groups = new Map<string, Group>();
+
+  for (const r of data ?? []) {
+    const characterId = (r.character_id as string | null) ?? null;
+    const resembleVoiceId = (r.resemble_voice_id as string | null) ?? null;
+    // One bucket per voice: character if known, else the raw voice id, else a
+    // single "no voice" bucket for org-wide (character-less) history.
+    const gkey = characterId
+      ? `char:${characterId}`
+      : resembleVoiceId
+        ? `voice:${resembleVoiceId}`
+        : "none";
+    let g = groups.get(gkey);
+    if (!g) {
+      const c = characterId ? charById.get(characterId) : undefined;
+      g = {
+        key: gkey,
+        character_id: characterId,
+        character_name: c
+          ? ((c.display_name as string | null) || (c.name as string | null) || null)
+          : null,
+        resemble_voice_id: resembleVoiceId,
+        language: c ? ((c.language as string | null) ?? null) : null,
+        pairs: new Map(),
+      };
+      groups.set(gkey, g);
+    }
+    const kind = (r.kind as string | null) ?? "spelling";
+    const pkey = `${r.original_word}${r.pronounced_as}`;
+    const p = g.pairs.get(pkey) ?? {
+      original_word: r.original_word as string,
+      pronounced_as: r.pronounced_as as string,
+      kind,
+      chosen: 0,
+      total: 0,
+    };
+    p.total += 1;
+    if (r.chosen) p.chosen += 1;
+    g.pairs.set(pkey, p);
+  }
+
+  const voices = [...groups.values()]
+    .map((g) => {
+      const learnings = [...g.pairs.values()].sort(
+        (a, b) => b.chosen - a.chosen || b.chosen / b.total - a.chosen / a.total,
+      );
+      return {
+        key: g.key,
+        character_id: g.character_id,
+        character_name: g.character_name,
+        resemble_voice_id: g.resemble_voice_id,
+        language: g.language,
+        learnings,
+        chosen_total: learnings.reduce((s, p) => s + p.chosen, 0),
+        pair_count: learnings.length,
+      };
+    })
+    // Voices with confirmed picks first, then by volume; the "no voice" bucket
+    // sinks to the bottom.
+    .sort((a, b) => b.chosen_total - a.chosen_total || b.pair_count - a.pair_count);
+
+  res.json({ voices });
 });
 
 export default router;

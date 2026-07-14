@@ -22,6 +22,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
+import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
@@ -546,6 +547,40 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     wasVerified = prior ? prior.manually_verified === true : null;
   }
 
+  // Recurrence edits go through the same COUNT → recurrence_until resolution as
+  // create (POST). PATCH previously skipped this, so an edited "ends after N
+  // occurrences" rule stored a bare COUNT the lazy spawn engine ignores — the
+  // series never terminated. Anchor on the incoming due_date when the same PATCH
+  // sets one; otherwise read the task's current due_date so the Nth occurrence is
+  // computed from the real start. Falls back to today when the task has none.
+  if (typeof updates.recurrence_rule === "string") {
+    let start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    if (!start) {
+      const { data: cur } = await db
+        .from("tasks")
+        .select("due_date")
+        .eq("organization_id", req.org!.id)
+        .eq("id", req.params.id)
+        .maybeSingle();
+      start = (cur?.due_date as string | null) ?? undefined;
+    }
+    const normalized = normalizeRecurrence(
+      updates.recurrence_rule,
+      start ?? new Date().toISOString().slice(0, 10),
+    );
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      // Match POST: apply the computed until whenever the caller didn't set an
+      // explicit one. The client sends recurrence_until:null for COUNT ("ends
+      // after N") rules, so `== null` (not `=== undefined`) is required — else
+      // COUNT is stripped from the rule but never converted to an end date and
+      // the series never terminates.
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
   // A position-only patch (drag-reorder writes today_position to every row of
@@ -558,6 +593,15 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     // the "returned from snooze" chip — unless the patch sets the chip itself.
     updates.last_interaction_at = updates.updated_at;
     if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
+  }
+
+  // A generic status-patch into a COMPLETION status is a completion too — enforce
+  // the research-task debrief here as well, so this path can't bypass the gate
+  // (acceptance #1). Completion = completed/archived (smrtTask "completes" to
+  // archived); dismissing/discarding a research task does NOT require a debrief.
+  if (typeof updates.status === "string" && (updates.status === "completed" || updates.status === "archived")) {
+    const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+    if (block) return res.status(block.status).json({ error: block.error });
   }
 
   const { data, error } = await db
@@ -604,6 +648,11 @@ router.delete("/tasks/:id", async (req: Request, res: Response) => {
 /** POST /tasks/:id/complete */
 router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
+  // Research tasks (requires_debrief) can't be closed via the desk path either —
+  // enforce the debrief before the status write (acceptance #1: even via direct
+  // API). No-op for ordinary tasks (requires_debrief defaults false).
+  const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+  if (block) return res.status(block.status).json({ error: block.error });
   const { data, error } = await db
     .from("tasks")
     .update({ status: "archived", completed_at: now, status_changed_at: now })

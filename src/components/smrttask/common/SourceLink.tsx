@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { useScreenRouter } from "@/lib/panes/nav";
 import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
-import { isEmbeddedPane } from "@/lib/navigate";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 import { SourceMessageReader } from "./SourceMessageReader";
 
 
@@ -59,8 +59,10 @@ interface SourceLinkProps {
  * opens the original message/doc in a new tab.
  */
 export function SourceLink({ source, stopPropagation, onNavigate, className }: SourceLinkProps) {
-  const waPanel = useWhatsAppPanel();
-  const router = useRouter();
+  const openWhatsApp = useOpenWhatsAppChat();
+  // Pane-aware: an SMS source inside the /tasks pane swaps that pane
+  // instead of navigating the top window out of the workspace.
+  const router = useScreenRouter();
   const { locale } = useParams() as { locale: string };
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
@@ -103,25 +105,12 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
           // <body> pointer-events + traps focus, so the docked panel would
           // open uninteractive behind it (same guard QuickAction uses).
           onNavigate?.();
-          // Inside a workspace pane the docked panel is force-hidden by CSS
-          // (`html[data-embed="1"] .wa-panel { display:none }` in globals.css),
-          // so openChat() would flip the panel state but render nothing — the
-          // button looks completely dead. Route the pane to the full WhatsApp
-          // reader instead, carrying the same chat + message anchor the panel
-          // would have used (the page reads chat_id/msg — WhatsAppPageClient).
-          if (isEmbeddedPane()) {
-            const params = new URLSearchParams();
-            if (phone) params.set("chat_id", phone);
-            if (focusWamid) params.set("msg", focusWamid);
-            const qs = params.toString();
-            router.push(`/${locale}/whatsapp${qs ? `?${qs}` : ""}`);
-            return;
-          }
-          // Surface the conversation in the docked side-panel — keeps the
-          // current list (tasks/inbox/log) in place instead of navigating away.
-          // When we know the exact source message, jump straight to it.
-          if (phone) waPanel.openChat(phone, null, focusWamid);
-          else waPanel.open();
+          // Surface the conversation in the docked side-panel (keeps the
+          // current list in place), or — inside a workspace pane where that
+          // panel is CSS-hidden — route to the full /whatsapp reader. The hook
+          // owns that branch so every call site stays in sync; when we know the
+          // exact source message we jump straight to it.
+          openWhatsApp(phone || null, { focusWamid });
         }}
         title={`${label} — open in WhatsApp`}
         className={cn(base, interactive, className)}

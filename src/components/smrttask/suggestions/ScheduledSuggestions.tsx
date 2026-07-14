@@ -8,10 +8,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, Pause, Trash2, BellRing, Pencil, CalendarClock } from "lucide-react";
+import { Clock, Pause, Trash2, BellRing, Pencil, CalendarClock, Repeat } from "lucide-react";
 import { toast } from "sonner";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
+import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { todayISO } from "@/lib/workdays";
+import type { Task } from "@/types/task";
 
 interface ReminderRow {
   id: string;
@@ -43,15 +45,50 @@ interface DatedTaskRow {
   manually_verified: boolean | null;
 }
 
+interface RecurringTaskRow {
+  id: string;
+  title: string | null;
+  title_he: string | null;
+  due_date: string | null;
+  due_time: string | null;
+  recurrence_rule: string | null;
+  recurrence_until: string | null;
+  priority: string | null;
+  task_type: string | null;
+  status: string | null;
+}
+
+/** Compact cadence label key (under the `manualTask` namespace) for a rule. */
+function recurrenceSummaryKey(rule: string | null | undefined): string {
+  if (!rule) return "recurrenceNone";
+  if (rule.includes("FREQ=DAILY")) return "recurrenceDaily";
+  if (rule.includes("FREQ=WEEKLY")) return "recurrenceWeekly";
+  if (rule.includes("FREQ=MONTHLY") || rule.includes("FREQ=HEBREW_MONTHLY")) return "recurrenceMonthly";
+  if (rule.includes("FREQ=HEBREW_YEARLY")) return "recurrenceHebrew";
+  if (rule.includes("FREQ=YEARLY")) return "recurrenceYearly";
+  return "recurrenceNone";
+}
+
 export function ScheduledSuggestions({ locale }: { locale: string }) {
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
+  const tManual = useTranslations("manualTask");
   const supabase = createClient();
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [snoozed, setSnoozed] = useState<SnoozedTaskRow[]>([]);
   const [dated, setDated] = useState<DatedTaskRow[]>([]);
+  const [recurring, setRecurring] = useState<RecurringTaskRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Show the skeleton only on the first load. Later refetches (triggered by the
+  // open editor's onUpdate) must NOT swap the tree for a skeleton — that would
+  // unmount the TaskDetail dialog mid-edit.
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
+  // Full-editor state — opening any card fetches the complete task and shows
+  // the same TaskDetail dialog used on the tasks page, so every field
+  // (title, description, size, due date, recurrence, checklist…) is editable.
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -80,6 +117,9 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
           .eq("user_id", user.id)
           .eq("status", "snoozed")
           .not("snoozed_until", "is", null)
+          // Recurring tasks get their own section below — keep them out of here
+          // so each task appears in exactly one place.
+          .is("recurrence_rule", null)
           // Order by WHEN it was snoozed (status_changed_at), freshest first —
           // the user scans "what did I just push off", not "what wakes first".
           .order("status_changed_at", { ascending: false })
@@ -98,15 +138,36 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
           .not("due_date", "is", null)
           .gt("due_date", todayISO())
           .in("status", ["inbox", "in_progress"])
+          // Recurring tasks render in their own section — exclude here.
+          .is("recurrence_rule", null)
           .order("due_date", { ascending: true })
           .limit(200);
         setDated((datedRows as DatedTaskRow[] | null) ?? []);
+
+        // Recurring tasks — the "organized place" to review every repeating
+        // task and open it for a full edit. We show the one live instance per
+        // series (completed instances are history; completing spawns the next),
+        // ordered by the next due date.
+        const { data: recurringRows } = await supabase
+          .from("tasks")
+          .select("id, title, title_he, due_date, due_time, recurrence_rule, recurrence_until, priority, task_type, status")
+          .eq("user_id", user.id)
+          // Verified only — an unverified recurring suggestion still lives in
+          // the Messages tab; showing it here too would duplicate it.
+          .eq("manually_verified", true)
+          .not("recurrence_rule", "is", null)
+          .in("status", ["inbox", "in_progress", "snoozed"])
+          .order("due_date", { ascending: true, nullsFirst: false })
+          .limit(200);
+        setRecurring((recurringRows as RecurringTaskRow[] | null) ?? []);
       } else {
         setSnoozed([]);
         setDated([]);
+        setRecurring([]);
       }
     } finally {
       setLoading(false);
+      setLoadedOnce(true);
     }
   }, [supabase]);
 
@@ -151,6 +212,31 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     }
   }
 
+  // Open any scheduled card in the full task editor. We only hold slim rows
+  // here (a few columns), so fetch the complete task first, then open the
+  // shared TaskDetail dialog — the same one the tasks page uses.
+  const openTask = useCallback(async (taskId: string) => {
+    try {
+      const { task } = await api<{ task: Task }>(`/api/tasks/${taskId}`);
+      setSelectedTask(task);
+      setDetailOpen(true);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }, []);
+
+  async function handleTaskDelete(taskId: string) {
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      toast.success(tTasks("actions.delete"));
+      setDetailOpen(false);
+      setSelectedTask(null);
+      fetchAll();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   async function handleReschedule(untilIso: string) {
     if (!rescheduleTaskId) return;
     try {
@@ -166,7 +252,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     }
   }
 
-  if (loading) {
+  if (loading && !loadedOnce) {
     return (
       <div className="space-y-3">
         {[1, 2].map((i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
@@ -174,7 +260,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
     );
   }
 
-  if (reminders.length === 0 && snoozed.length === 0 && dated.length === 0) {
+  if (reminders.length === 0 && snoozed.length === 0 && dated.length === 0 && recurring.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Clock className="mx-auto h-8 w-8 mb-2 opacity-50" />
@@ -187,6 +273,65 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-6">
+      {recurring.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("recurringSection")} ({recurring.length})
+          </h3>
+          <div className="space-y-3">
+            {recurring.map((task) => {
+              const title = (locale === "he" && task.title_he ? task.title_he : task.title) || "";
+              const nextLabel = task.due_date
+                ? new Date(`${task.due_date}T${task.due_time || "00:00"}:00`).toLocaleDateString(dtFmt, {
+                    day: "numeric", month: "short", ...(task.due_time ? { hour: "2-digit", minute: "2-digit" } : {}),
+                  })
+                : "";
+              const untilLabel = task.recurrence_until
+                ? new Date(`${task.recurrence_until}T00:00:00`).toLocaleDateString(dtFmt, {
+                    day: "numeric", month: "short", year: "numeric",
+                  })
+                : "";
+              return (
+                <Card key={task.id} className="transition-colors hover:bg-accent/50">
+                  <CardContent className="p-0">
+                    <button
+                      type="button"
+                      onClick={() => openTask(task.id)}
+                      className="flex w-full items-start gap-2 p-4 text-start"
+                      title={t("editDetails")}
+                      aria-label={t("editDetails")}
+                    >
+                      <div className="mt-1 rounded-full bg-primary/10 p-1.5 shrink-0">
+                        <Repeat className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-medium text-sm truncate" dir="auto">{title}</h4>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary" className="text-[10px]">
+                            {tManual(recurrenceSummaryKey(task.recurrence_rule))}
+                          </Badge>
+                          {nextLabel && <Badge variant="outline" className="text-[10px]">{nextLabel}</Badge>}
+                          <Badge variant="outline" className="text-[10px]">
+                            {task.recurrence_until ? t("untilLabel", { when: untilLabel }) : t("noEndDate")}
+                          </Badge>
+                          {task.task_type === "meeting" && (
+                            <Badge variant="secondary" className="text-[10px]">{t("kindEvent")}</Badge>
+                          )}
+                          {task.priority && (
+                            <Badge variant="secondary" className="text-[10px]">{tTasks(`priority.${task.priority}`)}</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    </button>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {dated.length > 0 && (
         <section className="space-y-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -201,9 +346,15 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                   })
                 : "";
               return (
-                <Card key={task.id}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start gap-2">
+                <Card key={task.id} className="transition-colors hover:bg-accent/50">
+                  <CardContent className="p-0">
+                    <button
+                      type="button"
+                      onClick={() => openTask(task.id)}
+                      className="flex w-full items-start gap-2 p-4 text-start"
+                      title={t("editDetails")}
+                      aria-label={t("editDetails")}
+                    >
                       <div className="mt-1 rounded-full bg-primary/10 p-1.5 shrink-0">
                         <CalendarClock className="h-3.5 w-3.5 text-primary" />
                       </div>
@@ -219,7 +370,8 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                           )}
                         </div>
                       </div>
-                    </div>
+                      <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    </button>
                   </CardContent>
                 </Card>
               );
@@ -243,7 +395,13 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                 <Card key={task.id}>
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-start gap-2 flex-1 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => openTask(task.id)}
+                        className="flex items-start gap-2 flex-1 min-w-0 text-start"
+                        title={t("editDetails")}
+                        aria-label={t("editDetails")}
+                      >
                         <div className="mt-1 rounded-full bg-status-warn-bg p-1.5 shrink-0">
                           <Clock className="h-3.5 w-3.5 text-status-warn" />
                         </div>
@@ -263,7 +421,7 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
                             )}
                           </div>
                         </div>
-                      </div>
+                      </button>
                       <div className="flex gap-1 shrink-0">
                         <Button
                           variant="ghost"
@@ -361,6 +519,17 @@ export function ScheduledSuggestions({ locale }: { locale: string }) {
         onClose={() => setRescheduleTaskId(null)}
         onConfirm={handleReschedule}
       />
+
+      {selectedTask && (
+        <TaskDetail
+          task={selectedTask}
+          locale={locale}
+          open={detailOpen}
+          onClose={() => { setDetailOpen(false); setSelectedTask(null); }}
+          onUpdate={fetchAll}
+          onDelete={handleTaskDelete}
+        />
+      )}
     </div>
   );
 }

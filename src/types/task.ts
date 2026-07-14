@@ -43,6 +43,13 @@ export interface Task {
   snooze_count: number;
   tags: string[] | null;
   ai_actions: Array<{ label: string; prompt: string }>;
+  /**
+   * Action nuggets — AI-extracted deep links (payment/tracking/invoice/meeting
+   * join, etc.) surfaced as one-click buttons instead of being pasted into the
+   * description. `label` is short Hebrew ("מעקב ותשלום"); `url` is verbatim.
+   * Written by ai-process; not user-editable. Defaults to [] on the column.
+   */
+  action_links?: Array<{ label: string; url: string }> | null;
   ai_generated_content: Array<{
     id: string;
     created_at: string;
@@ -152,6 +159,9 @@ export interface Task {
   /** A decision task: on completion its stated outcome propagates to the tasks
    *  that list it in affected_by (docs project-planning-protocol §10). */
   is_decision?: boolean | null;
+  /** A research task: completion is blocked at every done-path until a valid
+   *  debrief is filed (docs project-planning-protocol §5 "שלב ו"). */
+  requires_debrief?: boolean | null;
   /**
    * "What's needed to start" — the inbound task→task dependencies, resolved by the
    * backend from smrtplan_dependencies. Each entry is a provider task this task waits on.

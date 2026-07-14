@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle, Copy } from "lucide-react";
 import { toast } from "sonner";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 interface Notification {
   id: string;
   app_slug: string;
@@ -183,11 +183,11 @@ export function NotificationsList() {
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
                   {n.link && (
-                    <Link href={n.link}>
+                    <PaneLink href={n.link}>
                       <Button variant="ghost" size="icon" className="h-7 w-7">
                         <ExternalLink className="h-3.5 w-3.5" />
                       </Button>
-                    </Link>
+                    </PaneLink>
                   )}
                   {!n.is_read && (
                     <Button

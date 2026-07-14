@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useScreenRouter } from "@/lib/panes/nav";
 import { useTranslations } from "next-intl";
 import { Sunrise, X } from "lucide-react";
 import { todayISO } from "@/lib/workdays";
@@ -19,7 +19,9 @@ const DISMISS_KEY = "smrttask:morningDismissed";
  * set, so navigating back to /tasks stays put.
  */
 export function MorningInboxRedirect({ locale }: { locale: string }) {
-  const router = useRouter();
+  // Pane-aware: inside a pane the morning bounce swaps the pane to the inbox
+  // instead of silently changing the (hidden) top route.
+  const router = useScreenRouter();
   useEffect(() => {
     const today = todayISO();
     if (localStorage.getItem(LANDING_KEY) === today) return;

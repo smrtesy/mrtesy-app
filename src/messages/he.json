@@ -47,6 +47,7 @@
     "recurrenceHebrew": "כל שנה (תאריך עברי)",
     "recurrenceHebrewHint": "החזרה תיקבע לפי התאריך העברי של תאריך היעד (למשל כל ט\"ו בשבט).",
     "recurrenceNeedsWeekday": "בחר לפחות יום אחד בשבוע",
+    "recurrenceNeedsDueDate": "למשימה חוזרת ללא תאריך יעד החזרה תיחשב מהיום. קבע תאריך יעד כדי לעגן את החזרה.",
     "timeNeedsDate": "כדי לקבוע שעה צריך גם תאריך יעד",
     "weekdayShort": {
       "0": "א",
@@ -170,7 +171,9 @@
   "tabsWorkspace": {
     "close": "סגור טאב",
     "focusPane": "מקד טאב זה",
-    "resizePane": "שנה רוחב"
+    "resizePane": "שנה רוחב",
+    "paneError": "משהו השתבש בטאב הזה",
+    "paneReload": "טען מחדש"
   },
   "nav": {
     "tasks": "משימות",
@@ -202,6 +205,7 @@
     "crm": "אנשי קשר",
     "reach": "דיוור",
     "bots": "בוטים",
+    "vault": "כספת",
     "sectionBot": "smrtBot",
     "more": "עוד",
     "planBoard": "לוח",
@@ -369,7 +373,11 @@
     "chatSearchPrev": "תוצאה קודמת",
     "chatSearchNext": "תוצאה הבאה",
     "chatSearchCount": "{current} מתוך {total}",
-    "chatSearchNoMatch": "אין תוצאות"
+    "chatSearchNoMatch": "אין תוצאות",
+    "quickReply": "תשובה מהירה",
+    "quickReplyPlaceholder": "תשובה מהירה…",
+    "quickReplyQuoteLast": "כמענה להודעה האחרונה",
+    "quickReplySent": "התשובה נשלחה"
   },
   "auth": {
     "signInWithGoogle": "התחבר עם Google",
@@ -662,6 +670,45 @@
       "confirm": "סמן כהושלם",
       "cancel": "ביטול"
     },
+    "debrief": {
+      "title": "תחקיר סגירה",
+      "hint": "משימת מחקר נסגרת רק אחרי תחקיר — התוצאות נשמרות ומזינות את הפלייבוק.",
+      "conductedIn": {
+        "label": "איפה נערך הניסוי?",
+        "claude": "בקלוד",
+        "external": "בכלי חיצוני",
+        "both": "בשניהם",
+        "none": "לא נערך ניסוי"
+      },
+      "claude": {
+        "confirm": "נתתי לקלוד ציון לכל תוצאה לפי המחוון שנקבע",
+        "sessionLink": "קישור / מזהה סשן הקלוד",
+        "sessionLinkPh": "https://claude.ai/… או מזהה הסשן",
+        "scores": "טבלת הציונים או קישור ללוג הרתמה",
+        "scoresPh": "הדבק את טבלת הציונים, או קישור ללוג"
+      },
+      "external": {
+        "tool": "איזה כלי בדיוק",
+        "toolPh": "שם הכלי / המודל",
+        "steps": "מה נעשה (הגדרות, פרומפטים — כלשונם)",
+        "stepsPh": "הגדרות ופרומפטים מדויקים",
+        "results": "מה התוצאות",
+        "resultsPh": "מה יצא בפועל",
+        "scores": "ציון לכל תוצאה לפי המחוון",
+        "scoresPh": "ציון לכל תוצאה"
+      },
+      "noExperiment": {
+        "reason": "למה לא נערך ניסוי?",
+        "reasonPh": "הסבר קצר"
+      },
+      "q": {
+        "workedBest": "מה עבד הכי טוב?",
+        "trick": "איזה טריק/הגדרה עשו את ההבדל?",
+        "surprise": "מה הפתיע לרעה?"
+      },
+      "cancel": "ביטול",
+      "submit": "שמור וסמן כהושלם"
+    },
     "contextFilter": {
       "all": "הכל",
       "home": "בית",
@@ -775,6 +822,10 @@
     "noScheduled": "אין תזכורות מתוזמנות",
     "snoozedSection": "הצעות שדחיתי",
     "datedSection": "מתוזמנות לתאריך",
+    "recurringSection": "חוזרות",
+    "editDetails": "פתח לעריכת כל הפרטים",
+    "noEndDate": "ללא תאריך סיום",
+    "untilLabel": "עד {when}",
     "kindEvent": "אירוע",
     "morningTitle": "בוקר טוב 👋 מתחילים מהנכנס",
     "morningHint": "עבור על הפריטים אחד-אחד — לכל אחד: בחר להיום · תן תאריך · תייק לפי רמה · זרוק.",
@@ -2402,7 +2453,8 @@
     "nav": {
       "folders": "תיקיות",
       "characters": "דמויות",
-      "library": "ספריית קולות"
+      "library": "ספריית קולות",
+      "insights": "תובנות"
     },
     "folders": {
       "title": "תיקיות",
@@ -2490,7 +2542,8 @@
       "lines": "שורות",
       "failed": "נכשלו",
       "cost": "עלות",
-      "mode": "מצב"
+      "mode": "מצב",
+      "readingFromTab": "קורא מהטאב: {tab}"
     },
     "casting": {
       "title": "ליהוק",
@@ -2827,6 +2880,24 @@
       "empty": "עדיין אין מילים במילון",
       "delete": "מחק",
       "deleteConfirm": "למחוק את המילה מהמילון?"
+    },
+    "insights": {
+      "title": "מה המערכת למדה",
+      "subtitle": "כל מה שהמערכת הסיקה מהבחירות שלך — כתיב ופיסוק שעבדו הכי טוב, לכל קול בנפרד. סמנו גרסה בכוכב (⭐) וההעדפה נלמדת אוטומטית.",
+      "empty": "עדיין לא נלמד כלום. סמנו גרסאות טובות בכוכב (⭐) בסטודיו, והמערכת תתחיל ללמוד איזה כתיב ופיסוק עובד הכי טוב לכל קול.",
+      "loadError": "טעינת התובנות נכשלה",
+      "noVoice": "ללא קול מוגדר",
+      "voiceMeta": "{words} מילים · נבחרו {chosen} פעמים",
+      "filterAll": "הכל",
+      "filterSpelling": "כתיב",
+      "filterPunctuation": "פיסוק",
+      "kindSpelling": "כתיב",
+      "kindPunctuation": "פיסוק",
+      "recommended": "מומלץ",
+      "chosenStat": "נבחר {chosen} מתוך {total}",
+      "neverChosen": "עדיין לא נבחר",
+      "noneForFilter": "אין תיקונים בקטגוריה הזו",
+      "originalHeader": "מקור"
     }
   },
   "projectCombobox": {
@@ -2890,7 +2961,9 @@
   "smrtPlan": {
     "title": "לוח התכנון",
     "lead": "כל הפרויקטים, הלו\"ז, והתלויות ביניהם · לחיצה על שורה פותחת פרטים",
-    "aiBuilder": { "button": "בנה עם AI" },
+    "aiBuilder": {
+      "button": "בנה עם AI"
+    },
     "today": "היום",
     "newPlan": "תוכנית חדשה",
     "recompute": "חשב מחדש",
@@ -2968,6 +3041,13 @@
         "prog": "בתהליך",
         "done": "הושלם"
       }
+    },
+    "pulse": {
+      "title": "דופק יומי",
+      "empty": "אין התחייבויות פוקוס פעילות בתוכנית",
+      "streak": "{n} ימים ברצף",
+      "debriefed": "תחקיר מולא",
+      "legend": "ירוק = בוצע · אדום = יום עבודה שהוחמץ · אפור = יום חופש · נקודה = תחקיר מולא"
     },
     "effort": {
       "tasks": "משימות",
@@ -3080,6 +3160,8 @@
       "estimatedHours": "שעות מוערכות",
       "dailyMinutes": "התחייבות יומית (דקות)",
       "dailyMinutesHint": "כמה דקות ביום להשקיע בתוכנית",
+      "workdays": "ימי עבודה",
+      "workdaysHint": "הימים שבהם מצפים לביצוע יומי (ברירת מחדל: שני–שישי)",
       "fromCatalog": "בחר מהקטלוג…",
       "manualDuration": "משך ידני (ימים)",
       "durationDays": "משך (ימים)",
@@ -3268,6 +3350,51 @@
     },
     "zoomIn": "הגדל",
     "zoomOut": "הקטן"
+  },
+  "smrtVault": {
+    "title": "כספת סיסמאות",
+    "subtitle": "כל הלוגינים שלך במקום אחד, מוצפנים. הסיסמאות עצמן לעולם לא מוצגות כאן — תוסף הדפדפן ימלא אותן אוטומטית באתרים.",
+    "securityNote": "הסיסמאות נשמרות מוצפנות ולעולם לא מוצגות במסך הזה. תוסף הדפדפן של smrtVault ימלא אותן אוטומטית ישירות באתרים.",
+    "search": "חיפוש",
+    "searchPlaceholder": "חיפוש לפי שם, משתמש או כתובת…",
+    "close": "סגור",
+    "importCsv": "ייבוא מקובץ",
+    "add": "הוסף לוגין",
+    "empty": "עדיין אין לוגינים בכספת. הוסף אחד או ייבא קובץ CSV מכרום.",
+    "noMatches": "לא נמצאו תוצאות.",
+    "open": "פתח",
+    "addTitle": "לוגין חדש",
+    "editTitle": "עריכת לוגין",
+    "fieldLabel": "שם / שירות",
+    "fieldLabelPlaceholder": "למשל: בנק אמריקה",
+    "fieldUrl": "כתובת האתר",
+    "fieldUrlPlaceholder": "https://…",
+    "fieldUsername": "שם משתמש",
+    "fieldUsernamePlaceholder": "אימייל או שם משתמש",
+    "fieldPassword": "סיסמה",
+    "fieldPasswordPlaceholder": "הסיסמה תישמר מוצפנת",
+    "fieldPasswordEdit": "סיסמה חדשה",
+    "fieldPasswordEditPlaceholder": "השאר ריק כדי לא לשנות",
+    "fieldNotes": "הערות",
+    "fieldNotesPlaceholder": "הערה לא-מסווגת (לא חובה)",
+    "delete": "מחק",
+    "cancel": "ביטול",
+    "save": "שמור",
+    "saved": "נשמר",
+    "deleted": "נמחק",
+    "deleteConfirm": "למחוק את הלוגין הזה מהכספת?",
+    "labelRequired": "צריך למלא שם / שירות",
+    "passwordRequired": "צריך למלא סיסמה",
+    "importTitle": "ייבוא לוגינים מקובץ CSV",
+    "importHelp": "ייצא את הסיסמאות מכרום דרך chrome://password-manager/settings ← ייצוא סיסמאות, ואז העלה כאן את הקובץ. הקובץ מעובד בדפדפן שלך והסיסמאות נשמרות מוצפנות.",
+    "importParseError": "לא הצלחתי לקרוא את הקובץ. ודא שזה קובץ CSV תקין.",
+    "importNoPasswordColumn": "לא נמצאה עמודת סיסמה בקובץ.",
+    "importUnnamed": "ללא שם",
+    "importNoRows": "לא נמצאו שורות עם סיסמה בקובץ.",
+    "importRowsDetected": "זוהו {count} לוגינים",
+    "importDone": "הייבוא הושלם",
+    "importResult": "יובאו {imported}, דולגו {skipped}",
+    "runImport": "הפעל ייבוא"
   },
   "smrtBotWeb": {
     "formTitle": "בואו נתחיל לדבר",

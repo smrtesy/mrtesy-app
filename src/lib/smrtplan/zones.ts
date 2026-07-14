@@ -25,6 +25,7 @@ export interface PlanZoneTask {
   stage_name_he?: string | null;
   stage_name_en?: string | null;
   is_decision?: boolean | null;
+  requires_debrief?: boolean | null;
   needs: TaskNeed[];
   handoff: TaskHandoff[];
 }
