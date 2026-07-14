@@ -111,9 +111,17 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   if (!session) {
     // With the service worker's shell-first navigations (public/sw.js v7), an
     // expired session can paint a cached page whose fetches would all die
-    // here — dead screen. Route to login instead (top window, so a workspace
-    // pane doesn't show a nested login). The pathname guard prevents loops.
-    if (typeof window !== "undefined" && !window.location.pathname.includes("/login")) {
+    // here — dead screen. Wipe the cached shells (they belong to the expired
+    // account) and route to login (top window, so a workspace pane doesn't
+    // show a nested login). The pathname guard prevents loops. When OFFLINE,
+    // stay put — the painted page in read-only mode beats an offline.html
+    // bounce; the next online api() call will do the redirect.
+    if (
+      typeof window !== "undefined" &&
+      navigator.onLine !== false &&
+      !window.location.pathname.includes("/login")
+    ) {
+      navigator.serviceWorker?.controller?.postMessage("CLEAR_CACHE");
       const seg = window.location.pathname.split("/")[1];
       navigateTop(`/${seg === "en" ? "en" : "he"}/login`);
     }

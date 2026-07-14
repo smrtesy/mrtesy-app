@@ -162,7 +162,7 @@ function isShellNavigation(url) {
   if (url.origin !== self.location.origin) return false;
   if (url.search) return false;
   if (!/^\/(he|en)(\/|$)/.test(url.pathname)) return false;
-  if (/\/(login|onboarding|invite|privacy|terms)(\/|$)/.test(url.pathname)) return false;
+  if (/\/(login|onboarding|invite|privacy|terms|admin)(\/|$)/.test(url.pathname)) return false;
   if (url.pathname.startsWith("/embed/")) return false;
   return true;
 }
@@ -170,11 +170,11 @@ function isShellNavigation(url) {
 async function handleShellNavigation(event, request, url) {
   const cache = await caches.open(RUNTIME_CACHE);
   // Normalized key (bare path) — one shell per page, no query variants.
-  const shellKey = new Request(url.origin + url.pathname.replace(/\/+$/, "") || url.origin + "/");
+  const shellKey = new Request(url.origin + (url.pathname.replace(/\/+$/, "") || "/"));
 
-  const refresh = fetch(request).then((fresh) => {
+  const refresh = fetch(request).then(async (fresh) => {
     if (fresh && fresh.status === 200 && fresh.type === "basic" && !fresh.redirected) {
-      cache.put(shellKey, fresh.clone());
+      await cache.put(shellKey, fresh.clone());
     }
     return fresh;
   });
@@ -220,6 +220,16 @@ async function cacheFirst(request) {
   if (response && response.status === 200) {
     const copy = response.clone();
     caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+  } else if (
+    response &&
+    response.status === 404 &&
+    new URL(request.url).pathname.startsWith("/_next/static/")
+  ) {
+    // A hashed chunk 404s only when a cached shell from a PREVIOUS deploy
+    // references assets the new deploy no longer serves. Drop the runtime
+    // cache (shells + offline API snapshots) so the next navigation fetches
+    // fresh HTML instead of repeating the broken paint.
+    await caches.delete(RUNTIME_CACHE);
   }
   return response;
 }
