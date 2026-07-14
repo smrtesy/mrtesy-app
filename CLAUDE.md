@@ -3,6 +3,18 @@
 Operating instructions for Claude working in this repo. Read this at the start
 of every session before touching code.
 
+## Response language — always Hebrew
+
+Always respond to the user in **Hebrew**, in every reply, regardless of the
+language of their message, the codebase, or these (English) instructions. This
+is the user's standing preference and it applies to **all** sessions —
+including Claude Code on the web, which does not load personal `~/.claude`
+config, so this repo-level rule is what enforces it there. Write all prose
+directed at the user (chat replies, explanations, questions, summaries) in
+Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
+existing repo conventions (English where the repo already uses English) — only
+the text you address to the user is Hebrew.
+
 ## smrtTask task-ingest mode (trigger-gated)
 
 If the user's first message in the session begins with the phrase

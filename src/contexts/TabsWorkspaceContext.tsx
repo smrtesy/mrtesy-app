@@ -103,13 +103,26 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   }, [tabs, activeId, widths, hydrated]);
 
   const openTab = useCallback((href: string, label: string) => {
-    setTabs((prev) =>
-      prev.some((t) => t.id === href) ? prev : [...prev, { id: href, href, label }],
-    );
-    setActiveId(href);
-    // A new pane changes the layout — drop manual widths so the set re-lays out
-    // with the automatic default; the user can re-drag from there.
-    setWidthsState({});
+    // Dedupe by PAGE (path without query), not by exact href: opening
+    // "/he/whatsapp?chat_id=X" while "/he/whatsapp" is already a tab must
+    // focus that tab — not open WhatsApp twice. The href update carries the
+    // deep link into the open pane (PaneHost watches tab.href).
+    const pathOf = (h: string) => h.split("?")[0].split("#")[0].replace(/\/+$/, "");
+    const path = pathOf(href);
+    setTabs((prev) => {
+      const existing = prev.find((t) => pathOf(t.href) === path);
+      if (existing) {
+        setActiveId(existing.id);
+        return href === existing.href
+          ? prev
+          : prev.map((t) => (t.id === existing.id ? { ...t, href } : t));
+      }
+      setActiveId(href);
+      // A new pane changes the layout — drop manual widths so the set
+      // re-lays out with the automatic default; the user can re-drag.
+      setWidthsState({});
+      return [...prev, { id: href, href, label }];
+    });
   }, []);
 
   const closeTab = useCallback((id: string) => {
