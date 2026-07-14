@@ -14,6 +14,7 @@
  */
 
 import { createClient } from "@/lib/supabase/client";
+import { navigateTop } from "@/lib/navigate";
 
 const supabase = createClient();
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -107,7 +108,17 @@ export class ApiError extends Error {
 
 export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new ApiError(401, "Not authenticated");
+  if (!session) {
+    // With the service worker's shell-first navigations (public/sw.js v7), an
+    // expired session can paint a cached page whose fetches would all die
+    // here — dead screen. Route to login instead (top window, so a workspace
+    // pane doesn't show a nested login). The pathname guard prevents loops.
+    if (typeof window !== "undefined" && !window.location.pathname.includes("/login")) {
+      const seg = window.location.pathname.split("/")[1];
+      navigateTop(`/${seg === "en" ? "en" : "he"}/login`);
+    }
+    throw new ApiError(401, "Not authenticated");
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
