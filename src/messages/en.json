@@ -3211,7 +3211,9 @@
       "actStageMove": "Move stage",
       "actStageAdd": "Add stage",
       "actStageDel": "Delete stage",
-      "stageShort": "Stage"
+      "stageShort": "Stage",
+      "description": "Description / instructions",
+      "descriptionPlaceholder": "What exactly to do — step by step, in plain language"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",

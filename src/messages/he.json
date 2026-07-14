@@ -3210,7 +3210,9 @@
       "actStageMove": "הזזת שלב",
       "actStageAdd": "הוספת שלב",
       "actStageDel": "מחיקת שלב",
-      "stageShort": "שלב"
+      "stageShort": "שלב",
+      "description": "תיאור / הוראות",
+      "descriptionPlaceholder": "מה בדיוק צריך לעשות במשימה — צעד אחר צעד, בשפה פשוטה"
     },
     "gantt": {
       "connectHint": "לחץ על אייקון הקישור במשימה, ואז על משימה אחרת — כדי לצייר חץ תלות.",
