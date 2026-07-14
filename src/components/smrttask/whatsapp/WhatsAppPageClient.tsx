@@ -48,6 +48,7 @@ export function WhatsAppPageClient({ title }: { title: string }) {
       <WhatsAppReader
         layout="split"
         initialChatId={initialChatId}
+        seedKey={searchParams.toString()}
         initialFocusWamid={initialFocusWamid}
         className="flex-1"
       />

@@ -37,9 +37,11 @@ const THREADS_POLL_MS = 20000;
  */
 export function SmsReader({
   initialPeer,
+  seedKey,
   className,
 }: {
   initialPeer?: string | null;
+  seedKey?: string;
   className?: string;
 }) {
   const t = useTranslations("smsPage");
@@ -53,21 +55,9 @@ export function SmsReader({
   // prop in place instead of remounting) — apply it.
   useEffect(() => {
     if (initialPeer) setSelected(initialPeer);
-  }, [initialPeer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPeer, seedKey]);
 
-  // Container-based layout: viewport breakpoints (md:) lie inside a workspace
-  // pane that can be dragged narrow — measure our own box instead.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const update = () => setNarrow(el.getBoundingClientRect().width < 640);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
   const [messages, setMessages] = useState<SmsMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -133,7 +123,7 @@ export function SmsReader({
   const BackIcon = locale === "he" ? ArrowRight : ArrowLeft;
 
   const list = (
-    <div className={cn("flex flex-col min-h-0 border rounded-lg overflow-hidden", selected && narrow && "hidden")}>
+    <div className={cn("flex flex-col min-h-0 border rounded-lg overflow-hidden", selected && "hidden @2xl:flex")}>
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b bg-muted/30">
         <span className="text-sm font-semibold">{t("conversations")}</span>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => loadThreads()} aria-label={t("refresh")}>
@@ -186,14 +176,14 @@ export function SmsReader({
   );
 
   const conversation = (
-    <div className={cn("flex flex-col min-h-0 border rounded-lg overflow-hidden", !selected && narrow && "hidden")}>
+    <div className={cn("flex flex-col min-h-0 border rounded-lg overflow-hidden", !selected && "hidden @2xl:flex")}>
       {selected ? (
         <>
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-7 w-7", !narrow && "hidden")}
+              className="h-7 w-7 @2xl:hidden"
               onClick={() => setSelected(null)}
               aria-label={t("back")}
             >
@@ -243,7 +233,7 @@ export function SmsReader({
   );
 
   return (
-    <div ref={rootRef} className={cn("grid min-h-0 gap-2", !narrow && "grid-cols-[320px_1fr]", className)}>
+    <div className={cn("@container grid min-h-0 gap-2 @2xl:grid-cols-[320px_1fr]", className)}>
       {list}
       {conversation}
     </div>

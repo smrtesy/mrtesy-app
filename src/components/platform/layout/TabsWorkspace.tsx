@@ -207,7 +207,7 @@ export function TabsWorkspace() {
                     type="button"
                     onClick={() => setActive(tab.id)}
                     aria-label={t("focusPane")}
-                    className="absolute inset-0 cursor-pointer bg-transparent"
+                    className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
               </div>

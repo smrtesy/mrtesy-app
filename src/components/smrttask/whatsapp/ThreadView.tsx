@@ -847,7 +847,7 @@ export function ThreadView({ messages, tasks, loading, chatId, thread, locale, o
         <IconButton
           label={t("backToChats")}
           color="neutral"
-          className={alwaysShowBack ? "" : "md:hidden"}
+          className={alwaysShowBack ? "" : "@2xl:hidden"}
           onClick={onBack}
         >
           <ArrowLeft />

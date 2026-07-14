@@ -24,6 +24,9 @@ interface WhatsAppReaderProps {
   initialDraft?: string | null;
   /** One-shot wamid to scroll-to + highlight when the seeded chat opens. */
   initialFocusWamid?: string | null;
+  /** Raw search string of the hosting pane/page (nonce included) — changing it
+   *  re-applies the initialChatId seed even for the same chat. */
+  seedKey?: string;
   /**
    * "split"   = two-pane grid on md+ (list beside chat) — used by the full page.
    * "stacked" = single pane that toggles list ↔ chat at every width — used by
@@ -45,6 +48,7 @@ export function WhatsAppReader({
   initialChatId = null,
   initialDraft = null,
   initialFocusWamid = null,
+  seedKey,
   layout = "split",
   onActiveChatChange,
   className,
@@ -61,23 +65,11 @@ export function WhatsAppReader({
   // workspace dedupes by page), so the seed prop changes and must be applied.
   useEffect(() => {
     if (initialChatId) setSelectedChatId(initialChatId);
-  }, [initialChatId]);
+    // seedKey (the pane's raw search string, nonce included) re-fires this
+    // even when the same chat is deep-linked twice in a row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialChatId, seedKey]);
 
-  // Container-based layout: inside a workspace pane the VIEWPORT stays wide
-  // while the pane can be dragged narrow, so viewport breakpoints (md:) lie.
-  // Measure our own box instead; under 640px the split collapses to the
-  // stacked list ↔ chat behaviour (same as the old mobile breakpoint).
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const update = () => setNarrow(el.getBoundingClientRect().width < 640);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [tasks, setTasks] = useState<ChatTask[]>([]);
@@ -372,15 +364,31 @@ export function WhatsAppReader({
   // a long grey expanse below the conversation. With it, each pane is bounded to
   // the viewport and scrolls on its own (the list via its inner overflow, the
   // chat via its messages area), so the menu scrolls independently of the chat.
-  const stackedMode = layout === "stacked" || narrow;
-  const gridClass = stackedMode
-    ? "grid grid-rows-1 grid-cols-1 gap-3"
-    : "grid grid-rows-1 grid-cols-[260px_minmax(0,1fr)] gap-3";
-  const listVisibility = stackedMode ? (selectedChatId ? "hidden" : "block") : "block";
-  const chatVisibility = stackedMode ? (selectedChatId ? "block" : "hidden") : "block";
+  // Split layout collapses to stacked when the READER'S OWN box is narrow
+  // (container query @2xl = 672px) — the viewport is meaningless inside a
+  // draggable workspace pane. Pure CSS, so the first paint is already right
+  // (no measurement flash, correct SSR on phones).
+  const gridClass =
+    layout === "split"
+      ? "grid grid-rows-1 grid-cols-1 @2xl:grid-cols-[260px_minmax(0,1fr)] gap-3"
+      : "grid grid-rows-1 grid-cols-1 gap-3";
+  const listVisibility =
+    layout === "split"
+      ? `@2xl:block ${selectedChatId ? "hidden" : "block"}`
+      : selectedChatId
+        ? "hidden"
+        : "block";
+  const chatVisibility =
+    layout === "split"
+      ? selectedChatId
+        ? "block"
+        : "hidden @2xl:block"
+      : selectedChatId
+        ? "block"
+        : "hidden";
 
   return (
-    <div ref={rootRef} className={`flex flex-col min-h-0 ${className ?? ""}`}>
+    <div className={`@container flex flex-col min-h-0 ${className ?? ""}`}>
       {error && (
         <div className="mb-2 rounded border bg-status-late-bg p-2 text-sm text-status-late">
           {error}
@@ -452,10 +460,10 @@ export function WhatsAppReader({
               tasks={tasks}
               loading={loadingMessages}
               onBack={() => setSelectedChatId(null)}
-              // Single-pane mode (docked panel, or a split reader whose own
-              // container is narrow) needs the back-to-list button — the list
-              // isn't visible beside the chat.
-              alwaysShowBack={stackedMode}
+              // The docked panel is single-pane at every width; a split
+              // reader shows the back button only when its own container is
+              // narrow (see backHiddenClass inside ThreadView).
+              alwaysShowBack={layout === "stacked"}
               chatId={selectedChatId}
               thread={threads.find((th) => th.chat_id === selectedChatId)}
               locale={locale as string}

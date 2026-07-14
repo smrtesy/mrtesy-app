@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import tailwindAnimate from "tailwindcss-animate";
+import containerQueries from "@tailwindcss/container-queries";
 import plugin from "tailwindcss/plugin";
 import defaultTheme from "tailwindcss/defaultTheme";
 
@@ -80,6 +81,9 @@ const config: Config = {
   },
   plugins: [
     tailwindAnimate,
+    // `@container`/`@2xl:` — container-width variants; the workspace panes
+    // resize independently of the viewport, so readers size to their pane.
+    containerQueries,
     // `touch:` — applies only on devices without a real hover pointer
     // (phones/tablets). Pairs with `hoverOnlyWhenSupported`: controls that
     // are revealed via `group-hover:` on the desktop stay reachable on touch

@@ -63,6 +63,10 @@ export function useOpenWhatsAppChat() {
         const params = new URLSearchParams();
         if (phone) params.set("chat_id", phone);
         if (focusWamid) params.set("msg", focusWamid);
+        // Nonce: re-clicking the SAME chat must still re-apply the deep link
+        // (the reader's seed effect keys on the search string; without this a
+        // second identical href is deduped away and nothing happens).
+        params.set("ts", String(Date.now()));
         const qs = params.toString();
         const href = `/${locale}/whatsapp${qs ? `?${qs}` : ""}`;
 

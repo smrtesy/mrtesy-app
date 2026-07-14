@@ -41,7 +41,7 @@ export function SmsPageClient({ title }: { title: string }) {
       dir={isHe ? "rtl" : "ltr"}
     >
       <h1 className="sr-only">{title}</h1>
-      <SmsReader initialPeer={initialPeer} className="flex-1" />
+      <SmsReader initialPeer={initialPeer} seedKey={searchParams.toString()} className="flex-1" />
     </div>
   );
 }
