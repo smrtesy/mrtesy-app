@@ -48,6 +48,44 @@ async function resolveOrgApps(orgId: string, slugs: unknown): Promise<{ id: stri
     .map((a) => ({ id: a.id as string, slug: a.slug as string }));
 }
 
+/** Normalize a client-supplied access level; anything but "lite" is "full". */
+const ACCESS_LEVELS = ["full", "lite"] as const;
+type AccessLevel = (typeof ACCESS_LEVELS)[number];
+function normalizeAccessLevel(raw: unknown): AccessLevel {
+  return raw === "lite" ? "lite" : "full";
+}
+
+/**
+ * Apply a per-app access level for a user in an org, over a set of {id,slug}
+ * apps. "lite" (project-only worker) writes explicit `app_user_access` rows;
+ * "full" removes any such rows for those apps so the default (full) applies.
+ * Returns an error message on failure, or null on success. Never throws.
+ */
+async function applyAccessLevel(
+  orgId: string, userId: string, grantedBy: string,
+  apps: { id: string; slug: string }[], level: AccessLevel,
+): Promise<string | null> {
+  const appIds = apps.map((a) => a.id);
+  if (appIds.length === 0) return null;
+  if (level === "lite") {
+    const rows = appIds.map((app_id) => ({
+      org_id: orgId, user_id: userId, app_id, access_level: "lite", granted_by: grantedBy,
+    }));
+    const { error } = await db
+      .from("app_user_access")
+      .upsert(rows, { onConflict: "org_id,app_id,user_id" });
+    return error ? error.message : null;
+  }
+  // full → clear any explicit rows for these apps (default is full).
+  const { error } = await db
+    .from("app_user_access")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .in("app_id", appIds);
+  return error ? error.message : null;
+}
+
 /** GET /org/members — list members of active org (with each member's granted apps) */
 router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const { data, error } = await db
@@ -67,11 +105,19 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
   );
 
   // Per-user app grants for this org, as slugs grouped by user.
-  const [{ data: grants }, { data: appsRows }] = await Promise.all([
+  const [{ data: grants }, { data: appsRows }, { data: levels }] = await Promise.all([
     db.from("user_app_access").select("user_id, app_id").eq("org_id", req.org!.id),
     db.from("apps").select("id, slug"),
+    db.from("app_user_access").select("user_id, app_id, access_level").eq("org_id", req.org!.id),
   ]);
   const slugById = new Map((appsRows ?? []).map((a) => [a.id as string, a.slug as string]));
+  // A member is "project-only" (lite) if they carry a lite level for smrtTask.
+  const smrttaskId = (appsRows ?? []).find((a) => a.slug === "smrttask")?.id as string | undefined;
+  const liteUsers = new Set(
+    (levels ?? [])
+      .filter((l) => l.access_level === "lite" && l.app_id === smrttaskId)
+      .map((l) => l.user_id as string),
+  );
   const slugsByUser = new Map<string, string[]>();
   for (const g of grants ?? []) {
     const slug = slugById.get(g.app_id as string);
@@ -94,6 +140,7 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
       display_name: (m.display_name as string | null) ?? null,
       is_placeholder: placeholder,
       app_slugs: slugsByUser.get(m.user_id as string) ?? [],
+      access_level: liteUsers.has(m.user_id as string) ? "lite" : "full",
     };
   });
 
@@ -143,6 +190,7 @@ router.post("/org/members/placeholder",
   requireAuth, requireOrg, requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const { name, role = "member", app_slugs } = req.body ?? {};
+    const access_level: AccessLevel = role === "member" ? normalizeAccessLevel(req.body?.access_level) : "full";
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required" });
     }
@@ -177,7 +225,11 @@ router.post("/org/members/placeholder",
       const { error: grantErr } = await db.from("user_app_access").insert(rows);
       if (grantErr) warning = "member added but app access failed to save";
     }
-    res.status(201).json({ member: { user_id: uid, role, display_name: name.trim(), is_placeholder: true }, ...(warning ? { warning } : {}) });
+    if (!warning) {
+      const levelErr = await applyAccessLevel(req.org!.id, uid, req.user!.id, apps, access_level);
+      if (levelErr) { console.error("[org/members] placeholder access-level save failed:", levelErr); warning = "member added but access level failed to save"; }
+    }
+    res.status(201).json({ member: { user_id: uid, role, display_name: name.trim(), is_placeholder: true, access_level }, ...(warning ? { warning } : {}) });
   });
 
 /**
@@ -233,6 +285,9 @@ router.post("/org/members",
     const { email, role = "member", locale: rawLocale = "he", app_slugs } = req.body ?? {};
     // Only he/en are valid locale segments; never trust client input in the email link path.
     const locale = rawLocale === "en" ? "en" : "he";
+    // Access level only means anything for role='member' (owners/admins are
+    // always full). A project-only worker is a member with access_level='lite'.
+    const access_level: AccessLevel = role === "member" ? normalizeAccessLevel(req.body?.access_level) : "full";
     if (!email || typeof email !== "string") {
       return res.status(400).json({ error: "email is required" });
     }
@@ -279,6 +334,7 @@ router.post("/org/members",
           role,
           invited_by: req.user!.id,
           app_slugs: validSlugs,
+          access_level,
         })
         .select("token")
         .single();
@@ -328,8 +384,17 @@ router.post("/org/members",
       }
     }
 
+    // Record the per-app access level (project-only worker = 'lite').
+    if (!warning) {
+      const levelErr = await applyAccessLevel(req.org!.id, user.id, req.user!.id, apps, access_level);
+      if (levelErr) {
+        console.error("[org/members] access-level save failed:", levelErr);
+        warning = "member added but access level failed to save";
+      }
+    }
+
     res.status(201).json({
-      member: { user_id: user.id, email: user.email, role, app_slugs: warning ? [] : validSlugs },
+      member: { user_id: user.id, email: user.email, role, app_slugs: warning ? [] : validSlugs, access_level },
       invited: false,
       ...(warning ? { warning } : {}),
     });
@@ -463,7 +528,24 @@ router.patch("/org/members/:userId/apps",
       if (insErr) return res.status(500).json({ error: insErr.message });
     }
 
-    res.json({ ok: true, app_slugs: apps.map((a) => a.slug) });
+    // Optional: toggle project-only (lite) vs full for this member. When
+    // access_level is provided, clear any existing level rows first (so a level
+    // row for a now-ungranted app can't linger — the two tables are unrelated,
+    // no cascade), then write 'lite' rows for the currently-granted apps.
+    let access_level: AccessLevel | undefined;
+    if (req.body?.access_level !== undefined) {
+      access_level = normalizeAccessLevel(req.body.access_level);
+      const { error: clearErr } = await db
+        .from("app_user_access").delete()
+        .eq("org_id", req.org!.id).eq("user_id", userId);
+      if (clearErr) return res.status(500).json({ error: clearErr.message });
+      if (access_level === "lite") {
+        const levelErr = await applyAccessLevel(req.org!.id, userId, req.user!.id, apps, "lite");
+        if (levelErr) return res.status(500).json({ error: levelErr });
+      }
+    }
+
+    res.json({ ok: true, app_slugs: apps.map((a) => a.slug), ...(access_level ? { access_level } : {}) });
   },
 );
 

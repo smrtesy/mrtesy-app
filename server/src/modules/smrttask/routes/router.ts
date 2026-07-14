@@ -22,11 +22,12 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 // ── types ────────────────────────────────────────────────────────────────
 

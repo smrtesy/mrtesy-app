@@ -19,12 +19,13 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { simpleCall } from "../../../anthropic";
 import { transcribeAudio } from "../../../gemini";
 import { metaErrorSummary } from "../../../lib/meta-errors";
 
 const router = Router();
-const gate = [requireAuth, requireOrg, requireApp("smrttask")];
+const gate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour — long enough to open a PDF, short enough to bound exposure.
 
