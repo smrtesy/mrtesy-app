@@ -531,7 +531,7 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 
   const select =
     "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, checklist, assignment_status";
+    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, checklist, description, assignment_status";
 
   let query = db.from("tasks").select(select).eq("organization_id", req.org!.id);
   if (plan?.kind === "roster") {
