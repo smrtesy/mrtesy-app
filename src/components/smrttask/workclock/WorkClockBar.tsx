@@ -29,7 +29,13 @@ export function WorkClockBar() {
     return () => clearInterval(iv);
   }, [state.phase]);
 
-  if (!enabled) return null;
+  // Render nothing until mounted: the clock state is hydrated from localStorage
+  // on the client, so a server-rendered null must match the first client render
+  // (avoids a hydration mismatch when a session was persisted mid-day).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  if (!enabled || !mounted) return null;
 
   // ── the once-a-day offer ──────────────────────────────────────────────────
   if (showOffer) {

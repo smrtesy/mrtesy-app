@@ -138,7 +138,7 @@ export function useWorkClock(): UseWorkClock {
   const start = useCallback(() => {
     markOffered();
     setState({ phase: "running", workDate: todayISO(), startedAt: Date.now(), pausedSeconds: 0, pausedAt: null });
-    api("/api/work-clock/start", { method: "POST", body: { work_date: todayISO() } }).catch(() => {});
+    api("/api/tasks/work-clock/start", { method: "POST", body: { work_date: todayISO() } }).catch(() => {});
   }, []);
 
   const pause = useCallback(() => {
@@ -155,7 +155,7 @@ export function useWorkClock(): UseWorkClock {
   const stop = useCallback((reason: "manual" | "auto" | "extended" = "manual") => {
     const worked = workedSeconds(state, Date.now());
     const paused = state.pausedSeconds;
-    api("/api/work-clock/stop", {
+    api("/api/tasks/work-clock/stop", {
       method: "POST",
       body: { work_date: state.workDate, reason, worked_seconds: worked, paused_seconds: paused },
     }).catch(() => {});
@@ -175,7 +175,7 @@ export function useWorkClock(): UseWorkClock {
     if (heartbeatRef.current) return;
     heartbeatRef.current = setInterval(() => {
       if (state.phase === "running" || state.phase === "paused") {
-        api("/api/work-clock", {
+        api("/api/tasks/work-clock", {
           method: "PATCH",
           body: {
             work_date: state.workDate,
