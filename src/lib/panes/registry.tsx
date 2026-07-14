@@ -116,13 +116,14 @@ function InboxPane({ locale }: { locale: string }) {
   const t = useTranslations("inbox");
   const tNav = useTranslations("nav");
   // The routed page resolves the smrtTask entitlement server-side; the pane
-  // asks the backend once and caches it (entitlements change rarely).
-  const { data } = useQuery({
+  // asks the pre-existing /api/org/apps registry endpoint once and caches it
+  // (entitlements change rarely).
+  const { data, isError } = useQuery({
     queryKey: ["org-apps", activeOrgKey()],
-    queryFn: () => api<{ apps: string[] }>("/api/org/apps"),
+    queryFn: () => api<{ apps: { slug: string; enabled: boolean }[] }>("/api/org/apps"),
     staleTime: 5 * 60 * 1000,
   });
-  const hasSmrtTask = (data?.apps ?? []).includes("smrttask");
+  const hasSmrtTask = (data?.apps ?? []).some((a) => a.slug === "smrttask" && a.enabled);
 
   return (
     <div className="space-y-4">
@@ -146,8 +147,9 @@ function InboxPane({ locale }: { locale: string }) {
       {hasSmrtTask && <MorningStartBanner />}
       {/* Hold the tabs until the entitlement is known — mounting with
           hasSmrtTask=false and flipping would flash/reset the tab set. The
-          query is cached, so reopening the pane renders immediately. */}
-      {data ? <InboxTabs locale={locale} hasSmrtTask={hasSmrtTask} /> : null}
+          query is cached, so reopening the pane renders immediately. On
+          error, render without smrtTask so notifications stay reachable. */}
+      {data || isError ? <InboxTabs locale={locale} hasSmrtTask={hasSmrtTask} /> : null}
     </div>
   );
 }

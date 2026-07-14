@@ -15,8 +15,8 @@ Owner: Claude sessions; each phase runs the full pre-push protocol.
   `/projects/[id]` …). The iframe fallback is therefore a permanent part of
   the architecture, NOT transitional — the `?embed`/`data-embed` CSS layer
   and the postMessage bridge stay. §Phase 3's "teardown" did not apply.
-- New backend endpoint `GET /api/org/apps` (enabled app slugs for the
-  active org) powers client-side entitlement gating in the inbox pane.
+- The inbox pane gates its smrtTask UI client-side via the pre-existing
+  `GET /api/org/apps` registry endpoint (cached, org-scoped query key).
 - **Rule for new screens** (also in CLAUDE.md): a new sidebar screen must be
   registered in `src/lib/panes/registry.tsx`, use `useScreen*` hooks and
   `PaneLink` from `src/lib/panes/nav.tsx` instead of next/navigation and

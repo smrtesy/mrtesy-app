@@ -153,27 +153,6 @@ router.get("/org", requireAuth, requireOrg, async (req: Request, res: Response) 
   res.json({ org: data, my_role: req.member!.role });
 });
 
-/** GET /org/apps — slugs of the apps enabled for the active org. Lets client
- *  screens (e.g. the inbox pane) gate app-specific UI without a server render. */
-router.get("/org/apps", requireAuth, requireOrg, async (req: Request, res: Response) => {
-  const { data, error } = await db
-    .from("app_memberships")
-    .select("apps(slug)")
-    .eq("org_id", req.org!.id);
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  const slugs = (data ?? [])
-    .map((m) => {
-      const appField = m.apps as { slug?: string } | { slug?: string }[] | null;
-      const app = Array.isArray(appField) ? appField[0] : appField;
-      return app?.slug ?? null;
-    })
-    .filter((s): s is string => !!s);
-
-  res.json({ apps: slugs });
-});
-
 /** PATCH /org — update active org. Owner/admin only. */
 router.patch("/org",
   requireAuth, requireOrg, requireRole("owner", "admin"),
