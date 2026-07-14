@@ -159,6 +159,9 @@ export interface Task {
   /** A decision task: on completion its stated outcome propagates to the tasks
    *  that list it in affected_by (docs project-planning-protocol §10). */
   is_decision?: boolean | null;
+  /** A research task: completion is blocked at every done-path until a valid
+   *  debrief is filed (docs project-planning-protocol §5 "שלב ו"). */
+  requires_debrief?: boolean | null;
   /**
    * "What's needed to start" — the inbound task→task dependencies, resolved by the
    * backend from smrtplan_dependencies. Each entry is a provider task this task waits on.

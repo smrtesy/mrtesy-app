@@ -20,6 +20,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
+import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
@@ -599,6 +600,11 @@ router.post("/router/decisions/:id/apply", async (req: Request, res: Response) =
       appliedTaskId = targetTaskId;
     } else if (intent === "complete_task") {
       if (!targetTaskId) throw new Error("target_task_id required for complete_task");
+      // A research task (requires_debrief) can't be closed from a chat command —
+      // the structured debrief can only be filed in the app. Refuse here rather
+      // than silently bypassing the gate (acceptance #1).
+      const block = await enforceDebriefOnComplete(orgId, targetTaskId, userId, undefined);
+      if (block) throw new Error("משימת מחקר נסגרת רק דרך טופס התחקיר באפליקציה, לא מהצ'אט");
       const now = new Date().toISOString();
       const { error } = await db
         .from("tasks")

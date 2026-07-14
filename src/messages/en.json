@@ -670,6 +670,45 @@
       "confirm": "Mark complete",
       "cancel": "Cancel"
     },
+    "debrief": {
+      "title": "Completion debrief",
+      "hint": "A research task closes only after a debrief — the results are saved and feed the playbook.",
+      "conductedIn": {
+        "label": "Where did the experiment run?",
+        "claude": "In Claude",
+        "external": "External tool",
+        "both": "Both",
+        "none": "No experiment"
+      },
+      "claude": {
+        "confirm": "I scored every result against the agreed rubric",
+        "sessionLink": "Claude session link / id",
+        "sessionLinkPh": "https://claude.ai/… or the session id",
+        "scores": "Score table or a link to the harness log",
+        "scoresPh": "Paste the score table, or a link to the log"
+      },
+      "external": {
+        "tool": "Which tool exactly",
+        "toolPh": "Tool / model name",
+        "steps": "What was done (settings, prompts — verbatim)",
+        "stepsPh": "Exact settings and prompts",
+        "results": "The results",
+        "resultsPh": "What actually came out",
+        "scores": "Score per result against the rubric",
+        "scoresPh": "A score for each result"
+      },
+      "noExperiment": {
+        "reason": "Why was no experiment run?",
+        "reasonPh": "Short explanation"
+      },
+      "q": {
+        "workedBest": "What worked best?",
+        "trick": "Which trick/setting made the difference?",
+        "surprise": "What was a bad surprise?"
+      },
+      "cancel": "Cancel",
+      "submit": "Save & mark complete"
+    },
     "contextFilter": {
       "all": "All",
       "home": "Home",
@@ -3004,6 +3043,13 @@
         "done": "Done"
       }
     },
+    "pulse": {
+      "title": "Daily pulse",
+      "empty": "No active focus commitments on this plan",
+      "streak": "{n} days in a row",
+      "debriefed": "debrief filed",
+      "legend": "green = done · red = missed workday · gray = day off · dot = debrief filed"
+    },
     "effort": {
       "tasks": "Tasks",
       "empty": "No tasks in this plan yet",
@@ -3115,6 +3161,8 @@
       "estimatedHours": "Estimated hours",
       "dailyMinutes": "Daily commitment (minutes)",
       "dailyMinutesHint": "How many minutes a day to invest in this plan",
+      "workdays": "Work days",
+      "workdaysHint": "The days a daily run is expected (default: Mon–Fri)",
       "fromCatalog": "Pick from catalog…",
       "manualDuration": "Manual duration (days)",
       "durationDays": "Duration (days)",

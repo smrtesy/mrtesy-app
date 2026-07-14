@@ -22,6 +22,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
+import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
@@ -594,6 +595,15 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
   }
 
+  // A generic status-patch into a COMPLETION status is a completion too — enforce
+  // the research-task debrief here as well, so this path can't bypass the gate
+  // (acceptance #1). Completion = completed/archived (smrtTask "completes" to
+  // archived); dismissing/discarding a research task does NOT require a debrief.
+  if (typeof updates.status === "string" && (updates.status === "completed" || updates.status === "archived")) {
+    const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+    if (block) return res.status(block.status).json({ error: block.error });
+  }
+
   const { data, error } = await db
     .from("tasks")
     .update(updates)
@@ -638,6 +648,11 @@ router.delete("/tasks/:id", async (req: Request, res: Response) => {
 /** POST /tasks/:id/complete */
 router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
+  // Research tasks (requires_debrief) can't be closed via the desk path either —
+  // enforce the debrief before the status write (acceptance #1: even via direct
+  // API). No-op for ordinary tasks (requires_debrief defaults false).
+  const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+  if (block) return res.status(block.status).json({ error: block.error });
   const { data, error } = await db
     .from("tasks")
     .update({ status: "archived", completed_at: now, status_changed_at: now })
