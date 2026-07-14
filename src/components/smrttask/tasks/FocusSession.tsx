@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { Timer, X, Check, ClipboardList, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
@@ -76,6 +77,10 @@ export function FocusSession({
   /** Close the session screen and refresh the desk. */
   onExit: () => void;
 }) {
+  // Inside a tabs-workspace pane the run must stay INSIDE the pane (the
+  // user keeps other tabs usable beside it); full-page keeps the old
+  // fullscreen takeover. The pane body div is position:relative.
+  const overlayFrame = useOptionalPaneNav() ? "absolute inset-0" : "wa-panel-pushed fixed inset-0";
   const t = useTranslations("focusSession");
   const [targetSeconds, setTargetSeconds] = useState(dailyMinutes * 60);
   const [elapsed, setElapsed] = useState(0);
@@ -184,7 +189,7 @@ export function FocusSession({
   const overtime = remaining < 0;
 
   return (
-    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
+    <div className={`${overlayFrame} z-50 flex flex-col bg-background`} dir={locale === "he" ? "rtl" : "ltr"}>
       {/* Header: count-down + plan + stages ticked + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span

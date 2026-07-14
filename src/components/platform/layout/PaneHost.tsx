@@ -12,7 +12,7 @@
  * becomes an iframe at that href.
  */
 
-import { Component, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import type { WorkspaceTab } from "@/contexts/TabsWorkspaceContext";
@@ -66,6 +66,13 @@ function PaneError({ reset }: { reset: () => void }) {
 export function PaneHost({ tab }: { tab: WorkspaceTab }) {
   const locale = useLocale();
   const [location, setLocation] = useState<PaneLocation>(() => parsePaneHref(tab.href));
+
+  // openTab on an already-open page updates the tab's href to carry a deep
+  // link (e.g. whatsapp?chat_id=X) — sync it into the pane location. Internal
+  // pane navigation goes through `push` and doesn't touch tab.href.
+  useEffect(() => {
+    setLocation(parsePaneHref(tab.href));
+  }, [tab.href]);
 
   const push = useCallback((href: string) => setLocation(parsePaneHref(href)), []);
   const nav = useMemo<PaneNavValue>(

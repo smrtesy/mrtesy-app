@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ClipboardList, ExternalLink, AlertTriangle, Home, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -61,6 +62,10 @@ export function MarathonMode({
   onReclassify: (taskId: string) => Promise<void>;
   onExit: () => void;
 }) {
+  // Inside a tabs-workspace pane the run must stay INSIDE the pane (the
+  // user keeps other tabs usable beside it); full-page keeps the old
+  // fullscreen takeover. The pane body div is position:relative.
+  const overlayFrame = useOptionalPaneNav() ? "absolute inset-0" : "wa-panel-pushed fixed inset-0";
   const t = useTranslations("marathon");
   const tTasks = useTranslations("tasks");
   const tDetail = useTranslations("taskDetailExt");
@@ -287,7 +292,7 @@ export function MarathonMode({
   }
 
   return (
-    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
+    <div className={`${overlayFrame} z-50 flex flex-col bg-background`} dir={locale === "he" ? "rtl" : "ltr"}>
       {/* Header: run timer + per-task timer + progress + new-item + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span className="flex items-center gap-1.5 font-mono text-lg font-bold tabular-nums" dir="ltr">
@@ -510,6 +515,7 @@ function FinishScreen({
   prev: MarathonStats;
   onExit: () => void;
 }) {
+  const overlayFrame = useOptionalPaneNav() ? "absolute inset-0" : "wa-panel-pushed fixed inset-0";
   const t = useTranslations("marathon");
   const newRecord = done > prev.best_count && prev.best_count > 0;
   const firstRun = prev.total_runs === 0;
@@ -528,7 +534,7 @@ function FinishScreen({
   }, [newRecord]);
 
   return (
-    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden">
+    <div className={`${overlayFrame} z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden`}>
       {confetti.map((c) => (
         <span
           key={c.id}
