@@ -93,6 +93,11 @@ export function useScreenSearchParams(): URLSearchParams {
 
 type ScreenNavOptions = { scroll?: boolean };
 
+// NOTE for consumers: inside a pane the returned router's identity changes on
+// every pane navigation (the context value tracks the location). Effects that
+// depend on it re-run per navigation — guard one-shot effects with a ref or a
+// storage marker (see MorningInboxRedirect / TaskList's focusedRef).
+
 export function useScreenRouter(): {
   push: (href: string, opts?: ScreenNavOptions) => void;
   replace: (href: string, opts?: ScreenNavOptions) => void;
@@ -128,6 +133,8 @@ export function PaneLink(props: React.ComponentProps<typeof Link>) {
   const { href, replace, onClick, ...rest } = props;
   delete (rest as Record<string, unknown>).prefetch;
   delete (rest as Record<string, unknown>).scroll;
+  // String hrefs only — the object form keeps just `pathname` (no callers
+  // pass query/hash objects; pass a string if you need them).
   const target = typeof href === "string" ? href : (href.pathname ?? "/");
   return (
     <a
