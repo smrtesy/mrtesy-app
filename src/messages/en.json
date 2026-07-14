@@ -1080,7 +1080,13 @@
     "pausedLabel": "Paused",
     "resume": "Resume",
     "pause": "Pause",
-    "stop": "Stop day"
+    "stop": "Stop day",
+    "stepBadge": "Step {n} of 3",
+    "stepInbox": "Check the inbox — review all suggestions",
+    "stepPlan": "Plan your day — 3 medium + 1 big",
+    "stepRun": "Start run mode on the quick tasks",
+    "stepNext": "Continue",
+    "enterRun": "Enter run mode"
   },
   "settingsParameters": {
     "title": "smrtTask Parameters",
