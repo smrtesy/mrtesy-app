@@ -19,7 +19,7 @@
  * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
  * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v6";
+const VERSION = "v7";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];
@@ -144,6 +144,57 @@ function isCacheableApi(url) {
   return BACKEND_ORIGIN ? url.origin === BACKEND_ORIGIN : true;
 }
 
+/*
+ * Shell-first navigations (v7): authenticated app pages are served from the
+ * last cached copy IMMEDIATELY and refreshed in the background, so a cold PWA
+ * launch paints without waiting for the network. Careful scoping:
+ *   - Locale-prefixed app pages only; login/onboarding/invite/privacy/terms
+ *     and /embed stay network-first (auth decisions must be fresh).
+ *   - Bare URLs only (no query string): deep links like ?focus=/?chat_id=
+ *     keep network-first so the server render always matches the URL.
+ *   - Only final 200 same-origin documents are cached (never redirects), and
+ *     the runtime cache is wiped on sign-out (CLEAR_CACHE), so a logged-out
+ *     device can't replay an authenticated shell.
+ * If the session expired while a shell was cached, the page's own API client
+ * detects the missing session and routes to login (see src/lib/api/client.ts).
+ */
+function isShellNavigation(url) {
+  if (url.origin !== self.location.origin) return false;
+  if (url.search) return false;
+  if (!/^\/(he|en)(\/|$)/.test(url.pathname)) return false;
+  if (/\/(login|onboarding|invite|privacy|terms|admin)(\/|$)/.test(url.pathname)) return false;
+  if (url.pathname.startsWith("/embed/")) return false;
+  return true;
+}
+
+async function handleShellNavigation(event, request, url) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  // Normalized key (bare path) — one shell per page, no query variants.
+  const shellKey = new Request(url.origin + (url.pathname.replace(/\/+$/, "") || "/"));
+
+  const refresh = fetch(request).then(async (fresh) => {
+    if (fresh && fresh.status === 200 && fresh.type === "basic" && !fresh.redirected) {
+      await cache.put(shellKey, fresh.clone());
+    }
+    return fresh;
+  });
+
+  const cached = await cache.match(shellKey);
+  if (cached) {
+    // Serve instantly; keep the worker alive until the background refresh
+    // lands so the next launch gets the newest shell.
+    event.waitUntil(refresh.catch(() => {}));
+    return cached;
+  }
+
+  try {
+    return await refresh;
+  } catch {
+    const offline = await caches.match(OFFLINE_URL, { ignoreSearch: true });
+    return offline || Response.error();
+  }
+}
+
 // Navigations: network-first, then the cached shell for that page, then offline.
 async function handleNavigation(request) {
   try {
@@ -169,6 +220,16 @@ async function cacheFirst(request) {
   if (response && response.status === 200) {
     const copy = response.clone();
     caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+  } else if (
+    response &&
+    response.status === 404 &&
+    new URL(request.url).pathname.startsWith("/_next/static/")
+  ) {
+    // A hashed chunk 404s only when a cached shell from a PREVIOUS deploy
+    // references assets the new deploy no longer serves. Drop the runtime
+    // cache (shells + offline API snapshots) so the next navigation fetches
+    // fresh HTML instead of repeating the broken paint.
+    await caches.delete(RUNTIME_CACHE);
   }
   return response;
 }
@@ -201,9 +262,15 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // App-shell navigations.
+  // App-shell navigations. Authenticated app pages paint instantly from the
+  // cached shell (refreshed in the background); everything else stays
+  // network-first.
   if (request.mode === "navigate") {
-    event.respondWith(handleNavigation(request));
+    if (isShellNavigation(url)) {
+      event.respondWith(handleShellNavigation(event, request, url));
+    } else {
+      event.respondWith(handleNavigation(request));
+    }
     return;
   }
 
