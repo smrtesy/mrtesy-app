@@ -32,6 +32,7 @@ import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
 import { BuildDayBanner } from "./BuildDayBanner";
 import { DecisionDialog } from "./DecisionDialog";
+import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { QuickAction } from "./QuickAction";
 import { DriveSearch } from "./DriveSearch";
@@ -164,6 +165,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [marathonMode, setMarathonMode] = useState<null | "quick" | "regular">(null);
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [decisionTask, setDecisionTask] = useState<Task | null>(null);
+  const [debriefTask, setDebriefTask] = useState<Task | null>(null);
   const [buildDayOpen, setBuildDayOpen] = useState(false);
   // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
   const planfocusEnabled = useDayTool("planfocus").enabled;
@@ -524,14 +526,14 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   // ── actions ────────────────────────────────────────────────────────────────
 
-  const completeTask = useCallback(async (task: Task, decision?: string) => {
+  const completeTask = useCallback(async (task: Task, decision?: string, debrief?: DebriefPayload) => {
     if (task.plan_id) {
       await api(`/api/plan-tasks/${task.id}/done`, {
         method: "PATCH",
-        body: { done: true, ...(decision ? { decision } : {}) },
+        body: { done: true, ...(decision ? { decision } : {}), ...(debrief ? { debrief } : {}) },
       });
     } else {
-      await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+      await api(`/api/tasks/${task.id}/complete`, { method: "POST", body: { ...(debrief ? { debrief } : {}) } });
     }
   }, []);
 
@@ -544,8 +546,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   }, []);
 
   async function handleToggleDone(task: Task, done: boolean) {
-    // A decision plan task first asks for its outcome (which propagates to the
-    // tasks it affects); the actual completion runs on the dialog's confirm.
+    // A research task first captures its mandatory debrief; a decision task first
+    // asks for its outcome. Either way the real completion runs on the dialog's
+    // confirm. The debrief (the enforced one) takes priority when both apply.
+    if (done && task.requires_debrief) {
+      setDebriefTask(task);
+      return;
+    }
     if (done && task.plan_id && task.is_decision) {
       setDecisionTask(task);
       return;
@@ -553,13 +560,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     await runToggleDone(task, done);
   }
 
-  async function runToggleDone(task: Task, done: boolean, decision?: string) {
+  async function runToggleDone(task: Task, done: boolean, decision?: string, debrief?: DebriefPayload) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
     if (done) optimisticRemove(task.id);
     try {
       if (done) {
-        await completeTask(task, decision);
+        await completeTask(task, decision, debrief);
         undoToast({
           message: t("actions.complete"),
           undoLabel: t("row.undo"),
@@ -1182,6 +1189,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
           const tk = decisionTask;
           setDecisionTask(null);
           if (tk) void runToggleDone(tk, true, decision);
+        }}
+      />
+
+      <DebriefDialog
+        open={!!debriefTask}
+        taskTitle={debriefTask ? (locale === "he" && debriefTask.title_he ? debriefTask.title_he : debriefTask.title) : ""}
+        onClose={() => setDebriefTask(null)}
+        onConfirm={(debrief) => {
+          const tk = debriefTask;
+          setDebriefTask(null);
+          if (tk) void runToggleDone(tk, true, undefined, debrief);
         }}
       />
 

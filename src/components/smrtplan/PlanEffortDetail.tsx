@@ -15,10 +15,12 @@ import { DatePicker } from "@/components/ui/date-picker";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
 import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDays } from "@/lib/smrtplan/dates";
+import { DebriefDialog, type DebriefPayload } from "@/components/smrttask/tasks/DebriefDialog";
+import { DailyPulse } from "./DailyPulse";
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 type Member = OrgMember;
@@ -87,6 +89,7 @@ export function PlanEffortDetail({
   // Done tasks are filtered out of the list by default; a toggle reveals them.
   const [hideDone, setHideDone] = useState(true);
   const [myId, setMyId] = useState<string | null>(null);
+  const [debriefTask, setDebriefTask] = useState<PlanTask | null>(null);
   const { isSuperAdmin } = useSuperAdmin();
 
   useEffect(() => {
@@ -177,10 +180,13 @@ export function PlanEffortDetail({
   // Mark complete / reopen — allowed for the assignee + super-admin (not only
   // full-access planners). The server enforces the same rule.
   const canComplete = (task: PlanTask) => canEdit || isSuperAdmin || (myId != null && task.assigned_to_user_id === myId);
-  async function toggleDone(task: PlanTask) {
+  async function toggleDone(task: PlanTask, debrief?: DebriefPayload) {
     const reopening = zoneOf(task) === "done";
+    // A research task must file its debrief before it can be completed. The
+    // dialog's confirm re-invokes with the debrief; reopening is free.
+    if (!reopening && task.requires_debrief && !debrief) { setDebriefTask(task); return; }
     try {
-      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: !reopening } });
+      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: !reopening, ...(debrief ? { debrief } : {}) } });
       await afterMutation();
       if (reopening) void notifyReopen(task.id);
     } catch (e) {
@@ -391,6 +397,8 @@ export function PlanEffortDetail({
         </div>
       </div>
 
+      {canEdit && <DailyPulse planId={plan.id} locale={locale} memberMap={memberMap} />}
+
       {hasStages ? (
         <div className="divide-y">
           {sortedStages.map((s) =>
@@ -419,6 +427,17 @@ export function PlanEffortDetail({
           <div className="divide-y">{(hideDone ? tasks.filter((tk) => zoneOf(tk) !== "done") : tasks).map(renderRow)}</div>
         </>
       )}
+
+      <DebriefDialog
+        open={!!debriefTask}
+        taskTitle={debriefTask ? taskTitle(debriefTask, locale) : ""}
+        onClose={() => setDebriefTask(null)}
+        onConfirm={(debrief) => {
+          const tk = debriefTask;
+          setDebriefTask(null);
+          if (tk) void toggleDone(tk, debrief);
+        }}
+      />
     </div>
   );
 }

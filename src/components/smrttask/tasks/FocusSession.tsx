@@ -8,6 +8,7 @@ import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DecisionDialog } from "./DecisionDialog";
+import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 
 /** A ready plan task — the "current stage" (from GET /plan/:id/focus-stage). */
 interface FocusStage {
@@ -15,6 +16,7 @@ interface FocusStage {
   title: string;
   title_he: string | null;
   is_decision?: boolean | null;
+  requires_debrief?: boolean | null;
 }
 
 function fmtClock(totalSeconds: number): string {
@@ -81,6 +83,7 @@ export function FocusSession({
   const [tasksCompleted, setTasksCompleted] = useState(0);
   const [blocking, setBlocking] = useState(false);
   const [decisionOpen, setDecisionOpen] = useState(false);
+  const [debriefOpen, setDebriefOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   // The in-flight create, so an exit BEFORE it resolves can still await the id
@@ -147,17 +150,18 @@ export function FocusSession({
    *  outcome (propagated to the tasks it affects). */
   async function completeStage() {
     if (!stage || busy) return;
+    if (stage.requires_debrief) { setDebriefOpen(true); return; }
     if (stage.is_decision) { setDecisionOpen(true); return; }
     await doCompleteStage();
   }
 
-  async function doCompleteStage(decision?: string) {
+  async function doCompleteStage(decision?: string, debrief?: DebriefPayload) {
     if (!stage || busy) return;
     setBusy(true);
     try {
       await api(`/api/plan-tasks/${stage.id}/done`, {
         method: "PATCH",
-        body: { done: true, ...(decision ? { decision } : {}) },
+        body: { done: true, ...(decision ? { decision } : {}), ...(debrief ? { debrief } : {}) },
       });
       setTasksCompleted((n) => n + 1);
       await loadStage();
@@ -243,6 +247,12 @@ export function FocusSession({
         taskTitle={stageTitle ?? ""}
         onClose={() => setDecisionOpen(false)}
         onConfirm={(decision) => { setDecisionOpen(false); void doCompleteStage(decision); }}
+      />
+      <DebriefDialog
+        open={debriefOpen}
+        taskTitle={stageTitle ?? ""}
+        onClose={() => setDebriefOpen(false)}
+        onConfirm={(debrief) => { setDebriefOpen(false); void doCompleteStage(undefined, debrief); }}
       />
     </div>
   );
