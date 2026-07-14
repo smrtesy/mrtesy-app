@@ -136,11 +136,62 @@
 
 ---
 
-## 5. שאלות פתוחות להכרעה (ואז נגדיר את תיקון באג 2)
+## 5. ההכרעות שהתקבלו
 
-1. **מודל ה-lite של smrtTask:** להשתמש ב-`app_user_access` הקיימת (ציר full/lite כללי), או להוסיף דגל ייעודי? *(המלצה: `app_user_access` — קיים, ומאחד עם smrtPlan.)*
-2. **מה עובד רזה רואה חוץ ממשימות?** רק smrtTask (משימות)? גם smrtPlan (הקשר התוכנית)? *(הבקשה שלך רומזת: משימות בלבד, אולי + צפייה בתוכנית.)*
-3. **הפערים ב-smrtCRM/smrtReach:** להוסיף עכשיו שכבת "מנהל בלבד" (למשל שליחת קמפיין / מחיקה / טוקנים = מנהל), או להשאיר לבינתיים ולהתמקד ב-smrtTask?
-4. **פרויקטים/router/מרתון ב-lite:** להסתיר לגמרי, או להשאיר לצפייה?
+1. **מה עובד רזה רואה:** המשימות שלו בלבד **+ צפייה בתוכנית** (smrtPlan ברמת `lite`, קריאה בלבד).
+2. **פרויקטים / router (AI) / מרתון / inbox / מקורות:** **מוסתרים לגמרי** לעובד רזה.
+3. **smrtCRM / smrtReach:** לא נוגעים כרגע — מתמקדים ב-smrtTask בלבד. (הפער נשאר מתועד לעתיד.)
+4. **אחסון הרמה:** נשתמש בטבלה הקיימת `app_user_access` (ציר full/lite), ונחווט אותה סוף-סוף גם לכתיבה. *(ממתין לאישורך הסופי — סעיף 7.)*
 
-לאחר שנסגור את אלה — נגדיר במדויק את תיקון באג 2 (זרימת ה-onboarding למשתמש רזה + התיקון המיידי ל-lw@maor.org).
+---
+
+## 6. המודל שנבנה
+
+**עובד רזה (project-only worker)** = חבר ארגון (`role='member'`) עם:
+- מענק `user_app_access` ל-`smrttask` **וגם** `smrtplan`.
+- שורת `app_user_access` שקובעת `smrttask = 'lite'` (smrtplan נשאר `lite` כברירת מחדל של member — צפייה בלבד, כפי שכבר קיים).
+
+**עובד מלא** = חבר עם `smrttask` בלי שורת lite → נפתר ל-`full`.
+> ⚠ שינוי ברירת מחדל חשוב: היום כל member עם smrttask מקבל את האפליקציה המלאה. כדי לא לשבור חברים קיימים, ברירת המחדל של member ב-smrtTask תישאר **`full`**; `lite` הוא opt-in מפורש בלבד (בניגוד ל-smrtplan שם member=lite כברירת מחדל).
+
+מה עובד רזה יכול ב-smrtTask (`lite`):
+- לראות **רק** משימות שבהן `assigned_to_user_id = הוא עצמו` (מפלאן דרך `plan_id`+assignee, או ממשתמש אחר/מנהל). אכיפה בשרת, לא פילטר אופציונלי.
+- לעדכן/להשלים/להגיב-לשיבוץ על המשימות שלו.
+- **לא** רואה: inbox, מקורות/sync, agenda מהיומן, actions, WhatsApp/SMS, פרויקטים, router, מרתון, knowledge.
+
+---
+
+## 7. הגדרת תיקון באג 2 + תוכנית מימוש
+
+באג 2 הוא סימפטום של אותו חוסר: אין הבחנה בין "בעל ארגון שמחבר את המקורות של עצמו" לבין "עובד שהוזמן". התיקון = המודל של סעיף 6 + הסתעפות ב-onboarding.
+
+### 7.1 מסד נתונים (מיגרציה אחת)
+- `org_invites`: הוספת `access_level text NOT NULL DEFAULT 'full' CHECK (access_level IN ('full','lite'))`.
+- עדכון `accept_my_invites()`: כשמקבלים הזמנה עם `access_level='lite'`, בנוסף להכנסת `user_app_access`, לזרוע שורת `app_user_access(smrttask,'lite')`. (idempotent, `ON CONFLICT DO NOTHING`.)
+
+### 7.2 שרת (Express)
+- **smrtTask:** להוסיף `resolveTaskAccessLevel(req)` (במקביל ל-smrtplan): שורת `app_user_access` מנצחת; אחרת **full** לכולם (שמירת התנהגות). ואז:
+  - `GET /tasks` (ורשימות קשורות): כשהמשתמש `lite` — לכפות סינון `assigned_to_user_id = self` בשרת.
+  - שער `requireFullTask` שמחזיר 403 ל-`lite` על: `/sync/*`, projects, router, marathon, knowledge (כתיבה), inbox/source-messages, events, actions, whatsapp, sms.
+- **פלטפורמה — הזמנה:** `POST /org/members` ו-`/placeholder` יקבלו `access_level`; יעבירו אותו ל-`org_invites` (למשתמש חדש) או יזרעו `app_user_access` ישירות (למשתמש קיים/placeholder). כשמזמינים "עובד פרויקטים" — לכפות `role='member'`, `app_slugs=['smrttask','smrtplan']`, `access_level='lite'`.
+
+### 7.3 Frontend
+- **onboarding — לב התיקון:** בכניסה ל-`/onboarding`, אם למשתמש `smrttask=lite` (או שהוא member שהוזמן בלי מקורות) → לדלג על כל שלבי חיבור המקורות + מסך הסריקה. להציג מסך "ברוך הבא" קצר, לקבוע `onboarding_completed=true` **בלי** לקרוא ל-`/api/sync/part1`, ולנתב ל-`/tasks`. כך נעלמת גם שגיאת ההרשאה.
+- **Sidebar / ניווט:** לעובד רזה להציג רק `tasks` (מקבוצת smrtTask) + קבוצת smrtPlan לצפייה; להסתיר inbox/whatsapp/sms/projects/knowledge.
+- **מסך המשימות:** ברירת מחדל "המשימות שלי", בלי affordances של inbox/יצירת משימות ארגוניות.
+- **UI ניהול חברים** (`OrgSettingsClient`): טוגל "עובד פרויקטים בלבד" בטופס ההזמנה — כשדולק, נועל role=member, מסתיר בורר אפליקציות ושולח את החבילה הרזה. בנוסף, אפשרות לשנות חבר קיים בין מלא/רזה (חיווט `app_user_access` דרך ה-UI).
+
+### 7.4 תיקון מיידי ל-lw@maor.org
+lw כבר member בארגון Maor בלי הרשאות ו-onboarding תקוע. שני מסלולים אפשריים:
+- **א. להפוך אותו לעובד רזה עכשיו:** לזרוע `user_app_access(smrttask,smrtplan)` + `app_user_access(smrttask,'lite')`, ו-`onboarding_completed=true`. הוא נכנס מיד למסך המשימות שלו.
+- **ב. לא לגעת ידנית:** אחרי שהפיצ'ר יעלה, לאפס לו onboarding ולהזמין מחדש כעובד רזה.
+
+*(ההמלצה: א — הוא כבר תקוע, וזה מאמת את כל הזרימה מקצה לקצה. כתיבת DB ידנית תיעשה רק לאחר אישורך.)*
+
+### 7.5 היקף/סדר עבודה מוצע
+1. מיגרציה (7.1).
+2. שרת: resolveTaskAccessLevel + שערים + סינון (7.2) + נתיב ההזמנה.
+3. onboarding branch (7.3) — זה מה שסוגר את באג 2.
+4. UI ניהול חברים + ניווט (7.3).
+5. תיקון lw (7.4).
+6. פרוטוקול ה-pre-push המלא לפני push.
