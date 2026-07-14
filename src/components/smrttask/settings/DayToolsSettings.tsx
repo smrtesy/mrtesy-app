@@ -32,21 +32,45 @@ export function DayToolsSettings() {
       </CardHeader>
       <CardContent className="space-y-4">
         {DAY_TOOLS.map((tool) => {
-          const enabled = resolveTool(state, tool.slug).enabled;
+          const cfg = resolveTool(state, tool.slug);
+          const enabled = cfg.enabled;
           const id = `daytool-${tool.slug}`;
           return (
-            <div key={tool.slug} className="flex items-start justify-between gap-4">
-              <div className="space-y-0.5">
-                <label htmlFor={id} className="text-sm font-medium" dir="auto">{t(`${tool.slug}.title`)}</label>
-                <p className="text-xs text-muted-foreground" dir="auto">{t(`${tool.slug}.desc`)}</p>
+            <div key={tool.slug} className="space-y-3">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-0.5">
+                  <label htmlFor={id} className="text-sm font-medium" dir="auto">{t(`${tool.slug}.title`)}</label>
+                  <p className="text-xs text-muted-foreground" dir="auto">{t(`${tool.slug}.desc`)}</p>
+                </div>
+                <Switch
+                  id={id}
+                  checked={enabled}
+                  disabled={loading}
+                  onCheckedChange={(v) => toggle(tool.slug, v)}
+                  aria-label={t(`${tool.slug}.title`)}
+                />
               </div>
-              <Switch
-                id={id}
-                checked={enabled}
-                disabled={loading}
-                onCheckedChange={(v) => toggle(tool.slug, v)}
-                aria-label={t(`${tool.slug}.title`)}
-              />
+
+              {/* Per-tool config, revealed only when the tool is on. Each tool's
+                  config grows in its own phase; workclock ships the morning-offer
+                  toggle first (the rest of its settings arrive with the phases
+                  that make them do something). */}
+              {tool.slug === "workclock" && enabled && (
+                <div className="ms-1 space-y-3 border-s ps-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <label htmlFor="workclock-offer" className="text-xs text-muted-foreground" dir="auto">
+                      {t("workclock.offerDaily")}
+                    </label>
+                    <Switch
+                      id="workclock-offer"
+                      checked={cfg.offer_daily !== false}
+                      disabled={loading}
+                      onCheckedChange={(v) => setToolConfig("workclock", { offer_daily: v }).catch(() => toast.error(t("saveError")))}
+                      aria-label={t("workclock.offerDaily")}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

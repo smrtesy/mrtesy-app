@@ -6,7 +6,6 @@ import { cookies } from "next/headers";
 import { ExternalLink } from "lucide-react";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
-import { MorningStartBanner } from "@/components/smrttask/suggestions/MorningStart";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 export default async function InboxPage({
@@ -85,7 +84,6 @@ export default async function InboxPage({
           </div>
         )}
       </div>
-      {hasSmrtTask && <MorningStartBanner />}
       <InboxTabs locale={locale} hasSmrtTask={hasSmrtTask} />
     </div>
   );

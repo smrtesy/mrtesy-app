@@ -364,6 +364,120 @@ router.post("/tasks/day-plan", async (req: Request, res: Response) => {
   res.json({ plan: data });
 });
 
+// ── work-clock (workclock day-tool) ─────────────────────────────────────────
+// A work_sessions row logs the workday: bounds, worked/paused seconds, per-size
+// breakdown, escalation counts, and how it closed (see
+// 20260714000000_work_sessions.sql). The client drives the live clock off a
+// monotonic started_at and heartbeats here. Registered BEFORE GET/PATCH
+// /tasks/:id so "work-clock" isn't captured as an :id.
+
+/** Coerce a body value to a non-negative integer, or undefined if absent/invalid. */
+function nonNegInt(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
+}
+
+/** GET /tasks/work-clock/today?date=YYYY-MM-DD — that day's session (or null). */
+router.get("/tasks/work-clock/today", async (req: Request, res: Response) => {
+  const date = String(req.query.date ?? "");
+  if (!ISO_DATE.test(date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+  const { data, error } = await db
+    .from("work_sessions")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .eq("work_date", date)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data ?? null });
+});
+
+/** POST /tasks/work-clock/start — start or resume today's session.
+ *  Body: { work_date: "YYYY-MM-DD" }. Idempotent per (user_id, work_date):
+ *  resuming a closed day reopens the same row (closed_reason→open, ended_at→null)
+ *  and keeps the accumulated seconds. */
+router.post("/tasks/work-clock/start", async (req: Request, res: Response) => {
+  const workDate = String((req.body ?? {}).work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(
+      {
+        user_id: req.user!.id,
+        org_id: req.org!.id,
+        work_date: workDate,
+        closed_reason: "open",
+        ended_at: null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,work_date" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
+/** PATCH /tasks/work-clock — heartbeat: persist the accumulated counters.
+ *  Body: { work_date, worked_seconds?, paused_seconds?, quick_seconds?,
+ *  medium_seconds?, big_seconds?, alerts_soft?, alerts_popup?, alerts_block?,
+ *  ritual_completed? }. Only present, valid fields are written. */
+router.patch("/tasks/work-clock", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const k of [
+    "worked_seconds", "paused_seconds", "quick_seconds", "medium_seconds",
+    "big_seconds", "alerts_soft", "alerts_popup", "alerts_block",
+  ]) {
+    const n = nonNegInt(body[k]);
+    if (n !== undefined) patch[k] = n;
+  }
+  if (typeof body.ritual_completed === "boolean") patch.ritual_completed = body.ritual_completed;
+
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(
+      { user_id: req.user!.id, org_id: req.org!.id, work_date: workDate, ...patch },
+      { onConflict: "user_id,work_date" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
+/** POST /tasks/work-clock/stop — close the day.
+ *  Body: { work_date, reason?: 'manual'|'auto'|'extended', worked_seconds?,
+ *  paused_seconds? }. */
+router.post("/tasks/work-clock/stop", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  const reason = ["manual", "auto", "extended"].includes(body.reason) ? body.reason : "manual";
+
+  const patch: Record<string, unknown> = {
+    user_id: req.user!.id,
+    org_id: req.org!.id,
+    work_date: workDate,
+    ended_at: new Date().toISOString(),
+    closed_reason: reason,
+    updated_at: new Date().toISOString(),
+  };
+  const worked = nonNegInt(body.worked_seconds);
+  const paused = nonNegInt(body.paused_seconds);
+  if (worked !== undefined) patch.worked_seconds = worked;
+  if (paused !== undefined) patch.paused_seconds = paused;
+
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(patch, { onConflict: "user_id,work_date" })
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db

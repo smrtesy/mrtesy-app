@@ -334,6 +334,18 @@ persisted, create a numbered file under `supabase/migrations/` named
 CLI. Do not call `mcp__supabase__apply_migration` on a production
 project without explicit user authorization.
 
+## Planning / design docs — commit and share a GitHub link
+
+The user strongly prefers reading docs **on GitHub**, not in chat or as
+attachments. Whenever you author a substantial doc — a `docs/*-plan.md`,
+a design spec, an investigation write-up — **commit it to the repo and
+push**, then give the user the GitHub link to the file (on the branch you
+pushed to, e.g. `https://github.com/smrtesy/mrtesy-app/blob/<branch>/docs/<file>.md`).
+A docs-only commit doesn't need the full pre-push build protocol (it
+touches no code) — just commit and push. Do this by default for any plan
+you write for approval, so the user can read it comfortably before saying
+go.
+
 ## When the user is mid-onboarding and stuck
 
 The (app)/layout.tsx redirects to /onboarding when `onboarding_completed

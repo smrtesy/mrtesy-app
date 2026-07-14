@@ -827,8 +827,6 @@
     "noEndDate": "No end date",
     "untilLabel": "until {when}",
     "kindEvent": "Event",
-    "morningTitle": "Good morning 👋 start with the inbox",
-    "morningHint": "Go through the items one by one — for each: pick for today · give a date · file by level · drop.",
     "remindersSection": "Reminders",
     "snoozedUntil": "Returns {when}",
     "unsnooze": "Wake up now",
@@ -1067,7 +1065,22 @@
     "planfocus": {
       "title": "Plan focus",
       "desc": "A fixed daily time block on a smrtPlan project, with a timed focus session."
+    },
+    "workclock": {
+      "title": "Work clock",
+      "desc": "A guided workday: an all-day clock, a morning ritual, run mode with time limits, and an end-of-day close.",
+      "offerDaily": "Offer to start the clock on your first entry of the day"
     }
+  },
+  "workclock": {
+    "offerTitle": "Start the work clock?",
+    "offerStart": "Start",
+    "offerLater": "Not today",
+    "dayClock": "today",
+    "pausedLabel": "Paused",
+    "resume": "Resume",
+    "pause": "Pause",
+    "stop": "Stop day"
   },
   "settingsParameters": {
     "title": "smrtTask Parameters",

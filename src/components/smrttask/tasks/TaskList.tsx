@@ -78,8 +78,10 @@ interface FocusTodayPlan {
   completed_today: boolean;
 }
 
-/** Sortable wrapper for a desk row: grip handle + dnd-kit transform. */
-function SortableDeskRow({ id, children }: { id: string; children: React.ReactNode }) {
+/** Sortable wrapper for a desk row: grip handle + dnd-kit transform. An optional
+ *  `index` renders a small ordinal at the side (used by the quick list so the
+ *  count of waiting items reads at a glance). */
+function SortableDeskRow({ id, index, children }: { id: string; index?: number; children: React.ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   return (
@@ -88,6 +90,11 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
       className="flex items-center gap-1"
     >
+      {typeof index === "number" && (
+        <span className="w-4 shrink-0 text-center font-mono text-[11px] tabular-nums text-muted-foreground/50">
+          {index + 1}
+        </span>
+      )}
       <button
         {...attributes}
         {...listeners}
@@ -830,15 +837,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
   }
 
-  /** One drop zone: sortable + droppable, with a grip per row. */
-  function renderList(listId: string, list: Task[], zone: RowZone, emptyMsg: string) {
+  /** One drop zone: sortable + droppable, with a grip per row. When `numbered`,
+   *  each row shows its 1-based position (used by the quick list). */
+  function renderList(listId: string, list: Task[], zone: RowZone, emptyMsg: string, numbered = false) {
     return (
       <DroppableList id={listId} items={list.map((task) => task.id)}>
         {list.length === 0 ? (
           <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">{emptyMsg}</p>
         ) : (
-          list.map((task) => (
-            <SortableDeskRow key={task.id} id={task.id}>
+          list.map((task, i) => (
+            <SortableDeskRow key={task.id} id={task.id} index={numbered ? i : undefined}>
               {renderRow(task, zone)}
             </SortableDeskRow>
           ))
@@ -994,23 +1002,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   </Button>
                 )}
               </div>
-              {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"))}
+              {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>
 
             {m131Enabled ? (
               <>
-                {/* Big — the one deliberate focus of the day */}
-                <div>
-                  <div className="mb-2 flex items-center gap-2">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      {t("desk.big")}
-                      <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskBig.length}</span>
-                    </h3>
-                  </div>
-                  {renderList(LIST_BIG, deskBig, "desk", t("desk.emptyBig"))}
-                </div>
-
-                {/* Medium — the 3 picked for today; marathon runs over medium+big */}
+                {/* Medium — the 3 picked for today; marathon runs over medium+big.
+                    Ordered ABOVE big (docs/workclock-plan.md §9.6). */}
                 <div>
                   <div className="mb-2 flex items-center gap-2">
                     <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -1025,6 +1023,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                     )}
                   </div>
                   {renderList(LIST_MEDIUM, deskMedium, "desk", t("desk.emptyMedium"))}
+                </div>
+
+                {/* Big — the one deliberate focus of the day, below medium */}
+                <div>
+                  <div className="mb-2 flex items-center gap-2">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      {t("desk.big")}
+                      <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskBig.length}</span>
+                    </h3>
+                  </div>
+                  {renderList(LIST_BIG, deskBig, "desk", t("desk.emptyBig"))}
                 </div>
               </>
             ) : (
