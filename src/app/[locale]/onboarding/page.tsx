@@ -40,21 +40,32 @@ export default function OnboardingStep1() {
         // invited worker being pushed through the sync screen (and hitting the
         // permission error on "scan"). If the access check fails (e.g. no
         // smrtTask grant at all) we fall through to the normal flow.
+        let isLite = false;
         try {
           const { access_level } = await api<{ access_level: string }>("/api/tasks/access");
-          if (access_level === "lite") {
+          isLite = access_level === "lite";
+        } catch (accessErr) {
+          if (!(accessErr instanceof ApiError && accessErr.status === 403)) {
+            console.error("[onboarding] access check failed:", accessErr);
+          }
+        }
+        if (isLite) {
+          // Commit to the lite path: mark onboarding done and go to tasks. Never
+          // fall back to the source-connection flow (a lite worker can't finish
+          // it). If the settings write fails transiently, still route to /tasks —
+          // the layout re-runs this page and retries, so it self-heals rather
+          // than stranding the worker on a Gmail step they can't complete.
+          try {
             await api("/api/me/settings", {
               method: "PATCH",
               body: { onboarding_completed: true },
               noOrg: true,
             });
-            router.replace(`/${locale}/tasks`);
-            return;
+          } catch (patchErr) {
+            console.error("[onboarding] completing lite onboarding failed:", patchErr);
           }
-        } catch (accessErr) {
-          if (!(accessErr instanceof ApiError && accessErr.status === 403)) {
-            console.error("[onboarding] access check failed:", accessErr);
-          }
+          router.replace(`/${locale}/tasks`);
+          return;
         }
         setReady(true);
       } catch (e) {

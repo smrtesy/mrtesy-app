@@ -528,19 +528,23 @@ router.patch("/org/members/:userId/apps",
       if (insErr) return res.status(500).json({ error: insErr.message });
     }
 
-    // Optional: toggle project-only (lite) vs full for this member. When
-    // access_level is provided, clear any existing level rows first (so a level
-    // row for a now-ungranted app can't linger — the two tables are unrelated,
-    // no cascade), then write 'lite' rows for the currently-granted apps.
+    // Optional: toggle project-only (lite) vs full for this member. "Project-only"
+    // is specifically a smrtTask distinction, so we ONLY touch the member's
+    // smrtTask app_user_access row — never other apps' explicit levels (e.g. an
+    // explicit smrtPlan 'full' must survive a smrtTask toggle). 'lite' upserts
+    // the smrtTask row; 'full' removes it (reverting to the default).
     let access_level: AccessLevel | undefined;
     if (req.body?.access_level !== undefined) {
       access_level = normalizeAccessLevel(req.body.access_level);
-      const { error: clearErr } = await db
-        .from("app_user_access").delete()
-        .eq("org_id", req.org!.id).eq("user_id", userId);
-      if (clearErr) return res.status(500).json({ error: clearErr.message });
-      if (access_level === "lite") {
-        const levelErr = await applyAccessLevel(req.org!.id, userId, req.user!.id, apps, "lite");
+      const smrttaskApp = apps.find((a) => a.slug === "smrttask");
+      if (!smrttaskApp) {
+        if (access_level === "lite") {
+          return res.status(400).json({ error: "smrtTask must be granted to set project-only" });
+        }
+        // full + no smrtTask grant → nothing to clear; grant removal already
+        // dropped access, and a stale level row (if any) is inert without a grant.
+      } else {
+        const levelErr = await applyAccessLevel(req.org!.id, userId, req.user!.id, [smrttaskApp], access_level);
         if (levelErr) return res.status(500).json({ error: levelErr });
       }
     }
