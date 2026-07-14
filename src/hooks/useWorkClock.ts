@@ -90,6 +90,10 @@ function hydrate() {
       const parsed = JSON.parse(raw) as WorkClockState;
       if (parsed && parsed.workDate === todayISO() && parsed.phase !== "offer") {
         state = { ...freshState(), ...parsed };
+        // A restored ritual step's stored deadline is in the past — reset it so
+        // the reloaded step gets its full time instead of auto-advancing on the
+        // first tick.
+        if (isRitual(state.phase)) state.stepEndsAt = Date.now() + stepSeconds(state.phase) * 1000;
       }
     }
   } catch {

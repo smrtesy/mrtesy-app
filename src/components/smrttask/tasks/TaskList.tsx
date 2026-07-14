@@ -500,13 +500,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // must not inflate the quota or read as "picked" in the build-day picker.
   const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
   const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
-  // The set planned_for today — drives the build-day picker's selected state.
-  const pickedIds = useMemo(
-    () => new Set(
-      [...deskMedium, ...deskBig].filter((task) => task.planned_for === todayStr).map((task) => task.id),
-    ),
-    [deskMedium, deskBig, todayStr],
-  );
   // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
   // regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
@@ -819,12 +812,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   /** Add a task to / remove it from today's plan (planned_for), and snapshot the
    *  day to daily_plans. The build-day modal was removed — picking inline (the
    *  +/− on each row) IS building the day, so the snapshot happens on every pick
-   *  instead of behind a separate "done" button (docs/workclock-plan.md §6.7).
-   *  pickedIds is state (stale by one here), so we compute the next set inline. */
+   *  instead of behind a separate "done" button (docs/workclock-plan.md §6.7). */
   function handlePlanToggle(taskId: string, addToToday: boolean) {
     const planned_for = addToToday ? todayStr : null;
     patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
-    const nextPicked = new Set(pickedIds);
+    // Snapshot ALL picked medium/big tasks (not the context-filtered pickedIds —
+    // that would drop home/outside picks). `tasks` is pre-optimistic here, so
+    // apply the toggle to the derived set. Quick tasks are never "picked".
+    const nextPicked = new Set(
+      tasks.filter((tk) => tk.planned_for === todayStr && tk.size !== "quick").map((tk) => tk.id),
+    );
     if (addToToday) nextPicked.add(taskId); else nextPicked.delete(taskId);
     api("/api/tasks/day-plan", {
       method: "POST",

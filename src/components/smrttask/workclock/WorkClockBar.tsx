@@ -41,13 +41,15 @@ export function WorkClockBar() {
     return () => clearInterval(iv);
   }, [active, state.stepEndsAt]);
 
-  // Navigate to each ritual step's screen once, on entering it.
-  const navigatedForRef = useRef<WorkClockPhase | null>(null);
+  // Navigate to each ritual step's screen when the destination changes. Tracks
+  // the last destination (not the phase) so plan→run — which share /tasks —
+  // doesn't re-push the same URL.
+  const lastDestRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isRitual(state.phase)) { navigatedForRef.current = null; return; }
-    if (navigatedForRef.current === state.phase) return;
-    navigatedForRef.current = state.phase;
+    if (!isRitual(state.phase)) { lastDestRef.current = null; return; }
     const dest = state.phase === "ritual_inbox" ? `/${locale}/inbox` : `/${locale}/tasks`;
+    if (lastDestRef.current === dest) return;
+    lastDestRef.current = dest;
     router.push(dest);
   }, [state.phase, locale, router]);
 
