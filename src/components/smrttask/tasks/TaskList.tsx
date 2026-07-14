@@ -30,7 +30,6 @@ import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
 import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
-import { BuildDayBanner } from "./BuildDayBanner";
 import { DecisionDialog } from "./DecisionDialog";
 import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
@@ -54,7 +53,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Sun, Timer } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -173,7 +172,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [decisionTask, setDecisionTask] = useState<Task | null>(null);
   const [debriefTask, setDebriefTask] = useState<Task | null>(null);
-  const [buildDayOpen, setBuildDayOpen] = useState(false);
   // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
   const planfocusEnabled = useDayTool("planfocus").enabled;
   const [focusPlans, setFocusPlans] = useState<FocusTodayPlan[]>([]);
@@ -502,13 +500,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // must not inflate the quota or read as "picked" in the build-day picker.
   const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
   const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
-  // The set planned_for today — drives the build-day picker's selected state.
-  const pickedIds = useMemo(
-    () => new Set(
-      [...deskMedium, ...deskBig].filter((task) => task.planned_for === todayStr).map((task) => task.id),
-    ),
-    [deskMedium, deskBig, todayStr],
-  );
   // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
   // regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
@@ -818,23 +809,24 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
   }
 
-  /** Snapshot today's committed plan to daily_plans (the build-day commit).
-   *  Fire-and-forget: the picks themselves already persisted via planned_for. */
-  const commitDayPlan = useCallback(() => {
-    api("/api/tasks/day-plan", {
-      method: "POST",
-      body: {
-        plan_date: todayStr,
-        picked_task_ids: [...pickedIds],
-        quick_total: deskQuick.length,
-      },
-    }).catch((e) => { if (e instanceof ApiError && e.status !== 401) toast.error(e.message); });
-  }, [todayStr, pickedIds, deskQuick.length]);
-
-  /** Add a task to / remove it from today's plan (planned_for). */
+  /** Add a task to / remove it from today's plan (planned_for), and snapshot the
+   *  day to daily_plans. The build-day modal was removed — picking inline (the
+   *  +/− on each row) IS building the day, so the snapshot happens on every pick
+   *  instead of behind a separate "done" button (docs/workclock-plan.md §6.7). */
   function handlePlanToggle(taskId: string, addToToday: boolean) {
     const planned_for = addToToday ? todayStr : null;
     patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
+    // Snapshot ALL picked medium/big tasks (not the context-filtered pickedIds —
+    // that would drop home/outside picks). `tasks` is pre-optimistic here, so
+    // apply the toggle to the derived set. Quick tasks are never "picked".
+    const nextPicked = new Set(
+      tasks.filter((tk) => tk.planned_for === todayStr && tk.size !== "quick").map((tk) => tk.id),
+    );
+    if (addToToday) nextPicked.add(taskId); else nextPicked.delete(taskId);
+    api("/api/tasks/day-plan", {
+      method: "POST",
+      body: { plan_date: todayStr, picked_task_ids: [...nextPicked], quick_total: deskQuick.length },
+    }).catch((e) => { if (e instanceof ApiError && e.status !== 401) toast.error(e.message); });
   }
 
   /** One drop zone: sortable + droppable, with a grip per row. When `numbered`,
@@ -873,17 +865,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         <ExternalLink className="h-4 w-4" />
       </OpenTabLink>
       <InstallAppButton />
-      {m131Enabled && (
-        <button
-          type="button"
-          onClick={() => setBuildDayOpen(true)}
-          aria-label={t("buildDay.open")}
-          title={t("buildDay.open")}
-          className="text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <Sun className="h-4 w-4" />
-        </button>
-      )}
       <div className="ms-auto flex rounded-lg border p-0.5">
         {contextChips.map((chip) => (
           <button
@@ -911,21 +892,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         </div>
       ) : (
         <>
-          {m131Enabled && (
-            <BuildDayBanner
-              locale={locale}
-              mediumCandidates={[...deskMedium, ...rest.filter((task) => task.size !== "big")]}
-              bigCandidates={[...deskBig, ...rest.filter((task) => task.size === "big")]}
-              pickedIds={pickedIds}
-              mediumQuota={mediumQuota}
-              bigQuota={bigQuota}
-              onPlanToggle={handlePlanToggle}
-              onCommit={commitDayPlan}
-              open={buildDayOpen}
-              onOpenChange={setBuildDayOpen}
-            />
-          )}
-
           <ReviewBanner
             candidates={reviewCandidates}
             locale={locale}

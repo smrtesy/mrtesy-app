@@ -1080,7 +1080,13 @@
     "pausedLabel": "מושהה",
     "resume": "המשך",
     "pause": "השהה",
-    "stop": "עצור יום"
+    "stop": "עצור יום",
+    "stepBadge": "שלב {n} מ־3",
+    "stepInbox": "בדוק נכנס — עבור על כל ההצעות",
+    "stepPlan": "תכנן את היום — 3 בינוניות + 1 גדולה",
+    "stepRun": "התחל מצב ריצה על המשימות המהירות",
+    "stepNext": "המשך",
+    "enterRun": "כנס למצב ריצה"
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",
