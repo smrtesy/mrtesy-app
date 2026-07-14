@@ -73,17 +73,21 @@ router.get("/tasks/access", (req: Request, res: Response) => {
 router.param("id", (req: Request, res: Response, next: NextFunction, id: string) => {
   if (req.taskAccess !== "lite") return next();
   void (async () => {
-    const { data, error } = await db
-      .from("tasks")
-      .select("assigned_to_user_id")
-      .eq("organization_id", req.org!.id)
-      .eq("id", id)
-      .maybeSingle();
-    if (error) return res.status(500).json({ error: error.message });
-    if (!data || data.assigned_to_user_id !== req.user!.id) {
-      return res.status(404).json({ error: "task not found" });
+    try {
+      const { data, error } = await db
+        .from("tasks")
+        .select("assigned_to_user_id")
+        .eq("organization_id", req.org!.id)
+        .eq("id", id)
+        .maybeSingle();
+      if (error) return res.status(500).json({ error: error.message });
+      if (!data || data.assigned_to_user_id !== req.user!.id) {
+        return res.status(404).json({ error: "task not found" });
+      }
+      next();
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
     }
-    next();
   })();
 });
 
