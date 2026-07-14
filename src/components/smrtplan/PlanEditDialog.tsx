@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { api } from "@/lib/api/client";
@@ -59,6 +59,20 @@ export function PlanEditDialog({
     owner_user_id: "",
   });
   const [saving, setSaving] = useState(false);
+  // My daily-minutes commitment to this plan (the focus tool, §6). Blank = no
+  // commitment; entering a value upserts smrtplan_focus on save. Only meaningful
+  // for an existing plan (a new plan has no id to attach the commitment to yet).
+  const [dailyMinutes, setDailyMinutes] = useState("");
+  // Personal work week for the daily commitment (0=Sun..6=Sat). Default Mon–Fri.
+  const DEFAULT_WORKDAYS = useMemo(() => [1, 2, 3, 4, 5], []);
+  const [workdays, setWorkdays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const locale = useLocale();
+  // Short weekday names in the active locale, without any locale ternary.
+  const dayLabels = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(locale, { weekday: "short" });
+    // 2024-01-07 is a Sunday → index i lands on day-of-week i (0=Sun..6=Sat).
+    return [0, 1, 2, 3, 4, 5, 6].map((i) => fmt.format(new Date(Date.UTC(2024, 0, 7 + i))));
+  }, [locale]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,6 +91,22 @@ export function PlanEditDialog({
       owner_user_id: plan?.owner_user_id ?? "",
     });
   }, [open, plan]);
+
+  // Prefill the daily-minutes commitment when editing an existing plan.
+  useEffect(() => {
+    setDailyMinutes("");
+    setWorkdays(DEFAULT_WORKDAYS);
+    if (!open || !plan?.id) return;
+    let alive = true;
+    api<{ focus: { daily_minutes: number; workdays: number[] | null } | null }>(`/api/plan/${plan.id}/focus`)
+      .then((d) => {
+        if (!alive || !d.focus) return;
+        setDailyMinutes(String(d.focus.daily_minutes));
+        setWorkdays(d.focus.workdays && d.focus.workdays.length ? d.focus.workdays : DEFAULT_WORKDAYS);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [open, plan?.id, DEFAULT_WORKDAYS]);
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -105,6 +135,17 @@ export function PlanEditDialog({
     try {
       if (plan?.id) {
         await api(`/api/plans/${plan.id}`, { method: "PATCH", body });
+        // Upsert the daily-focus commitment alongside the plan edit. A positive
+        // value sets/updates it; blank leaves any existing commitment untouched
+        // (deactivating is done from the focus tool, not by clearing this field).
+        const mins = parseInt(dailyMinutes, 10);
+        if (Number.isInteger(mins) && mins > 0) {
+          const sorted = [...workdays].sort((a, b) => a - b);
+          await api(`/api/plan/${plan.id}/focus`, {
+            method: "PUT",
+            body: { daily_minutes: mins, active: true, workdays: sorted.length ? sorted : null },
+          });
+        }
       } else {
         await api("/api/plans", { method: "POST", body });
       }
@@ -224,6 +265,37 @@ export function PlanEditDialog({
               </select>
             </Field>
           </div>
+
+          {plan?.id && (
+            <Field label={te("dailyMinutes")}>
+              <Input type="number" min={1} step={5} value={dailyMinutes}
+                onChange={(e) => setDailyMinutes(e.target.value)} dir="ltr" placeholder={te("dailyMinutesHint")} />
+            </Field>
+          )}
+
+          {plan?.id && (
+            <Field label={te("workdays")}>
+              <div className="flex flex-wrap gap-1">
+                {dayLabels.map((label, dow) => {
+                  const on = workdays.includes(dow);
+                  return (
+                    <button
+                      key={dow}
+                      type="button"
+                      onClick={() => setWorkdays((w) => (on ? w.filter((d) => d !== dow) : [...w, dow]))}
+                      className={cn(
+                        "min-w-9 rounded-md border px-2 py-1 text-[11.5px] font-medium",
+                        on ? "border-primary bg-primary/10 text-primary" : "border-input text-muted-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">{te("workdaysHint")}</p>
+            </Field>
+          )}
 
           <Field label={te("owner")}>
             <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>

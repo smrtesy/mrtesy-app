@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useScreenRouter } from "@/lib/panes/nav";
 import { useLocale, useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,7 @@ export function CharacterFormDialog({
 }) {
   const t = useTranslations("smrtVoice.characters");
   const tf = useTranslations("smrtVoice.characters.form");
-  const router = useRouter();
+  const router = useScreenRouter();
   const locale = useLocale();
   const isEdit = !!character;
 

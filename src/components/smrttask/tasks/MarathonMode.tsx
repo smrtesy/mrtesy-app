@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { Zap, X, SkipForward, Scale, Trophy, Plus, MapPin, ClipboardList, ExternalLink, AlertTriangle, Home, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -17,7 +18,9 @@ import { effectiveDeadline } from "@/lib/workdays";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useWhatsAppPanel } from "@/contexts/WhatsAppPanelContext";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
+import { taskActionNuggets } from "@/lib/smrttask/links";
 import type { Task } from "@/types/task";
 
 interface MarathonStats {
@@ -59,10 +62,15 @@ export function MarathonMode({
   onReclassify: (taskId: string) => Promise<void>;
   onExit: () => void;
 }) {
+  // Inside a tabs-workspace pane the run must stay INSIDE the pane (the
+  // user keeps other tabs usable beside it); full-page keeps the old
+  // fullscreen takeover. The pane body div is position:relative.
+  const overlayFrame = useOptionalPaneNav() ? "absolute inset-0" : "wa-panel-pushed fixed inset-0";
   const t = useTranslations("marathon");
   const tTasks = useTranslations("tasks");
   const tDetail = useTranslations("taskDetailExt");
-  const waPanel = useWhatsAppPanel();
+  const tWa = useTranslations("whatsappPage");
+  const openWhatsApp = useOpenWhatsAppChat();
   const blocked = useWorkCalendar();
   // Snapshot the queue at start: list refetches during the run must not
   // reshuffle what the runner sees.
@@ -237,13 +245,25 @@ export function MarathonMode({
   const checklist = detail?.checklist ?? [];
   const materials = detail?.task_materials ?? [];
   const driveDocs = (detail?.linked_drive_docs ?? []).filter((d) => !!d.url);
+  // Fall through to the list row per-field (detail is the fuller record, but a
+  // null field on it shouldn't mask a value the list row already carried).
   const sourceUrl = detail?.source_messages?.source_url ?? current?.source_messages?.source_url ?? null;
-  // WhatsApp sources open in the in-app docked panel (consistent with the task
-  // lists / log) instead of launching the external WhatsApp client.
+  const sourceId = detail?.source_messages?.source_id ?? current?.source_messages?.source_id ?? null;
+  // WhatsApp sources open in the in-app reader (consistent with the task lists /
+  // log) instead of launching the external WhatsApp client.
   const isWaSource = sourceUrl ? /wa\.me\//.test(sourceUrl) : false;
   const sourceWaPhone = isWaSource
     ? ((sourceUrl ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "")
     : "";
+  // Burst/echo source id is `wa:<chatId>:<wamid>` — pull the wamid so we can
+  // jump straight to the originating message (wamids never contain ':', so the
+  // tail after the second colon is safe). Legacy `wa:<chatId>` rows carry none.
+  const sourceWaWamid = (() => {
+    const sid = sourceId ?? "";
+    if (!isWaSource || !sid.startsWith("wa:")) return null;
+    const idx = sid.indexOf(":", 3);
+    return idx > 0 ? sid.slice(idx + 1) || null : null;
+  })();
   // Plan tasks carry their plan/stage on the desk row — the "where this lives".
   const planLabel = current?.plan_id
     ? [
@@ -252,6 +272,10 @@ export function MarathonMode({
       ].filter(Boolean).join(" / ")
     : "";
   const hasAttachments = !!sourceUrl || driveDocs.length > 0 || materials.length > 0;
+  // Action nuggets — one-click deep links (payment/tracking/etc.) so the runner
+  // acts without opening the source. Attachments render in their own block
+  // below, so exclude them here to avoid a double row.
+  const actionLinks = view ? taskActionNuggets(view) : [];
   const chipCls =
     "inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border bg-secondary/60 px-2 py-0.5 text-[12px] hover:bg-accent";
 
@@ -268,7 +292,7 @@ export function MarathonMode({
   }
 
   return (
-    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col bg-background" dir={locale === "he" ? "rtl" : "ltr"}>
+    <div className={`${overlayFrame} z-50 flex flex-col bg-background`} dir={locale === "he" ? "rtl" : "ltr"}>
       {/* Header: run timer + per-task timer + progress + new-item + exit */}
       <div className="flex items-center gap-3 border-b px-4 py-3">
         <span className="flex items-center gap-1.5 font-mono text-lg font-bold tabular-nums" dir="ltr">
@@ -396,6 +420,9 @@ export function MarathonMode({
             <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80" dir="auto">{description}</p>
           )}
 
+          {/* action nuggets: one-click deep links, right under the description (no heading) */}
+          {actionLinks.length > 0 && <LinkActions links={actionLinks} />}
+
           {/* attachments: origin deep-link + Drive docs + task materials */}
           {hasAttachments && (
             <div className="space-y-1.5">
@@ -406,8 +433,14 @@ export function MarathonMode({
                     <button
                       type="button"
                       onClick={() => {
-                        if (sourceWaPhone) waPanel.openChat(sourceWaPhone);
-                        else waPanel.open();
+                        // preservePane: inside a workspace pane, open WhatsApp
+                        // in a NEW pane beside the run instead of navigating this
+                        // one away (which would abandon the marathon session).
+                        openWhatsApp(sourceWaPhone || null, {
+                          focusWamid: sourceWaWamid,
+                          preservePane: true,
+                          paneLabel: tWa("title"),
+                        });
                       }}
                       className={chipCls}
                     >
@@ -482,6 +515,7 @@ function FinishScreen({
   prev: MarathonStats;
   onExit: () => void;
 }) {
+  const overlayFrame = useOptionalPaneNav() ? "absolute inset-0" : "wa-panel-pushed fixed inset-0";
   const t = useTranslations("marathon");
   const newRecord = done > prev.best_count && prev.best_count > 0;
   const firstRun = prev.total_runs === 0;
@@ -500,7 +534,7 @@ function FinishScreen({
   }, [newRecord]);
 
   return (
-    <div className="wa-panel-pushed fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden">
+    <div className={`${overlayFrame} z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center overflow-hidden`}>
       {confetti.map((c) => (
         <span
           key={c.id}

@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut } from "lucide-react";
+import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut, Sparkles } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanAccessLevel, PlanMilestone, PlanStatus } from "@/types/plan";
 import { parseISO, isoOf, gregShort, hebDate, hebDay, hebMonth, gregMonthLabel, daysBetween, countdownText } from "@/lib/smrtplan/dates";
@@ -16,6 +17,7 @@ import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanTableView } from "./PlanTableView";
 import { PlanEditDialog } from "./PlanEditDialog";
+import { PlanAiBuilder } from "./PlanAiBuilder";
 import { MilestoneEditor } from "./MilestoneEditor";
 import { PlanSettingsHub } from "./PlanSettingsHub";
 
@@ -78,6 +80,7 @@ const healthColor: Record<Health, string> = {
 
 export function PlanBoardClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
+  const paneNav = useOptionalPaneNav();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
   const [stages, setStages] = useState<BoardStage[]>([]);
@@ -88,6 +91,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorPlan, setEditorPlan] = useState<Plan | null>(null);
+  const [aiBuilderOpen, setAiBuilderOpen] = useState(false);
   const [milestonesOpen, setMilestonesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [templates, setTemplates] = useState<{ id: string; name_he: string }[]>([]);
@@ -154,9 +158,13 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   // Let the board use the full main width (and grow with the window) instead of
   // the global 896px reading cap — see globals.css [data-content-wide].
   useEffect(() => {
+    // Inside a workspace pane the container has no width cap to lift, and the
+    // body attribute would leak onto the TOP window, shifting the whole
+    // workspace (the iframe days scoped it to the pane's own document).
+    if (paneNav) return;
     document.body.setAttribute("data-content-wide", "true");
     return () => document.body.removeAttribute("data-content-wide");
-  }, []);
+  }, [paneNav]);
 
   async function recompute() {
     setRecomputing(true);
@@ -771,6 +779,9 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             )}
             <ControlButton onClick={() => { setEditorPlan(null); setEditorOpen(true); }}>
               <Plus className="h-3.5 w-3.5" /> {t("edit.newPlan")}
+            </ControlButton>
+            <ControlButton onClick={() => setAiBuilderOpen(true)}>
+              <Sparkles className="h-3.5 w-3.5" /> {t("aiBuilder.button")}
             </ControlButton>
             <ControlButton onClick={() => setMilestonesOpen(true)}>
               <Flag className="h-3.5 w-3.5" /> {t("edit.editMilestones")}
@@ -1404,6 +1415,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
       )}
 
       <PlanEditDialog plan={editorPlan} open={editorOpen} onClose={() => setEditorOpen(false)} onSaved={reloadBoard} />
+      <PlanAiBuilder open={aiBuilderOpen} onClose={() => setAiBuilderOpen(false)} onCreated={() => reloadBoard()} />
       <MilestoneEditor
         milestones={milestones}
         plans={plans}

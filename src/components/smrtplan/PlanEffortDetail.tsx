@@ -15,10 +15,12 @@ import { DatePicker } from "@/components/ui/date-picker";
 import type { Plan } from "@/types/plan";
 import type { Task, TaskNeed, TaskHandoff } from "@/types/task";
 import { parseISO, gregShort, hebDate, countdownText, urgencyFor, countWorkingDays } from "@/lib/smrtplan/dates";
+import { DebriefDialog, type DebriefPayload } from "@/components/smrttask/tasks/DebriefDialog";
+import { DailyPulse } from "./DailyPulse";
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist"
+  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 type Member = OrgMember;
@@ -87,6 +89,7 @@ export function PlanEffortDetail({
   // Done tasks are filtered out of the list by default; a toggle reveals them.
   const [hideDone, setHideDone] = useState(true);
   const [myId, setMyId] = useState<string | null>(null);
+  const [debriefTask, setDebriefTask] = useState<PlanTask | null>(null);
   const { isSuperAdmin } = useSuperAdmin();
 
   useEffect(() => {
@@ -177,10 +180,13 @@ export function PlanEffortDetail({
   // Mark complete / reopen — allowed for the assignee + super-admin (not only
   // full-access planners). The server enforces the same rule.
   const canComplete = (task: PlanTask) => canEdit || isSuperAdmin || (myId != null && task.assigned_to_user_id === myId);
-  async function toggleDone(task: PlanTask) {
+  async function toggleDone(task: PlanTask, debrief?: DebriefPayload) {
     const reopening = zoneOf(task) === "done";
+    // A research task must file its debrief before it can be completed. The
+    // dialog's confirm re-invokes with the debrief; reopening is free.
+    if (!reopening && task.requires_debrief && !debrief) { setDebriefTask(task); return; }
     try {
-      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: !reopening } });
+      await api(`/api/plan-tasks/${task.id}/done`, { method: "PATCH", body: { done: !reopening, ...(debrief ? { debrief } : {}) } });
       await afterMutation();
       if (reopening) void notifyReopen(task.id);
     } catch (e) {
@@ -391,6 +397,8 @@ export function PlanEffortDetail({
         </div>
       </div>
 
+      {canEdit && <DailyPulse planId={plan.id} locale={locale} memberMap={memberMap} />}
+
       {hasStages ? (
         <div className="divide-y">
           {sortedStages.map((s) =>
@@ -419,6 +427,17 @@ export function PlanEffortDetail({
           <div className="divide-y">{(hideDone ? tasks.filter((tk) => zoneOf(tk) !== "done") : tasks).map(renderRow)}</div>
         </>
       )}
+
+      <DebriefDialog
+        open={!!debriefTask}
+        taskTitle={debriefTask ? taskTitle(debriefTask, locale) : ""}
+        onClose={() => setDebriefTask(null)}
+        onConfirm={(debrief) => {
+          const tk = debriefTask;
+          setDebriefTask(null);
+          if (tk) void toggleDone(tk, debrief);
+        }}
+      />
     </div>
   );
 }
@@ -675,6 +694,9 @@ function NewTaskRow({
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [dur, setDur] = useState("");
+  // Effort estimate in hours — the forward projection (§4) and the AI builder's
+  // daily split both read this; the engine derives duration_days from it.
+  const [estHours, setEstHours] = useState("");
   const [status, setStatus] = useState("inbox");
   const [assignee, setAssignee] = useState("");
   const [busy, setBusy] = useState(false);
@@ -688,6 +710,7 @@ function NewTaskRow({
           title_he: title.trim(),
           due_date: due || null,
           duration_days: dur ? Number(dur) : null,
+          estimated_hours: estHours ? Number(estHours) : null,
           status,
           assigned_to_user_id: assignee || null,
           stage_id: stageId,
@@ -720,6 +743,8 @@ function NewTaskRow({
       <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={due} onChange={setDue} />
       <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")} value={dur}
         onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
+      <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("estimatedHours")} value={estHours}
+        onChange={(e) => setEstHours(e.target.value)} title={te("estimatedHours")} />
       <button onClick={save} disabled={busy || !title.trim()}
         className="rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:opacity-50">
         {te("save")}
@@ -756,6 +781,7 @@ function EditTaskRow({
   const [due, setDue] = useState(task.due_date ?? "");
   // dur is the MANUAL override only — blank means "let the engine compute it".
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
+  const [estHours, setEstHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   // Dependency picker value is typed: "task:<id>" or "plan:<id>" (a capability).
@@ -795,6 +821,7 @@ function EditTaskRow({
           // a filled manual duration pins it; otherwise the engine owns it.
           duration_days: dur ? Number(dur) : null,
           duration_manual: !!dur,
+          estimated_hours: estHours ? Number(estHours) : null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -871,10 +898,12 @@ function EditTaskRow({
         </select>
       </div>
 
-      {/* duration in working days */}
+      {/* duration (manual override, working days) + effort estimate (hours) */}
       <div className="flex flex-wrap items-center gap-2">
         <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("durationDays")}
           value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
+        <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("estimatedHours")}
+          value={estHours} onChange={(e) => setEstHours(e.target.value)} title={te("estimatedHours")} />
       </div>
 
       {/* subtasks (checklist) — same editor as the regular tasks desk; persists

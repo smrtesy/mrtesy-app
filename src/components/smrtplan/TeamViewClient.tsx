@@ -8,6 +8,7 @@ import { personLabel } from "@/lib/smrtplan/people";
 import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
 import { TaskZones, type PlanZoneTask } from "./TaskZones";
 import { TaskDetailDialog } from "./TaskDetailDialog";
+import { DebriefDialog, type DebriefPayload } from "@/components/smrttask/tasks/DebriefDialog";
 
 type Member = OrgMember;
 function memberName(m: Member) {
@@ -25,6 +26,7 @@ export function TeamViewClient({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const [debriefTask, setDebriefTask] = useState<PlanZoneTask | null>(null);
   const today = new Date();
 
   // Default the worker picker to the first member once the roster arrives.
@@ -57,10 +59,14 @@ export function TeamViewClient({ locale }: { locale: string }) {
   }, [userId, load]);
 
   // ✓ / un-✓ — the server allows the assignee, full access, or super-admin.
-  async function toggle(id: string, done: boolean) {
+  async function toggle(id: string, done: boolean, debrief?: DebriefPayload) {
+    if (done && !debrief) {
+      const tk = tasks.find((x) => x.id === id);
+      if (tk?.requires_debrief) { setDebriefTask(tk); return; }
+    }
     setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, status: done ? "completed" : "inbox" } : x)));
     try {
-      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done } });
+      await api(`/api/plan-tasks/${id}/done`, { method: "PATCH", body: { done, ...(debrief ? { debrief } : {}) } });
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
@@ -111,6 +117,17 @@ export function TeamViewClient({ locale }: { locale: string }) {
         locale={locale}
         canEdit={canEdit}
         onChanged={() => void load()}
+      />
+
+      <DebriefDialog
+        open={!!debriefTask}
+        taskTitle={debriefTask ? (locale === "en" ? debriefTask.title : debriefTask.title_he || debriefTask.title) : ""}
+        onClose={() => setDebriefTask(null)}
+        onConfirm={(debrief) => {
+          const tk = debriefTask;
+          setDebriefTask(null);
+          if (tk) void toggle(tk.id, true, debrief);
+        }}
       />
     </div>
   );

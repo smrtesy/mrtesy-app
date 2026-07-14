@@ -145,14 +145,37 @@ async function send(
 
   let lastErr: WhatsAppSendError | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${creds.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body,
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body,
+      });
+    } catch (e) {
+      // Network-level failure: undici throws `TypeError: fetch failed` (DNS blip,
+      // connection reset, socket hangup, TLS error reaching graph.facebook.com)
+      // *instead of* returning a Response, so it never carries an HTTP status and
+      // the status-based retry below can't see it. Left unhandled it rejects on
+      // the first blip, aborting the whole conversation turn and paging the
+      // operator with an action_required error for something a retry would clear.
+      // Treat it as transient — back off and retry exactly like a 5xx.
+      const cause = e instanceof Error && e.cause != null ? ` (${String(e.cause)})` : "";
+      const reason = e instanceof Error ? e.message : String(e);
+      // Reason+cause is baked into the message; leave `detail` unset so
+      // errInfo()/formatDetail() (report-error.ts) don't repeat it in the
+      // operator notification.
+      lastErr = new WhatsAppSendError(
+        `שגיאת רשת בשליחה ל‑Meta: ${reason}${cause}. נסה שוב מאוחר יותר.`,
+        0,
+      );
+      if (attempt === MAX_RETRIES) break;
+      await sleep(1000 * Math.pow(2, attempt)); // 1s, 2s, 4s
+      continue;
+    }
 
     if (resp.ok) {
       const json = (await resp.json().catch(() => ({}))) as {

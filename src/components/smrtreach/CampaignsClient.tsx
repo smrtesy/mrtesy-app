@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 import { Loader2, Mail, MessageCircle, Layers, ChevronLeft, BarChart3, Settings, Trash2 } from "lucide-react";
 
 import { api } from "@/lib/api/client";
@@ -172,10 +172,10 @@ export function CampaignsClient() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button asChild variant="ghost" className="gap-2 me-auto">
-          <Link href={`/${locale}/reach/settings`}>
+          <PaneLink href={`/${locale}/reach/settings`}>
             <Settings className="h-4 w-4" />
             {t("settingsLink")}
-          </Link>
+          </PaneLink>
         </Button>
         <Button onClick={toggleDeliverability} variant="outline" className="gap-2" disabled={loadingDeliv}>
           {loadingDeliv ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
@@ -234,7 +234,7 @@ export function CampaignsClient() {
         <ul className="divide-y rounded-lg border">
           {campaigns.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-accent">
-              <Link
+              <PaneLink
                 href={`/${locale}/reach/campaigns/${c.id}`}
                 className="flex min-w-0 flex-1 items-center gap-3"
               >
@@ -242,14 +242,14 @@ export function CampaignsClient() {
                   <ChannelIcon channel={c.channel} />
                 </span>
                 <span className="truncate font-medium">{c.name}</span>
-              </Link>
+              </PaneLink>
               <div className="flex items-center gap-2">
                 <Badge variant="secondary">{t(`status.${c.status}` as Parameters<typeof t>[0])}</Badge>
                 <Button asChild variant="ghost" size="sm" className="gap-1">
-                  <Link href={`/${locale}/reach/campaigns/${c.id}`}>
+                  <PaneLink href={`/${locale}/reach/campaigns/${c.id}`}>
                     <BarChart3 className="h-4 w-4" />
                     <span className="hidden sm:inline">{t("statistics")}</span>
-                  </Link>
+                  </PaneLink>
                 </Button>
                 <Button
                   variant="ghost"

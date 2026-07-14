@@ -22,6 +22,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
+import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
@@ -298,6 +299,185 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
   res.json({ count: count ?? 0 });
 });
 
+// ── day-plan (מהיר·3·1 day-tool) ────────────────────────────────────────────
+// A daily_plans row records the day the user "built": the medium/big picks +
+// the quick load. The nightly rollover closes it out with the completion
+// snapshot (see 20260712130000_daily_plans.sql). Registered BEFORE GET/PATCH
+// /tasks/:id so "day-plan" isn't captured as an :id.
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** GET /tasks/day-plan?date=YYYY-MM-DD — that day's committed plan (or null). */
+router.get("/tasks/day-plan", async (req: Request, res: Response) => {
+  const date = String(req.query.date ?? "");
+  if (!ISO_DATE.test(date)) {
+    return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+  }
+  const { data, error } = await db
+    .from("daily_plans")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .eq("plan_date", date)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data ?? null });
+});
+
+/** POST /tasks/day-plan — upsert today's committed picks.
+ *  Body: { plan_date: "YYYY-MM-DD", picked_task_ids: string[], quick_total: number }.
+ *  Idempotent per (user_id, plan_date): rebuilding the day overwrites the picks
+ *  and quick_total but never the completion counts (only the rollover writes those). */
+router.post("/tasks/day-plan", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const planDate = String(body.plan_date ?? "");
+  if (!ISO_DATE.test(planDate)) {
+    return res.status(400).json({ error: "plan_date must be YYYY-MM-DD" });
+  }
+  const picked = body.picked_task_ids;
+  if (!Array.isArray(picked) || picked.some((id) => typeof id !== "string" || !id)) {
+    return res.status(400).json({ error: "picked_task_ids must be an array of task ids" });
+  }
+  if (picked.length > 100) {
+    return res.status(400).json({ error: "picked_task_ids is limited to 100 entries" });
+  }
+  const quickTotal = body.quick_total;
+  if (typeof quickTotal !== "number" || !Number.isInteger(quickTotal) || quickTotal < 0) {
+    return res.status(400).json({ error: "quick_total must be a non-negative integer" });
+  }
+
+  const { data, error } = await db
+    .from("daily_plans")
+    .upsert(
+      {
+        user_id: req.user!.id,
+        org_id: req.org!.id,
+        plan_date: planDate,
+        picked_task_ids: picked,
+        quick_total: quickTotal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,plan_date" },
+    )
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ plan: data });
+});
+
+// ── work-clock (workclock day-tool) ─────────────────────────────────────────
+// A work_sessions row logs the workday: bounds, worked/paused seconds, per-size
+// breakdown, escalation counts, and how it closed (see
+// 20260714000000_work_sessions.sql). The client drives the live clock off a
+// monotonic started_at and heartbeats here. Registered BEFORE GET/PATCH
+// /tasks/:id so "work-clock" isn't captured as an :id.
+
+/** Coerce a body value to a non-negative integer, or undefined if absent/invalid. */
+function nonNegInt(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
+}
+
+/** GET /tasks/work-clock/today?date=YYYY-MM-DD — that day's session (or null). */
+router.get("/tasks/work-clock/today", async (req: Request, res: Response) => {
+  const date = String(req.query.date ?? "");
+  if (!ISO_DATE.test(date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+  const { data, error } = await db
+    .from("work_sessions")
+    .select("*")
+    .eq("user_id", req.user!.id)
+    .eq("work_date", date)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data ?? null });
+});
+
+/** POST /tasks/work-clock/start — start or resume today's session.
+ *  Body: { work_date: "YYYY-MM-DD" }. Idempotent per (user_id, work_date):
+ *  resuming a closed day reopens the same row (closed_reason→open, ended_at→null)
+ *  and keeps the accumulated seconds. */
+router.post("/tasks/work-clock/start", async (req: Request, res: Response) => {
+  const workDate = String((req.body ?? {}).work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(
+      {
+        user_id: req.user!.id,
+        org_id: req.org!.id,
+        work_date: workDate,
+        closed_reason: "open",
+        ended_at: null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,work_date" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
+/** PATCH /tasks/work-clock — heartbeat: persist the accumulated counters.
+ *  Body: { work_date, worked_seconds?, paused_seconds?, quick_seconds?,
+ *  medium_seconds?, big_seconds?, alerts_soft?, alerts_popup?, alerts_block?,
+ *  ritual_completed? }. Only present, valid fields are written. */
+router.patch("/tasks/work-clock", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const k of [
+    "worked_seconds", "paused_seconds", "quick_seconds", "medium_seconds",
+    "big_seconds", "alerts_soft", "alerts_popup", "alerts_block",
+  ]) {
+    const n = nonNegInt(body[k]);
+    if (n !== undefined) patch[k] = n;
+  }
+  if (typeof body.ritual_completed === "boolean") patch.ritual_completed = body.ritual_completed;
+
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(
+      { user_id: req.user!.id, org_id: req.org!.id, work_date: workDate, ...patch },
+      { onConflict: "user_id,work_date" },
+    )
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
+/** POST /tasks/work-clock/stop — close the day.
+ *  Body: { work_date, reason?: 'manual'|'auto'|'extended', worked_seconds?,
+ *  paused_seconds? }. */
+router.post("/tasks/work-clock/stop", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  const reason = ["manual", "auto", "extended"].includes(body.reason) ? body.reason : "manual";
+
+  const patch: Record<string, unknown> = {
+    user_id: req.user!.id,
+    org_id: req.org!.id,
+    work_date: workDate,
+    ended_at: new Date().toISOString(),
+    closed_reason: reason,
+    updated_at: new Date().toISOString(),
+  };
+  const worked = nonNegInt(body.worked_seconds);
+  const paused = nonNegInt(body.paused_seconds);
+  if (worked !== undefined) patch.worked_seconds = worked;
+  if (paused !== undefined) patch.paused_seconds = paused;
+
+  const { data, error } = await db
+    .from("work_sessions")
+    .upsert(patch, { onConflict: "user_id,work_date" })
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ session: data });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
@@ -481,6 +661,40 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     wasVerified = prior ? prior.manually_verified === true : null;
   }
 
+  // Recurrence edits go through the same COUNT → recurrence_until resolution as
+  // create (POST). PATCH previously skipped this, so an edited "ends after N
+  // occurrences" rule stored a bare COUNT the lazy spawn engine ignores — the
+  // series never terminated. Anchor on the incoming due_date when the same PATCH
+  // sets one; otherwise read the task's current due_date so the Nth occurrence is
+  // computed from the real start. Falls back to today when the task has none.
+  if (typeof updates.recurrence_rule === "string") {
+    let start = typeof updates.due_date === "string" ? updates.due_date : undefined;
+    if (!start) {
+      const { data: cur } = await db
+        .from("tasks")
+        .select("due_date")
+        .eq("organization_id", req.org!.id)
+        .eq("id", req.params.id)
+        .maybeSingle();
+      start = (cur?.due_date as string | null) ?? undefined;
+    }
+    const normalized = normalizeRecurrence(
+      updates.recurrence_rule,
+      start ?? new Date().toISOString().slice(0, 10),
+    );
+    if (normalized) {
+      updates.recurrence_rule = normalized.rule;
+      // Match POST: apply the computed until whenever the caller didn't set an
+      // explicit one. The client sends recurrence_until:null for COUNT ("ends
+      // after N") rules, so `== null` (not `=== undefined`) is required — else
+      // COUNT is stripped from the rule but never converted to an end date and
+      // the series never terminates.
+      if (normalized.until && updates.recurrence_until == null) {
+        updates.recurrence_until = normalized.until;
+      }
+    }
+  }
+
   // Track status_changed_at
   if (updates.status) updates.status_changed_at = new Date().toISOString();
   // A position-only patch (drag-reorder writes today_position to every row of
@@ -493,6 +707,15 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
     // the "returned from snooze" chip — unless the patch sets the chip itself.
     updates.last_interaction_at = updates.updated_at;
     if (!("woke_from_snooze_at" in updates)) updates.woke_from_snooze_at = null;
+  }
+
+  // A generic status-patch into a COMPLETION status is a completion too — enforce
+  // the research-task debrief here as well, so this path can't bypass the gate
+  // (acceptance #1). Completion = completed/archived (smrtTask "completes" to
+  // archived); dismissing/discarding a research task does NOT require a debrief.
+  if (typeof updates.status === "string" && (updates.status === "completed" || updates.status === "archived")) {
+    const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+    if (block) return res.status(block.status).json({ error: block.error });
   }
 
   const { data, error } = await db
@@ -539,6 +762,11 @@ router.delete("/tasks/:id", async (req: Request, res: Response) => {
 /** POST /tasks/:id/complete */
 router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
+  // Research tasks (requires_debrief) can't be closed via the desk path either —
+  // enforce the debrief before the status write (acceptance #1: even via direct
+  // API). No-op for ordinary tasks (requires_debrief defaults false).
+  const block = await enforceDebriefOnComplete(req.org!.id, req.params.id, req.user!.id, req.body ?? {});
+  if (block) return res.status(block.status).json({ error: block.error });
   const { data, error } = await db
     .from("tasks")
     .update({ status: "archived", completed_at: now, status_changed_at: now })

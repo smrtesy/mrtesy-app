@@ -25,6 +25,7 @@ import {
   Archive,
   Send,
   Reply,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -80,6 +81,10 @@ const smrtPlanItems = [
   { key: "planRepository", href: "/plan/repository", icon: Archive       },
 ] as const;
 
+const smrtVaultItems = [
+  { key: "vault", href: "/vault", icon: KeyRound },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
@@ -89,6 +94,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   const hasSmrtReach = enabledApps.includes("smrtreach");
   const hasSmrtBot = enabledApps.includes("smrtbot");
   const hasSmrtPlan = enabledApps.includes("smrtplan");
+  const hasSmrtVault = enabledApps.includes("smrtvault");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -268,6 +274,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
+  if (hasSmrtVault) moreSections.push({ app: APPS.smrtvault, items: [...smrtVaultItems] });
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
@@ -381,6 +388,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             <>
               <AppSectionHeader app={APPS.smrtplan} />
               {smrtPlanItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtVault && (
+            <>
+              <AppSectionHeader app={APPS.smrtvault} />
+              {smrtVaultItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

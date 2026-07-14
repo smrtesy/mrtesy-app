@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
+import { DayToolsSettings } from "@/components/smrttask/settings/DayToolsSettings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +38,7 @@ const MODELS = ["haiku", "sonnet", "opus"] as const;
 
 export default function SettingsParametersPage() {
   const t = useTranslations("settingsParameters");
+  const { appSlug } = useParams() as { appSlug: string };
   const supabase = createClient();
   const [params, setParams] = useState<ParamsRow>(DEFAULTS);
   const [loading, setLoading] = useState(true);
@@ -90,6 +93,8 @@ export default function SettingsParametersPage() {
         <h1 className="text-2xl font-bold">{t("title")}</h1>
         <p className="text-sm text-muted-foreground mt-1">{t("subtitle")}</p>
       </div>
+
+      {appSlug === "smrttask" && <DayToolsSettings />}
 
       <Card>
         <CardHeader className="pb-3">

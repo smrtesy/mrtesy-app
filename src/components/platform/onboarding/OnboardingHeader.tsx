@@ -15,6 +15,14 @@ export function OnboardingHeader({ email }: { email: string }) {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
+    // Wipe SW-cached pages/data so the next user on this device can't replay
+    // this account's shell (mirrors the sign-out in AccountClient).
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      reg?.active?.postMessage("CLEAR_CACHE");
+    } catch {
+      /* no SW (dev or unsupported) — nothing cached to clear */
+    }
     router.push(`/${locale}/login`);
   }
 

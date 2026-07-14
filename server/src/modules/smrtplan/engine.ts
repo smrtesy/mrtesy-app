@@ -30,7 +30,7 @@ const ORG_DEFAULT_HOURS_PER_DAY = 8;
 /** "at risk" threshold — kept in sync with the smrtplan_task_health view. */
 export const AT_RISK_DAYS = 3;
 
-function toISO(d: Date): string {
+export function toISO(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 function parseISO(s: string): Date {
@@ -755,6 +755,184 @@ export async function notifyManagersOfBlockedTasks(orgId: string): Promise<numbe
   return sent;
 }
 
+// ── daily manager alert: missed focus task (docs debrief-enforcement brief §2) ──
+// The end-of-workday hour (local) after which "no focus session logged today"
+// counts as a missed day. Runs from the once-daily refresh (02:00 UTC), so the
+// target day is resolved per performer against their OWN local clock: at/after
+// this hour we evaluate today; before it we evaluate yesterday (the last day
+// that has actually ended for them). This keeps a single daily run correct for
+// both the NY team (02:00 UTC ≈ 22:00 → evaluate today) and Israel-based users
+// (02:00 UTC ≈ 05:00 → evaluate yesterday), with no false morning alerts.
+const FOCUS_ALERT_HOUR = 18;
+// Org default work week when a performer has no personal workdays set (Mon–Fri;
+// same convention as isWorkingDay / src/lib/workdays.ts, day-of-week 0=Sun..6=Sat).
+const DEFAULT_WORKDAYS = [1, 2, 3, 4, 5];
+// How far back the missed-day streak is counted (a safety cap, not a real limit).
+const FOCUS_STREAK_CAP = 60;
+
+/** The performer's local calendar date (YYYY-MM-DD) and hour (0–23) right now. */
+function localDateHour(tz: string): { date: string; hour: number } {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now);
+  const hourStr = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now);
+  const hour = parseInt(hourStr, 10);
+  return { date, hour: Number.isFinite(hour) ? hour : 0 };
+}
+
+/** A personal working day = in the performer's own workday mask AND not a holiday
+ *  (blocked). The mask uses day-of-week 0=Sun..6=Sat; empty/undefined → Mon–Fri. */
+function isPersonalWorkday(dateISO: string, mask: number[] | null | undefined, blocked: Set<string>): boolean {
+  const dow = parseISO(dateISO).getUTCDay();
+  const m = mask && mask.length ? mask : DEFAULT_WORKDAYS;
+  if (!m.includes(dow)) return false;
+  return !blocked.has(dateISO);
+}
+
+/** The calendar date one day before dateISO (YYYY-MM-DD). */
+function prevDate(dateISO: string): string {
+  return toISO(addDays(parseISO(dateISO), -1));
+}
+
+/**
+ * Notify each managed plan's manager when a performer who committed daily focus
+ * to that plan did NOT log/complete a focus session on their most-recently-ended
+ * personal workday. Respects the performer's personal work week and Israeli
+ * holidays (never alerts on a day off), reports the consecutive-missed-day streak,
+ * and dedups to one alert per commitment per (UTC) day. Best-effort, ride the
+ * daily refresh. Recipient = manager_user_id, falling back to owner/creator.
+ */
+export async function notifyManagersOfMissedFocus(orgId: string): Promise<number> {
+  const { data: plans } = await db
+    .from("smrtplan_plans")
+    .select("id, title_he, manager_user_id, owner_user_id, created_by")
+    .eq("org_id", orgId)
+    .eq("status", "active");
+  const planById = new Map(
+    (plans ?? []).map((p) => [
+      p.id as string,
+      {
+        title_he: (p.title_he as string) ?? "",
+        recipient: (p.manager_user_id as string | null) ?? (p.owner_user_id as string | null) ?? (p.created_by as string | null),
+      },
+    ]),
+  );
+  if (planById.size === 0) return 0;
+
+  const { data: focusRows } = await db
+    .from("smrtplan_focus")
+    .select("id, plan_id, user_id, workdays")
+    .eq("org_id", orgId)
+    .eq("active", true)
+    .in("plan_id", [...planById.keys()]);
+  const commitments = (focusRows ?? []) as Record<string, unknown>[];
+  if (commitments.length === 0) return 0;
+
+  const blocked = await loadBlockedDates(orgId);
+
+  // Per-performer timezone (fallback Asia/Jerusalem, matching userLocalToday).
+  const uids = [...new Set(commitments.map((c) => c.user_id as string))];
+  const { data: settings } = await db.from("user_settings").select("user_id, timezone").in("user_id", uids);
+  const tzByUser = new Map<string, string>();
+  for (const s of settings ?? []) {
+    const tz = (s.timezone as string | null) || "";
+    if (tz) tzByUser.set(s.user_id as string, tz);
+  }
+  // Per-performer display name (per-org display_name, fallback to email/generic).
+  const { data: members } = await db.from("org_members").select("user_id, display_name").eq("org_id", orgId).in("user_id", uids);
+  const nameByUser = new Map<string, string>();
+  for (const m of members ?? []) {
+    const dn = (m.display_name as string | null) || "";
+    if (dn) nameByUser.set(m.user_id as string, dn);
+  }
+
+  // Dedup: one focus-miss alert per commitment per UTC day (the job runs once/day).
+  const dayStart = `${toISO(new Date())}T00:00:00.000Z`;
+  const { data: alreadySent } = await db
+    .from("notifications")
+    .select("entity_id")
+    .eq("org_id", orgId)
+    .eq("app_slug", "smrtplan")
+    .eq("entity_type", "focus_miss")
+    .gte("created_at", dayStart);
+  const sentToday = new Set((alreadySent ?? []).map((n) => n.entity_id as string));
+
+  let sent = 0;
+  for (const c of commitments) {
+    const focusId = c.id as string;
+    const planId = c.plan_id as string;
+    const uid = c.user_id as string;
+    const mask = Array.isArray(c.workdays) ? (c.workdays as number[]) : null;
+    const plan = planById.get(planId);
+    if (!plan || !plan.recipient) continue;
+    // Don't nag a manager about their own commitment (self-managed plan).
+    if (plan.recipient === uid) continue;
+    if (sentToday.has(focusId)) continue;
+
+    const tz = tzByUser.get(uid) || "Asia/Jerusalem";
+    const { date: localToday, hour } = localDateHour(tz);
+    const targetDay = hour >= FOCUS_ALERT_HOUR ? localToday : prevDate(localToday);
+
+    // Never alert on a day off / holiday (acceptance #4).
+    if (!isPersonalWorkday(targetDay, mask, blocked)) continue;
+
+    // Sessions that count as "worked": a full session, or one that closed a task.
+    const rangeStart = (() => {
+      let d = targetDay;
+      for (let i = 0; i < FOCUS_STREAK_CAP + 7; i++) d = prevDate(d);
+      return d;
+    })();
+    const { data: sessRows } = await db
+      .from("focus_sessions")
+      .select("session_date, completed_full, tasks_completed")
+      .eq("org_id", orgId)
+      .eq("plan_id", planId)
+      .eq("user_id", uid)
+      .gte("session_date", rangeStart)
+      .lte("session_date", targetDay);
+    const satisfied = new Set<string>();
+    for (const s of sessRows ?? []) {
+      if ((s.completed_full as boolean) === true || Number(s.tasks_completed ?? 0) > 0) {
+        satisfied.add(s.session_date as string);
+      }
+    }
+    // Did they do the target day? Then nothing to alert.
+    if (satisfied.has(targetDay)) continue;
+
+    // Streak = consecutive missed PERSONAL workdays ending at targetDay.
+    let streak = 0;
+    let cursor = targetDay;
+    for (let i = 0; i < FOCUS_STREAK_CAP; i++) {
+      if (isPersonalWorkday(cursor, mask, blocked)) {
+        if (satisfied.has(cursor)) break;
+        streak++;
+      }
+      cursor = prevDate(cursor);
+    }
+
+    let who = nameByUser.get(uid) || "";
+    if (!who) {
+      try {
+        const { data: u } = await db.auth.admin.getUserById(uid);
+        who = (u?.user?.email as string | undefined) || "מבצע";
+      } catch {
+        who = "מבצע";
+      }
+    }
+
+    const streakSuffix = streak > 1 ? ` (${streak} ימי עבודה רצופים)` : "";
+    await notify(orgId, plan.recipient, {
+      app_slug: "smrtplan",
+      type: "warning",
+      title: `לא בוצעה משימת היום: ${who}`,
+      body: `${who} לא סגר/ביצע את משימת הפוקוס בתוכנית "${plan.title_he}" בתאריך ${targetDay}${streakSuffix}`,
+      entity_type: "focus_miss",
+      entity_id: focusId,
+    });
+    sent++;
+  }
+  return sent;
+}
+
 /** Recompute every org that has plans (cron entry point). */
 export async function refreshAll(): Promise<{ orgs: number; scheduled: number }> {
   const { data: orgs } = await db.from("smrtplan_plans").select("org_id");
@@ -766,6 +944,9 @@ export async function refreshAll(): Promise<{ orgs: number; scheduled: number }>
     // Manager alerts ride the daily refresh — best-effort, never fail the job.
     try { await notifyManagersOfBlockedTasks(orgId); }
     catch (e) { console.error("[smrtplan] manager alerts failed:", e); }
+    // Daily missed-focus alert (debrief-enforcement brief §2) — same daily run.
+    try { await notifyManagersOfMissedFocus(orgId); }
+    catch (e) { console.error("[smrtplan] missed-focus alerts failed:", e); }
   }
   return { orgs: uniqueOrgs.length, scheduled };
 }

@@ -10,11 +10,7 @@ import {
   type WorkspaceTab,
 } from "@/contexts/TabsWorkspaceContext";
 
-/** Append the embed flag so the page renders without the app chrome (sidebar,
- *  floating panels) inside the pane — see globals.css `html[data-embed="1"]`. */
-function withEmbed(href: string): string {
-  return href + (href.includes("?") ? "&" : "?") + "embed=1";
-}
+import { PaneHost } from "./PaneHost";
 
 /** Smallest a pane may be dragged to, in pixels. */
 const MIN_PANE_PX = 200;
@@ -200,12 +196,10 @@ export function TabsWorkspace() {
                   <X className="h-3.5 w-3.5" />
                 </button>
               </header>
-              <div className="relative flex-1">
-                <iframe
-                  src={withEmbed(tab.href)}
-                  title={tab.label}
-                  className="h-full w-full border-0"
-                />
+              {/* min-h-0 lets the pane body shrink below its content height so
+                  component panes scroll internally (iframes never pushed back). */}
+              <div className="relative min-h-0 flex-1">
+                <PaneHost tab={tab} />
                 {/* Inactive panes are previews: an overlay swallows clicks and
                     focuses the pane instead of interacting with the iframe. */}
                 {!active && (
@@ -213,7 +207,7 @@ export function TabsWorkspace() {
                     type="button"
                     onClick={() => setActive(tab.id)}
                     aria-label={t("focusPane")}
-                    className="absolute inset-0 cursor-pointer bg-transparent"
+                    className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
               </div>

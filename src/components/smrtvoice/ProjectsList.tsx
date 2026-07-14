@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 import { useTranslations, useLocale } from "next-intl";
 import { Folder, FileText } from "lucide-react";
 
@@ -62,9 +62,9 @@ export function ProjectsList() {
       <Card>
         <CardContent className="p-6 text-center space-y-2">
           <p className="text-muted-foreground">{t("empty")}</p>
-          <Link href={`/${locale}/voice/projects/new`} className="text-primary underline">
+          <PaneLink href={`/${locale}/voice/projects/new`} className="text-primary underline">
             {t("createFirst")}
-          </Link>
+          </PaneLink>
         </CardContent>
       </Card>
     );
@@ -77,12 +77,12 @@ export function ProjectsList() {
           <CardHeader className="flex flex-row items-center justify-between gap-3 pb-2">
             <CardTitle className="text-base flex items-center gap-2 min-w-0">
               <Folder className="h-4 w-4 text-muted-foreground shrink-0" />
-              <Link
+              <PaneLink
                 href={`/${locale}/voice/projects/${f.id}`}
                 className="truncate hover:underline"
               >
                 {f.name}
-              </Link>
+              </PaneLink>
             </CardTitle>
             {f.code_prefix && <Badge variant="secondary">{f.code_prefix}</Badge>}
           </CardHeader>
@@ -91,7 +91,7 @@ export function ProjectsList() {
             {f.scripts.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {f.scripts.map((s) => (
-                  <Link
+                  <PaneLink
                     key={s.id}
                     href={`/${locale}/voice/scripts/${s.id}`}
                     title={s.name ?? s.code}
@@ -99,7 +99,7 @@ export function ProjectsList() {
                   >
                     <FileText className="h-3 w-3 text-muted-foreground" />
                     {s.code}
-                  </Link>
+                  </PaneLink>
                 ))}
               </div>
             )}

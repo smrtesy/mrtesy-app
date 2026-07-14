@@ -11,8 +11,10 @@ import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
+import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
+import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 
 export default async function AppLayout({
   children,
@@ -27,7 +29,17 @@ export default async function AppLayout({
     process.env.NODE_ENV === "development";
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // getClaims() verifies the JWT's signature (locally, via cached JWKS, when
+  // the project uses asymmetric signing keys; via the auth server otherwise)
+  // — so this stays a real auth check but usually skips the network
+  // round-trip the old getUser() paid on every navigation. Note the
+  // middleware matcher skips dotted paths, so this layout cannot assume the
+  // middleware already validated the request.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+  const user = claims?.sub
+    ? { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null }
+    : null;
 
   if (!user && !devBypass) {
     redirect(`/${locale}/login`);
@@ -124,6 +136,7 @@ export default async function AppLayout({
       {/* Reliable fallback for the inline script above (which doesn't always
           execute in the App Router). */}
       <EmbedFlag />
+      <QueryProvider>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
@@ -136,6 +149,9 @@ export default async function AppLayout({
               margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
               swaps the centered page for side-by-side panes when tabs are open. */}
           <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-52">
+            {/* Workclock day-tool bar — a thin strip at the top of the workspace,
+                shown only while a clock session is active/offered. smrtTask only. */}
+            {hasSmrtTask && <WorkClockBar />}
             <TabsArea>{children}</TabsArea>
           </main>
           {hasSmrtTask && (
@@ -146,6 +162,7 @@ export default async function AppLayout({
           )}
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
+      </QueryProvider>
     </div>
   );
 }

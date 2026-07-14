@@ -46,6 +46,28 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // ── Cold-start fast-paths ──────────────────────────────────────────────
+  // A PWA launch on a phone pays a full cellular round-trip per redirect hop,
+  // so collapse the "/" → "/he" → "/he/tasks" chain BEFORE the auth
+  // round-trip below. Auth/session refresh simply happens on the request
+  // that follows the redirect.
+  //
+  // (1) The locale home ("/he", "/en") unconditionally redirects to /tasks —
+  //     mirror of [locale]/page.tsx, one hop earlier.
+  const localeRoot = pathname.match(/^\/(he|en)\/?$/);
+  if (localeRoot) {
+    return NextResponse.redirect(new URL(`/${localeRoot[1]}/tasks`, request.url));
+  }
+  // (2) Root entry with a saved-language cookie: straight to the landing
+  //     page in ONE redirect. A logged-out visitor with a stale cookie just
+  //     bounces /tasks → login, same hop count as before.
+  if (pathname === "/") {
+    const lang = request.cookies.get("smrt_lang_pref")?.value;
+    if (lang === "he" || lang === "en") {
+      return NextResponse.redirect(new URL(`/${lang}/tasks`, request.url));
+    }
+  }
+
   const { orgSlug, isPlatform } = extractSubdomain(host);
 
   // Update Supabase session (mutates request.cookies in place)
@@ -115,8 +137,10 @@ export async function middleware(request: NextRequest) {
       .maybeSingle();
     const pref = settings?.preferred_language;
     if (pref === "he" || pref === "en") {
+      // Root goes straight to the landing page — skips the "/he" → "/he/tasks"
+      // intermediate hop (mirrors the cold-start fast-paths above).
       const target = new URL(
-        `/${pref}${pathname === "/" ? "" : pathname}${request.nextUrl.search}`,
+        `/${pref}${pathname === "/" ? "/tasks" : pathname}${request.nextUrl.search}`,
         request.url,
       );
       const redirectResp = NextResponse.redirect(target);

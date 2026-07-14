@@ -30,6 +30,7 @@ import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/sm
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
+import smrtvaultRouter from "./modules/smrtvault";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -165,6 +166,7 @@ app.use("/api", smrtcrmRouter);
 app.use("/api", smrtreachRouter);
 app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
+app.use("/api", smrtvaultRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
