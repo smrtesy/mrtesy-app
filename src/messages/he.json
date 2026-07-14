@@ -827,8 +827,6 @@
     "noEndDate": "ללא תאריך סיום",
     "untilLabel": "עד {when}",
     "kindEvent": "אירוע",
-    "morningTitle": "בוקר טוב 👋 מתחילים מהנכנס",
-    "morningHint": "עבור על הפריטים אחד-אחד — לכל אחד: בחר להיום · תן תאריך · תייק לפי רמה · זרוק.",
     "remindersSection": "תזכורות",
     "snoozedUntil": "חוזר ב-{when}",
     "unsnooze": "החזר עכשיו",
@@ -1067,7 +1065,22 @@
     "planfocus": {
       "title": "פוקוס תוכנית",
       "desc": "בלוק זמן יומי קבוע על פרויקט מ-smrtPlan, עם סשן פוקוס מתוזמן."
+    },
+    "workclock": {
+      "title": "שעון עבודה",
+      "desc": "יום עבודה מודרך: שעון שרץ כל היום, טקס בוקר, מצב ריצה עם הגבלות זמן, וסגירת יום.",
+      "offerDaily": "הצע לפתוח שעון בכניסה הראשונה של היום"
     }
+  },
+  "workclock": {
+    "offerTitle": "להתחיל שעון עבודה?",
+    "offerStart": "התחל",
+    "offerLater": "לא היום",
+    "dayClock": "שעון היום",
+    "pausedLabel": "מושהה",
+    "resume": "המשך",
+    "pause": "השהה",
+    "stop": "עצור יום"
   },
   "settingsParameters": {
     "title": "פרמטרים של smrtTask",

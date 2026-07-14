@@ -25,7 +25,6 @@ import { api } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
-import { MorningStartBanner } from "@/components/smrttask/suggestions/MorningStart";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 import { LogPageClient } from "@/app/[locale]/(app)/(smrttask)/log/LogPageClient";
@@ -144,7 +143,6 @@ function InboxPane({ locale }: { locale: string }) {
           </div>
         )}
       </div>
-      {hasSmrtTask && <MorningStartBanner />}
       {/* Hold the tabs until the entitlement is known — mounting with
           hasSmrtTask=false and flipping would flash/reset the tab set. The
           query is cached, so reopening the pane renders immediately. On

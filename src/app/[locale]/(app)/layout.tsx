@@ -14,6 +14,7 @@ import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
 import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
+import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 
 export default async function AppLayout({
   children,
@@ -148,6 +149,9 @@ export default async function AppLayout({
               margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
               swaps the centered page for side-by-side panes when tabs are open. */}
           <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-52">
+            {/* Workclock day-tool bar — a thin strip at the top of the workspace,
+                shown only while a clock session is active/offered. smrtTask only. */}
+            {hasSmrtTask && <WorkClockBar />}
             <TabsArea>{children}</TabsArea>
           </main>
           {hasSmrtTask && (
