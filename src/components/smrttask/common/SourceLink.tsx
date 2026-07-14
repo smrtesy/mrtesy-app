@@ -133,7 +133,7 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
           // Close the enclosing modal before navigating so it doesn't linger
           // over the SMS reader (and so its dirty-refresh fires cleanly).
           onNavigate?.();
-          router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}` : `/${locale}/sms`);
+          router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}&ts=${Date.now()}` : `/${locale}/sms`);
         }}
         title={`${label} — open in SMS`}
         className={cn(base, interactive, className)}
