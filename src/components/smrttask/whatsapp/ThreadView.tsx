@@ -1,9 +1,8 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
-import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import Link from "next/link";
+import { PaneLink, useOptionalPaneNav, useScreenSearchParams } from "@/lib/panes/nav";
 import { ArrowLeft, Check, CheckCheck, AlertCircle, Loader2, FileText, Download, Send, SmilePlus, CheckSquare, Mic, MicOff, Sparkles, X, ScanText, Pencil, Reply, ImagePlus, Clock, Search, ChevronUp, ChevronDown, AudioLines, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -1108,7 +1107,8 @@ function ComposeBox({
   onClearImages: () => void;
 }) {
   const t = useTranslations("whatsappPage");
-  const searchParams = useSearchParams();
+  const searchParams = useScreenSearchParams();
+  const paneNav = useOptionalPaneNav();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1131,11 +1131,20 @@ function ComposeBox({
     if (draft) {
       draftConsumedRef.current = true;
       setText(draft);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("draft");
-      window.history.replaceState(null, "", url.toString());
+      if (paneNav) {
+        // Pane mode: the draft lives in the pane's own location, not the
+        // window URL — strip it there so it can't refill.
+        const params = new URLSearchParams(paneNav.location.search);
+        params.delete("draft");
+        const qs = params.toString();
+        paneNav.replace(qs ? `${paneNav.location.pathname}?${qs}` : paneNav.location.pathname);
+      } else {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("draft");
+        window.history.replaceState(null, "", url.toString());
+      }
     }
-  }, [searchParams]);
+  }, [searchParams, paneNav]);
 
   // Prop-driven prefill (side-panel path — no URL param to read). Shares the
   // consume guard with the ?draft= path so neither double-fills the textarea.
@@ -2197,7 +2206,7 @@ const MessageBubble = memo(function MessageBubble({
               const href = taskLinkFor(task, locale);
               const isSuggestion = task.manually_verified === false;
               return (
-                <Link
+                <PaneLink
                   key={task.id}
                   href={href}
                   className={`inline-flex items-center gap-1 self-start rounded-md border px-1.5 py-0.5 text-[10px] transition ${
@@ -2211,7 +2220,7 @@ const MessageBubble = memo(function MessageBubble({
                   <span className="truncate max-w-[200px]">
                     {isSuggestion ? `${t("suggestionPrefix")} ${taskTitle}` : taskTitle}
                   </span>
-                </Link>
+                </PaneLink>
               );
             })}
           </div>

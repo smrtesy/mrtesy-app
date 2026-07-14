@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 import { useLocale, useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
@@ -73,7 +73,7 @@ export function CharactersList() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {characters.map((c) => (
-            <Link key={c.id} href={`/${locale}/voice/characters/${c.id}`}>
+            <PaneLink key={c.id} href={`/${locale}/voice/characters/${c.id}`}>
               <Card className="hover:bg-accent transition-colors">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">{c.display_name ?? c.name}</CardTitle>
@@ -93,7 +93,7 @@ export function CharactersList() {
                   </div>
                 </CardContent>
               </Card>
-            </Link>
+            </PaneLink>
           ))}
         </div>
       )}

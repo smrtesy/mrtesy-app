@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useScreenSearchParams, useScreenRouter, useScreenPathname } from "@/lib/panes/nav";
 import {
   DndContext,
   closestCorners,
@@ -141,9 +141,11 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const t = useTranslations("tasks");
   const tNav = useTranslations("nav");
   const supabase = createClient();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
+  // Pane-aware: inside a tabs-workspace pane these read/write the pane's own
+  // location; as a routed page they are exactly next/navigation.
+  const searchParams = useScreenSearchParams();
+  const router = useScreenRouter();
+  const pathname = useScreenPathname();
   const blocked = useWorkCalendar();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
