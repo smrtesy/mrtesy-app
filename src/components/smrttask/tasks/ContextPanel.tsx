@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import Link from "next/link";
+import { PaneLink } from "@/lib/panes/nav";
 import { Info, ClipboardList, ExternalLink, CheckCircle2, Clock, ArrowLeft, MessageSquarePlus } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -349,14 +349,14 @@ function PlanPanelBody({
         </div>
       )}
 
-      <Link
+      <PaneLink
         href={`/${locale}/plan`}
         className="inline-flex items-center gap-1 text-primary hover:underline"
         onClick={(e) => e.stopPropagation()}
       >
         {t("openBoard")}
         <ExternalLink className="h-3 w-3" />
-      </Link>
+      </PaneLink>
     </>
   );
 }

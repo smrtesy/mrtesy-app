@@ -17,8 +17,16 @@
 
 import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
+import { Plus } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { PaneLink } from "@/lib/panes/nav";
 
 import { LogPageClient } from "@/app/[locale]/(app)/(smrttask)/log/LogPageClient";
+import { TasksPageClient } from "@/components/smrttask/tasks/TasksPageClient";
+import { WhatsAppPageClient } from "@/components/smrttask/whatsapp/WhatsAppPageClient";
+import { SmsPageClient } from "@/components/smrttask/sms/SmsPageClient";
+import { KnowledgeCenter } from "@/components/smrttask/knowledge/KnowledgeCenter";
 import { AutoReplyManager } from "@/components/smrttask/whatsapp/AutoReplyManager";
 import { ContactsClient } from "@/components/smrtcrm/ContactsClient";
 import { CrmManagePanel } from "@/components/smrtcrm/CrmManagePanel";
@@ -26,11 +34,20 @@ import { VaultClient } from "@/components/smrtvault/VaultClient";
 import { PlanBoardClient } from "@/components/smrtplan/PlanBoardClient";
 import { TeamViewClient } from "@/components/smrtplan/TeamViewClient";
 import { PlanRepositoryClient } from "@/components/smrtplan/PlanRepositoryClient";
+import { VoiceNav } from "@/components/smrtvoice/VoiceNav";
+import { ProjectsList } from "@/components/smrtvoice/ProjectsList";
+import { BudgetIndicator } from "@/components/smrtvoice/BudgetIndicator";
+import { CharactersList } from "@/components/smrtvoice/CharactersList";
+import { BotsClient } from "@/components/smrtbot/BotsClient";
+import { CampaignsClient } from "@/components/smrtreach/CampaignsClient";
 
 export type PaneScreen = {
   /** Matched against the locale-stripped pane pathname, e.g. "/plan/team". */
   match: (path: string) => boolean;
   render: (locale: string) => ReactNode;
+  /** Screens that manage their own internal scroll (chat readers) get a
+   *  fixed full-height pane body instead of the padded scroll container. */
+  fullHeight?: boolean;
 };
 
 // ── per-screen wrappers (mirror the route pages) ────────────────────────────
@@ -75,9 +92,93 @@ function VaultPane() {
   );
 }
 
+function TasksPane() {
+  const t = useTranslations("tasks");
+  return <TasksPageClient title={t("title")} />;
+}
+
+function WhatsAppPane() {
+  const t = useTranslations("whatsappPage");
+  return <WhatsAppPageClient title={t("title")} />;
+}
+
+function SmsPane() {
+  const t = useTranslations("smsPage");
+  return <SmsPageClient title={t("title")} />;
+}
+
+function VoicePane({ locale }: { locale: string }) {
+  const t = useTranslations("smrtVoice.folders");
+  return (
+    <div className="p-6 space-y-6">
+      <VoiceNav />
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">{t("title")}</h1>
+          <p className="text-muted-foreground">{t("subtitle")}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <BudgetIndicator />
+          <PaneLink href={`/${locale}/voice/projects/new`}>
+            <Button>
+              <Plus className="w-4 h-4 me-2" />
+              {t("new")}
+            </Button>
+          </PaneLink>
+        </div>
+      </div>
+      <ProjectsList />
+    </div>
+  );
+}
+
+function VoiceCharactersPane() {
+  const t = useTranslations("smrtVoice");
+  return (
+    <div className="p-6 space-y-6">
+      <VoiceNav />
+      <div>
+        <h1 className="text-2xl font-bold">{t("characters.title")}</h1>
+        <p className="text-muted-foreground">{t("characters.subtitle")}</p>
+      </div>
+      <CharactersList />
+    </div>
+  );
+}
+
+function BotsPane() {
+  const t = useTranslations("smrtBot");
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <p className="text-muted-foreground">{t("subtitle")}</p>
+      </div>
+      <BotsClient />
+    </div>
+  );
+}
+
+function ReachPane() {
+  const t = useTranslations("smrtReach");
+  return (
+    <div className="p-6 space-y-8">
+      <div>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <p className="text-muted-foreground">{t("subtitle")}</p>
+      </div>
+      <CampaignsClient />
+    </div>
+  );
+}
+
 // ── registry ────────────────────────────────────────────────────────────────
 
 const PANE_SCREENS: PaneScreen[] = [
+  { match: (p) => p === "/tasks", render: () => <TasksPane /> },
+  { match: (p) => p === "/whatsapp", render: () => <WhatsAppPane />, fullHeight: true },
+  { match: (p) => p === "/sms", render: () => <SmsPane />, fullHeight: true },
+  { match: (p) => p === "/knowledge", render: () => <KnowledgeCenter /> },
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },
   { match: (p) => p === "/vault", render: () => <VaultPane /> },
@@ -88,6 +189,10 @@ const PANE_SCREENS: PaneScreen[] = [
     render: (locale) => <PlanRepositoryClient locale={locale} />,
   },
   { match: (p) => p === "/whatsapp/autoreply", render: () => <AutoReplyManager /> },
+  { match: (p) => p === "/voice", render: (locale) => <VoicePane locale={locale} /> },
+  { match: (p) => p === "/voice/characters", render: () => <VoiceCharactersPane /> },
+  { match: (p) => p === "/bots", render: () => <BotsPane /> },
+  { match: (p) => p === "/reach", render: () => <ReachPane /> },
 ];
 
 export function resolvePaneScreen(path: string): PaneScreen | null {

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { useScreenRouter } from "@/lib/panes/nav";
 import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
@@ -59,7 +60,9 @@ interface SourceLinkProps {
  */
 export function SourceLink({ source, stopPropagation, onNavigate, className }: SourceLinkProps) {
   const openWhatsApp = useOpenWhatsAppChat();
-  const router = useRouter();
+  // Pane-aware: an SMS source inside the /tasks pane swaps that pane
+  // instead of navigating the top window out of the workspace.
+  const router = useScreenRouter();
   const { locale } = useParams() as { locale: string };
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 

@@ -83,13 +83,22 @@ export function PaneHost({ tab }: { tab: WorkspaceTab }) {
   return (
     <div className="h-full w-full overflow-y-auto bg-background">
       <PaneNavProvider value={nav}>
+        {/* Keyed by pathname ONLY: search-param changes (?focus strip, ?draft
+            strip) must update in place — remounting would drop screen state.
+            A different screen in the same pane still gets a fresh boundary. */}
         <PaneErrorBoundary
-          key={`${location.pathname}?${location.search}`}
+          key={location.pathname}
           fallback={(reset) => <PaneError reset={reset} />}
         >
-          {/* Mirrors the embedded-page container: TabsArea's p-4/md:p-6 with
-              the max-width lifted by the data-embed CSS. */}
-          <div className="w-full p-4 md:p-6">{screen.render(locale)}</div>
+          {screen.fullHeight ? (
+            // Chat-style screens: definite height so their h-full resolves,
+            // internal scroll is theirs.
+            <div className="h-full w-full">{screen.render(locale)}</div>
+          ) : (
+            // Mirrors the embedded-page container: TabsArea's p-4/md:p-6 with
+            // the max-width lifted by the data-embed CSS.
+            <div className="w-full p-4 md:p-6">{screen.render(locale)}</div>
+          )}
         </PaneErrorBoundary>
       </PaneNavProvider>
     </div>

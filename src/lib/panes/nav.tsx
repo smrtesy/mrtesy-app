@@ -19,6 +19,7 @@
  */
 
 import { createContext, useContext, useMemo } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 export type PaneLocation = {
@@ -90,14 +91,62 @@ export function useScreenSearchParams(): URLSearchParams {
   );
 }
 
-export function useScreenRouter(): { push: (href: string) => void; replace: (href: string) => void } {
+type ScreenNavOptions = { scroll?: boolean };
+
+// NOTE for consumers: inside a pane the returned router's identity changes on
+// every pane navigation (the context value tracks the location). Effects that
+// depend on it re-run per navigation — guard one-shot effects with a ref or a
+// storage marker (see MorningInboxRedirect / TaskList's focusedRef).
+
+export function useScreenRouter(): {
+  push: (href: string, opts?: ScreenNavOptions) => void;
+  replace: (href: string, opts?: ScreenNavOptions) => void;
+} {
   const pane = useContext(PaneNavContext);
   const router = useRouter();
   return useMemo(
     () =>
       pane
-        ? { push: pane.push, replace: pane.replace }
-        : { push: (href: string) => router.push(href), replace: (href: string) => router.replace(href) },
+        ? // Pane content swaps don't scroll the window — the option is moot.
+          { push: (href: string) => pane.push(href), replace: (href: string) => pane.replace(href) }
+        : {
+            push: (href: string, opts?: ScreenNavOptions) => router.push(href, opts),
+            replace: (href: string, opts?: ScreenNavOptions) => router.replace(href, opts),
+          },
     [pane, router],
+  );
+}
+
+/**
+ * Drop-in replacement for next/link inside screens that can render in a pane.
+ * As a routed page it IS next/link (prefetch and all); inside a pane a plain
+ * navigation would swap the TOP route underneath the workspace — invisible
+ * and confusing — so instead the click swaps this pane's content (falling
+ * back to an iframe when the target isn't in the registry). Modified clicks
+ * (new-tab, middle-click) keep native anchor behavior.
+ */
+export function PaneLink(props: React.ComponentProps<typeof Link>) {
+  const pane = useContext(PaneNavContext);
+  if (!pane) return <Link {...props} />;
+
+  // Strip Link-only props (prefetch/scroll) so they don't land on the <a>.
+  const { href, replace, onClick, ...rest } = props;
+  delete (rest as Record<string, unknown>).prefetch;
+  delete (rest as Record<string, unknown>).scroll;
+  // String hrefs only — the object form keeps just `pathname` (no callers
+  // pass query/hash objects; pass a string if you need them).
+  const target = typeof href === "string" ? href : (href.pathname ?? "/");
+  return (
+    <a
+      {...rest}
+      href={target}
+      onClick={(e) => {
+        onClick?.(e as React.MouseEvent<HTMLAnchorElement>);
+        if (e.defaultPrevented) return;
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        (replace ? pane.replace : pane.push)(target);
+      }}
+    />
   );
 }

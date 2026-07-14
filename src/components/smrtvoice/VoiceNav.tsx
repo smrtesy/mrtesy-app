@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { PaneLink, useScreenPathname } from "@/lib/panes/nav";
 import { useLocale, useTranslations } from "next-intl";
 import { Folder, Users, Library, Lightbulb } from "lucide-react";
 
@@ -12,7 +11,7 @@ import { Folder, Users, Library, Lightbulb } from "lucide-react";
 export function VoiceNav() {
   const t = useTranslations("smrtVoice.nav");
   const locale = useLocale();
-  const pathname = usePathname();
+  const pathname = useScreenPathname();
 
   const items = [
     { href: `/${locale}/voice`, label: t("folders"), Icon: Folder, match: /\/voice$|\/voice\/(projects|scripts)(\/|$)/ },
@@ -26,7 +25,7 @@ export function VoiceNav() {
       {items.map(({ href, label, Icon, match }) => {
         const active = match.test(pathname);
         return (
-          <Link
+          <PaneLink
             key={href}
             href={href}
             className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
@@ -37,7 +36,7 @@ export function VoiceNav() {
           >
             <Icon className="h-4 w-4" />
             {label}
-          </Link>
+          </PaneLink>
         );
       })}
     </nav>
