@@ -1256,7 +1256,10 @@
     "addEmployee": "Add employee",
     "emailSet": "Email saved",
     "noEmailBadge": "No email",
-    "setEmailPlaceholder": "Add login email…"
+    "setEmailPlaceholder": "Add login email…",
+    "projectOnlyToggle": "Project-only worker",
+    "projectOnlyHint": "In smrtTask they see only tasks assigned to them (from a plan or another user) + a read-only plan view. No source connections, inbox, projects or scan.",
+    "projectOnlyBadge": "Project-only"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",
@@ -3113,7 +3116,8 @@
       "inputReopened": "Input reopened",
       "reopenReleased": "Note — {n, plural, one {1 dependent task was already released} other {# dependent tasks were already released}}",
       "reblockAction": "Re-block not-yet-started",
-      "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}"
+      "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}",
+      "viewJournal": "Journal"
     },
     "repository": {
       "title": "Idea repository",
@@ -3225,7 +3229,9 @@
       "actStageMove": "Move stage",
       "actStageAdd": "Add stage",
       "actStageDel": "Delete stage",
-      "stageShort": "Stage"
+      "stageShort": "Stage",
+      "description": "Description / instructions",
+      "descriptionPlaceholder": "What exactly to do — step by step, in plain language"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
@@ -3386,7 +3392,34 @@
       "empty": "No tasks for this worker"
     },
     "zoomIn": "Zoom in",
-    "zoomOut": "Zoom out"
+    "zoomOut": "Zoom out",
+    "journal": {
+      "decisionsBoard": "Decisions board",
+      "decidedCount": "{done}/{total} decisions resolved",
+      "noDecisions": "No decisions in this plan",
+      "decided": "Decided",
+      "researching": "Researching",
+      "notStarted": "Not started",
+      "affects": "{n} tasks depend on it",
+      "outcome": "Outcome",
+      "byDecision": "By decision",
+      "byDay": "By day",
+      "noEntries": "No results or debriefs yet",
+      "ungrouped": "No decision",
+      "workedBest": "What worked best",
+      "trick": "Trick/setting that made the difference",
+      "surprise": "What surprised us",
+      "tool": "Tool",
+      "steps": "What was done",
+      "results": "Results",
+      "scores": "Scores",
+      "reason": "Reason",
+      "sessionLink": "Session link",
+      "ranClaude": "In Claude",
+      "ranExternal": "External tool",
+      "ranBoth": "Claude + external",
+      "ranNone": "No experiment"
+    }
   },
   "smrtVault": {
     "title": "Password Vault",

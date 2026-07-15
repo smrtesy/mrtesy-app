@@ -20,7 +20,7 @@ import { DailyPulse } from "./DailyPulse";
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
+  "id" | "title" | "title_he" | "description" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 type Member = OrgMember;
@@ -782,6 +782,7 @@ function EditTaskRow({
   // dur is the MANUAL override only — blank means "let the engine compute it".
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
   const [estHours, setEstHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
+  const [fDescription, setFDescription] = useState(task.description ?? "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   // Dependency picker value is typed: "task:<id>" or "plan:<id>" (a capability).
@@ -822,6 +823,7 @@ function EditTaskRow({
           duration_days: dur ? Number(dur) : null,
           duration_manual: !!dur,
           estimated_hours: estHours ? Number(estHours) : null,
+          description: fDescription.trim() || null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -904,6 +906,19 @@ function EditTaskRow({
           value={dur} onChange={(e) => setDur(e.target.value)} title={te("durationDays")} />
         <input type="number" min={0} step={0.5} className={`${fieldCls} w-40`} placeholder={te("estimatedHours")}
           value={estHours} onChange={(e) => setEstHours(e.target.value)} title={te("estimatedHours")} />
+      </div>
+
+      {/* description / instructions — shown next to the checklist so the doer
+          sees WHAT to do, not just the step titles */}
+      <div className="space-y-1">
+        <div className="text-[11px] font-bold text-muted-foreground">{te("description")}</div>
+        <textarea
+          value={fDescription}
+          onChange={(e) => setFDescription(e.target.value)}
+          placeholder={te("descriptionPlaceholder")}
+          rows={4}
+          className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-[12.5px] leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
       </div>
 
       {/* subtasks (checklist) — same editor as the regular tasks desk; persists

@@ -1256,7 +1256,10 @@
     "addEmployee": "הוסף עובד",
     "emailSet": "האימייל נשמר",
     "noEmailBadge": "ללא אימייל",
-    "setEmailPlaceholder": "הוסף אימייל לכניסה…"
+    "setEmailPlaceholder": "הוסף אימייל לכניסה…",
+    "projectOnlyToggle": "עובד פרויקטים בלבד",
+    "projectOnlyHint": "רואה ב-smrtTask רק משימות שהוקצו לו (מפלאן או ממשתמש אחר) + צפייה בתוכנית. בלי חיבור מקורות, תיבה, פרויקטים או סריקה.",
+    "projectOnlyBadge": "פרויקטים בלבד"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",
@@ -3112,7 +3115,8 @@
       "inputReopened": "הקלט נפתח מחדש",
       "reopenReleased": "שים לב — {n, plural, one {משימה אחת שממשיכה ממנה כבר שוחררה} other {# משימות שממשיכות ממנה כבר שוחררו}}",
       "reblockAction": "חסום מחדש את שטרם התחילו",
-      "reblocked": "{n, plural, =0 {אין משימות לחסימה מחדש — כולן כבר בעבודה או הושלמו} one {משימה אחת נחסמה מחדש} other {# משימות נחסמו מחדש}}"
+      "reblocked": "{n, plural, =0 {אין משימות לחסימה מחדש — כולן כבר בעבודה או הושלמו} one {משימה אחת נחסמה מחדש} other {# משימות נחסמו מחדש}}",
+      "viewJournal": "יומן"
     },
     "repository": {
       "title": "מאגר הרעיונות",
@@ -3224,7 +3228,9 @@
       "actStageMove": "הזזת שלב",
       "actStageAdd": "הוספת שלב",
       "actStageDel": "מחיקת שלב",
-      "stageShort": "שלב"
+      "stageShort": "שלב",
+      "description": "תיאור / הוראות",
+      "descriptionPlaceholder": "מה בדיוק צריך לעשות במשימה — צעד אחר צעד, בשפה פשוטה"
     },
     "gantt": {
       "connectHint": "לחץ על אייקון הקישור במשימה, ואז על משימה אחרת — כדי לצייר חץ תלות.",
@@ -3385,7 +3391,34 @@
       "empty": "אין משימות לעובד הזה"
     },
     "zoomIn": "הגדל",
-    "zoomOut": "הקטן"
+    "zoomOut": "הקטן",
+    "journal": {
+      "decisionsBoard": "לוח החלטות",
+      "decidedCount": "{done}/{total} החלטות הוכרעו",
+      "noDecisions": "אין החלטות בתוכנית",
+      "decided": "הוכרע",
+      "researching": "במחקר",
+      "notStarted": "טרם התחיל",
+      "affects": "{n} משימות תלויות",
+      "outcome": "התוצאה",
+      "byDecision": "לפי החלטה",
+      "byDay": "לפי יום",
+      "noEntries": "עדיין אין תוצאות ותחקירים",
+      "ungrouped": "ללא החלטה",
+      "workedBest": "מה עבד הכי טוב",
+      "trick": "הטריק/ההגדרה שעשו את ההבדל",
+      "surprise": "מה הפתיע לרעה",
+      "tool": "כלי",
+      "steps": "מה נעשה",
+      "results": "תוצאות",
+      "scores": "ציונים",
+      "reason": "סיבה",
+      "sessionLink": "קישור לסשן",
+      "ranClaude": "בקלוד",
+      "ranExternal": "כלי חיצוני",
+      "ranBoth": "קלוד + חיצוני",
+      "ranNone": "לא נערך ניסוי"
+    }
   },
   "smrtVault": {
     "title": "כספת סיסמאות",

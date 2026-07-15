@@ -15,10 +15,11 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 // ── types ──────────────────────────────────────────────────────────────────
 

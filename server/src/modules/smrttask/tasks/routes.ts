@@ -19,11 +19,12 @@
  */
 
 import { Router } from "express";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { enforceDebriefOnComplete } from "../../smrtplan/debrief";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { attachTaskAccess, requireFullTask } from "../lib/access";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
 import { nextOccurrence, isValidRecurrenceRule, normalizeRecurrence } from "./recurrence";
@@ -52,7 +53,43 @@ function utcInstantForLocalHour(dateStr: string, hour: number, tz: string): Date
 }
 
 // Every task route requires auth + active org + smrtTask enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+// attachTaskAccess resolves req.taskAccess ("full" | "lite") once for the whole
+// router so list filtering + the per-:id ownership guard below can read it.
+router.use(requireAuth, requireOrg, requireApp("smrttask"), attachTaskAccess);
+
+// GET /tasks/access — the caller's smrtTask access level. Deliberately NOT
+// behind requireFullTask: a lite (project-only) worker must be able to read
+// their own level (the web onboarding gate and UI use it to hide the full-app
+// surface). Registered before the /tasks/:id routes so "access" isn't an :id.
+router.get("/tasks/access", (req: Request, res: Response) => {
+  res.json({ access_level: req.taskAccess ?? "full" });
+});
+
+// Per-:id ownership guard for project-only workers. router.param fires only on
+// routes that carry an `:id` param (so static routes like /tasks/day-plan are
+// unaffected), and only does work for "lite" users — "full" users short-circuit
+// with zero extra queries. A lite user may only act on a task assigned to them;
+// anything else (incl. source-messages/:id, which reuses `:id`) returns 404.
+router.param("id", (req: Request, res: Response, next: NextFunction, id: string) => {
+  if (req.taskAccess !== "lite") return next();
+  void (async () => {
+    try {
+      const { data, error } = await db
+        .from("tasks")
+        .select("assigned_to_user_id")
+        .eq("organization_id", req.org!.id)
+        .eq("id", id)
+        .maybeSingle();
+      if (error) return res.status(500).json({ error: error.message });
+      if (!data || data.assigned_to_user_id !== req.user!.id) {
+        return res.status(404).json({ error: "task not found" });
+      }
+      next();
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  })();
+});
 
 // ── fields whitelisted for PATCH ───────────────────────────────────────────
 const UPDATABLE_FIELDS = new Set([
@@ -268,6 +305,9 @@ router.get("/tasks", async (req: Request, res: Response) => {
     .eq("organization_id", req.org!.id);
 
   q = applyTaskFilters(q, req.query, req.user!.id);
+  // Project-only workers only ever see tasks assigned to them (from a plan or by
+  // another user/manager) — enforced here, not left to an optional filter.
+  if (req.taskAccess === "lite") q = q.eq("assigned_to_user_id", req.user!.id);
   // Hide tasks of draft (not-yet-approved) smrtPlan plans. Ordinary tasks have a
   // null plan_id, so the null branch keeps them (a bare not-in would drop nulls).
   const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
@@ -290,6 +330,7 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
     .select("id", { count: "exact", head: true })
     .eq("organization_id", req.org!.id);
   q = applyTaskFilters(q, req.query, req.user!.id);
+  if (req.taskAccess === "lite") q = q.eq("assigned_to_user_id", req.user!.id);
   const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
   const draftIds = (draftPlans ?? []).map((p) => p.id as string);
   if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
@@ -493,7 +534,7 @@ router.get("/tasks/:id", async (req: Request, res: Response) => {
 });
 
 /** POST /tasks — create manual task */
-router.post("/tasks", async (req: Request, res: Response) => {
+router.post("/tasks", requireFullTask, async (req: Request, res: Response) => {
   const body = req.body ?? {};
   if (!body.title || typeof body.title !== "string") {
     return res.status(400).json({ error: "title is required" });
@@ -572,7 +613,7 @@ router.post("/tasks", async (req: Request, res: Response) => {
  *  NOTE: registered BEFORE PATCH /tasks/:id — Express matches routes in
  *  registration order, so this must come first or "reorder" is captured
  *  as an :id. */
-router.patch("/tasks/reorder", async (req: Request, res: Response) => {
+router.patch("/tasks/reorder", requireFullTask, async (req: Request, res: Response) => {
   const items = req.body?.items;
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "items must be a non-empty array" });
@@ -747,7 +788,7 @@ router.patch("/tasks/:id", async (req: Request, res: Response) => {
 });
 
 /** DELETE /tasks/:id */
-router.delete("/tasks/:id", async (req: Request, res: Response) => {
+router.delete("/tasks/:id", requireFullTask, async (req: Request, res: Response) => {
   const { error, count } = await db
     .from("tasks")
     .delete({ count: "exact" })
@@ -1232,7 +1273,7 @@ ${recent || "(אין עדכונים)"}
  *   [{ action_label: "project_cluster", clustered_task_ids: [...], keywords: [...], key_contacts: [...] }]
  */
 router.post("/tasks/:id/approve-as-project",
-  async (req: Request, res: Response) => {
+  requireFullTask, async (req: Request, res: Response) => {
     const { data: task, error: tErr } = await db
       .from("tasks")
       .select("id, title, title_he, task_type, ai_generated_content")
@@ -1438,7 +1479,7 @@ function resolveSender(
  *  picked this reason. The UI fetches this when the user selects a
  *  cascading reason so we can show "+5 other suggestions from this sender".
  *  Non-cascading codes return cascade_count=0 unconditionally. */
-router.get("/tasks/:id/dismiss-preview", async (req: Request, res: Response) => {
+router.get("/tasks/:id/dismiss-preview", requireFullTask, async (req: Request, res: Response) => {
   const reasonCode = String(req.query.reason_code ?? "");
   if (!CASCADING_CODES.has(reasonCode)) {
     return res.json({ cascade_count: 0, cascade_trigger: null });
@@ -1492,7 +1533,7 @@ router.get("/tasks/:id/dismiss-preview", async (req: Request, res: Response) => 
  *  When cascade=true (default for cascading codes) all OTHER pending
  *  suggestions from the same sender are archived in the same call.
  */
-router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
+router.post("/tasks/:id/dismiss", requireFullTask, async (req: Request, res: Response) => {
   const reasonCode = (req.body?.reason_code ?? "") as string;
   const reasonText = typeof req.body?.reason_text === "string" ? req.body.reason_text.trim() : "";
   const cascadeRequested = req.body?.cascade !== false;  // default true; pass false to opt out
@@ -1738,7 +1779,7 @@ router.post("/tasks/:id/dismiss", async (req: Request, res: Response) => {
  *  Archive a single suggestion with NO learning, NO LLM, NO cascade. The UI's
  *  unannotated X button uses this when the user just wants the item out of
  *  their inbox without spending tokens or producing a rule. */
-router.post("/tasks/:id/dismiss-fast", async (req: Request, res: Response) => {
+router.post("/tasks/:id/dismiss-fast", requireFullTask, async (req: Request, res: Response) => {
   const { data: task, error: tErr } = await db
     .from("tasks")
     .select("id")
@@ -1774,7 +1815,7 @@ router.post("/tasks/:id/dismiss-fast", async (req: Request, res: Response) => {
  *  Body: { task_ids: string[] }
  *  Marks each task in the active org as manually_verified=true and stamps
  *  seen_at. Used by the suggestion list's bulk-action toolbar. */
-router.post("/tasks/bulk-approve", async (req: Request, res: Response) => {
+router.post("/tasks/bulk-approve", requireFullTask, async (req: Request, res: Response) => {
   const ids = Array.isArray(req.body?.task_ids) ? (req.body.task_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
 
@@ -1812,7 +1853,7 @@ router.post("/tasks/bulk-approve", async (req: Request, res: Response) => {
  *  Body: { task_ids: string[] }
  *  Same semantics as dismiss-fast but for a batch — archives without
  *  learning, cascading, or LLM calls. */
-router.post("/tasks/bulk-dismiss-fast", async (req: Request, res: Response) => {
+router.post("/tasks/bulk-dismiss-fast", requireFullTask, async (req: Request, res: Response) => {
   const ids = Array.isArray(req.body?.task_ids) ? (req.body.task_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
 
@@ -1992,7 +2033,7 @@ If the subject is too generic to extract a useful keyword (e.g. "Notification", 
  *  in an editable input so the user can correct a bad guess before
  *  committing to a rule.
  */
-router.get("/tasks/:id/narrow-dismiss-propose", async (req: Request, res: Response) => {
+router.get("/tasks/:id/narrow-dismiss-propose", requireFullTask, async (req: Request, res: Response) => {
   const { data: task, error: tErr } = await db
     .from("tasks")
     .select("id, user_id, title_he, title, description, related_contact, source_message_id, source_messages(source_type, sender_email, sender_phone, sender, subject, body_text)")
