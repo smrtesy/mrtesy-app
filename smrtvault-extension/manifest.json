@@ -22,6 +22,13 @@
   },
   "options_page": "options.html",
   "permissions": ["cookies", "storage", "alarms", "scripting", "activeTab", "notifications"],
-  "host_permissions": ["https://*.smrtesy.com/*", "https://*.supabase.co/*"],
-  "optional_host_permissions": ["https://*/*"]
+  "host_permissions": ["https://*.smrtesy.com/*", "https://*.supabase.co/*", "https://claude.ai/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/code/*"],
+      "js": ["claude-capture.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
