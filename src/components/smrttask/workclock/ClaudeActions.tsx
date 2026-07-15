@@ -48,8 +48,11 @@ export function ClaudeActions({ dir }: { dir: "rtl" | "ltr" }) {
   }
 
   function reopen(a: CAction) {
-    const url = a.session_url || CLAUDE_URL;
-    if (claudeWindow && !claudeWindow.closed && !a.session_url) claudeWindow.focus();
+    // Only ever open a claude.ai https link — session_url arrives from the
+    // extension (an external source), so never trust it into window.open
+    // verbatim (a javascript:/data: URL would be an injection).
+    const url = a.session_url && /^https:\/\/(www\.)?claude\.ai\//i.test(a.session_url) ? a.session_url : CLAUDE_URL;
+    if (claudeWindow && !claudeWindow.closed && url === CLAUDE_URL) claudeWindow.focus();
     else claudeWindow = window.open(url, "smrtesy-claude", POPUP);
   }
 
