@@ -25,6 +25,58 @@ file is active and that the rules apply (project matching, table
 preview, no DB writes without explicit approval). Do not invoke
 that flow unless the trigger phrase is present at the start.
 
+## smrtTask session proposals (Stop hook)
+
+**Requirement:** every Claude Code chat in this repo must leave a trace in
+smrtTask. When a chat here stops, a "הצעה" (proposal) is filed into the
+user's smrtTask inbox summarizing the session: the topic discussed, where it
+happened (repo / branch), a verbatim deep link back to the web chat, and a
+proposed next step to close the discussion/action.
+
+This is enforced by a **`Stop` hook**, not by Claude remembering to do it —
+the harness runs the hook on every turn-end, so it fires reliably even if the
+session ends abruptly. Claude following a CLAUDE.md line alone would be
+best-effort; the hook is the real mechanism. Moving parts:
+
+- **`.claude/settings.json`** → `hooks.Stop` runs
+  `.claude/hooks/smrttask-session-proposal.sh`.
+- **`.claude/hooks/smrttask-session-proposal.sh`** — fully guarded,
+  fire-and-forget wrapper. Reads the hook JSON on stdin, builds the request
+  body, and POSTs it detached so it never delays or fails a turn. Exits 0
+  silently whenever `CRON_SECRET` (or `node`/`curl`) is missing.
+- **`.claude/hooks/build-session-proposal.mjs`** — derives everything from the
+  environment: `session_id`/`session_url` from `CLAUDE_CODE_REMOTE_SESSION_ID`
+  (`cse_<slug>` → `https://claude.ai/code/session_<slug>`), `user_email` from
+  `CLAUDE_CODE_USER_EMAIL`, `git_branch` from `.git/HEAD`, and a compact
+  transcript from `transcript_path`.
+- **`POST /api/claude-session/proposal`** (server
+  `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
+  the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
+  JWT). Resolves the user → primary org → smrttask entitlement, summarizes the
+  transcript with Haiku, and **upserts one task per session** keyed by the tag
+  `claude-session:<session_id>` (`task_type: "followup"`, `status: "inbox"`,
+  `priority: "low"`, `manually_verified: false`, the deep link in
+  `action_links`). Repeated Stop calls refresh the same task's content; a
+  status the user changed (archived/dismissed) is never overwritten.
+
+**Provisioning (one-time):** the endpoint lives on the **Express backend
+(Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
+`/api/claude-session` route and would 404). Set two things in the Claude Code
+environment, copying the values from the Railway backend's service variables:
+- the shared secret — `SMRTBOT_INTERNAL_SECRET` (or `CRON_SECRET`). The backend
+  accepts either (`process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET`);
+  Railway currently provisions `SMRTBOT_INTERNAL_SECRET`, so copy that value.
+- the backend base URL — `SMRTESY_BACKEND_URL`, set to the value of the
+  backend's `SMRTESY_PUBLIC_URL` (same as the app's `NEXT_PUBLIC_BACKEND_URL`,
+  e.g. `https://<app>.up.railway.app`); the hook builds
+  `…/api/claude-session/proposal` from it. Or set the full
+  `SMRTTASK_PROPOSAL_URL` directly.
+
+There is no baked-in URL default on purpose (a wrong host silently 404s every
+turn). A missing secret **or** URL makes the hook a silent no-op. The backend
+also hard-fails the auth check when neither secret env var is set, so an unset
+secret can never leave the route open.
+
 ## Push target — main by default
 
 The user has standing authorization to push fixes directly to `main` once the
