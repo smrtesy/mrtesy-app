@@ -11,6 +11,7 @@ import {
   useWorkClock, workedSeconds, activeSeconds, escalationOf, isRitual,
   RITUAL_ORDER, type WorkClockPhase, type Escalation,
 } from "@/hooks/useWorkClock";
+import { ClaudeActions } from "./ClaudeActions";
 
 /**
  * The workclock bar — a thin strip at the top of the workspace, shown only
@@ -224,6 +225,7 @@ export function WorkClockBar() {
 
         {!ritual && (
           <div className="ms-auto flex items-center gap-1.5">
+            <ClaudeActions dir={dir} />
             {closeState === "remind" && !closeExtended && (
               <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                 <Moon className="h-3 w-3" />{t("closeRemind")}

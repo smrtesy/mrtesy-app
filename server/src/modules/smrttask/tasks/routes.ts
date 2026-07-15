@@ -589,6 +589,72 @@ router.get("/tasks/work-clock/insights", async (req: Request, res: Response) => 
   });
 });
 
+// ── claude-actions (workclock phase 5) ──────────────────────────────────────
+const CLAUDE_STATUSES = ["open", "running", "waiting", "done", "failed"];
+
+/** GET /tasks/claude-actions — the user's active (open/running/waiting) actions,
+ *  newest first. Pass ?all=1 for the full recent list. */
+router.get("/tasks/claude-actions", async (req: Request, res: Response) => {
+  let q = db.from("claude_actions").select("*").eq("user_id", req.user!.id);
+  if (req.query.all !== "1") q = q.in("status", ["open", "running", "waiting"]);
+  const { data, error } = await q.order("updated_at", { ascending: false }).limit(50);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ actions: data ?? [] });
+});
+
+/** POST /tasks/claude-actions — record/refresh a Claude launch.
+ *  Body: { title?, session_url?, status?, task_id? }. When session_url matches an
+ *  existing open-ish row it is updated (the extension refreshing a live session);
+ *  otherwise a new row is inserted (the bar opening Claude). */
+router.post("/tasks/claude-actions", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const status = CLAUDE_STATUSES.includes(body.status) ? body.status : "open";
+  const sessionUrl = typeof body.session_url === "string" && body.session_url ? body.session_url : null;
+  const title = typeof body.title === "string" ? body.title.slice(0, 200) : null;
+  const taskId = typeof body.task_id === "string" && body.task_id ? body.task_id : null;
+
+  if (sessionUrl) {
+    const { data: existing } = await db
+      .from("claude_actions").select("id")
+      .eq("user_id", req.user!.id).eq("session_url", sessionUrl)
+      .in("status", ["open", "running", "waiting"])
+      .maybeSingle();
+    if (existing) {
+      const { data, error } = await db
+        .from("claude_actions")
+        .update({ status, ...(title ? { title } : {}), updated_at: new Date().toISOString() })
+        .eq("id", existing.id).eq("user_id", req.user!.id)
+        .select("*").single();
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ action: data });
+    }
+  }
+
+  const { data, error } = await db
+    .from("claude_actions")
+    .insert({ user_id: req.user!.id, org_id: req.org!.id, task_id: taskId, title, session_url: sessionUrl, status })
+    .select("*").single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ action: data });
+});
+
+/** PATCH /tasks/claude-actions/:id — update status / pr_url / session_url. */
+router.patch("/tasks/claude-actions/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (CLAUDE_STATUSES.includes(body.status)) patch.status = body.status;
+  if (typeof body.pr_url === "string") patch.pr_url = body.pr_url;
+  if (typeof body.session_url === "string") patch.session_url = body.session_url;
+  if (typeof body.title === "string") patch.title = body.title.slice(0, 200);
+  const { data, error } = await db
+    .from("claude_actions")
+    .update(patch).eq("id", req.params.id).eq("user_id", req.user!.id)
+    .select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "action not found" });
+  res.json({ action: data });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
