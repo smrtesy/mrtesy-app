@@ -7,15 +7,28 @@
 #
 # Required env (set these in the Claude Code environment):
 #   CRON_SECRET             shared secret, identical to the backend's CRON_SECRET
-# Optional env:
-#   SMRTTASK_PROPOSAL_URL   endpoint (default: https://app.smrtesy.com/api/claude-session/proposal)
+#   and ONE of the endpoint locators:
+#     SMRTTASK_PROPOSAL_URL   full endpoint URL, OR
+#     SMRTESY_BACKEND_URL     the Express backend base (same value as the app's
+#                             NEXT_PUBLIC_BACKEND_URL, e.g. https://<app>.up.railway.app)
+#
+# NOTE: the endpoint lives on the Express backend (Railway), NOT on the Next.js
+# app at app.smrtesy.com — that host has no /api/claude-session route. There is
+# deliberately no baked-in default: a wrong host would silently 404 every turn.
 set -uo pipefail
 
-URL="${SMRTTASK_PROPOSAL_URL:-https://app.smrtesy.com/api/claude-session/proposal}"
 SECRET="${CRON_SECRET:-}"
+if [ -n "${SMRTTASK_PROPOSAL_URL:-}" ]; then
+  URL="$SMRTTASK_PROPOSAL_URL"
+elif [ -n "${SMRTESY_BACKEND_URL:-}" ]; then
+  URL="${SMRTESY_BACKEND_URL%/}/api/claude-session/proposal"
+else
+  URL=""
+fi
 
-# No secret → feature not provisioned in this environment. Do nothing, quietly.
+# Not provisioned in this environment → do nothing, quietly.
 [ -z "$SECRET" ] && exit 0
+[ -z "$URL" ] && exit 0
 command -v node >/dev/null 2>&1 || exit 0
 command -v curl >/dev/null 2>&1 || exit 0
 

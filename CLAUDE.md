@@ -59,10 +59,19 @@ best-effort; the hook is the real mechanism. Moving parts:
   `action_links`). Repeated Stop calls refresh the same task's content; a
   status the user changed (archived/dismissed) is never overwritten.
 
-**Provisioning (one-time):** the hook needs `CRON_SECRET` set in the Claude
-Code environment (identical to the backend's value); optionally override the
-endpoint with `SMRTTASK_PROPOSAL_URL`. Without `CRON_SECRET` present the hook
-is a silent no-op — it never errors.
+**Provisioning (one-time):** the endpoint lives on the **Express backend
+(Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
+`/api/claude-session` route and would 404). The hook needs two things set in
+the Claude Code environment:
+- `CRON_SECRET` — identical to the backend's value.
+- the backend base URL — `SMRTESY_BACKEND_URL` (same value as the app's
+  `NEXT_PUBLIC_BACKEND_URL`, e.g. `https://<app>.up.railway.app`), from which
+  the hook builds `…/api/claude-session/proposal`. Or set the full
+  `SMRTTASK_PROPOSAL_URL` directly.
+
+There is no baked-in URL default on purpose (a wrong host silently 404s every
+turn). Missing `CRON_SECRET` **or** a missing URL makes the hook a silent
+no-op — it never errors.
 
 ## Push target — main by default
 
