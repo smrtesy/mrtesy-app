@@ -15,6 +15,7 @@ import actionsRouter from "./routes/actions";
 import eventsRouter from "./routes/events";
 import knowledgeRouter from "./routes/knowledge";
 import syncRouter from "./routes/sync";
+import claudeSessionRouter from "./routes/claude-session";
 import whatsappViewRouter from "./routes/whatsapp-view";
 import smsRouter from "./routes/sms";
 import routerRouter from "./routes/router";
@@ -38,6 +39,8 @@ router.use("/actions", actionsRouter);
 router.use(eventsRouter);
 router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);
+// Machine-to-machine (x-cron-secret): Claude Code Stop hook files session proposals.
+router.use(claudeSessionRouter);
 // Authenticated read API powering /[locale]/whatsapp.
 router.use(whatsappViewRouter);
 // Authenticated SMS device-connection API (webhook lives on the Next.js side).
