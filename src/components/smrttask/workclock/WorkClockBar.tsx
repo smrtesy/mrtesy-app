@@ -29,7 +29,7 @@ export function WorkClockBar() {
   const router = useRouter();
   const {
     enabled, config, state, showOffer,
-    start, advance, pause, resume, stop, dismissOffer, clearActiveTask, bumpAlert,
+    start, advance, pause, resume, stop, restart, dismissOffer, clearActiveTask, bumpAlert,
   } = useWorkClock();
 
   const [, setTick] = useState(0);
@@ -87,10 +87,20 @@ export function WorkClockBar() {
   const [popupAcked, setPopupAcked] = useState(false);
   const [blockSnoozeUntil, setBlockSnoozeUntil] = useState(0);
 
+  // Render nothing until mounted (localStorage-hydrated state must match the
+  // server-rendered null), and never inside a workspace pane / iframe — the
+  // settings screen loads the whole app layout in an iframe pane, which would
+  // otherwise duplicate the bar inside that tab.
   const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const [embedded, setEmbedded] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+    try {
+      setEmbedded(window.self !== window.top || document.documentElement.getAttribute("data-embed") === "1");
+    } catch { setEmbedded(true); }
+  }, []);
 
-  if (!enabled || !mounted) return null;
+  if (!enabled || !mounted || embedded) return null;
 
   if (showOffer) {
     return (
@@ -102,6 +112,25 @@ export function WorkClockBar() {
         </Button>
         <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" onClick={dismissOffer}>
           {t("offerLater")}
+        </Button>
+      </div>
+    );
+  }
+
+  // Stopped for the day but still on screen — a quiet "ready" bar the user can
+  // run again from (not vanished).
+  if (state.phase === "stopped") {
+    return (
+      <div dir={dir} className="flex items-center gap-3 border-b bg-muted/20 px-4 py-1.5 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="grid h-6 w-6 place-items-center rounded-md bg-muted text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" />
+          </span>
+          <span className="font-mono text-[15px] font-semibold tabular-nums text-muted-foreground" dir="ltr">{fmtHMS(state.dayTotalSeconds)}</span>
+          <span className="text-[10px] font-medium text-muted-foreground/70">{t("stoppedLabel")}</span>
+        </div>
+        <Button size="sm" className="ms-auto h-8 gap-1.5" onClick={restart}>
+          <Play className="h-3.5 w-3.5" />{t("startAgain")}
         </Button>
       </div>
     );

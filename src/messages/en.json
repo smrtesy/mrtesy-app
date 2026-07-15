@@ -1081,6 +1081,8 @@
     "resume": "Resume",
     "pause": "Pause",
     "stop": "Stop day",
+    "stoppedLabel": "Day stopped",
+    "startAgain": "Start again",
     "stepBadge": "Step {n} of 3",
     "stepInbox": "Check the inbox — review all suggestions",
     "stepPlan": "Plan your day — 3 medium + 1 big",
