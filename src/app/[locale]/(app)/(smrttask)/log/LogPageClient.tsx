@@ -17,6 +17,7 @@ const sourceIcons: Record<string, string> = {
   google_drive: "📁",
   google_calendar: "📅",
   sms: "📱",
+  sms_echo: "📱",
 };
 
 const processingBadge: Record<string, { variant: "default" | "secondary" | "outline"; key: string }> = {
@@ -213,6 +214,9 @@ export function LogPageClient({ locale }: { locale: string }) {
     if (sourceFilter !== "all") {
       if (sourceFilter === "whatsapp") {
         query = query.in("source_type", ["whatsapp", "whatsapp_echo"]);
+      } else if (sourceFilter === "sms") {
+        // The SMS filter covers both two-party threads and self-notes (sms_echo).
+        query = query.in("source_type", ["sms", "sms_echo"]);
       } else {
         query = query.eq("source_type", sourceFilter);
       }
