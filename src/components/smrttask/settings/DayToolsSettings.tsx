@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { DAY_TOOLS, resolveTool } from "@/lib/smrttask/day-tools";
 import { useDayTools } from "@/hooks/useDayTools";
+import { WorkClockInsights } from "@/components/smrttask/workclock/WorkClockInsights";
 
 /**
  * "כלי היום" settings section — one quiet toggle row per day-tool. Per-tool
@@ -69,6 +70,7 @@ export function DayToolsSettings() {
                       aria-label={t("workclock.offerDaily")}
                     />
                   </div>
+                  <WorkClockInsights />
                 </div>
               )}
             </div>

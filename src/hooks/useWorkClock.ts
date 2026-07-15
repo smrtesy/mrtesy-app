@@ -185,10 +185,23 @@ function isActive(phase: WorkClockPhase): boolean {
   return isRitual(phase) || phase === "running" || phase === "paused";
 }
 
-/** Close the current active-task span into its size accumulator. */
+/** Close the current active-task span into its size accumulator, and log the
+ *  span to the server for the learning view (fire-and-forget). */
 function flushActiveSpan() {
   if (state.activeTaskId == null || state.activeTaskSize == null || state.activeStartedAt == null) return {};
   const secs = activeSeconds(state, Date.now());
+  if (secs > 0) {
+    api("/api/tasks/work-clock/span", {
+      method: "POST",
+      body: {
+        work_date: state.workDate,
+        task_id: state.activeTaskId,
+        size: state.activeTaskSize,
+        seconds: secs,
+        ended_at: new Date().toISOString(),
+      },
+    }).catch(() => {});
+  }
   const key = state.activeTaskSize === "quick" ? "quickSeconds" : state.activeTaskSize === "medium" ? "mediumSeconds" : "bigSeconds";
   return { [key]: (state[key as "quickSeconds"] as number) + secs } as Partial<WorkClockState>;
 }

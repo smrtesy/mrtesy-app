@@ -519,6 +519,61 @@ router.post("/tasks/work-clock/stop", async (req: Request, res: Response) => {
   res.json({ session: data });
 });
 
+/** POST /tasks/work-clock/span — record one closed active-task span (workclock
+ *  phase 4). Body: { work_date, task_id?, size, seconds, started_at?, ended_at? }. */
+router.post("/tasks/work-clock/span", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  if (!["quick", "medium", "big"].includes(body.size)) return res.status(400).json({ error: "size must be quick|medium|big" });
+  const seconds = nonNegInt(body.seconds);
+  if (seconds === undefined) return res.status(400).json({ error: "seconds must be a non-negative integer" });
+  if (seconds === 0) return res.json({ ok: true }); // nothing to log
+
+  const { error } = await db.from("work_task_spans").insert({
+    user_id: req.user!.id,
+    org_id: req.org!.id,
+    work_date: workDate,
+    task_id: typeof body.task_id === "string" && body.task_id ? body.task_id : null,
+    size: body.size,
+    seconds,
+    started_at: typeof body.started_at === "string" ? body.started_at : null,
+    ended_at: typeof body.ended_at === "string" ? body.ended_at : null,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/** GET /tasks/work-clock/insights — learning summary over the last N days:
+ *  average worked day length, per-size averages, day count. */
+router.get("/tasks/work-clock/insights", async (req: Request, res: Response) => {
+  const days = Math.min(90, Math.max(1, parseInt(String(req.query.days ?? "30"), 10) || 30));
+  const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+
+  const { data: sessions, error: sErr } = await db
+    .from("work_sessions")
+    .select("worked_seconds, quick_seconds, medium_seconds, big_seconds, alerts_soft, alerts_popup, alerts_block, closed_reason")
+    .eq("user_id", req.user!.id)
+    .gte("work_date", since);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  const rows = sessions ?? [];
+  const closed = rows.filter((r) => r.closed_reason !== "open");
+  const n = closed.length || 1;
+  const sum = (f: (r: typeof rows[number]) => number) => closed.reduce((a, r) => a + (f(r) || 0), 0);
+
+  res.json({
+    days,
+    sessions: closed.length,
+    avg_worked_seconds: Math.round(sum((r) => r.worked_seconds) / n),
+    total_worked_seconds: sum((r) => r.worked_seconds),
+    avg_quick_seconds: Math.round(sum((r) => r.quick_seconds) / n),
+    avg_medium_seconds: Math.round(sum((r) => r.medium_seconds) / n),
+    avg_big_seconds: Math.round(sum((r) => r.big_seconds) / n),
+    alerts: { soft: sum((r) => r.alerts_soft), popup: sum((r) => r.alerts_popup), block: sum((r) => r.alerts_block) },
+  });
+});
+
 /** GET /tasks/:id */
 router.get("/tasks/:id", async (req: Request, res: Response) => {
   const { data, error } = await db
