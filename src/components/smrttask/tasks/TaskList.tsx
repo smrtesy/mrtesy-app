@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { useDayTool } from "@/hooks/useDayTools";
+import { useWorkClock } from "@/hooks/useWorkClock";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -185,6 +186,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const m131Enabled = method131.enabled;
   const mediumQuota = typeof method131.config.medium_quota === "number" ? method131.config.medium_quota : 3;
   const bigQuota = typeof method131.config.big_quota === "number" ? method131.config.big_quota : 1;
+  // Workclock run mode: opening a task starts its clock (no-op unless a clock
+  // session is running); completing the active task stops it (§9.5).
+  const workClock = useWorkClock();
 
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
@@ -561,6 +565,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   async function runToggleDone(task: Task, done: boolean, decision?: string, debrief?: DebriefPayload) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
+    // Completing the workclock's active task stops its clock (§9.5).
+    if (done && workClock.state.activeTaskId === task.id) workClock.clearActiveTask();
     if (done) optimisticRemove(task.id);
     try {
       if (done) {
@@ -705,6 +711,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
     setSelectedTask({ ...task, seen_at: task.seen_at ?? nowIso, has_unread_update: false, woke_from_snooze_at: null });
     setDetailOpen(true);
+    // Run mode: the opened task becomes the active one (its clock starts).
+    const size = task.size === "quick" || task.size === "big" ? task.size : "medium";
+    workClock.setActiveTask(task.id, size, locale === "he" && task.title_he ? task.title_he : task.title);
   }
 
   function handleQuickAction(taskId: string, action: { label: string; prompt: string }) {

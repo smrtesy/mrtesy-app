@@ -549,6 +549,98 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
   res.json({ tasks: plan?.kind === "roster" ? await attachPlanTitles(req.org!.id, enriched) : enriched });
 });
 
+// ── plan journal: decision board + test debriefs (grouped by day / decision) ─
+// Read-only. Assembles three views from EXISTING data (no new table):
+//  · decisions   — the plan's is_decision tasks with state + affected count + outcome
+//  · entries     — every recorded debrief (the results Claude logged + the doer's
+//                  report), each tagged with the date and the decision it feeds
+// The client shows the decision board on top and toggles entries by day / by decision.
+router.get("/plans/:id/journal", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const planId = req.params.id;
+
+  const { data: taskRows, error } = await db
+    .from("tasks")
+    .select("id, title, title_he, status, is_decision, definition_of_done, affected_by, completed_at")
+    .eq("organization_id", orgId)
+    .eq("plan_id", planId);
+  if (error) return res.status(500).json({ error: error.message });
+  const tasks = taskRows ?? [];
+  const byId = new Map<string, (typeof tasks)[number]>(tasks.map((t) => [t.id as string, t]));
+  const ids = tasks.map((t) => t.id as string);
+
+  const { data: debriefRows, error: dErr } = await db
+    .from("task_debriefs")
+    .select("task_id, user_id, conducted_in, answers, created_at")
+    .eq("org_id", orgId)
+    .in("task_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]);
+  if (dErr) return res.status(500).json({ error: dErr.message });
+  const debriefs = debriefRows ?? [];
+
+  const { data: depRows, error: depErr } = await db
+    .from("smrtplan_dependencies")
+    .select("from_id, to_id")
+    .eq("org_id", orgId)
+    .eq("from_type", "task")
+    .eq("to_type", "task");
+  if (depErr) return res.status(500).json({ error: depErr.message });
+  // prereq (to_id) → tasks that depend on it (from_id)
+  const dependents = new Map<string, string[]>();
+  for (const d of depRows ?? []) {
+    const arr = dependents.get(d.to_id as string) ?? [];
+    arr.push(d.from_id as string);
+    dependents.set(d.to_id as string, arr);
+  }
+  // Forward BFS: the nearest is_decision task downstream of (or equal to) a task.
+  const decisionOf = (taskId: string): string | null => {
+    const seen = new Set<string>();
+    const queue: string[] = [taskId];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (!cur || seen.has(cur)) continue;
+      seen.add(cur);
+      if (byId.get(cur)?.is_decision) return cur;
+      for (const nxt of dependents.get(cur) ?? []) if (!seen.has(nxt)) queue.push(nxt);
+    }
+    return null;
+  };
+
+  const debriefByTask = new Map<string, (typeof debriefs)[number]>(debriefs.map((d) => [d.task_id as string, d]));
+  const decisions = tasks
+    .filter((t) => t.is_decision)
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      title_he: t.title_he,
+      status: t.status,
+      definition_of_done: t.definition_of_done,
+      affected_count: tasks.filter(
+        (x) => Array.isArray(x.affected_by) && (x.affected_by as string[]).includes(t.id as string),
+      ).length,
+      decided: t.status === "completed" || t.status === "archived",
+      decided_at: t.completed_at,
+      outcome: debriefByTask.get(t.id as string)?.answers ?? null,
+    }));
+
+  const entries = debriefs
+    .map((d) => {
+      const t = byId.get(d.task_id as string);
+      return {
+        task_id: d.task_id,
+        title: t?.title ?? null,
+        title_he: t?.title_he ?? null,
+        date: d.created_at,
+        user_id: d.user_id,
+        conducted_in: d.conducted_in,
+        answers: d.answers,
+        decision_id: decisionOf(d.task_id as string),
+      };
+    })
+    .sort((a, b) => (String(a.date) < String(b.date) ? 1 : -1));
+
+  res.json({ decisions, entries });
+});
+
 // ── dependency candidates: any org task (cross-plan) + capabilities ──────────
 // Powers the dependency picker so a task can depend on a task in ANOTHER plan,
 // or on a whole capability (a reusable tool plan). The caller filters out the

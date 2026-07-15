@@ -28,5 +28,18 @@
       "mcp__Supabase__list_organizations",
       "mcp__Supabase__execute_sql"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/smrttask-session-proposal.sh"
+          }
+        ]
+      }
+    ]
   }
 }
