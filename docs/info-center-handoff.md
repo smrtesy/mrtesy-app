@@ -31,9 +31,17 @@
 | **Supabase MCP** | list_tables, בדיקת סכמה, יצירת מיגרציה, בדיקת RLS | project ref: `exjnlghuzuvqedlltztz` |
 | (אופציונלי) Gmail/Drive MCP | רק אם רוצים לבדוק חילוץ על נתונים חיים | לא חובה לבנייה עצמה |
 
-> הרשאת הרצת מיגרציה על פרודקשן: לפי CLAUDE.md, **לא** מריצים `apply_migration` על
-> פרודקשן בלי אישור מפורש. הסשן ייצור קובץ מיגרציה תחת `supabase/migrations/` ואתה
-> תריץ אותו (Supabase CLI) או תיתן אישור מפורש.
+> **הרשאת הרצת מיגרציה (אישור קבוע מהמשתמש):** סשן הבנייה **מורשה להריץ בעצמו** את
+> מיגרציות smrtInfo (`apply_migration`) — **אחרי בדיקה ואימות**, בשלושה שלבים:
+> 1. **בדיקה לפני:** לקרוא את ה-SQL ולוודא שהוא אידמפוטנטי (`IF NOT EXISTS`), ש-RLS
+>    נכון (אישי לפי `user_id`, ארגוני לחברי הארגון), ושאין פעולה הרסנית על טבלה קיימת.
+> 2. **הרצה:** `apply_migration` (מותר כבר ב-`allow` של `.claude/settings.json`).
+> 3. **אימות אחרי:** `list_tables`/`execute_sql` שהטבלה+האינדקס+הפונקציה נוצרו ו-RLS
+>    פעיל, ולהריץ `get_advisors` (security+performance). **אם האימות נכשל — לעצור
+>    ולדווח, לא להמשיך.**
+>
+> הקובץ תמיד נשמר תחת `supabase/migrations/` (forward-only). ההרשאה הזו מוגבלת
+> למיגרציות smrtInfo; שאר המיגרציות במערכת נשארות תחת כלל האישור המפורש של CLAUDE.md.
 
 ---
 
@@ -54,8 +62,13 @@
 ---
 
 ## 4. הגדרות סביבה (Claude Code on the web)
-- **מדיניות רשת:** לאפשר יציאת HTTPS ל-npm registry (הבנייה מריצה
-  `npm install && npm run build`). Node לפי `.node-version` שב-repo.
+- **SessionStart hook — כבר מוגדר בענף:** `.claude/hooks/session-start.sh` מריץ
+  `npm install` אוטומטית בתחילת כל סשן web (מזוהה דרך `CLAUDE_CODE_REMOTE`), כך
+  שה-build/lint מוכנים מיד. סינכרוני (הסשן ממתין לסיום ההתקנה); ניתן להפוך ל-async
+  לזמן-עלייה מהיר יותר. **דורש שהענף עם ה-hook יהיה בסביבה** (הוא כבר על
+  `claude/org-info-center-tl52qy`).
+- **מדיניות רשת:** לאפשר יציאת HTTPS ל-npm registry (ה-hook + הבנייה מריצים
+  `npm install`/`npm run build`). Node לפי `.node-version` שב-repo (20).
 - **פרוטוקול pre-push:** נאכף אוטומטית דרך `CLAUDE.md` — build אמיתי (`npm run build`,
   לא רק tsc), greps, סוכן-review. אין צורך להזכיר לו; הוא יקרא.
 - **Edge functions:** אם החילוץ נכנס ל-`ai-process` (Deno) — **deploy ידני**
