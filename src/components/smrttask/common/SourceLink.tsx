@@ -15,6 +15,7 @@ const SOURCE_ICONS: Record<string, typeof Mail> = {
   whatsapp:        MessageCircle,
   whatsapp_echo:   MessageCircle,
   sms:             MessageSquare,
+  sms_echo:        MessageSquare,
   google_drive:    FolderOpen,
   google_calendar: Calendar,
 };
@@ -123,7 +124,8 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
 
   // SMS sources open the in-app SMS reader on the matching conversation, not the
   // native sms: link. The peer is stored verbatim in source_url as `sms:<peer>`.
-  if (row.source_type === "sms") {
+  // sms_echo (self-notes) carry `sms:<own number>` and open the same reader.
+  if (row.source_type === "sms" || row.source_type === "sms_echo") {
     const peer = (row.source_url ?? "").startsWith("sms:") ? (row.source_url as string).slice(4) : "";
     return (
       <button
