@@ -25,6 +25,45 @@ file is active and that the rules apply (project matching, table
 preview, no DB writes without explicit approval). Do not invoke
 that flow unless the trigger phrase is present at the start.
 
+## smrtTask session proposals (Stop hook)
+
+**Requirement:** every Claude Code chat in this repo must leave a trace in
+smrtTask. When a chat here stops, a "הצעה" (proposal) is filed into the
+user's smrtTask inbox summarizing the session: the topic discussed, where it
+happened (repo / branch), a verbatim deep link back to the web chat, and a
+proposed next step to close the discussion/action.
+
+This is enforced by a **`Stop` hook**, not by Claude remembering to do it —
+the harness runs the hook on every turn-end, so it fires reliably even if the
+session ends abruptly. Claude following a CLAUDE.md line alone would be
+best-effort; the hook is the real mechanism. Moving parts:
+
+- **`.claude/settings.json`** → `hooks.Stop` runs
+  `.claude/hooks/smrttask-session-proposal.sh`.
+- **`.claude/hooks/smrttask-session-proposal.sh`** — fully guarded,
+  fire-and-forget wrapper. Reads the hook JSON on stdin, builds the request
+  body, and POSTs it detached so it never delays or fails a turn. Exits 0
+  silently whenever `CRON_SECRET` (or `node`/`curl`) is missing.
+- **`.claude/hooks/build-session-proposal.mjs`** — derives everything from the
+  environment: `session_id`/`session_url` from `CLAUDE_CODE_REMOTE_SESSION_ID`
+  (`cse_<slug>` → `https://claude.ai/code/session_<slug>`), `user_email` from
+  `CLAUDE_CODE_USER_EMAIL`, `git_branch` from `.git/HEAD`, and a compact
+  transcript from `transcript_path`.
+- **`POST /api/claude-session/proposal`** (server
+  `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
+  the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
+  JWT). Resolves the user → primary org → smrttask entitlement, summarizes the
+  transcript with Haiku, and **upserts one task per session** keyed by the tag
+  `claude-session:<session_id>` (`task_type: "followup"`, `status: "inbox"`,
+  `priority: "low"`, `manually_verified: false`, the deep link in
+  `action_links`). Repeated Stop calls refresh the same task's content; a
+  status the user changed (archived/dismissed) is never overwritten.
+
+**Provisioning (one-time):** the hook needs `CRON_SECRET` set in the Claude
+Code environment (identical to the backend's value); optionally override the
+endpoint with `SMRTTASK_PROPOSAL_URL`. Without `CRON_SECRET` present the hook
+is a silent no-op — it never errors.
+
 ## Push target — main by default
 
 The user has standing authorization to push fixes directly to `main` once the
