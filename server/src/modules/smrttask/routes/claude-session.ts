@@ -166,12 +166,25 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
 
   // 3. Upsert by the dedup tag. Refresh content only; never touch a status the
   // user changed (archived/dismissed proposals stay put).
-  const { data: existing } = await db
+  //
+  // The Stop hook fires at every turn-end via a detached POST, so a fast reply
+  // can race turn N's still-running insert against turn N+1's lookup. Two
+  // guards keep that from cascading into unbounded duplicates:
+  //   - `.limit(1)` so a transient duplicate can't turn maybeSingle() into a
+  //     "multiple rows" error that (previously, unhandled) made `existing` null
+  //     and forced yet another insert every turn;
+  //   - always bind + check `findErr` and bail without inserting on any error.
+  // We also order by created_at so we consistently reuse the earliest row —
+  // any duplicate a genuine race created is absorbed (updated), not grown.
+  const { data: existing, error: findErr } = await db
     .from("tasks")
     .select("id, status")
     .eq("organization_id", orgId)
     .contains("tags", [dedupTag])
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
 
   if (existing) {
     const { data: updated, error } = await db
