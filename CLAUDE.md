@@ -61,17 +61,21 @@ best-effort; the hook is the real mechanism. Moving parts:
 
 **Provisioning (one-time):** the endpoint lives on the **Express backend
 (Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
-`/api/claude-session` route and would 404). The hook needs two things set in
-the Claude Code environment:
-- `CRON_SECRET` — identical to the backend's value.
-- the backend base URL — `SMRTESY_BACKEND_URL` (same value as the app's
-  `NEXT_PUBLIC_BACKEND_URL`, e.g. `https://<app>.up.railway.app`), from which
-  the hook builds `…/api/claude-session/proposal`. Or set the full
+`/api/claude-session` route and would 404). Set two things in the Claude Code
+environment, copying the values from the Railway backend's service variables:
+- the shared secret — `SMRTBOT_INTERNAL_SECRET` (or `CRON_SECRET`). The backend
+  accepts either (`process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET`);
+  Railway currently provisions `SMRTBOT_INTERNAL_SECRET`, so copy that value.
+- the backend base URL — `SMRTESY_BACKEND_URL`, set to the value of the
+  backend's `SMRTESY_PUBLIC_URL` (same as the app's `NEXT_PUBLIC_BACKEND_URL`,
+  e.g. `https://<app>.up.railway.app`); the hook builds
+  `…/api/claude-session/proposal` from it. Or set the full
   `SMRTTASK_PROPOSAL_URL` directly.
 
 There is no baked-in URL default on purpose (a wrong host silently 404s every
-turn). Missing `CRON_SECRET` **or** a missing URL makes the hook a silent
-no-op — it never errors.
+turn). A missing secret **or** URL makes the hook a silent no-op. The backend
+also hard-fails the auth check when neither secret env var is set, so an unset
+secret can never leave the route open.
 
 ## Push target — main by default
 

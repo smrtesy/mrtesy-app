@@ -102,7 +102,15 @@ async function resolveUserId(userId?: string, email?: string): Promise<string | 
 }
 
 router.post("/claude-session/proposal", async (req: Request, res: Response) => {
-  if (req.headers["x-cron-secret"] !== process.env.CRON_SECRET) {
+  // Shared machine-to-machine secret. Accept SMRTBOT_INTERNAL_SECRET as well as
+  // CRON_SECRET — the same fallback the rest of this codebase's internal
+  // endpoints use (smrtbot/internal.ts, smrtplan/jobs.ts, …), and the value
+  // that is actually provisioned on the backend. Require it to be SET: comparing
+  // a header against an undefined env var would let an empty header through
+  // (`undefined !== undefined` is false), so an unset secret must hard-fail, not
+  // silently open the route.
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
