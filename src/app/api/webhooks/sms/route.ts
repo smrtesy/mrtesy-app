@@ -589,12 +589,34 @@ async function refreshSmsSourceThread(
 }
 
 /**
+ * Do two phone numbers identify the same line? Compares digits only, so
+ * "+1 929-333-0248" and "19293330248" match. Falls back to a national-suffix
+ * compare (last 9 digits) when the two are stored in different formats — a
+ * local "050…" vs an international "97250…" — but ONLY for real phone numbers
+ * (≥10 digits), so a 5–6 digit short code can never collide with the user's
+ * own number on a shared tail.
+ */
+function numbersMatch(a: string, b: string): boolean {
+  const aD = a.replace(/\D/g, "");
+  const bD = b.replace(/\D/g, "");
+  if (!aD || !bD) return false;
+  if (aD === bD) return true;
+  if (aD.length >= 10 && bD.length >= 10) {
+    return aD.endsWith(bD.slice(-9)) || bD.endsWith(aD.slice(-9));
+  }
+  return false;
+}
+
+/**
  * The device's own phone line, used to recognise a self-note (the user texting
  * their own number as a task-capture channel). Learned from the `recipient`
  * field of any INCOMING sms — that is the device's receiving line — and cached
  * on the connection so an OUTGOING self-note (which carries no self identifier
- * of its own) can still be matched. Returns null until at least one incoming
- * message has taught us the number.
+ * of its own) can still be matched. When the very first message on a fresh
+ * connection is an outgoing self-note (no incoming recipient to read), we fall
+ * back to the device number recorded on the most recent prior INCOMING sms, so
+ * detection works from the first note as long as any inbound SMS was ever seen.
+ * Returns null only when the number has never been observed.
  */
 async function resolveOwnNumber(
   db: SupabaseAdmin,
@@ -615,8 +637,23 @@ async function resolveOwnNumber(
   const stored = String(data?.display_phone_number ?? "").trim();
   if (stored) return stored;
 
-  const learned = String(incomingRecipient ?? "").trim();
+  let learned = String(incomingRecipient ?? "").trim();
+  // Cold-start fallback: an outgoing-first self-note carries no self identifier,
+  // so read the device's own receiving line from a prior incoming message.
+  if (!learned) {
+    const { data: recent } = await db
+      .from("sms_messages")
+      .select("to_phone")
+      .eq("user_id", userId)
+      .eq("direction", "incoming")
+      .not("to_phone", "is", null)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    learned = String(recent?.to_phone ?? "").trim();
+  }
   if (!learned) return null;
+
   // Cache it, but only fill a NULL column — never overwrite a user-set value.
   const { error: updErr } = await db
     .from("sms_connections")
@@ -640,7 +677,6 @@ async function resolveOwnNumber(
 async function emitSmsSelfNote(
   db: SupabaseAdmin,
   userId: string,
-  messageId: string,
   body: string,
   receivedAt: string,
   ownNumber: string,
@@ -656,13 +692,19 @@ async function emitSmsSelfNote(
     `[OUTGOING ${ts}] ${text}`,
   ].join("\n").slice(0, 3000);
 
-  // ignoreDuplicates so a gateway re-delivery of the same messageId is a no-op
-  // (mirrors the whatsapp_echo per-message upsert).
+  // Key the row on the message CONTENT, not its provider messageId. Texting your
+  // own number can be delivered TWICE — once as the observed sent-box row and
+  // once as the carrier loopback into the inbox — with two different provider
+  // ids. Both carry the identical body, so a content hash collapses the pair to
+  // ONE row (ignoreDuplicates below no-ops the second). Distinct notes — even
+  // several fired within the same second/minute — have distinct bodies and so
+  // stay separate, which a time-bucket key would wrongly have merged.
+  const bodyKey = crypto.createHash("sha1").update(text).digest("hex").slice(0, 16);
   const { error } = await db.from("source_messages").upsert(
     {
       user_id: userId,
       source_type: "sms_echo",
-      source_id: `sms:self:${messageId}`,
+      source_id: `sms:self:${bodyKey}`,
       sender: ownNumber,
       sender_email: null,
       subject: "פתק SMS",
@@ -677,7 +719,7 @@ async function emitSmsSelfNote(
       // wrongly snooze a self-note (technically an outgoing message). chatId is
       // set for source_url/debug parity only — threadKey returns null for
       // sms_echo, so it never keys thread memory or matter routing.
-      metadata: { chatId: ownNumber, peerPhone: ownNumber, channel: "sms", messageId, isSelfNote: true },
+      metadata: { chatId: ownNumber, peerPhone: ownNumber, channel: "sms", isSelfNote: true },
     },
     { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
   );
@@ -748,10 +790,9 @@ async function ingestSms(
   //    the newest) and get ONE immutable sms_echo row per message — each its own
   //    task, exactly like whatsapp_echo.
   const ownNumber = await resolveOwnNumber(db, userId, deviceId, isIncoming ? (payload.recipient ?? null) : null);
-  const onlyDigits = (s: string) => s.replace(/\D/g, "");
-  const isSelfNote = !!ownNumber && onlyDigits(peer).length > 0 && onlyDigits(peer) === onlyDigits(ownNumber);
+  const isSelfNote = !!ownNumber && numbersMatch(peer, ownNumber);
   if (isSelfNote) {
-    await emitSmsSelfNote(db, userId, messageId, body, receivedAt, ownNumber!);
+    await emitSmsSelfNote(db, userId, body, receivedAt, ownNumber!);
     return { outcome: "ingested", reason: "self_note", direction, messageId, peer, bodyPreview: body };
   }
 
