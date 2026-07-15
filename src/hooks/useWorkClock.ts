@@ -302,6 +302,9 @@ export function useWorkClock(): UseWorkClock {
     const now = Date.now();
     const worked = workedSeconds(state, now);
     const paused = state.pausedSeconds;
+    // Log the final active-task span before we drop the anchors (otherwise the
+    // day's last span never lands in work_task_spans). Side-effect only.
+    flushActiveSpan();
     // Final flush: persist the per-size totals incl. the live span (the stop
     // route only takes worked/paused, so send the size breakdown as a last
     // heartbeat first). Both upsert the same row on distinct columns.

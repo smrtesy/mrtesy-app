@@ -562,14 +562,29 @@ router.get("/tasks/work-clock/insights", async (req: Request, res: Response) => 
   const n = closed.length || 1;
   const sum = (f: (r: typeof rows[number]) => number) => closed.reduce((a, r) => a + (f(r) || 0), 0);
 
+  // Per-TASK size averages come from the granular span log (work_sessions only
+  // has per-day size totals). AVG(seconds) grouped by size.
+  const { data: spans, error: spErr } = await db
+    .from("work_task_spans")
+    .select("size, seconds")
+    .eq("user_id", req.user!.id)
+    .gte("work_date", since);
+  if (spErr) return res.status(500).json({ error: spErr.message });
+  const spanRows = spans ?? [];
+  const avgSize = (sz: string) => {
+    const rs = spanRows.filter((r) => r.size === sz);
+    if (!rs.length) return 0;
+    return Math.round(rs.reduce((a, r) => a + (r.seconds || 0), 0) / rs.length);
+  };
+
   res.json({
     days,
     sessions: closed.length,
     avg_worked_seconds: Math.round(sum((r) => r.worked_seconds) / n),
     total_worked_seconds: sum((r) => r.worked_seconds),
-    avg_quick_seconds: Math.round(sum((r) => r.quick_seconds) / n),
-    avg_medium_seconds: Math.round(sum((r) => r.medium_seconds) / n),
-    avg_big_seconds: Math.round(sum((r) => r.big_seconds) / n),
+    avg_quick_seconds: avgSize("quick"),
+    avg_medium_seconds: avgSize("medium"),
+    avg_big_seconds: avgSize("big"),
     alerts: { soft: sum((r) => r.alerts_soft), popup: sum((r) => r.alerts_popup), block: sum((r) => r.alerts_block) },
   });
 });
