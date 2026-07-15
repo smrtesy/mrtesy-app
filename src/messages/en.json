@@ -3099,7 +3099,8 @@
       "inputReopened": "Input reopened",
       "reopenReleased": "Note — {n, plural, one {1 dependent task was already released} other {# dependent tasks were already released}}",
       "reblockAction": "Re-block not-yet-started",
-      "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}"
+      "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}",
+      "viewJournal": "Journal"
     },
     "repository": {
       "title": "Idea repository",
@@ -3374,7 +3375,34 @@
       "empty": "No tasks for this worker"
     },
     "zoomIn": "Zoom in",
-    "zoomOut": "Zoom out"
+    "zoomOut": "Zoom out",
+    "journal": {
+      "decisionsBoard": "Decisions board",
+      "decidedCount": "{done}/{total} decisions resolved",
+      "noDecisions": "No decisions in this plan",
+      "decided": "Decided",
+      "researching": "Researching",
+      "notStarted": "Not started",
+      "affects": "{n} tasks depend on it",
+      "outcome": "Outcome",
+      "byDecision": "By decision",
+      "byDay": "By day",
+      "noEntries": "No results or debriefs yet",
+      "ungrouped": "No decision",
+      "workedBest": "What worked best",
+      "trick": "Trick/setting that made the difference",
+      "surprise": "What surprised us",
+      "tool": "Tool",
+      "steps": "What was done",
+      "results": "Results",
+      "scores": "Scores",
+      "reason": "Reason",
+      "sessionLink": "Session link",
+      "ranClaude": "In Claude",
+      "ranExternal": "External tool",
+      "ranBoth": "Claude + external",
+      "ranNone": "No experiment"
+    }
   },
   "smrtVault": {
     "title": "Password Vault",
