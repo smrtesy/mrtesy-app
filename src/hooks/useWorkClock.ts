@@ -278,8 +278,22 @@ export function useWorkClock(): UseWorkClock {
   }, []);
 
   const stop = useCallback((reason: "manual" | "auto" | "extended" = "manual") => {
-    const worked = workedSeconds(state, Date.now());
+    const now = Date.now();
+    const worked = workedSeconds(state, now);
     const paused = state.pausedSeconds;
+    // Final flush: persist the per-size totals incl. the live span (the stop
+    // route only takes worked/paused, so send the size breakdown as a last
+    // heartbeat first). Both upsert the same row on distinct columns.
+    api("/api/tasks/work-clock", {
+      method: "PATCH",
+      body: {
+        work_date: state.workDate,
+        quick_seconds: sizeSeconds(state, "quick", now),
+        medium_seconds: sizeSeconds(state, "medium", now),
+        big_seconds: sizeSeconds(state, "big", now),
+        alerts_soft: state.alertsSoft, alerts_popup: state.alertsPopup, alerts_block: state.alertsBlock,
+      },
+    }).catch(() => {});
     api("/api/tasks/work-clock/stop", {
       method: "POST",
       body: { work_date: state.workDate, reason, worked_seconds: worked, paused_seconds: paused },
@@ -293,7 +307,10 @@ export function useWorkClock(): UseWorkClock {
   const setActiveTask = useCallback((taskId: string, size: TaskSize, title: string) => {
     if (state.phase !== "running" && state.phase !== "paused") return; // run mode only
     if (state.activeTaskId === taskId && state.activeTaskSize === size) return;
-    setState({ ...flushActiveSpan(), activeTaskId: taskId, activeTaskSize: size, activeTaskTitle: title, activeStartedAt: Date.now() });
+    // Anchor at the pause instant while paused so the new span doesn't start
+    // late once resume() shifts anchors forward by the pause gap.
+    const anchor = state.phase === "paused" && state.pausedAt != null ? state.pausedAt : Date.now();
+    setState({ ...flushActiveSpan(), activeTaskId: taskId, activeTaskSize: size, activeTaskTitle: title, activeStartedAt: anchor });
   }, []);
 
   const clearActiveTask = useCallback(() => {

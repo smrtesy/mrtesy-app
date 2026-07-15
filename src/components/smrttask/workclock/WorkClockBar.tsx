@@ -39,7 +39,10 @@ export function WorkClockBar() {
   const advanceRef = useRef(advance); advanceRef.current = advance;
   const configRef = useRef(config); configRef.current = config;
   const bumpRef = useRef(bumpAlert); bumpRef.current = bumpAlert;
-  const prevEscRef = useRef<Escalation>({ soft: false, popup: false, block: false });
+  // null until the first tick seeds it — so a reload with an already-tripped
+  // level doesn't re-count it as a fresh rising edge (which would inflate the
+  // persisted alert stats on every reload).
+  const prevEscRef = useRef<Escalation | null>(null);
 
   const active = isRitual(state.phase) || state.phase === "running" || state.phase === "paused";
   useEffect(() => {
@@ -52,9 +55,11 @@ export function WorkClockBar() {
       // Count each escalation on its rising edge (persisted via heartbeat).
       const esc = escalationOf(s, configRef.current, now);
       const prev = prevEscRef.current;
-      if (esc.soft && !prev.soft) bumpRef.current("soft");
-      if (esc.popup && !prev.popup) bumpRef.current("popup");
-      if (esc.block && !prev.block) bumpRef.current("block");
+      if (prev) {
+        if (esc.soft && !prev.soft) bumpRef.current("soft");
+        if (esc.popup && !prev.popup) bumpRef.current("popup");
+        if (esc.block && !prev.block) bumpRef.current("block");
+      }
       prevEscRef.current = esc;
     }, 1000);
     return () => clearInterval(iv);

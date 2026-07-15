@@ -1098,7 +1098,7 @@
     "popupQuickTitle": "Too much time on quick tasks",
     "popupQuickHint": "Quick tasks should close fast — maybe one of them is really a medium?",
     "popupContinue": "Got it, keep going",
-    "popupToMedium": "Move to medium",
+    "popupToMedium": "Switch to mediums",
     "blockMediumTitle": "This medium task is running long",
     "blockBigTitle": "This big task is running long",
     "blockHint": "Still on it? Maybe split it — or pause and decide.",
