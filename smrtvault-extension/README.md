@@ -81,8 +81,27 @@ target site's field receives it.
 - An inline in-page fill button on detected login forms.
 - Packaging/signing for the Chrome Web Store.
 
+## Claude tracking (workclock)
+
+The extension doubles as the smrtesy workclock's eyes on Claude Code
+(docs/workclock-plan.md §11). `claude-capture.js` runs on `claude.ai/code/*` and
+reports the current **session link + best-effort status** (running /
+waiting-on-you / done) to smrtesy via the background worker
+(`POST /api/tasks/claude-actions`), so the workclock bar tracks your Claude
+sessions — and flags when Claude is **waiting for you** — without babysitting
+the tab.
+
+- **Status is heuristic, not an API.** Most reliable signal: claude.ai's own
+  notification (a page-world shim wraps `window.Notification`); title changes
+  are a backup; the DOM "is it generating" check is the most fragile and
+  **needs tuning against the live UI** (`detectDomStatus()`).
+- **Authoritative outcome = GitHub** (the resulting PR), tracked separately.
+- Adds `https://claude.ai/*` host permission + the content script; never touches
+  the vault.
+
 ## Note
 
 This extension was written against the smrtVault API but has **not been
 exercised end-to-end in a real Chrome profile** in this environment. Load it
-unpacked and test the flow (login detection → fill) before relying on it.
+unpacked and test both flows — login detection → fill, AND the `claude.ai/code`
+status reporting → the workclock bar's 🤖 tracker — before relying on it.

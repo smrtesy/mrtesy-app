@@ -94,10 +94,16 @@ const sessionUrl = slug ? `https://claude.ai/code/session_${slug}` : null;
 
 const transcript = buildTranscript(hook.transcript_path);
 
+// Identity: the smrtTask account to file for. The Claude Code login email can
+// differ from the smrtesy platform account email (e.g. a maor.org login vs a
+// gmail.com platform account), so honor explicit overrides first; the backend
+// prefers user_id, then user_email.
 const body = {
   session_id: sessionId,
   session_url: sessionUrl,
-  user_email: process.env.CLAUDE_CODE_USER_EMAIL || null,
+  user_id: process.env.SMRTTASK_USER_ID || null,
+  user_email:
+    process.env.SMRTTASK_USER_EMAIL || process.env.CLAUDE_CODE_USER_EMAIL || null,
   repo: "mrtesy-app",
   git_branch: gitBranch(hook.cwd),
   transcript,

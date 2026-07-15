@@ -70,7 +70,19 @@ environment, copying the values from the Railway backend's service variables:
   backend's `SMRTESY_PUBLIC_URL` (same as the app's `NEXT_PUBLIC_BACKEND_URL`,
   e.g. `https://<app>.up.railway.app`); the hook builds
   `…/api/claude-session/proposal` from it. Or set the full
-  `SMRTTASK_PROPOSAL_URL` directly.
+  `SMRTTASK_PROPOSAL_URL` directly. Include the `https://` scheme — a
+  schemeless value makes curl use `http://`, which Railway 301-redirects and a
+  POST does not replay (the hook now normalizes a missing scheme to `https://`
+  and follows redirects, but set it correctly anyway).
+
+**Identity override (often required):** the endpoint files the proposal for the
+smrtesy *platform* account, which may differ from the Claude Code *login* email
+(e.g. a `@maor.org` Claude login vs a `@gmail.com` platform account). When they
+differ, set one of `SMRTTASK_USER_ID` (most robust — bypasses email lookup) or
+`SMRTTASK_USER_EMAIL` in the Claude Code environment; otherwise the hook sends
+`CLAUDE_CODE_USER_EMAIL` and the backend 404s with "user not found". The
+backend resolves email via a single `listUsers({ perPage: 1000 })` + local
+match (the repo's proven pattern; a paginated `{ page }` loop did not resolve).
 
 There is no baked-in URL default on purpose (a wrong host silently 404s every
 turn). A missing secret **or** URL makes the hook a silent no-op. The backend
