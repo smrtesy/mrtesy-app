@@ -32,7 +32,10 @@ export type WorkClockPhase =
   | "ritual_plan"
   | "ritual_run"
   | "running"
-  | "paused";
+  | "paused"
+  // Day stopped but the bar stays visible (ready to run again). Distinct from
+  // idle (pre-offer / declined), which hides the bar.
+  | "stopped";
 
 export type TaskSize = "quick" | "medium" | "big";
 
@@ -63,6 +66,9 @@ export interface WorkClockState {
   alertsSoft: number;
   alertsPopup: number;
   alertsBlock: number;
+  /** Worked seconds captured at the last stop — shown on the "stopped" bar and
+   *  used as the resume anchor when the day is run again. */
+  dayTotalSeconds: number;
 }
 
 const LS_KEY = "smrttask:workclock";
@@ -74,6 +80,7 @@ function freshState(): WorkClockState {
     activeTaskId: null, activeTaskSize: null, activeTaskTitle: null, activeStartedAt: null,
     quickSeconds: 0, mediumSeconds: 0, bigSeconds: 0,
     alertsSoft: 0, alertsPopup: 0, alertsBlock: 0,
+    dayTotalSeconds: 0,
   };
 }
 
@@ -196,6 +203,7 @@ export interface UseWorkClock {
   pause: () => void;
   resume: () => void;
   stop: (reason?: "manual" | "auto" | "extended") => void;
+  restart: () => void;
   dismissOffer: () => void;
   /** Run mode: set / change the active task (its clock starts now). No-op
    *  unless the clock is running (so opening a task off-clock doesn't start one). */
@@ -299,7 +307,21 @@ export function useWorkClock(): UseWorkClock {
       body: { work_date: state.workDate, reason, worked_seconds: worked, paused_seconds: paused },
     }).catch(() => {});
     markOffered();
-    setState({ ...freshState() });
+    // Keep the bar visible in a "stopped" (ready) state instead of vanishing:
+    // freeze the day total, clear the run anchors, drop the active task.
+    setState({
+      phase: "stopped", startedAt: null, pausedAt: null,
+      activeTaskId: null, activeTaskSize: null, activeTaskTitle: null, activeStartedAt: null,
+      dayTotalSeconds: worked,
+    });
+  }, []);
+
+  // Run the day again after a stop — continue from the frozen total (no morning
+  // ritual; that already happened) and reopen the same server session.
+  const restart = useCallback(() => {
+    const anchor = Date.now() - state.dayTotalSeconds * 1000;
+    setState({ phase: "running", startedAt: anchor, pausedSeconds: 0, pausedAt: null });
+    api("/api/tasks/work-clock/start", { method: "POST", body: { work_date: todayISO() } }).catch(() => {});
   }, []);
 
   const dismissOffer = useCallback(() => { markOffered(); setState({ phase: "idle" }); }, []);
@@ -355,7 +377,7 @@ export function useWorkClock(): UseWorkClock {
 
   return {
     enabled, config, state: local, showOffer,
-    start, advance, pause, resume, stop, dismissOffer,
+    start, advance, pause, resume, stop, restart, dismissOffer,
     setActiveTask, clearActiveTask, bumpAlert,
   };
 }
