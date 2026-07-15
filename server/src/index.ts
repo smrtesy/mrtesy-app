@@ -24,7 +24,7 @@ import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter from "./modules/smrttask";
+import smrttaskRouter, { claudeSessionRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
@@ -157,6 +157,10 @@ app.use(smrtbotJobsRouter);
 // smrtPlan engine refresh — shared-secret guarded (pg_cron calls it), so it
 // comes BEFORE the auth-guarded routers (same reasoning as smrtBot jobs).
 app.use(smrtplanJobsRouter);
+
+// smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
+// Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
+app.use("/api", claudeSessionRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
