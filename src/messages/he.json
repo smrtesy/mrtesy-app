@@ -3098,7 +3098,8 @@
       "inputReopened": "הקלט נפתח מחדש",
       "reopenReleased": "שים לב — {n, plural, one {משימה אחת שממשיכה ממנה כבר שוחררה} other {# משימות שממשיכות ממנה כבר שוחררו}}",
       "reblockAction": "חסום מחדש את שטרם התחילו",
-      "reblocked": "{n, plural, =0 {אין משימות לחסימה מחדש — כולן כבר בעבודה או הושלמו} one {משימה אחת נחסמה מחדש} other {# משימות נחסמו מחדש}}"
+      "reblocked": "{n, plural, =0 {אין משימות לחסימה מחדש — כולן כבר בעבודה או הושלמו} one {משימה אחת נחסמה מחדש} other {# משימות נחסמו מחדש}}",
+      "viewJournal": "יומן"
     },
     "repository": {
       "title": "מאגר הרעיונות",
@@ -3373,7 +3374,34 @@
       "empty": "אין משימות לעובד הזה"
     },
     "zoomIn": "הגדל",
-    "zoomOut": "הקטן"
+    "zoomOut": "הקטן",
+    "journal": {
+      "decisionsBoard": "לוח החלטות",
+      "decidedCount": "{done}/{total} החלטות הוכרעו",
+      "noDecisions": "אין החלטות בתוכנית",
+      "decided": "הוכרע",
+      "researching": "במחקר",
+      "notStarted": "טרם התחיל",
+      "affects": "{n} משימות תלויות",
+      "outcome": "התוצאה",
+      "byDecision": "לפי החלטה",
+      "byDay": "לפי יום",
+      "noEntries": "עדיין אין תוצאות ותחקירים",
+      "ungrouped": "ללא החלטה",
+      "workedBest": "מה עבד הכי טוב",
+      "trick": "הטריק/ההגדרה שעשו את ההבדל",
+      "surprise": "מה הפתיע לרעה",
+      "tool": "כלי",
+      "steps": "מה נעשה",
+      "results": "תוצאות",
+      "scores": "ציונים",
+      "reason": "סיבה",
+      "sessionLink": "קישור לסשן",
+      "ranClaude": "בקלוד",
+      "ranExternal": "כלי חיצוני",
+      "ranBoth": "קלוד + חיצוני",
+      "ranNone": "לא נערך ניסוי"
+    }
   },
   "smrtVault": {
     "title": "כספת סיסמאות",
