@@ -611,28 +611,33 @@ router.post("/tasks/claude-actions", async (req: Request, res: Response) => {
   const status = CLAUDE_STATUSES.includes(body.status) ? body.status : "open";
   const sessionUrl = typeof body.session_url === "string" && body.session_url ? body.session_url : null;
   const title = typeof body.title === "string" ? body.title.slice(0, 200) : null;
-  const taskId = typeof body.task_id === "string" && body.task_id ? body.task_id : null;
+  // task_id is not accepted from the client yet (no linking UI); ignoring it
+  // avoids a cross-tenant FK link with only a valid JWT.
 
-  if (sessionUrl) {
-    const { data: existing } = await db
-      .from("claude_actions").select("id")
-      .eq("user_id", req.user!.id).eq("session_url", sessionUrl)
-      .in("status", ["open", "running", "waiting"])
-      .maybeSingle();
-    if (existing) {
-      const { data, error } = await db
-        .from("claude_actions")
-        .update({ status, ...(title ? { title } : {}), updated_at: new Date().toISOString() })
-        .eq("id", existing.id).eq("user_id", req.user!.id)
-        .select("*").single();
-      if (error) return res.status(500).json({ error: error.message });
-      return res.json({ action: data });
-    }
+  // Reuse an existing active row rather than spawning a new one on every launch:
+  // by session_url when the extension supplies one, else the latest null-URL
+  // "open" bar row (so repeated bar opens don't pile up orphan rows).
+  const dedup = sessionUrl
+    ? db.from("claude_actions").select("id").eq("user_id", req.user!.id).eq("session_url", sessionUrl)
+        .in("status", ["open", "running", "waiting"]).order("updated_at", { ascending: false }).limit(1).maybeSingle()
+    : db.from("claude_actions").select("id").eq("user_id", req.user!.id).is("session_url", null)
+        .eq("status", "open").order("updated_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: existing, error: findErr } = await dedup;
+  if (findErr) return res.status(500).json({ error: findErr.message });
+
+  if (existing) {
+    const { data, error } = await db
+      .from("claude_actions")
+      .update({ status, ...(title ? { title } : {}), updated_at: new Date().toISOString() })
+      .eq("id", existing.id).eq("user_id", req.user!.id)
+      .select("*").single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ action: data });
   }
 
   const { data, error } = await db
     .from("claude_actions")
-    .insert({ user_id: req.user!.id, org_id: req.org!.id, task_id: taskId, title, session_url: sessionUrl, status })
+    .insert({ user_id: req.user!.id, org_id: req.org!.id, title, session_url: sessionUrl, status })
     .select("*").single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ action: data });

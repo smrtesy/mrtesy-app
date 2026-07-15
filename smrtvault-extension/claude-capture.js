@@ -63,5 +63,6 @@
 
   report("running");
   setInterval(function () { report(detectDomStatus()); }, 30000);
-  window.addEventListener("beforeunload", function () { report("done"); });
+  // No beforeunload→"done": a reload / in-app navigation would falsely close a
+  // still-running session. "done" comes from the user (mark done) or GitHub.
 })();
