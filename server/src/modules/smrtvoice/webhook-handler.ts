@@ -78,16 +78,32 @@ router.post("/api/voice/webhook", async (req: Request, res: Response) => {
 });
 
 async function handleJobStarted(jobId: string): Promise<void> {
-  const { data: job } = await db
+  // Promote ONLY from 'queued'. job.started is now durable + re-delivered, so a
+  // late/duplicate copy could otherwise arrive after job.completed (or after
+  // the user cancelled) and flip a finished job/script back to running. The
+  // status guard makes it a no-op once the job has left 'queued'.
+  const { data: job, error } = await db
     .from("smrtvoice_jobs")
     .update({ status: "running", started_at: new Date().toISOString() })
     .eq("voice_engine_job_id", jobId)
+    .eq("status", "queued")
     .select("script_id")
     .maybeSingle();
 
+  if (error) {
+    console.error("[smrtvoice webhook] job.started update failed:", error.message);
+    return;
+  }
+
+  // Only advance the script when THIS call actually promoted the job — never
+  // drag a script that's already audio_ready/failed back to processing.
   const scriptId = (job?.script_id as string | undefined) ?? null;
   if (scriptId) {
-    await db.from("smrtvoice_scripts").update({ status: "processing" }).eq("id", scriptId);
+    await db
+      .from("smrtvoice_scripts")
+      .update({ status: "processing" })
+      .eq("id", scriptId)
+      .eq("status", "queued");
   }
 }
 
@@ -149,7 +165,7 @@ async function handleJobCompleted(
   const linesCompleted = (data.lines_completed as number | undefined) ?? 0;
   const linesFailed = (data.lines_failed as number | undefined) ?? 0;
 
-  const { data: job } = await db
+  const { data: job, error: jobErr } = await db
     .from("smrtvoice_jobs")
     .update({
       status: "completed",
@@ -159,8 +175,13 @@ async function handleJobCompleted(
       result: data,
     })
     .eq("voice_engine_job_id", jobId)
-    .select("job_type, script_id")
+    .select("id, job_type, script_id")
     .maybeSingle();
+
+  if (jobErr) {
+    console.error("[smrtvoice webhook] job.completed update failed:", jobErr.message);
+    return;
+  }
 
   const scriptId =
     (job?.script_id as string | undefined) ?? (data.script_id as string | undefined) ?? null;
@@ -194,6 +215,13 @@ async function handleJobCompleted(
   }
   if (!script) return;
 
+  // Fire the user-facing notification + event EXACTLY once. The engine now
+  // writes terminal status directly AND durably re-delivers this webhook (and
+  // overlapping drains can deliver it twice), so a status/read-then-write guard
+  // would race. Claim atomically: stamp terminal_notified_at only where it is
+  // still NULL; if this call didn't win the claim, another already notified.
+  if (!(await claimTerminalNotify(job?.id as string | undefined))) return;
+
   const label = script.name || script.code;
   await notify(script.org_id, script.created_by, {
     app_slug: "smrtvoice",
@@ -213,13 +241,37 @@ async function handleJobCompleted(
   });
 }
 
+/**
+ * Atomically claim the one-time terminal notification for a job. Sets
+ * terminal_notified_at only if it is currently NULL and returns true iff THIS
+ * call performed the transition — so concurrent/duplicate webhook deliveries
+ * (and the direct-write + webhook race) notify at most once. Returns false when
+ * jobId is missing or already claimed; logs and returns false on a DB error
+ * (better to skip a duplicate-risk notify than to spam on every redelivery).
+ */
+async function claimTerminalNotify(jobId: string | undefined): Promise<boolean> {
+  if (!jobId) return false;
+  const { data, error } = await db
+    .from("smrtvoice_jobs")
+    .update({ terminal_notified_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("terminal_notified_at", null)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[smrtvoice webhook] terminal-notify claim failed:", error.message);
+    return false;
+  }
+  return Boolean(data);
+}
+
 async function handleJobFailed(
   jobId: string,
   data: Record<string, unknown>,
 ): Promise<void> {
   const errorMessage = (data.error as string | undefined) ?? "Unknown error";
 
-  const { data: job } = await db
+  const { data: job, error: jobErr } = await db
     .from("smrtvoice_jobs")
     .update({
       status: "failed",
@@ -227,8 +279,13 @@ async function handleJobFailed(
       error_message: errorMessage,
     })
     .eq("voice_engine_job_id", jobId)
-    .select("script_id")
+    .select("id, script_id")
     .maybeSingle();
+
+  if (jobErr) {
+    console.error("[smrtvoice webhook] job.failed update failed:", jobErr.message);
+    return;
+  }
 
   const scriptId =
     (job?.script_id as string | undefined) ?? (data.script_id as string | undefined) ?? null;
@@ -241,7 +298,9 @@ async function handleJobFailed(
     .select("id, org_id, code, name")
     .maybeSingle();
 
-  if (script) {
+  // Notify exactly once — the failure webhook is durably re-delivered and may
+  // race the engine's direct write, so claim atomically (see handleJobCompleted).
+  if (script && (await claimTerminalNotify(job?.id as string | undefined))) {
     await notifyError(script.org_id, "smrtvoice", {
       title: `הייצור ל-${script.name || script.code} נכשל`,
       body: errorMessage,
