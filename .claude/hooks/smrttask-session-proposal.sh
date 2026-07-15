@@ -5,19 +5,20 @@
 # Fully guarded + fire-and-forget: any missing env var / tool, or any error,
 # makes it exit 0 silently so it can NEVER block, delay, or fail a turn.
 #
-# Required env (set these in the Claude Code environment):
-#   CRON_SECRET             shared secret, identical to the backend's CRON_SECRET
-#   and ONE of the endpoint locators:
-#     SMRTTASK_PROPOSAL_URL   full endpoint URL, OR
-#     SMRTESY_BACKEND_URL     the Express backend base (same value as the app's
-#                             NEXT_PUBLIC_BACKEND_URL, e.g. https://<app>.up.railway.app)
+# Required env in the Claude Code environment (copy the values from the backend):
+#   the shared secret — ONE of:
+#     CRON_SECRET  or  SMRTBOT_INTERNAL_SECRET   (backend accepts either)
+#   the backend base URL — ONE of:
+#     SMRTESY_BACKEND_URL  or  SMRTTASK_PROPOSAL_URL (full endpoint)
+#     (SMRTESY_BACKEND_URL = the backend's SMRTESY_PUBLIC_URL / the app's
+#      NEXT_PUBLIC_BACKEND_URL, e.g. https://<app>.up.railway.app)
 #
-# NOTE: the endpoint lives on the Express backend (Railway), NOT on the Next.js
-# app at app.smrtesy.com — that host has no /api/claude-session route. There is
-# deliberately no baked-in default: a wrong host would silently 404 every turn.
+# The endpoint lives on the Express backend (Railway), NOT on the Next.js app at
+# app.smrtesy.com. No baked-in default on purpose — a wrong host silently 404s.
 set -uo pipefail
 
-SECRET="${CRON_SECRET:-}"
+SECRET="${CRON_SECRET:-${SMRTBOT_INTERNAL_SECRET:-}}"
+
 if [ -n "${SMRTTASK_PROPOSAL_URL:-}" ]; then
   URL="$SMRTTASK_PROPOSAL_URL"
 elif [ -n "${SMRTESY_BACKEND_URL:-}" ]; then
