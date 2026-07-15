@@ -84,21 +84,22 @@ async function summarizeTranscript(
   return fallback;
 }
 
-/** Resolve a user by explicit id or by email (super-admin's personal automation). */
+/** Resolve a user by explicit id or by email (super-admin's personal automation).
+ *  One bulk listUsers({ perPage: 1000 }) + local match — the exact pattern the
+ *  rest of this codebase uses (admin/users, platform/members). The earlier
+ *  paginated { page } loop failed to resolve even existing emails on the
+ *  deployed route; this mirrors the proven call so email resolution is reliable. */
 async function resolveUserId(userId?: string, email?: string): Promise<string | null> {
-  if (userId && typeof userId === "string") return userId;
+  if (userId && typeof userId === "string" && userId.trim()) return userId.trim();
   if (!email) return null;
   const target = email.trim().toLowerCase();
-  // Scan the auth user list in bounded pages — this is a small, single-tenant
-  // deployment, so a few pages of 200 covers it without an auth-schema RPC.
-  for (let page = 1; page <= 5; page++) {
-    const { data, error } = await db.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users?.length) return null;
-    const hit = data.users.find((u) => (u.email ?? "").toLowerCase() === target);
-    if (hit) return hit.id;
-    if (data.users.length < 200) return null; // last page, no match
+  const { data, error } = await db.auth.admin.listUsers({ perPage: 1000 });
+  if (error) {
+    console.error("[claude-session] listUsers failed:", error.message);
+    return null;
   }
-  return null;
+  const hit = (data?.users ?? []).find((u) => (u.email ?? "").toLowerCase() === target);
+  return hit?.id ?? null;
 }
 
 router.post("/claude-session/proposal", async (req: Request, res: Response) => {
