@@ -15,6 +15,30 @@ Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
 existing repo conventions (English where the repo already uses English) — only
 the text you address to the user is Hebrew.
 
+## Cost approval — explicit, up-front, non-negotiable
+
+**Any action that will spend the user's money requires the user's explicit,
+up-front approval of the estimated cost — every time.** This covers anything
+that consumes **paid API / LLM tokens billed to the user's services**
+(Anthropic, Voyage, Gemini, or any paid API), in particular when triggered on
+the backend — e.g. the smrtInfo extraction / `/info/extract/batch`, running the
+classifier or any summarizer manually, `quick-action`, or any batch/loop that
+racks up such calls. Before running such an action you MUST:
+
+1. State what it will do and which service gets billed.
+2. Give a concrete cost estimate — per-item **and** total.
+3. Wait for an explicit **"go"** on the cost. A generic "should I proceed?" is
+   NOT enough — the user must approve the **cost** specifically.
+
+Work the Claude Code **agent** does itself runs on the user's Claude
+subscription and is **not** billed as API tokens — that does not need cost
+approval. The line is **paid API/token spend billed to the user**. When unsure
+whether something costs money, assume it does and ask first.
+
+Why this rule exists: a large batch-extraction run and repeated backend LLM
+summaries were triggered without the user approving the spend. Standing
+instruction (2026-07): no money-spending action without explicit cost sign-off.
+
 ## smrtTask task-ingest mode (trigger-gated)
 
 If the user's first message in the session begins with the phrase
