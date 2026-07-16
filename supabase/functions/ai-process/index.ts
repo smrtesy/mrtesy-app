@@ -2528,6 +2528,7 @@ async function linkAndEnrichDuplicate(
   analysis: ThreadAnalysis,
   reasonHe: string,
   sys: SystemParams,
+  opts?: { reopen?: boolean },
 ) {
   const urls = extractUrls(bodyForAI(msg));
   // Was this exact message already linked here on a prior run? appendUpdateToTask
@@ -2547,7 +2548,7 @@ async function linkAndEnrichDuplicate(
     completionReason: "",
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
   };
-  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable");
+  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable", opts);
 
   // Backfill fields the existing task lacked, and detect any MATERIAL change the
   // follow-up introduces (modality/date/place/amount) so it's surfaced, not buried.
@@ -3421,6 +3422,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                   // T665→T685 respawn) stay suppressed.
                   const escalation = tDup.status !== "completed" && !isConversational(msg);
                   if (escalation) {
+                    // Reopen-when-strong: a dismissed/archived matter that
+                    // resurfaces carrying a CONCRETE new date/deadline
+                    // (task.due_date, extracted by the builder — e.g. an official
+                    // notice with a hearing date) is reopened as the SAME task
+                    // instead of spawned as a parallel duplicate. Gated tight so
+                    // the documented "tag, don't resurrect" rule still holds for
+                    // weak re-mentions: HIGH confidence (already) + non-conversational
+                    // (already, via `escalation`) + a real date on the new document.
+                    if (task.due_date) {
+                      await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason, sys, { reopen: true });
+                      if (!firstTaskId) firstTaskId = tDup.taskId;
+                      classification = "actionable_followup";
+                      classificationReason = `reopened ${tDup.status} ${tDup.serial || tDup.taskId} — strong continuation (has date) — ${tDup.reason}`;
+                      await supabase.from("log_entries").insert({
+                        // log_entries.status CHECK allows only ok|skipped|failed|duplicate;
+                        // the "reopened" detail lives in classification_reason.
+                        user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "ok",
+                        ...msgLogFields(msg), classification_reason: classificationReason,
+                      });
+                      continue;
+                    }
                     if (!resendContext) {
                       const verb = tDup.status === "dismissed" ? "דחית" : "העברת לארכיון";
                       resendContext = `↩ חזרה של עניין ש${verb} (${tDup.serial || tDup.taskId}) — ${tDup.reason}`;
