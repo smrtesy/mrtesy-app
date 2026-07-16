@@ -26,7 +26,10 @@ router.get("/count", requireAuth, requireOrg, async (req: Request, res: Response
       .eq("user_id", userId)
       .eq("status", "inbox")
       .eq("manually_verified", false)
-      .not("source_message_id", "is", null),
+      // AI-sourced suggestions (have a source message) OR sourceless Claude-Code
+      // session proposals (tagged via-claude-session) — both surface in the
+      // suggestions inbox, so both belong in its badge count.
+      .or("source_message_id.not.is.null,tags.cs.{via-claude-session}"),
     db
       .from("notifications")
       .select("*", { count: "exact", head: true })

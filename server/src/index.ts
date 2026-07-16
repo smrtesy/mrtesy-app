@@ -31,6 +31,7 @@ import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publi
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
 import smrtvaultRouter from "./modules/smrtvault";
+import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -162,6 +163,10 @@ app.use(smrtplanJobsRouter);
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", claudeSessionRouter);
 
+// smrtInfo batch extraction — x-cron-secret guarded (the data-population runner
+// calls it), so it comes BEFORE the auth-guarded routers too.
+app.use("/api", smrtinfoCronRouter);
+
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
@@ -171,6 +176,7 @@ app.use("/api", smrtreachRouter);
 app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
 app.use("/api", smrtvaultRouter);
+app.use("/api", smrtinfoRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

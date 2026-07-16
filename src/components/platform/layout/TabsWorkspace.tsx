@@ -159,7 +159,7 @@ export function TabsWorkspace() {
   }, []);
 
   return (
-    <div className="flex h-[100dvh] w-full overflow-x-auto">
+    <div className="flex h-[calc(100dvh_-_var(--wc-bar-h,0px))] w-full overflow-x-auto">
       {orderedTabs.map((tab, i) => {
         const active = tab.id === activeId;
         const frac = fractions[tab.id] ?? 1 / n;

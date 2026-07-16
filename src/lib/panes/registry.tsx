@@ -36,6 +36,7 @@ import { AutoReplyManager } from "@/components/smrttask/whatsapp/AutoReplyManage
 import { ContactsClient } from "@/components/smrtcrm/ContactsClient";
 import { CrmManagePanel } from "@/components/smrtcrm/CrmManagePanel";
 import { VaultClient } from "@/components/smrtvault/VaultClient";
+import { InfoClient } from "@/components/smrtinfo/InfoClient";
 import { PlanBoardClient } from "@/components/smrtplan/PlanBoardClient";
 import { TeamViewClient } from "@/components/smrtplan/TeamViewClient";
 import { PlanRepositoryClient } from "@/components/smrtplan/PlanRepositoryClient";
@@ -93,6 +94,19 @@ function VaultPane() {
         <p className="text-muted-foreground">{t("subtitle")}</p>
       </div>
       <VaultClient />
+    </div>
+  );
+}
+
+function InfoPane() {
+  const t = useTranslations("smrtInfo");
+  return (
+    <div className="p-6 space-y-8">
+      <div>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <p className="text-muted-foreground">{t("subtitle")}</p>
+      </div>
+      <InfoClient />
     </div>
   );
 }
@@ -238,6 +252,7 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },
   { match: (p) => p === "/vault", render: () => <VaultPane /> },
+  { match: (p) => p === "/info", render: () => <InfoPane /> },
   { match: (p) => p === "/plan", render: (locale) => <PlanBoardClient locale={locale} /> },
   { match: (p) => p === "/plan/team", render: (locale) => <TeamViewClient locale={locale} /> },
   {
