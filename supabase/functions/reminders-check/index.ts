@@ -148,24 +148,28 @@ Deno.serve(async (req) => {
         if (!completionRecorded && (await matterStillPending(task))) {
           // Surface with a visible explanation (tasks.updates feeds the task's
           // activity trail in the UI) — the reply alone did not close the matter.
-          const { data: taskRow } = await supabase
+          const { data: taskRow, error: updatesReadError } = await supabase
             .from("tasks").select("updates").eq("id", task.id).single();
-          const updates = taskRow?.updates || [];
-          updates.push({
-            id: crypto.randomUUID(),
-            created_at: now,
-            type: "reminder",
-            actor: "system",
-            content: "התקבלה תגובה בשיחה, אך העניין עדיין לא נסגר — המעקב הוחזר לתיבה לבדיקה",
-          });
-          const { error: pendingWakeError } = await supabase.from("tasks").update({
+          if (updatesReadError) console.error("tasks updates read failed:", updatesReadError);
+          const wakePayload: Record<string, unknown> = {
             snoozed_until: null,
             status: "inbox",
-            updates,
             last_updated_reason: "followup_reply_pending_outcome",
             woke_from_snooze_at: now,
             updated_at: now,
-          }).eq("id", task.id);
+          };
+          // Only touch `updates` when the read succeeded — writing on a failed
+          // read would replace the task's whole history with one entry.
+          if (taskRow) {
+            wakePayload.updates = [...(taskRow.updates || []), {
+              id: crypto.randomUUID(),
+              created_at: now,
+              type: "reminder",
+              actor: "system",
+              content: "התקבלה תגובה בשיחה, אך העניין עדיין לא נסגר — המעקב הוחזר לתיבה לבדיקה",
+            }];
+          }
+          const { error: pendingWakeError } = await supabase.from("tasks").update(wakePayload).eq("id", task.id);
           if (pendingWakeError) console.error("tasks followup pending wake failed:", pendingWakeError);
           continue;
         }
@@ -358,7 +362,10 @@ async function matterStillPending(task: { id: string; user_id: string | null; so
   // the other side.
   let query = supabase.from("thread_memory").select("state").eq("user_id", task.user_id);
   query = key ? query.eq("thread_key", key) : query.eq("related_task_id", task.id);
-  const { data: memory, error: memoryError } = await query.limit(1).maybeSingle();
+  // related_task_id is not unique — order so the freshest memory row wins
+  // instead of a nondeterministic (possibly stale) one.
+  const { data: memory, error: memoryError } = await query
+    .order("updated_at", { ascending: false }).limit(1).maybeSingle();
   if (memoryError) console.error("matterStillPending thread_memory read failed:", memoryError);
   if (!memory?.state) return false;
   return memory.state !== "resolved";
