@@ -597,6 +597,9 @@ interface ThreadAnalysis {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   model: string;
+  // smrtInfo: durable facts extracted in the SAME classification pass (no second
+  // Claude call). Optional so the fallback literals don't need it.
+  facts?: any[];
 }
 
 // Current wall-clock time in the user's timezone, appended to the per-message
@@ -638,6 +641,129 @@ function nowContextLine(tz: string): string {
 const SENSITIVE_WORDING_RE = /התחייב|הבטיח|מתחייב|מבטיח|נכשל|committed|promised|guarantee[ds]?|\bfailed\b/i;
 function summaryAssertsCommitmentOrFailure(parsed: any): boolean {
   return SENSITIVE_WORDING_RE.test(`${parsed?.new_summary ?? ""} ${parsed?.reason_he ?? ""}`);
+}
+
+// ── smrtInfo: fold fact-extraction into the classifier (single pass) ──────────
+// The classifier already reads every message with Claude; we add a "facts" array
+// to its output and store it here — no second Claude call. Everything below is
+// fully guarded: a failure NEVER affects classification or task creation.
+
+const INFO_PROFILE_CACHE = new Map<string, { profile: any; ts: number }>();
+async function getInfoProfile(userId: string): Promise<any | null> {
+  const cached = INFO_PROFILE_CACHE.get(userId);
+  if (cached && Date.now() - cached.ts < 300000) return cached.profile;
+  const { data } = await supabase
+    .from("info_context_profile").select("profile").eq("user_id", userId).maybeSingle();
+  const p = (data as any)?.profile ?? null;
+  INFO_PROFILE_CACHE.set(userId, { profile: p, ts: Date.now() });
+  return p;
+}
+
+function renderInfoProfile(p: any): string {
+  if (!p || typeof p !== "object") return "No context profile set — use \"unclassified\" whenever scope is unclear.";
+  const lines: string[] = [];
+  if (Array.isArray(p.orgs) && p.orgs.length) {
+    lines.push('Organizations (facts about these / their vendors → scope "org"): ' +
+      p.orgs.map((o: any) => `${o.name}${o.domain ? ` (${o.domain})` : ""}${Array.isArray(o.vendors) && o.vendors.length ? ` [vendors: ${o.vendors.join(", ")}]` : ""}`).join("; "));
+  }
+  if (Array.isArray(p.family) && p.family.length) {
+    lines.push('Family / personal people (facts about these → scope "personal"): ' +
+      p.family.map((f: any) => `${f.name}${f.relation ? ` (${f.relation})` : ""}`).join("; "));
+  }
+  if (Array.isArray(p.vendors) && p.vendors.length) lines.push("Vendors: " + p.vendors.join(", "));
+  if (Array.isArray(p.personalAccounts) && p.personalAccounts.length) lines.push("Personal accounts: " + p.personalAccounts.join(", "));
+  if (Array.isArray(p.orgAccounts) && p.orgAccounts.length) lines.push("Org accounts: " + p.orgAccounts.join(", "));
+  if (typeof p.notes === "string" && p.notes) lines.push("Notes: " + p.notes);
+  return lines.length ? lines.join("\n") : "No context profile set — use \"unclassified\" whenever scope is unclear.";
+}
+
+// Voyage embedding via plain fetch (no imports — esm.sh is banned in edge fns).
+// Returns null when VOYAGE_API_KEY isn't set for the edge; facts then land with
+// embedding=null (keyword-searchable) until a key is configured.
+async function embedForInfo(text: string): Promise<number[] | null> {
+  const key = Deno.env.get("VOYAGE_API_KEY");
+  if (!key || !text.trim()) return null;
+  try {
+    const r = await fetch("https://api.voyageai.com/v1/embeddings", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: "voyage-4", input: [text.slice(0, 8000)], input_type: "document" }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const emb = j?.data?.[0]?.embedding;
+    return Array.isArray(emb) ? emb : null;
+  } catch { return null; }
+}
+
+const INFO_SCOPES = new Set(["personal", "org", "unclassified"]);
+async function storeInfoFacts(msg: any, classification: string, facts: any[]): Promise<void> {
+  if (classification === "spam") return;
+  if (!Array.isArray(facts) || facts.length === 0) return;
+
+  const { data: mem } = await supabase
+    .from("org_members").select("org_id").eq("user_id", msg.user_id).limit(1).maybeSingle();
+  const orgId = (mem as any)?.org_id;
+  if (!orgId) return;
+  const { data: app } = await supabase.from("apps").select("id").eq("slug", "smrtinfo").maybeSingle();
+  const appId = (app as any)?.id;
+  if (!appId) return;
+  const { data: ent } = await supabase
+    .from("app_memberships").select("org_id").eq("org_id", orgId).eq("app_id", appId).maybeSingle();
+  if (!ent) return;
+
+  for (const f of facts.slice(0, 8)) {
+    try {
+      if (f?.is_secret) {
+        const secret = typeof f.secret_value === "string" ? f.secret_value : "";
+        const label = String(f.secret_label || f.entity || "").trim();
+        if (!secret || !label) continue;
+        const { data: dup } = await supabase.from("info_secret_suggestions")
+          .select("id").eq("org_id", orgId).eq("user_id", msg.user_id).eq("label", label).eq("status", "pending").limit(1);
+        if (dup && dup.length) continue;
+        const { data: sid, error: verr } = await supabase.rpc("vault_create_secret", {
+          new_secret: secret, new_name: `smrtvault:${crypto.randomUUID()}`,
+          new_description: `smrtInfo pending credential: ${label}`.slice(0, 500),
+        });
+        if (verr || !sid) continue;
+        await supabase.from("info_secret_suggestions").insert({
+          org_id: orgId, user_id: msg.user_id, label, url: msg.source_url ?? null,
+          password_secret_id: sid, source_message_id: msg.id, source_type: msg.source_type ?? null, source_url: msg.source_url ?? null,
+        });
+        continue;
+      }
+      const entity = String(f?.entity ?? "").trim();
+      const attribute = String(f?.attribute ?? "").trim();
+      const value = String(f?.value ?? "").trim();
+      const confidence = typeof f?.confidence === "number" ? f.confidence : 0;
+      if (!entity || !attribute || !value || confidence < 0.5) continue;
+      const scope = INFO_SCOPES.has(f?.scope) ? f.scope : "unclassified";
+      const effDate = (typeof f?.effective_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f.effective_date)) ? f.effective_date : null;
+      const embedding = await embedForInfo(`${entity} — ${attribute}: ${value}`);
+      let q = supabase.from("info_facts").select("id, value")
+        .eq("org_id", orgId).eq("scope", scope).eq("entity", entity).eq("attribute", attribute)
+        .is("superseded_by", null).order("created_at", { ascending: false }).limit(1);
+      if (scope === "personal") q = q.eq("user_id", msg.user_id);
+      const { data: existRows } = await q;
+      const exist = (existRows as any)?.[0] ?? null;
+      if (exist && String(exist.value).trim() === value) continue;
+      const { data: ins, error: insErr } = await supabase.from("info_facts").insert({
+        org_id: orgId, user_id: msg.user_id, scope, entity, attribute, value,
+        effective_date: effDate, confidence, verified: confidence >= 0.85, language: f?.language ?? null,
+        source_message_id: msg.id, source_type: msg.source_type ?? null, source_url: msg.source_url ?? null,
+        embedding: embedding ? JSON.stringify(embedding) : null,
+      }).select("id").single();
+      if (insErr || !ins) continue;
+      if (exist) {
+        await supabase.from("info_fact_history").insert({
+          fact_id: exist.id, org_id: orgId, user_id: msg.user_id, scope, entity, attribute, value: exist.value, source_url: msg.source_url ?? null,
+        });
+        await supabase.from("info_facts").update({ superseded_by: (ins as any).id }).eq("id", exist.id);
+      }
+    } catch (e) {
+      console.error("[smrtinfo] store fact:", (e as Error).message);
+    }
+  }
 }
 
 async function analyzeWithMemory(
@@ -908,14 +1034,36 @@ content under the rules above.`;
   // WhatsApp share the leading prefix and each variant stays byte-stable.
   // FRESH user message = only the truly per-message parts: current time, thread
   // memory (changes per message), the self-note marker, and the body itself.
-  const systemPrefix = staticPrompt + newMatterContract + identityBlock + personalBlock + whatsappNote;
+  // smrtInfo: instruct the SAME call to also emit durable facts (only for
+  // ACTIONABLE/INFORMATIONAL — SPAM returns []). Scope via the user's context
+  // profile. Appended to the cached prefix; per-user (identity is already here),
+  // so cache stays warm.
+  const infoProfile = await getInfoProfile(msg.user_id);
+  const factsContract = `\n\n═══ INFORMATION-CENTER FACTS (additional output field) ═══
+In the SAME JSON object you return, also include a "facts" array: durable,
+reusable facts worth keeping in the user's information center (insurer/company
+names, policy/account/reference numbers, due/payment/renewal dates, amounts,
+contact details, addresses, plan names, where a credential lives). Rules:
+- ONLY when classification is ACTIONABLE or INFORMATIONAL. For SPAM: "facts": [].
+- At most 8, highest-value only. If nothing is worth keeping: "facts": [].
+- Each item: {"entity","attribute","value","effective_date"(YYYY-MM-DD or null),
+  "confidence"(0.0-1.0),"scope"("personal"|"org"|"unclassified"),
+  "is_secret"(bool),"secret_label"(or null),"secret_value"(or null),"language"}.
+- Keep any URL in a value VERBATIM (full URL, never a bare domain).
+- SECRETS: if a password/PIN/access-code appears, set is_secret=true, put a human
+  label in secret_label, the secret verbatim in secret_value, and value="". Never
+  put a secret in value/entity/attribute. No fact for one-time codes / OTP.
+Scope each fact using this profile (never guess; "unclassified" when unsure):
+${renderInfoProfile(infoProfile)}`;
+
+  const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + personalBlock + whatsappNote;
   const systemBlocks: SystemBlock[] = [{ type: "text", text: systemPrefix, cache_control: { type: "ephemeral", ttl: "1h" } }];
   const userMessage = `${nowContextLine(userTz(settings))}${memoryBlock}${selfNote}\n\nFrom: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
   // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
   // and truncate the JSON mid-object. JSON-only output (no prose preamble) is
   // enforced by the OUTPUT FORMAT block in newMatterContract.
-  const result = await callClaude(model, systemBlocks, userMessage, 1500, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(model, systemBlocks, userMessage, 3000, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
   try {
@@ -982,6 +1130,7 @@ content under the rules above.`;
       cacheReadTokens: result.cacheReadTokens,
       cacheWriteTokens: result.cacheWriteTokens,
       model,
+      facts: [],
     };
   }
 
@@ -1047,6 +1196,7 @@ content under the rules above.`;
     cacheReadTokens: result.cacheReadTokens,
     cacheWriteTokens: result.cacheWriteTokens,
     model,
+    facts: Array.isArray(parsed.facts) ? parsed.facts : [],
   };
 }
 
@@ -3649,6 +3799,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
   const { error: finalMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: classification, processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
   if (finalMsgUpdateError) console.error("source_messages final update failed:", finalMsgUpdateError);
+
+  // smrtInfo: store the facts extracted IN THIS SAME classification pass (no
+  // second Claude call). Fully guarded — never affects classification/tasks.
+  try {
+    await storeInfoFacts(msg, classification, (analysis as any)?.facts);
+  } catch (e) {
+    console.error("[smrtinfo] fold-store failed:", (e as Error).message);
+  }
+
   await tagGmailReview(msg, classification);
   const costType = modelTypeFromName(aiModel);
   await supabase.from("log_entries").insert({
