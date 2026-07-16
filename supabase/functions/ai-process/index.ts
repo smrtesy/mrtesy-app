@@ -2706,6 +2706,33 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
     // Don't double-create if this sent message was processed before.
     const { data: existingFu } = await supabase
       .from("tasks").select("id").eq("source_message_id", msg.id).eq("task_type", "followup").maybeSingle();
+
+    // Thread-level dedup: the original send and a later "Re:" nudge are distinct
+    // source_messages (different ids, same Gmail threadId), so the per-message
+    // guard above misses them and we'd spawn a second "מעקב" card for the same
+    // thread. Look for an already-open follow-up on any sibling message in this
+    // thread. Closed follow-ups (completed/dismissed/archived) are intentionally
+    // ignored, so a genuinely new round of outreach after the loop was closed
+    // still earns its own fresh follow-up.
+    let threadFu: { id: string } | null = null;
+    const followupThreadId = (msg.metadata as any)?.threadId as string | undefined;
+    if (!existingFu && followupThreadId) {
+      const { data: threadSiblings } = await supabase
+        .from("source_messages").select("id")
+        .eq("user_id", msg.user_id).neq("id", msg.id)
+        .filter("metadata->>threadId", "eq", followupThreadId);
+      const threadSiblingIds = (threadSiblings ?? []).map((r) => r.id);
+      if (threadSiblingIds.length > 0) {
+        const { data: openThreadFu } = await supabase
+          .from("tasks").select("id")
+          .eq("user_id", msg.user_id).eq("task_type", "followup")
+          .in("source_message_id", threadSiblingIds)
+          .not("status", "in", "(completed,dismissed,archived)")
+          .order("created_at", { ascending: false }).limit(1).maybeSingle();
+        threadFu = openThreadFu ?? null;
+      }
+    }
+
     if (!existingFu) {
       const anchor = msg.received_at ? new Date(msg.received_at) : new Date();
       const surfaceAt = addBusinessHours(anchor, FOLLOWUP_LEAD_HOURS);
@@ -2719,6 +2746,42 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         recipient ? `נשלח אל: ${recipient}` : null,
         sourceUrl ? `קישור להודעה: ${sourceUrl}` : null,
       ].filter(Boolean).join("\n");
+
+      if (threadFu) {
+        // A follow-up for this thread is already open — re-anchor it to this
+        // newer send instead of creating a duplicate: restart the 48h clock
+        // from the latest outreach and re-defer it if it had already surfaced.
+        // Only touch a still-waiting card (snoozed / inbox); a follow-up the
+        // user is actively working (in_progress / pending_completion) is left
+        // exactly as-is.
+        const { data: reanchored, error: reanchorError } = await supabase.from("tasks")
+          .update({
+            source_message_id: msg.id,
+            snoozed_until: surfaceAt.toISOString(),
+            status: "snoozed",
+            description,
+            source_link: sourceUrl,
+            related_contact_email: recipient || null,
+          })
+          .eq("id", threadFu.id)
+          .in("status", ["snoozed", "inbox"])
+          .select("id").maybeSingle();
+        if (reanchorError) console.error("followup thread re-anchor failed:", reanchorError);
+        if (reanchored) {
+          const { error: reanchorActivityError } = await supabase.from("task_activities").insert({
+            user_id: msg.user_id, task_id: threadFu.id,
+            activity_type: "snoozed", new_value: "snoozed",
+            note: `Re-anchored follow-up to a newer send in the same thread; re-deferred to ${surfaceAt.toISOString()}`,
+            actor: "system",
+          });
+          if (reanchorActivityError) console.error("task_activities re-anchor insert failed:", reanchorActivityError);
+        }
+        const { error: followupMsgReanchorError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
+        if (followupMsgReanchorError) console.error("source_messages followup re-anchor update failed:", followupMsgReanchorError);
+        await supabase.from("log_entries").insert({ ...baseFields, status: "ok", ai_classification: "actionable_followup", classification_reason: `follow-up merged into existing thread task ${threadFu.id}: ${fu.reason}` });
+        return;
+      }
+
       const { data: newTask, error: followupTaskInsertError } = await supabase.from("tasks").insert({
         user_id: msg.user_id, source_message_id: msg.id,
         title, title_he: title, description,
