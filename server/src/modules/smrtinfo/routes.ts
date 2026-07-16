@@ -221,17 +221,41 @@ interface FactMatch {
 
 function buildAskSystem(): string {
   return `You are the answer engine for a personal/organizational information center.
-Answer the user's question ONLY from the FACTS provided in the user message.
-Rules:
-- If the facts do not contain the answer, say you don't have it (in the user's
-  language) — never guess or invent.
-- Cite the source for each fact you use: include its source_url VERBATIM (full
-  URL, never shortened to a domain) when present.
-- If the question is about a password/login and a VAULT MATCH is listed, tell the
-  user the credential is saved in smrtVault and to use "reveal" there — NEVER try
-  to state a password (you are not given one).
-- Answer concisely in the SAME LANGUAGE as the question (Hebrew stays Hebrew).
-Return plain text (a short answer + the relevant source link(s)).`;
+You receive a QUESTION and a numbered list of FACTS (each: subject/entity,
+attribute, value, scope, source). Answer STRICTLY from these facts.
+
+Use the WHO'S WHO block (context about the user) to resolve relationships — who
+is a relative (and which relation), which names are the user's organizations or
+vendors — when judging whether a fact's subject matches the question.
+
+CRITICAL — subject match:
+- A fact's SUBJECT (its entity — the person/company/thing it is about) must
+  actually match the SUBJECT of the question. A fact about one person or entity
+  does NOT answer a question about a different one. Example: if WHO'S WHO says
+  "דובי חסקינד" is the user's BROTHER, then a fact about דובי does NOT answer
+  "the medical insurance of my children" — say so explicitly (it is the brother,
+  not the children).
+- Use ONLY facts that DIRECTLY answer the question. IGNORE facts that merely
+  share a word (e.g. "ילדים"/"kids" appearing inside an unrelated project name
+  like "רבי לילדים").
+
+If NO fact directly answers the question:
+- Say so honestly, in the question's language (e.g. "לא נמצא מידע על ...").
+- You MAY briefly mention a related-but-not-matching fact AS related only
+  (e.g. "קיימת רשומה על ביטוח של דובי חסקינד, אך לא על הילדים") — never present
+  it as the answer.
+
+Other rules:
+- Passwords: if a VAULT MATCH genuinely matches, say the credential is in
+  smrtVault (use "reveal" there); NEVER state a password.
+- Preserve any source URL VERBATIM (full URL, never a bare domain).
+- Answer in the SAME LANGUAGE as the question (Hebrew stays Hebrew), concise.
+
+Return ONLY this JSON (no markdown, no prose outside it):
+{
+  "answer": "the concise answer, or an honest not-found, in the question's language",
+  "used_facts": [the #numbers of the facts you actually used to answer; [] if none]
+}`;
 }
 
 /** POST /info/ask { question, scope? } */
@@ -249,7 +273,10 @@ router.post("/info/ask", async (req: Request, res: Response) => {
       p_org_id: req.org!.id,
       p_user_id: req.user!.id,
       p_scopes: scopes,
-      match_threshold: 0.5,
+      // Tighter than the old 0.5 (cosine distance): 0.5 let weakly-related facts
+      // through (e.g. a "רבי לילדים" project item matching "הילדים שלי"). Voyage
+      // does recall; Claude does the final subject-match judgment below.
+      match_threshold: 0.35,
       match_count: 10,
     });
     if (error) return res.status(500).json({ error: error.message });
@@ -308,14 +335,56 @@ router.post("/info/ask", async (req: Request, res: Response) => {
     .map((v) => `- ${v.label}${v.username ? ` (user: ${v.username})` : ""}`)
     .join("\n");
 
-  const userMessage = `QUESTION:\n${question}\n\nFACTS:\n${factLines || "(none)"}\n\nVAULT MATCHES (passwords in smrtVault — do not state them):\n${vaultLines || "(none)"}`;
+  // WHO'S WHO — the user's context profile, so the answer engine can resolve
+  // relationships (e.g. that a named person is the user's brother, not the kids).
+  let contextBlock = "";
+  {
+    const { data: prof } = await db
+      .from("info_context_profile")
+      .select("profile")
+      .eq("org_id", req.org!.id)
+      .eq("user_id", req.user!.id)
+      .maybeSingle();
+    const p = (prof as { profile?: Record<string, unknown> } | null)?.profile;
+    if (p) {
+      const fam = Array.isArray(p.family)
+        ? (p.family as { name?: string; relation?: string }[])
+            .map((f) => `${f.name}${f.relation ? ` (${f.relation})` : ""}`)
+            .join(", ")
+        : "";
+      const orgs = Array.isArray(p.orgs)
+        ? (p.orgs as { name?: string }[]).map((o) => o.name).filter(Boolean).join(", ")
+        : "";
+      const parts: string[] = [];
+      if (orgs) parts.push(`Organizations: ${orgs}`);
+      if (fam) parts.push(`Family / personal people: ${fam}`);
+      if (typeof p.notes === "string" && p.notes) parts.push(`Notes: ${p.notes}`);
+      contextBlock = parts.join("\n");
+    }
+  }
 
-  const { content: answer } = await simpleCall("sonnet", buildAskSystem(), userMessage, 1024, {
+  const userMessage = `QUESTION:\n${question}\n\nWHO'S WHO (context about the user):\n${contextBlock || "(none)"}\n\nFACTS:\n${factLines || "(none)"}\n\nVAULT MATCHES (passwords in smrtVault — do not state them):\n${vaultLines || "(none)"}`;
+
+  const { content: raw } = await simpleCall("sonnet", buildAskSystem(), userMessage, 1024, {
     component: "server.smrtinfo.ask",
     userId: req.user!.id,
   });
 
-  res.json({ answer, facts, vaultMatches });
+  // The model returns { answer, used_facts:[#..] }. Surface ONLY the facts it
+  // actually used as sources — not every loosely-retrieved candidate (that was
+  // the "unrelated sources" bug). If it didn't return a usable list, show no
+  // sources rather than a wall of irrelevant ones.
+  const parsed = parseJsonResponse<{ answer?: string; used_facts?: number[] }>(raw);
+  const answer = (parsed?.answer ?? raw ?? "").trim();
+  const usedSet = new Set(
+    (Array.isArray(parsed?.used_facts) ? parsed!.used_facts! : []).map((n) => Number(n)),
+  );
+  const sources =
+    parsed && Array.isArray(parsed.used_facts)
+      ? facts.filter((_, i) => usedSet.has(i + 1))
+      : [];
+
+  res.json({ answer, facts: sources, vaultMatches });
 });
 
 // ============================================================
