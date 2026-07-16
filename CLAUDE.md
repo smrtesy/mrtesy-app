@@ -15,6 +15,26 @@ Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
 existing repo conventions (English where the repo already uses English) — only
 the text you address to the user is Hebrew.
 
+## Timezone — always New York (America/New_York)
+
+The user is based in **New York**. Present **all** dates, times, and
+time-of-day the user sees in the **America/New_York** timezone (US Eastern,
+EST/EDT with DST) — **never** in Israel time (`Asia/Jerusalem`) and never in
+raw UTC. This is a standing preference and applies to **all** sessions,
+including Claude Code on the web.
+
+- Any time/date in prose you address to the user (chat replies, summaries,
+  explanations, reminders, task previews) is stated in New York time. When it
+  helps avoid ambiguity, label it (e.g. "14:00 ניו יורק").
+- When you write or review code that formats a date/time for the user, or
+  schedules something on the user's behalf (reminders, cron/`send_later`,
+  calendar events, task due dates shown in the UI), use `America/New_York`
+  as the display/target timezone unless the code deliberately needs UTC for
+  storage. Store timestamps in UTC as usual; convert to New York only at the
+  display / user-facing boundary.
+- If you're given a time without a zone from a user-facing context, assume
+  it's New York time.
+
 ## Cost approval — explicit, up-front, non-negotiable
 
 **Any action that will spend the user's money requires the user's explicit,
