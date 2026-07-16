@@ -102,7 +102,10 @@ async function loadSystemParams(): Promise<SystemParams> {
   };
 }
 
-const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "sms_echo", "google_calendar", "google_drive", "gmail", "gmail_sent"];
+// gmail_spam is processed LAST (lowest priority): it's the opt-in spam-folder
+// scan, classified on the cheap model, and real inbox/chat mail always takes
+// the batch slots first.
+const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "sms_echo", "google_calendar", "google_drive", "gmail", "gmail_sent", "gmail_spam"];
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.sms,source_type.eq.sms_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
 const DEFAULT_FILTERED_CATEGORY_KEYS = new Set(["promotions", "social", "forums"]);
@@ -2876,7 +2879,39 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   } else {
     // ── Single AI call: classify + update summary + flag completion ───────────
     try {
-      analysis = await analyzeWithMemory(msg, memory, settings, sys);
+      // Opt-in spam-folder scan (source_type gmail_spam): classify on the CHEAP
+      // model first — most spam is junk and we don't want to pay Sonnet on all
+      // of it. Only when the cheap pass says "actionable" do we spend ONE
+      // strong-model confirmation before the message is allowed to create a
+      // task, so junk/phishing can't spawn tasks. A non-actionable verdict falls
+      // through to the normal quiet handling (marked processed + logged, no task
+      // and no notification) exactly like any informational message.
+      const isSpamScan = msg.source_type === "gmail_spam";
+      analysis = isSpamScan
+        ? await analyzeWithMemory(msg, memory, settings, sys, sys.classification_model)
+        : await analyzeWithMemory(msg, memory, settings, sys);
+      if (
+        isSpamScan &&
+        analysis.classification === "actionable" &&
+        sys.classifier_model &&
+        sys.classifier_model !== analysis.model
+      ) {
+        const cheap = analysis;
+        const confirm = await analyzeWithMemory(msg, memory, settings, sys, sys.classifier_model);
+        // Keep the strong model's verdict; fold both passes' tokens so the log +
+        // ai_usage cost accounting reflect the full spam→task decision.
+        analysis = {
+          ...confirm,
+          classificationTrail: [
+            { model: cheap.model, classification: cheap.classification, confidence: cheap.confidence, reason: cheap.reason },
+            { model: confirm.model, classification: confirm.classification, confidence: confirm.confidence, reason: confirm.reason },
+          ],
+          inputTokens: confirm.inputTokens + cheap.inputTokens,
+          outputTokens: confirm.outputTokens + cheap.outputTokens,
+          cacheReadTokens: confirm.cacheReadTokens + cheap.cacheReadTokens,
+          cacheWriteTokens: confirm.cacheWriteTokens + cheap.cacheWriteTokens,
+        };
+      }
       classification = analysis.classification;
       classificationReason = analysis.reason;
       totalInputTokens += analysis.inputTokens;
@@ -2967,7 +3002,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // task linkage) so the task-builder — which now receives the grafted MEETING
   // block — builds a join task with the link preserved verbatim. SPAM is left
   // alone (a join link in junk is more likely phishing than a real meeting).
-  if (classification === "informational" && hasMeetingInvite(bodyForAI(msg))) {
+  if (classification === "informational" && msg.source_type !== "gmail_spam" && hasMeetingInvite(bodyForAI(msg))) {
     classification = "actionable";
     classificationReason = classificationReason
       ? `${classificationReason} | pre:meeting_invite`
