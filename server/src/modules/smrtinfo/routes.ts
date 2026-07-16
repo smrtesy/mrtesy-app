@@ -224,11 +224,17 @@ function buildAskSystem(): string {
 You receive a QUESTION and a numbered list of FACTS (each: subject/entity,
 attribute, value, scope, source). Answer STRICTLY from these facts.
 
+Use the WHO'S WHO block (context about the user) to resolve relationships — who
+is a relative (and which relation), which names are the user's organizations or
+vendors — when judging whether a fact's subject matches the question.
+
 CRITICAL — subject match:
 - A fact's SUBJECT (its entity — the person/company/thing it is about) must
   actually match the SUBJECT of the question. A fact about one person or entity
-  does NOT answer a question about a different one. Example: a fact about
-  "דובי חסקינד" does NOT answer "the medical insurance of my children".
+  does NOT answer a question about a different one. Example: if WHO'S WHO says
+  "דובי חסקינד" is the user's BROTHER, then a fact about דובי does NOT answer
+  "the medical insurance of my children" — say so explicitly (it is the brother,
+  not the children).
 - Use ONLY facts that DIRECTLY answer the question. IGNORE facts that merely
   share a word (e.g. "ילדים"/"kids" appearing inside an unrelated project name
   like "רבי לילדים").
@@ -329,7 +335,35 @@ router.post("/info/ask", async (req: Request, res: Response) => {
     .map((v) => `- ${v.label}${v.username ? ` (user: ${v.username})` : ""}`)
     .join("\n");
 
-  const userMessage = `QUESTION:\n${question}\n\nFACTS:\n${factLines || "(none)"}\n\nVAULT MATCHES (passwords in smrtVault — do not state them):\n${vaultLines || "(none)"}`;
+  // WHO'S WHO — the user's context profile, so the answer engine can resolve
+  // relationships (e.g. that a named person is the user's brother, not the kids).
+  let contextBlock = "";
+  {
+    const { data: prof } = await db
+      .from("info_context_profile")
+      .select("profile")
+      .eq("org_id", req.org!.id)
+      .eq("user_id", req.user!.id)
+      .maybeSingle();
+    const p = (prof as { profile?: Record<string, unknown> } | null)?.profile;
+    if (p) {
+      const fam = Array.isArray(p.family)
+        ? (p.family as { name?: string; relation?: string }[])
+            .map((f) => `${f.name}${f.relation ? ` (${f.relation})` : ""}`)
+            .join(", ")
+        : "";
+      const orgs = Array.isArray(p.orgs)
+        ? (p.orgs as { name?: string }[]).map((o) => o.name).filter(Boolean).join(", ")
+        : "";
+      const parts: string[] = [];
+      if (orgs) parts.push(`Organizations: ${orgs}`);
+      if (fam) parts.push(`Family / personal people: ${fam}`);
+      if (typeof p.notes === "string" && p.notes) parts.push(`Notes: ${p.notes}`);
+      contextBlock = parts.join("\n");
+    }
+  }
+
+  const userMessage = `QUESTION:\n${question}\n\nWHO'S WHO (context about the user):\n${contextBlock || "(none)"}\n\nFACTS:\n${factLines || "(none)"}\n\nVAULT MATCHES (passwords in smrtVault — do not state them):\n${vaultLines || "(none)"}`;
 
   const { content: raw } = await simpleCall("sonnet", buildAskSystem(), userMessage, 1024, {
     component: "server.smrtinfo.ask",
