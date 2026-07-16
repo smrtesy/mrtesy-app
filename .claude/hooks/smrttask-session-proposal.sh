@@ -12,6 +12,9 @@
 #     SMRTESY_BACKEND_URL  or  SMRTTASK_PROPOSAL_URL (full endpoint)
 #     (SMRTESY_BACKEND_URL = the backend's SMRTESY_PUBLIC_URL / the app's
 #      NEXT_PUBLIC_BACKEND_URL, e.g. https://<app>.up.railway.app)
+# Optional identity override (the smrtTask account to file for). Needed when the
+# Claude Code login email differs from the smrtesy platform account email:
+#     SMRTTASK_USER_EMAIL  or  SMRTTASK_USER_ID
 #
 # The endpoint lives on the Express backend (Railway), NOT on the Next.js app at
 # app.smrtesy.com. No baked-in default on purpose — a wrong host silently 404s.
@@ -27,6 +30,14 @@ else
   URL=""
 fi
 
+# Normalize the scheme: a schemeless host makes curl default to http://, and
+# Railway 301-redirects http→https — a redirect a -X POST does not replay, so
+# the body is silently dropped. Force https:// when no scheme is present.
+case "$URL" in
+  ""|http://*|https://*) ;;
+  *) URL="https://$URL" ;;
+esac
+
 # Not provisioned in this environment → do nothing, quietly.
 [ -z "$SECRET" ] && exit 0
 [ -z "$URL" ] && exit 0
@@ -40,7 +51,9 @@ PAYLOAD="$(printf '%s' "$INPUT" | node "$HOOK_DIR/build-session-proposal.mjs" 2>
 [ -z "$PAYLOAD" ] && exit 0
 
 # Fire-and-forget: detach so the network round-trip never delays the user.
-( curl -sS -m 20 -X POST "$URL" \
+# -L + --post301/302 keep the POST body across any redirect (belt and braces on
+# top of the https normalization above).
+( curl -sS -m 20 -L --post301 --post302 -X POST "$URL" \
     -H "Content-Type: application/json" \
     -H "X-Cron-Secret: $SECRET" \
     --data-binary "$PAYLOAD" >/dev/null 2>&1 || true ) &
