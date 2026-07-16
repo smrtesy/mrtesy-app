@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { extractEmailBody } from "../_shared/email-body.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -3792,6 +3793,221 @@ async function runShadowEval(reqUrl: URL): Promise<Response> {
   return new Response(JSON.stringify({ run_id: runId, evaluated: rows.length, insertError }), { headers: { "Content-Type": "application/json" } });
 }
 
+// ── Spam-scan cost probe (measurement-only) ────────────────────────────────
+// Reachable ONLY via `?action=spam_cost_probe` behind the cron secret. Answers
+// "how much would scanning SPAM add?" with REAL numbers before any pipeline
+// change: fetches a bounded sample of the user's SPAM mail straight from Gmail
+// (which the collector never scans), classifies each on Haiku through the REAL
+// classifier (analyzeWithMemory — same prompt, same cost math, ai_usage row per
+// call), and records tokens + cost + verdict to spam_cost_probe. NEVER writes
+// source_messages or tasks; no suggestion is ever created. The verdict spread
+// doubles as the "rescue rate" — how many spam the cheap pass flags as
+// actionable/informational, i.e. mail the user is currently missing.
+interface SpamProbeMsg {
+  id: string;
+  subject: string;
+  sender: string;
+  senderEmail: string;
+  recipient: string;
+  body: string;
+  receivedAt: string | null;
+}
+
+// Fetch a bounded sample of SPAM messages plus Gmail's own estimate of the
+// total spam volume in the window (used to project the full cost from the
+// sampled per-message cost). Self-contained on the shared token/body helpers —
+// touches no production collector state.
+async function fetchSpamSample(token: string, days: number, sample: number): Promise<{ estimate: number; messages: SpamProbeMsg[] }> {
+  const q = encodeURIComponent(`in:spam newer_than:${days}d`);
+  const listResp = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=${sample}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!listResp.ok) throw new Error(`spam list ${listResp.status}`);
+  const listData = await listResp.json();
+  // resultSizeEstimate is Gmail's ROUGH estimate of total matches — good enough
+  // to project daily/monthly volume, but not exact. The projection inherits its
+  // approximation; the sampled per-message cost is the precise part.
+  const estimate = Number(listData.resultSizeEstimate ?? 0);
+  const ids: string[] = (listData.messages ?? []).map((m: any) => m.id).slice(0, sample);
+  const messages: SpamProbeMsg[] = [];
+  for (const id of ids) {
+    const r = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!r.ok) continue;
+    const m = await r.json();
+    const headers: Array<{ name: string; value: string }> = m.payload?.headers ?? [];
+    const h = (n: string) => headers.find((x) => x.name?.toLowerCase() === n)?.value ?? "";
+    const from = h("from");
+    // `[^>]+` (non-greedy across bracket pairs) — same address extraction the
+    // collector uses, so multi-recipient headers don't produce garbage.
+    const senderEmail = (from.match(/<([^>]+)>/) ?? [])[1] ?? from;
+    let receivedAt: string | null = null;
+    try {
+      receivedAt = h("date")
+        ? new Date(h("date")).toISOString()
+        : (m.internalDate ? new Date(Number(m.internalDate)).toISOString() : null);
+    } catch { receivedAt = null; }
+    messages.push({
+      id,
+      subject: h("subject"),
+      sender: from,
+      senderEmail,
+      recipient: h("to"),
+      body: extractEmailBody(m.payload),
+      receivedAt,
+    });
+  }
+  return { estimate, messages };
+}
+
+async function runSpamCostProbe(reqUrl: URL): Promise<Response> {
+  // sample: how many spam messages to actually classify (each is one live Haiku
+  // call). Bounded so the measurement itself costs cents. days: the volume
+  // window used both for the fetch and for projecting daily/monthly cost.
+  const sample = Math.min(Math.max(parseInt(reqUrl.searchParams.get("sample") || "30", 10) || 30, 1), 60);
+  const days = Math.min(Math.max(parseInt(reqUrl.searchParams.get("days") || "7", 10) || 7, 1), 30);
+  const runId = reqUrl.searchParams.get("run_id") || crypto.randomUUID();
+  const requested = reqUrl.searchParams.get("user_id");
+  const sys = await loadSystemParams();
+
+  // Target set: an explicit user_id, else every Gmail-connected user (bounded).
+  let userIds: string[];
+  if (requested) {
+    userIds = [requested];
+  } else {
+    const { data: connected } = await supabase
+      .from("user_settings")
+      .select("user_id")
+      .eq("gmail_connected", true)
+      .limit(50);
+    userIds = (connected ?? []).map((r: any) => r.user_id);
+  }
+
+  const rows: any[] = [];
+  const perUser: any[] = [];
+  for (const userId of userIds) {
+    let token: string;
+    try {
+      token = await refreshGmailToken(userId);
+    } catch (e) {
+      perUser.push({ user_id: userId, error: `token: ${(e as Error).message}` });
+      continue;
+    }
+    let estimate = 0;
+    let messages: SpamProbeMsg[] = [];
+    try {
+      const fetched = await fetchSpamSample(token, days, sample);
+      estimate = fetched.estimate;
+      messages = fetched.messages;
+    } catch (e) {
+      perUser.push({ user_id: userId, error: `fetch: ${(e as Error).message}` });
+      continue;
+    }
+
+    const settings = await buildEvalSettings(userId);
+    let sampledCost = 0;
+    const classCounts: Record<string, number> = { actionable: 0, informational: 0, spam: 0, ERROR: 0 };
+    const CONC = 4;
+    for (let i = 0; i < messages.length; i += CONC) {
+      const chunk = messages.slice(i, i + CONC);
+      await Promise.all(chunk.map(async (sm) => {
+        // Synthetic source_messages-shaped row — analyzeWithMemory reads only
+        // these fields; the row is NEVER persisted to source_messages.
+        const msg = {
+          id: sm.id,
+          user_id: userId,
+          source_type: "gmail",
+          sender: sm.sender,
+          sender_email: sm.senderEmail,
+          recipient: sm.recipient,
+          subject: sm.subject,
+          body_text: sm.body.slice(0, 10000),
+        };
+        try {
+          const haiku = await analyzeWithMemory(msg, null, settings, sys, HAIKU_EVAL_MODEL);
+          const haikuCost = estimateCost(haiku.inputTokens, haiku.outputTokens, haiku.cacheReadTokens, haiku.cacheWriteTokens, "haiku");
+          // Same token profile priced at the Sonnet rate = what this message
+          // would cost IF the cheap pass flagged it uncertain and escalated.
+          const sonnetCost = estimateCost(haiku.inputTokens, haiku.outputTokens, haiku.cacheReadTokens, haiku.cacheWriteTokens, "sonnet");
+          sampledCost += haikuCost;
+          classCounts[haiku.classification] = (classCounts[haiku.classification] ?? 0) + 1;
+          rows.push({
+            run_id: runId,
+            user_id: userId,
+            message_id: sm.id,
+            subject: sm.subject?.slice(0, 500) ?? "",
+            sender_email: sm.senderEmail,
+            received_at: sm.receivedAt,
+            haiku_class: haiku.classification,
+            haiku_confidence: haiku.confidence,
+            input_tokens: haiku.inputTokens,
+            output_tokens: haiku.outputTokens,
+            cache_read_tokens: haiku.cacheReadTokens,
+            cache_write_tokens: haiku.cacheWriteTokens,
+            haiku_cost_usd: haikuCost,
+            sonnet_cost_usd: sonnetCost,
+          });
+        } catch (e) {
+          classCounts.ERROR = (classCounts.ERROR ?? 0) + 1;
+          rows.push({
+            run_id: runId, user_id: userId, message_id: sm.id,
+            subject: sm.subject?.slice(0, 500) ?? "", sender_email: sm.senderEmail, received_at: sm.receivedAt,
+            haiku_class: "ERROR", haiku_confidence: String((e as Error).message).slice(0, 180),
+            input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+            haiku_cost_usd: 0, sonnet_cost_usd: 0,
+          });
+        }
+      }));
+    }
+
+    const sampled = messages.length;
+    const classifiedOk = sampled - (classCounts.ERROR ?? 0);
+    // Divide accrued cost by the messages actually classified, NOT the full
+    // sample: sampledCost only accumulates on successful classifications, so
+    // dividing by `sampled` (which includes ERRORs) would understate the true
+    // per-email Haiku cost — the wrong direction for a cost probe.
+    const avgCost = classifiedOk > 0 ? sampledCost / classifiedOk : 0;
+    // Project full cost from the sampled per-message cost × the window's volume.
+    const spamPerDay = estimate / days;
+    // Rescue rate = share of spam the cheap pass would surface (actionable or
+    // informational) rather than confirm as spam. Only these would escalate to
+    // the strong model, so the escalation cost rides on this fraction.
+    const rescued = (classCounts.actionable ?? 0) + (classCounts.informational ?? 0);
+    const rescueRate = classifiedOk > 0 ? rescued / classifiedOk : 0;
+    // Sonnet per-email cost projected from this user's sampled token profile.
+    const avgSonnet = sampled > 0 ? rows.filter((r) => r.user_id === userId && r.haiku_class !== "ERROR").reduce((a, r) => a + r.sonnet_cost_usd, 0) / Math.max(classifiedOk, 1) : 0;
+    // Blended daily cost: Haiku on every spam + Sonnet only on the rescued share.
+    const dailyHaiku = spamPerDay * avgCost;
+    const dailyEscalation = spamPerDay * rescueRate * avgSonnet;
+    perUser.push({
+      user_id: userId,
+      spam_estimate_window: estimate,
+      window_days: days,
+      spam_per_day: Number(spamPerDay.toFixed(1)),
+      sampled,
+      class_counts: classCounts,
+      rescue_rate: Number((rescueRate * 100).toFixed(1)),
+      avg_haiku_cost_per_email_usd: Number(avgCost.toFixed(6)),
+      projected_daily_usd: Number((dailyHaiku + dailyEscalation).toFixed(4)),
+      projected_monthly_usd: Number(((dailyHaiku + dailyEscalation) * 30).toFixed(2)),
+    });
+  }
+
+  let insertError: string | null = null;
+  for (let i = 0; i < rows.length; i += 100) {
+    const { error: insErr } = await supabase.from("spam_cost_probe").insert(rows.slice(i, i + 100));
+    if (insErr) { insertError = insErr.message; console.error("[spam_cost_probe] insert error:", insErr.message); }
+  }
+  const totalMonthly = perUser.reduce((a, u) => a + (u.projected_monthly_usd ?? 0), 0);
+  return new Response(
+    JSON.stringify({ run_id: runId, users: perUser, total_projected_monthly_usd: Number(totalMonthly.toFixed(2)), classified: rows.length, insertError }, null, 2),
+    { headers: { "Content-Type": "application/json" } },
+  );
+}
+
 /**
  * After a user's batch is processed, surface ONE "new items in your inbox"
  * notification so the `notifications` AFTER INSERT push trigger pings their
@@ -3916,6 +4132,20 @@ Deno.serve(async (req) => {
         return new Response(JSON.stringify({ write_call, read_call }), { headers: { "Content-Type": "application/json" } });
       }
       return await runShadowEval(reqUrl);
+    }
+
+    // Spam-cost-probe mode (admin-only): fetch a bounded sample of SPAM mail
+    // from Gmail, classify on Haiku through the real classifier, and record
+    // per-message cost + verdict to spam_cost_probe. Measures what scanning
+    // spam would cost BEFORE any pipeline change; writes no source_messages or
+    // tasks. Triggered by
+    //   POST .../ai-process?action=spam_cost_probe[&user_id=<uuid>][&sample=30][&days=7]
+    if (reqUrl.searchParams.get("action") === "spam_cost_probe") {
+      if (authHeader !== cronSecret && req.headers.get("x-cron-secret") !== cronSecret) {
+        return new Response("Forbidden — admin only", { status: 403 });
+      }
+      gmailTokenCache.clear();
+      return await runSpamCostProbe(reqUrl);
     }
 
     // Idle probe — most cron ticks have nothing pending, so bail with one
