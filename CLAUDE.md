@@ -64,15 +64,36 @@ best-effort; the hook is the real mechanism. Moving parts:
 
 - **`.claude/settings.json`** → `hooks.Stop` runs
   `.claude/hooks/smrttask-session-proposal.sh`.
-- **`.claude/hooks/smrttask-session-proposal.sh`** — fully guarded,
-  fire-and-forget wrapper. Reads the hook JSON on stdin, builds the request
-  body, and POSTs it detached so it never delays or fails a turn. Exits 0
-  silently whenever `CRON_SECRET` (or `node`/`curl`) is missing.
-- **`.claude/hooks/build-session-proposal.mjs`** — derives everything from the
-  environment: `session_id`/`session_url` from `CLAUDE_CODE_REMOTE_SESSION_ID`
-  (`cse_<slug>` → `https://claude.ai/code/session_<slug>`), `user_email` from
+- **`.claude/hooks/smrttask-session-proposal.sh`** — the enforcer. Two free
+  mechanisms (no paid API tokens):
+  1. **Enforce the agent summary.** On the FIRST stop of a turn-cycle it emits
+     `{"decision":"block","reason":…}`, which the harness feeds back to the
+     agent as its next instruction: write a short Hebrew summary and run
+     `.claude/hooks/post-session-summary.sh`. The harness sets
+     `stop_hook_active=true` when it re-runs the hook after the agent
+     continued — that's the loop-guard, so it blocks **at most once** per
+     turn-cycle. This is what makes the summary reliable instead of
+     best-effort — a plain CLAUDE.md line was NOT firing (2026-07: proposals
+     were landing as the minimal placeholder because the agent never posted).
+  2. **Safety net.** On the second stop it fire-and-forgets a minimal metadata
+     trace (via `build-session-proposal.mjs`), detached so it never delays a
+     turn. So even a session where the agent failed to post still leaves a row.
+  Fully guarded: not a web session (`CLAUDE_CODE_REMOTE_SESSION_ID` unset),
+  or a missing secret / URL / `node`/`curl`/`jq`, makes it a no-op that
+  neither blocks nor fails a turn.
+- **`.claude/hooks/post-session-summary.sh`** — the helper the agent runs when
+  blocked. Takes `"<topic>" "<summary>" "<next_step>"` (or `--json <file>`),
+  resolves session/secret/URL/identity exactly like the Stop hook, builds the
+  body with `jq --arg` (safe escaping), and POSTs `{ topic, summary, next_step }`
+  so the backend enriches the SAME task. Prints the endpoint response so the
+  agent can confirm `"ok":true`. The summary is written by the agent on the
+  user's Claude subscription — ZERO paid API tokens.
+- **`.claude/hooks/build-session-proposal.mjs`** — builds the minimal safety-net
+  body. Derives everything from the environment: `session_id`/`session_url` from
+  `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_<slug>` →
+  `https://claude.ai/code/session_<slug>`), `user_email` from
   `CLAUDE_CODE_USER_EMAIL`, `git_branch` from `.git/HEAD`, and a compact
-  transcript from `transcript_path`.
+  transcript from `transcript_path` (metadata only — NO topic/summary).
 - **`POST /api/claude-session/proposal`** (server
   `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
   the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
@@ -86,13 +107,14 @@ best-effort; the hook is the real mechanism. Moving parts:
   **Cost model (changed 2026-07): the backend NEVER calls an LLM here.** The
   chat summary is produced by the Claude Code **agent** (on the user's Claude
   subscription — no API tokens) and passed in the request body as
-  `{ topic, summary, next_step }`. When those are absent (the plain Stop-hook
-  fallback), the endpoint files a **minimal no-AI trace** instead, and a
-  no-summary call never overwrites an existing agent-written summary (partial
-  update). So the flow is BOTH: the Stop hook guarantees a trace every session;
-  the agent should, at the end of a substantive session, generate a short Hebrew
-  summary and POST it to `/api/claude-session/proposal` (with the same
-  `x-cron-secret`, `SMRTTASK_USER_ID`, `session_id`/`session_url`) to enrich it.
+  `{ topic, summary, next_step }`. When those are absent (the safety-net
+  Stop-hook fallback), the endpoint files a **minimal no-AI trace** instead, and
+  a no-summary call never overwrites an existing agent-written summary (partial
+  update). So the flow is BOTH: the Stop hook's block step drives the agent to
+  post a real summary every turn-cycle; the safety-net trace guarantees a row
+  even if that post fails. Because the block re-fires each turn-cycle, the
+  summary refreshes to reflect the latest state of the chat (a few extra seconds
+  at each turn-end — the accepted trade for a $0, reliable summary).
 
 **Provisioning (one-time):** the endpoint lives on the **Express backend
 (Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
