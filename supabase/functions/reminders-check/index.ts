@@ -130,8 +130,26 @@ Deno.serve(async (req) => {
     for (const task of snoozedTasks || []) {
       // Follow-up suggestions are only worth surfacing if the other side never
       // replied. If a reply has arrived on the same thread since we sent the
-      // message, the loop closed itself — auto-dismiss instead of nagging.
+      // message, the loop USUALLY closed itself — but a reply is not always a
+      // resolution: on a pending-outcome matter (a donation that must go
+      // through, a payment to fix) the reply may be a mere clarifying exchange
+      // ("Which cc?" → the user answers) while the outcome is still pending.
+      // Consult the classifier-maintained thread state: when it says the
+      // matter is still open, WAKE the follow-up for a one-click decision
+      // instead of silently dropping a live matter; auto-dismiss only when the
+      // thread is resolved or we have no signal (legacy behavior).
       if (task.task_type === "followup" && (await replyArrived(task))) {
+        if (await matterStillPending(task)) {
+          const { error: pendingWakeError } = await supabase.from("tasks").update({
+            snoozed_until: null,
+            status: "inbox",
+            last_updated_reason: "followup_reply_pending_outcome",
+            woke_from_snooze_at: now,
+            updated_at: now,
+          }).eq("id", task.id);
+          if (pendingWakeError) console.error("tasks followup pending wake failed:", pendingWakeError);
+          continue;
+        }
         const { error: suppressError } = await supabase.from("tasks").update({
           snoozed_until: null,
           status: "dismissed",
@@ -287,6 +305,43 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+// A reply arrived — but is the matter this follow-up tracks still OPEN?
+// thread_memory is the classifier-maintained per-thread state (one slot per
+// Gmail thread / WhatsApp chat, upserted on every classified burst). If it
+// says the thread is anything other than resolved, the reply did NOT close
+// the loop (e.g. a clarifying "which card?" on a donation that must still go
+// through) and the follow-up should surface for a one-click decision rather
+// than silently die. No thread key / no memory row → unknown → false, which
+// keeps the legacy auto-dismiss for cases the classifier never saw.
+// Key format must mirror threadKey() in ai-process: gmail:<threadId> for
+// gmail/gmail_sent, <source_type>:<chatId> for whatsapp/sms.
+async function matterStillPending(task: { user_id: string | null; source_message_id: string | null }): Promise<boolean> {
+  if (!task.source_message_id || !task.user_id) return false;
+  const { data: sent } = await supabase
+    .from("source_messages")
+    .select("source_type, metadata")
+    .eq("id", task.source_message_id)
+    .maybeSingle();
+  if (!sent) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meta = (sent.metadata ?? {}) as any;
+  let key: string | null = null;
+  if (sent.source_type === "gmail" || sent.source_type === "gmail_sent") {
+    key = meta.threadId ? `gmail:${meta.threadId}` : null;
+  } else if (sent.source_type === "whatsapp" || sent.source_type === "sms") {
+    key = meta.chatId ? `${sent.source_type}:${meta.chatId}` : null;
+  }
+  if (!key) return false;
+  const { data: memory } = await supabase
+    .from("thread_memory")
+    .select("state")
+    .eq("user_id", task.user_id)
+    .eq("thread_key", key)
+    .maybeSingle();
+  if (!memory?.state) return false;
+  return memory.state !== "resolved";
+}
 
 // Did the other party reply on the same thread after we sent the message that
 // spawned this follow-up? Looks the sent message up via source_message_id, then
