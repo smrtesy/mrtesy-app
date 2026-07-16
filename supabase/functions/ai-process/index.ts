@@ -646,10 +646,36 @@ async function analyzeWithMemory(
   settings: any,
   sys: SystemParams,
   modelOverride?: string,
+  existingTitle?: string | null,
 ): Promise<ThreadAnalysis> {
   // modelOverride is set only on the escalation pass (see end of function), so
   // the recursion is bounded to a single re-run on the stronger model.
   const model = modelOverride ?? sys.classifier_model;
+
+  // The linked task's CURRENT title, shown to the model below so it can decide
+  // whether the matter has advanced past the stored title and emit a fresh
+  // new_title_he. WITHOUT this the prompt told the model to "leave empty when
+  // unchanged from the existing title" while never showing it that title, so it
+  // defaulted to empty and the title stayed FROZEN on the original (already-done)
+  // ask while the description moved on — the recurring "הכותרת לא עודכנה" bug.
+  // The server-side manual-update path (tasks/routes.ts refresh_summary) already
+  // works precisely because it shows the model the current title; this mirrors it
+  // for the edge classifier. Fetched once here and threaded into the escalation
+  // recursion so the stronger pass reuses it (no second read).
+  // NOTE: for a multi-matter WhatsApp chat this is the chat-level linked task,
+  // which may differ from the per-matter target the router later picks. That only
+  // affects the model's PHRASING — the apply-time guard in appendUpdateToTask still
+  // compares any produced title against the ACTUAL target's stored title, so a
+  // mismatch can never write a wrong title onto the wrong matter.
+  let linkedTitle: string | null | undefined = existingTitle;
+  if (linkedTitle === undefined && memory?.related_task_id) {
+    const { data: linkedForTitle } = await supabase
+      .from("tasks")
+      .select("title_he, title")
+      .eq("id", memory.related_task_id)
+      .maybeSingle();
+    linkedTitle = (linkedForTitle?.title_he || linkedForTitle?.title || null) as string | null;
+  }
   const myEmails: string[] = settings.my_emails ?? [];
   const officeAddresses: string[] = settings.office_addresses ?? [];
   const userName: string = settings.__userName ?? "";
@@ -659,10 +685,18 @@ async function analyzeWithMemory(
   if (userName) identityLines.push(`User's first name: ${userName}. Use "${userName}" instead of "המשתמש" in all Hebrew output fields (reason_he, completion_reason_he, new_summary).`);
   const identityBlock = identityLines.length > 0 ? `\n\n${identityLines.join("\n")}` : "";
 
+  // When a task is linked, show its CURRENT title verbatim plus an inline
+  // instruction — kept in the (uncached) user message, not the prompt, so it
+  // applies even to tenants whose edge_classifier prompt is admin-overridden.
+  const linkedTitleLine = memory?.related_task_id
+    ? (linkedTitle
+        ? `\nLinked task's CURRENT title (what is stored right now): "${linkedTitle.replace(/"/g, "'")}". new_title_he must name the matter's next action AS OF THIS MESSAGE: if this message advances the matter beyond that title, return the new next-action title; if the stored title still names the correct next action, repeat it verbatim or return an empty string — never leave the title frozen on a step that is already done.`
+        : `\nLinked task exists.`)
+    : "";
   const memoryBlock = memory && memory.summary
-    ? `\n\nExisting thread summary (previous messages already processed):\n"""${memory.summary}"""\nThread state so far: ${memory.state}${memory.related_task_id ? `\nLinked task exists.` : ""}`
+    ? `\n\nExisting thread summary (previous messages already processed):\n"""${memory.summary}"""\nThread state so far: ${memory.state}${linkedTitleLine}`
     : memory
-      ? `\n\n(Empty thread summary so far. This may be the first or second message.)`
+      ? `\n\n(Empty thread summary so far. This may be the first or second message.)${linkedTitleLine}`
       : "";
 
   const whatsappNote = isConversational(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
@@ -691,7 +725,7 @@ summary/title.
 {
   "classification": "ACTIONABLE" | "INFORMATIONAL" | "SPAM",
   "reason_he": "short Hebrew explanation",
-  "new_title_he": "Hebrew, ≤80 chars: the matter's CURRENT next action as of THIS message — what the user must do NEXT, not the original ask if that step is already done. Empty string when unchanged from the existing title.",
+  "new_title_he": "Hebrew, ≤80 chars: the matter's CURRENT next action as of THIS message — what the user must do NEXT, not the original ask if that step is already done. When the thread-memory block shows the linked task's current title, compare against it: return a FRESH title when this message advances the matter beyond it, or repeat it verbatim / return an empty string when it still names the correct next action. Never leave a title frozen on an already-completed step.",
   "new_summary": "Hebrew, ≤400 chars: lead with the current open question and who owes the next step RIGHT NOW. Do not open by recapping steps the user already completed.",
   "state": "open" | "pending_user_action" | "pending_other_party" | "resolved",
   "completion": true | false,
@@ -1012,7 +1046,7 @@ content under the rules above.`;
     sys.escalation_model !== model &&
     ((confidence === "low" && sys.escalate_low_confidence) || sensitiveWording)
   ) {
-    const escalated = await analyzeWithMemory(msg, memory, settings, sys, sys.escalation_model);
+    const escalated = await analyzeWithMemory(msg, memory, settings, sys, sys.escalation_model, linkedTitle ?? null);
     // Record what each model said, cheap-pass first, escalation last, so the
     // log shows exactly which model produced the final verdict.
     const trail = [
