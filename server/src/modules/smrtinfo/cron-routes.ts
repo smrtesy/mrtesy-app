@@ -89,6 +89,15 @@ router.post("/info/extract/batch", async (req: Request, res: Response) => {
       .order("created_at", { ascending: false })
       .limit(limit);
     if (typeof body.before === "string" && body.before) q = q.lt("created_at", body.before);
+    // Lower bound (exclusive) — lets a runner partition the history into
+    // non-overlapping created_at windows and process them in parallel.
+    if (typeof body.after === "string" && body.after) q = q.gt("created_at", body.after);
+    // Skip non-substantive messages (spam / skipped / superseded old versions)
+    // so the initial population doesn't spend Sonnet calls on noise. Pass
+    // skip_noise:false to process everything.
+    if (body.skip_noise !== false) {
+      q = q.not("ai_classification", "in", "(spam,skip,skipped,superseded,self_chat_thread_skip)");
+    }
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
     rows = (data as MsgRow[]) ?? [];
