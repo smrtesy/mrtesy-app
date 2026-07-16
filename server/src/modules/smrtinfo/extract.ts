@@ -157,6 +157,18 @@ export async function extractAndStore(
         result.dropped++;
         continue;
       }
+      // Idempotent re-runs: skip if a pending suggestion with this label already
+      // exists (avoids duplicate Vault secrets + suggestions on batch re-extract).
+      const { data: dup } = await db
+        .from("info_secret_suggestions")
+        .select("id")
+        .eq("org_id", orgId)
+        .eq("user_id", userId)
+        .eq("label", label)
+        .eq("status", "pending")
+        .limit(1);
+      if (dup && dup.length > 0) continue;
+
       const secretId = await createPendingVaultSecret(secret, label);
       if (!secretId) {
         result.dropped++;
