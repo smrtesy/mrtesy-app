@@ -262,11 +262,12 @@ function pickUpdates(body: Record<string, unknown>) {
  *   has_source    — "true" → source_message_id IS NOT NULL  (AI-sourced)
  *                  "false" → source_message_id IS NULL       (manually created)
  *   task_type     — single type or comma-separated  ("action","project_suggestion",...)
+ *   tag           — rows whose `tags` array contains this value (e.g. "via-claude-session")
  */
-function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T }>(
+function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T; contains: (k: string, v: unknown[]) => T }>(
   q: T, query: Request["query"], userId?: string,
 ): T {
-  const { status, verified, project_id, assigned_to, has_source, task_type, today, mine, size, context } = query;
+  const { status, verified, project_id, assigned_to, has_source, task_type, today, mine, size, context, tag } = query;
   // mine=true → personal scope: rows the user owns (user_id). Used by the
   // suggestions inbox, which is per-user rather than org-wide.
   if (mine === "true" && userId) q = q.eq("user_id", userId);
@@ -288,6 +289,10 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
   if (typeof assigned_to === "string") q = q.eq("assigned_to_user_id", assigned_to);
   if (has_source === "true")  q = q.not("source_message_id", "is", null);
   if (has_source === "false") q = q.is("source_message_id", null);
+  // tag=<value> → rows whose `tags` array contains this value. Used by the
+  // suggestions inbox to pull in sourceless proposals (e.g. Claude-session
+  // followups tagged `via-claude-session`) that the has_source filter excludes.
+  if (typeof tag === "string" && tag.trim()) q = q.contains("tags", [tag.trim()]);
   // today=true → today_position IS NOT NULL (tasks in the Today work-plan)
   // today=false → today_position IS NULL
   if (today === "true")  q = q.not("today_position", "is", null);
