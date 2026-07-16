@@ -36,7 +36,7 @@ export function SmsPageClient({ title }: { title: string }) {
         paneNav
           ? // Pane mode: fill the pane body, not the viewport.
             "flex flex-col h-full p-2 md:p-3"
-          : "flex flex-col h-[calc(100dvh-3.5rem)] md:h-[100dvh] p-2 md:p-3"
+          : "flex flex-col h-[calc(100dvh-3.5rem-var(--wc-bar-h,0px))] md:h-[calc(100dvh_-_var(--wc-bar-h,0px))] p-2 md:p-3"
       }
       dir={isHe ? "rtl" : "ltr"}
     >

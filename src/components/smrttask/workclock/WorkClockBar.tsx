@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { Clock, Play, Pause, Square, Sun, X, Inbox, ListChecks, AlertTriangle, Volume2, Moon } from "lucide-react";
@@ -118,11 +118,31 @@ export function WorkClockBar() {
     } catch { setEmbedded(true); }
   }, []);
 
+  // Publish the bar's live height as --wc-bar-h so full-viewport screens
+  // (TabsWorkspace, WhatsApp, SMS) can shrink by exactly the bar height instead
+  // of overflowing the viewport. A callback ref + ResizeObserver keeps it exact
+  // across states (offer/run/stopped) and when the popup banner adds a row;
+  // detaching (bar gone) resets it to 0.
+  const roRef = useRef<ResizeObserver | null>(null);
+  const setBarEl = useCallback((node: HTMLDivElement | null) => {
+    if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
+    const root = typeof document !== "undefined" ? document.documentElement : null;
+    if (!root) return;
+    if (!node) { root.style.setProperty("--wc-bar-h", "0px"); return; }
+    const apply = () => root.style.setProperty("--wc-bar-h", `${node.offsetHeight}px`);
+    apply();
+    try { roRef.current = new ResizeObserver(apply); roRef.current.observe(node); } catch { /* ignore */ }
+  }, []);
+  useEffect(() => () => {
+    if (roRef.current) roRef.current.disconnect();
+    try { document.documentElement.style.setProperty("--wc-bar-h", "0px"); } catch { /* ignore */ }
+  }, []);
+
   if (!enabled || !mounted || embedded) return null;
 
   if (showOffer) {
     return (
-      <div dir={dir} className="flex items-center gap-3 border-b border-primary/25 bg-primary/5 px-4 py-2 text-sm">
+      <div ref={setBarEl} dir={dir} className="flex items-center gap-3 border-b border-primary/25 bg-primary/5 px-4 py-2 text-sm">
         <Sun className="h-4 w-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate" dir="auto">{t("offerTitle")}</span>
         <Button size="sm" className="h-8 gap-1.5" onClick={start}>
@@ -139,7 +159,7 @@ export function WorkClockBar() {
   // run again from (not vanished).
   if (state.phase === "stopped") {
     return (
-      <div dir={dir} className="flex items-center gap-3 border-b bg-muted/20 px-4 py-1.5 text-sm">
+      <div ref={setBarEl} dir={dir} className="flex items-center gap-3 border-b bg-muted/20 px-4 py-1.5 text-sm">
         <div className="flex items-center gap-2">
           <span className="grid h-6 w-6 place-items-center rounded-md bg-muted text-muted-foreground">
             <Clock className="h-3.5 w-3.5" />
@@ -170,6 +190,8 @@ export function WorkClockBar() {
 
   return (
     <>
+      {/* In-flow bar rows (measured for --wc-bar-h); fixed overlays sit outside. */}
+      <div ref={setBarEl}>
       <div
         dir={dir}
         className={cn(
@@ -278,6 +300,7 @@ export function WorkClockBar() {
           </button>
         </div>
       )}
+      </div>
 
       {/* Blocking screen — a medium/big task over its hard limit */}
       {esc.block && now >= blockSnoozeUntil && (
