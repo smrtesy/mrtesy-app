@@ -172,33 +172,10 @@ export function TabsWorkspace() {
                 active ? "bg-background" : "bg-muted/20",
               )}
             >
-              <header
-                className={cn(
-                  "flex h-9 shrink-0 items-center gap-2 border-b px-2",
-                  active ? "bg-muted/40" : "bg-muted/60",
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActive(tab.id)}
-                  className="flex-1 truncate text-start text-xs font-medium text-foreground/90"
-                  title={tab.label}
-                >
-                  {tab.label}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => closeTab(tab.id)}
-                  aria-label={t("close")}
-                  title={t("close")}
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </header>
-              {/* min-h-0 lets the pane body shrink below its content height so
-                  component panes scroll internally (iframes never pushed back). */}
-              <div className="relative min-h-0 flex-1">
+              {/* No header row — the tab name is dropped (redundant) and closing
+                  is a floating X on the pane itself. min-h-0 lets the body scroll
+                  internally (iframes are never pushed back). */}
+              <div className="group relative min-h-0 flex-1">
                 <PaneHost tab={tab} />
                 {/* Inactive panes are previews: an overlay swallows clicks and
                     focuses the pane instead of interacting with the iframe. */}
@@ -210,6 +187,18 @@ export function TabsWorkspace() {
                     className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
+                {/* Floating close — top-left, above the focus overlay (z-70) so it
+                    works on inactive panes too; hover-reveal on desktop, always on
+                    touch. */}
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                  aria-label={t("close")}
+                  title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
+                  className="absolute left-2 top-2 z-[70] inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             </section>
             {i < n - 1 && (
