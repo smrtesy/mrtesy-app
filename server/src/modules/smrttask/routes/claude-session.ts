@@ -25,7 +25,7 @@ import { emitEvent } from "../../../lib/platform";
 
 const router = Router();
 
-/** Cap the transcript we summarize so a long chat can't blow up the Haiku bill. */
+/** Cap the transcript we summarize so a long chat can't blow up the summariser bill. */
 const MAX_TRANSCRIPT_CHARS = 24_000;
 
 interface SessionSummary {
@@ -42,7 +42,8 @@ const SUMMARY_SYSTEM = `אתה מסכם שיחת עבודה שהתנהלה ב-Cl
 פלט: JSON בלבד, ללא טקסט נוסף, במבנה:
 {"topic": "...", "summary": "...", "next_step": "..."}
 כללים:
-- הכול בעברית, קצר וענייני. topic = עד 8 מילים. summary = 1-3 משפטים. next_step = משפט אחד עם הפעולה המוצעת להשלמת הדיון/המשימה.
+- הכול בעברית בלבד, בשפה פשוטה ויומיומית. כתוב כמו שמסבירים לחבר: משפטים קצרים, בלי מונחים טכניים מיותרים ובלי מילים באנגלית כשיש חלופה עברית — כך שגם מי שאינו מפתח יבין בדיוק מה נעשה ומה הצעד הבא.
+- קצר וענייני. topic = עד 8 מילים. summary = 1-3 משפטים. next_step = משפט אחד עם הפעולה המוצעת להשלמת הדיון/המשימה.
 - שמר כל קישור (URL) שמופיע בשיחה מילה-במילה (verbatim), כולל פרמטרים — אל תקצר ל-domain.
 - אם השיחה טריוויאלית או ריקה, החזר topic="שיחת Claude Code" ו-next_step קצר בהתאם.`;
 
@@ -64,7 +65,7 @@ async function summarizeTranscript(
 
   try {
     const { content } = await simpleCall(
-      "haiku",
+      "sonnet",
       SUMMARY_SYSTEM,
       clipped,
       512,
@@ -227,7 +228,7 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
       description,
       action_links: actionLinks,
       tags: ["via-claude-session", dedupTag],
-      ai_model_used: MODELS.haiku,
+      ai_model_used: MODELS.sonnet,
     })
     .select("id")
     .single();
