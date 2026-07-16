@@ -3153,8 +3153,19 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // hide → still appends via branch (c).
         const REOPENABLE_STATUSES = ["pending_completion", "completed", "dismissed", "archived"];
         const taskClosed = REOPENABLE_STATUSES.includes(String(linkedTask.status));
+        // pending_completion is NOT a real close: the UI still lists it as an
+        // active task (TaskList shows inbox/in_progress/pending_completion) and
+        // the user has NOT confirmed it's done — it only means "the system
+        // thinks this resolved, click to confirm". So a continuing actionable
+        // turn in the same thread must REOPEN this very task (branch b), never
+        // fork a new one. Spinning off is reserved for genuinely-closed tasks
+        // (completed/dismissed/archived) or a new matter that arrives WITH a
+        // completion signal on an OPEN task. (The Jack / T1134 case: the task
+        // kept showing as active while later thread replies silently forked
+        // into a separate task — T1479 — the user never connected to it.)
+        const isPendingCompletion = String(linkedTask.status) === "pending_completion";
 
-        if (classification === "actionable" && analysis.newMatter && (analysis.completionSignal || taskClosed)) {
+        if (classification === "actionable" && analysis.newMatter && !isPendingCompletion && (analysis.completionSignal || taskClosed)) {
           // (a) New, distinct matter AND the old task is closing or already
           // closed → spin off a fresh task. If this same message resolved the
           // old task's original question, record that closure (which moves it
