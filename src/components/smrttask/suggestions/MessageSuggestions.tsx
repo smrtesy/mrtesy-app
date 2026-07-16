@@ -19,6 +19,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
+import { LinkActions } from "@/components/smrttask/common/LinkActions";
+import { taskActionNuggets } from "@/lib/smrttask/links";
 import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolbar";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
@@ -619,6 +621,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             const displayTitle = task.task_type === "meeting" ? t("reminderPrefix", { title }) : title;
             const isSelected = selected.has(task.id);
             const isFocused = task.id === focusId;
+            // Action nuggets — clean one-click buttons (e.g. "פתח את הצ'אט
+            // ב-Claude Code"). These replace the raw session link.
+            const nuggets = taskActionNuggets(task);
+            // Machine/system tags are plumbing, not user-facing labels: the
+            // `via-claude-session` marker and the `claude-session:<id>` pointer
+            // (whose id the nugget already links to) would otherwise render as
+            // an ugly "half the session address" chip. Hide them from display.
+            const visibleTags = (task.tags ?? []).filter(
+              (tag) => tag.toLowerCase() !== "via-claude-session" && !/^claude-session:/i.test(tag),
+            );
 
             return (
               <Card
@@ -672,14 +684,18 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     </p>
                   ) : null}
 
-                  {(task.related_contact || (task.tags ?? []).length > 0) && (
+                  {/* Action nuggets — one-click deep links, immediately below
+                      the description (no heading). */}
+                  {nuggets.length > 0 && <LinkActions links={nuggets} />}
+
+                  {(task.related_contact || visibleTags.length > 0) && (
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       {task.related_contact && (
                         <Badge variant="outline" className="text-[10px]">
                           {task.related_contact}
                         </Badge>
                       )}
-                      {(task.tags ?? []).slice(0, 2).map((tag) => (
+                      {visibleTags.slice(0, 2).map((tag) => (
                         <Badge key={tag} variant="outline" className="text-[10px] capitalize">
                           {tag}
                         </Badge>

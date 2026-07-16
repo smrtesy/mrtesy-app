@@ -737,7 +737,118 @@ async function _syncUserGmailInner(userId: string, setSyncState: (s: any) => voi
     if (checkpointUpsertError) console.error("sync_state checkpoint upsert failed:", checkpointUpsertError);
   }
 
+  // Opt-in spam-folder scan — never blocks or fails the inbox sync. Gmail's
+  // SPAM label is invisible to the History-API sync above, so mail Gmail
+  // mis-flags as spam never reaches smrtTask and the user silently misses it.
+  try {
+    const { data: ss } = await supabase
+      .from("user_settings").select("scan_spam").eq("user_id", userId).maybeSingle();
+    if (ss?.scan_spam === true) {
+      await syncSpamForUser(userId, token, skipFilter);
+    }
+  } catch (e) {
+    console.error("gmail-sync spam scan failed:", e instanceof Error ? e.message : String(e));
+  }
+
   return { synced, newCheckpoint };
+}
+
+// Bounded, deduped scan of the Gmail SPAM folder. Records NEW spam as
+// source_type='gmail_spam' pending rows for ai-process, which classifies them
+// on the cheap model and only surfaces genuinely actionable ones as tasks
+// (informational/junk stay quiet — logged, no task, no notification). The list
+// call re-returns the same messages every run until they age out of the window,
+// so we skip already-ingested ids and only pay a message fetch on fresh ones.
+const SPAM_SCAN_QUERY = "in:spam newer_than:1d";
+const SPAM_SCAN_MAX = 50;
+
+async function syncSpamForUser(
+  userId: string,
+  token: string,
+  skipFilter: ReturnType<typeof parseSkipRules>,
+): Promise<number> {
+  const resp = await gmailFetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(SPAM_SCAN_QUERY)}&maxResults=${SPAM_SCAN_MAX}`,
+    token,
+  );
+  if (!resp.ok) return 0;
+  const data = await resp.json();
+  const ids: string[] = (data.messages || []).map((m: any) => m.id);
+  if (ids.length === 0) return 0;
+
+  // Dedup: skip spam we've already ingested (the list re-returns them each run).
+  const { data: existing } = await supabase
+    .from("source_messages")
+    .select("source_id")
+    .eq("user_id", userId)
+    .eq("source_type", "gmail_spam")
+    .in("source_id", ids);
+  const seen = new Set((existing || []).map((r: any) => r.source_id));
+  const fresh = ids.filter((id) => !seen.has(id));
+
+  let ingested = 0;
+  for (const msgId of fresh) {
+    const msg = await fetchMessageDetails(token, msgId);
+    if (!msg) continue;
+    if (msg.labelIds?.includes("DRAFT")) continue;
+
+    const h = extractHeaders(msg);
+    const body = extractEmailBody(msg.payload);
+    const senderEmail = extractEmail(h.from);
+    const allRecipients = Array.from(new Set([
+      ...parseAddressList(h.to),
+      ...parseAddressList(h.cc),
+      ...parseAddressList(h.bcc),
+      ...parseAddressList(h.deliveredTo),
+      ...parseAddressList(h.forwardedTo),
+      ...parseAddressList(h.originalTo),
+    ]));
+    let receivedAt: string;
+    try {
+      receivedAt = h.date ? new Date(h.date).toISOString() : new Date(parseInt(msg.internalDate)).toISOString();
+    } catch {
+      receivedAt = new Date().toISOString();
+    }
+
+    const baseRow = {
+      user_id: userId,
+      source_type: "gmail_spam",
+      source_id: msgId,
+      // Deep link straight to the message in the Spam folder (product URL rule).
+      source_url: `https://mail.google.com/mail/u/0/#spam/${msgId}`,
+      sender: h.from,
+      sender_email: senderEmail,
+      recipient: h.to,
+      subject: h.subject,
+      body_text: body.substring(0, 10000),
+      has_attachments: (msg.payload?.parts || []).some(
+        (p: any) => p.filename && p.filename.length > 0,
+      ),
+      received_at: receivedAt,
+      metadata: { to: h.to, threadId: msg.threadId, labels: msg.labelIds || [], recipients: allRecipients },
+    };
+
+    // The user's skip rules still apply inside spam (a from=/domain= skip means
+    // skip): record it processed+skip so it shows in the log at no AI cost.
+    const skipTrigger = skipFilter.skipMatch({ from: h.from, to: h.to, senderEmail, subject: h.subject });
+    if (skipTrigger) {
+      const { error: skipErr } = await supabase.from("source_messages").upsert(
+        { ...baseRow, processing_status: "processed", ai_classification: "skip", skip_reason: `skip_rule: ${skipTrigger}`, processed_at: new Date().toISOString() },
+        { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+      );
+      if (skipErr) console.error(`gmail-sync spam skip upsert failed (${msgId}):`, skipErr.message);
+      ingested++;
+      continue;
+    }
+
+    const { error: upsertErr } = await supabase.from("source_messages").upsert(
+      { ...baseRow, processing_status: "pending", ai_classification: "pending" },
+      { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+    );
+    if (upsertErr) console.error(`gmail-sync spam pending upsert failed (${msgId}):`, upsertErr.message);
+    ingested++;
+  }
+  return ingested;
 }
 
 Deno.serve(async (req) => {
