@@ -121,7 +121,7 @@ Deno.serve(async (req) => {
     // old snoozed_until from before dismissal must NOT bounce back into inbox.
     const { data: snoozedTasks } = await supabase
       .from("tasks")
-      .select("id, user_id, title_he, task_type, source_message_id")
+      .select("id, user_id, title_he, task_type, source_message_id, status, completion_signal_detected")
       .lte("snoozed_until", now)
       .not("snoozed_until", "is", null)
       .not("status", "in", "(archived,completed,dismissed)");
@@ -139,10 +139,29 @@ Deno.serve(async (req) => {
       // instead of silently dropping a live matter; auto-dismiss only when the
       // thread is resolved or we have no signal (legacy behavior).
       if (task.task_type === "followup" && (await replyArrived(task))) {
-        if (await matterStillPending(task)) {
+        // A completion signal already recorded on the task (pending_completion
+        // surface, or completion_signal_detected) means the reply DID close the
+        // loop — never wipe that state with an inbox wake; fall through to the
+        // legacy auto-dismiss below.
+        const completionRecorded =
+          task.status === "pending_completion" || task.completion_signal_detected === true;
+        if (!completionRecorded && (await matterStillPending(task))) {
+          // Surface with a visible explanation (tasks.updates feeds the task's
+          // activity trail in the UI) — the reply alone did not close the matter.
+          const { data: taskRow } = await supabase
+            .from("tasks").select("updates").eq("id", task.id).single();
+          const updates = taskRow?.updates || [];
+          updates.push({
+            id: crypto.randomUUID(),
+            created_at: now,
+            type: "reminder",
+            actor: "system",
+            content: "התקבלה תגובה בשיחה, אך העניין עדיין לא נסגר — המעקב הוחזר לתיבה לבדיקה",
+          });
           const { error: pendingWakeError } = await supabase.from("tasks").update({
             snoozed_until: null,
             status: "inbox",
+            updates,
             last_updated_reason: "followup_reply_pending_outcome",
             woke_from_snooze_at: now,
             updated_at: now,
@@ -316,13 +335,14 @@ Deno.serve(async (req) => {
 // keeps the legacy auto-dismiss for cases the classifier never saw.
 // Key format must mirror threadKey() in ai-process: gmail:<threadId> for
 // gmail/gmail_sent, <source_type>:<chatId> for whatsapp/sms.
-async function matterStillPending(task: { user_id: string | null; source_message_id: string | null }): Promise<boolean> {
+async function matterStillPending(task: { id: string; user_id: string | null; source_message_id: string | null }): Promise<boolean> {
   if (!task.source_message_id || !task.user_id) return false;
-  const { data: sent } = await supabase
+  const { data: sent, error: sentError } = await supabase
     .from("source_messages")
     .select("source_type, metadata")
     .eq("id", task.source_message_id)
     .maybeSingle();
+  if (sentError) console.error("matterStillPending source_messages read failed:", sentError);
   if (!sent) return false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meta = (sent.metadata ?? {}) as any;
@@ -332,13 +352,14 @@ async function matterStillPending(task: { user_id: string | null; source_message
   } else if (sent.source_type === "whatsapp" || sent.source_type === "sms") {
     key = meta.chatId ? `${sent.source_type}:${meta.chatId}` : null;
   }
-  if (!key) return false;
-  const { data: memory } = await supabase
-    .from("thread_memory")
-    .select("state")
-    .eq("user_id", task.user_id)
-    .eq("thread_key", key)
-    .maybeSingle();
+  // gmail_sent rows often carry no threadId (see replyArrived's fallback for
+  // the same gap). When there is no thread key, fall back to the memory row
+  // that POINTS AT this task — same classifier-maintained state, keyed from
+  // the other side.
+  let query = supabase.from("thread_memory").select("state").eq("user_id", task.user_id);
+  query = key ? query.eq("thread_key", key) : query.eq("related_task_id", task.id);
+  const { data: memory, error: memoryError } = await query.limit(1).maybeSingle();
+  if (memoryError) console.error("matterStillPending thread_memory read failed:", memoryError);
   if (!memory?.state) return false;
   return memory.state !== "resolved";
 }
