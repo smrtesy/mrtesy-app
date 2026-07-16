@@ -63,7 +63,8 @@ function renderFact(entity: string, attribute: string, value: string): string {
 /** GET /info/facts?scope=&verified=&q= — current (non-superseded) facts. */
 router.get("/info/facts", async (req: Request, res: Response) => {
   const scope = typeof req.query.scope === "string" ? req.query.scope : null;
-  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  // Strip PostgREST filter separators before interpolating into .or() below.
+  const q = (typeof req.query.q === "string" ? req.query.q.trim() : "").replace(/[,()*\\]/g, " ").trim();
 
   let query = db
     .from("info_facts")
@@ -181,6 +182,7 @@ router.patch("/info/facts/:id", async (req: Request, res: Response) => {
     .update(patch)
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
+    .or(`scope.neq.personal,user_id.eq.${req.user!.id}`)
     .select(FACT_COLUMNS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
@@ -260,7 +262,7 @@ router.post("/info/ask", async (req: Request, res: Response) => {
       const orExpr = tokens
         .map((t) => `entity.ilike.%${t}%,attribute.ilike.%${t}%,value.ilike.%${t}%`)
         .join(",");
-      const { data } = await db
+      const { data, error } = await db
         .from("info_facts")
         .select(FACT_COLUMNS)
         .eq("org_id", req.org!.id)
@@ -268,6 +270,7 @@ router.post("/info/ask", async (req: Request, res: Response) => {
         .or(`scope.neq.personal,user_id.eq.${req.user!.id}`)
         .or(orExpr)
         .limit(10);
+      if (error) console.error("[smrtinfo] ask keyword fallback:", error.message);
       facts = (data as FactMatch[]) ?? [];
     }
   }
@@ -277,13 +280,14 @@ router.post("/info/ask", async (req: Request, res: Response) => {
   let vaultMatches: { id: string; label: string; username: string | null; url: string | null }[] = [];
   if (tokens.length) {
     const orExpr = tokens.map((t) => `label.ilike.%${t}%,username.ilike.%${t}%,url.ilike.%${t}%`).join(",");
-    const { data } = await db
+    const { data, error } = await db
       .from("smrtvault_credentials")
       .select("id, label, username, url")
       .eq("org_id", req.org!.id)
       .eq("user_id", req.user!.id)
       .or(orExpr)
       .limit(5);
+    if (error) console.error("[smrtinfo] ask vault match:", error.message);
     vaultMatches = (data as typeof vaultMatches) ?? [];
   }
 

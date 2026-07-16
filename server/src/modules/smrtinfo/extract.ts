@@ -202,18 +202,24 @@ export async function extractAndStore(
     });
 
     // Supersede an existing current fact with the same key whose value changed.
+    // Exact match (not ilike — attributes like "payment_date" contain "_",
+    // which ilike would treat as a wildcard). limit(1) + take first avoids a
+    // maybeSingle() error when more than one current row shares the key.
     let query = db
       .from("info_facts")
       .select("id, value")
       .eq("org_id", orgId)
       .eq("scope", scope)
-      .ilike("entity", entity)
-      .ilike("attribute", attribute)
-      .is("superseded_by", null);
+      .eq("entity", entity)
+      .eq("attribute", attribute)
+      .is("superseded_by", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
     if (scope === "personal") query = query.eq("user_id", userId);
-    const { data: existing } = await query.maybeSingle();
-
-    const existingRow = existing as { id: string; value: string } | null;
+    const { data: existingRows, error: existingErr } = await query;
+    if (existingErr) console.error("[smrtinfo] supersede lookup:", existingErr.message);
+    const existingRow =
+      (existingRows?.[0] as { id: string; value: string } | undefined) ?? null;
     if (existingRow && existingRow.value.trim() === value) {
       // identical fact already current — nothing to do
       continue;
