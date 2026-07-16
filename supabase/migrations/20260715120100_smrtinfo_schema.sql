@@ -88,6 +88,7 @@ CREATE INDEX IF NOT EXISTS info_facts_entity_trgm_idx
 CREATE INDEX IF NOT EXISTS info_facts_embedding_idx
   ON info_facts USING hnsw (embedding vector_cosine_ops);
 
+DROP TRIGGER IF EXISTS info_facts_updated_at ON info_facts;
 CREATE TRIGGER info_facts_updated_at BEFORE UPDATE ON info_facts
   FOR EACH ROW EXECUTE FUNCTION smrtinfo_set_updated_at();
 
@@ -131,6 +132,7 @@ CREATE TABLE IF NOT EXISTS info_context_profile (
 ALTER TABLE info_context_profile ENABLE ROW LEVEL SECURITY;
 -- Intentionally no policy: service-role only.
 
+DROP TRIGGER IF EXISTS info_context_profile_updated_at ON info_context_profile;
 CREATE TRIGGER info_context_profile_updated_at BEFORE UPDATE ON info_context_profile
   FOR EACH ROW EXECUTE FUNCTION smrtinfo_set_updated_at();
 
@@ -165,6 +167,7 @@ ALTER TABLE info_secret_suggestions ENABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS info_secret_suggestions_owner_idx
   ON info_secret_suggestions(org_id, user_id, status);
 
+DROP TRIGGER IF EXISTS info_secret_suggestions_updated_at ON info_secret_suggestions;
 CREATE TRIGGER info_secret_suggestions_updated_at BEFORE UPDATE ON info_secret_suggestions
   FOR EACH ROW EXECUTE FUNCTION smrtinfo_set_updated_at();
 
