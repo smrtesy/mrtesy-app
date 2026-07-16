@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { Clock, Play, Pause, Square, Sun, X, Inbox, ListChecks, AlertTriangle, Volume2 } from "lucide-react";
+import { Clock, Play, Pause, Square, Sun, X, Inbox, ListChecks, AlertTriangle, Volume2, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { beep } from "@/lib/sound";
@@ -11,6 +11,7 @@ import {
   useWorkClock, workedSeconds, activeSeconds, escalationOf, isRitual,
   RITUAL_ORDER, type WorkClockPhase, type Escalation,
 } from "@/hooks/useWorkClock";
+import { ClaudeActions } from "./ClaudeActions";
 
 /**
  * The workclock bar — a thin strip at the top of the workspace, shown only
@@ -39,10 +40,16 @@ export function WorkClockBar() {
   const advanceRef = useRef(advance); advanceRef.current = advance;
   const configRef = useRef(config); configRef.current = config;
   const bumpRef = useRef(bumpAlert); bumpRef.current = bumpAlert;
+  const stopRef = useRef(stop); stopRef.current = stop;
   // null until the first tick seeds it — so a reload with an already-tripped
   // level doesn't re-count it as a fresh rising edge (which would inflate the
   // persisted alert stats on every reload).
   const prevEscRef = useRef<Escalation | null>(null);
+  // End-of-day close: "עוד שעה" suppresses the prompt until this epoch; the ref
+  // lets the interval read the current value without re-subscribing.
+  const [closeExtendUntil, setCloseExtendUntil] = useState(0);
+  const closeExtendRef = useRef(closeExtendUntil); closeExtendRef.current = closeExtendUntil;
+  const promptSinceRef = useRef<number | null>(null);
 
   const active = isRitual(state.phase) || state.phase === "running" || state.phase === "paused";
   useEffect(() => {
@@ -61,6 +68,17 @@ export function WorkClockBar() {
         if (esc.block && !prev.block) bumpRef.current("block");
       }
       prevEscRef.current = esc;
+      // End-of-day auto-stop: once the close prompt has stood unanswered for
+      // close_autostop_sec (and the user hasn't extended), stop the day.
+      if (s.phase === "running" || s.phase === "paused") {
+        if (closeStateOf(configRef.current) === "prompt" && now >= closeExtendRef.current) {
+          if (promptSinceRef.current == null) promptSinceRef.current = now;
+          const autostop = numFromCfg(configRef.current, "close_autostop_sec", 300);
+          if (now - promptSinceRef.current >= autostop * 1000) stopRef.current("auto");
+        } else {
+          promptSinceRef.current = null;
+        }
+      }
     }, 1000);
     return () => clearInterval(iv);
   }, [active]);
@@ -100,11 +118,31 @@ export function WorkClockBar() {
     } catch { setEmbedded(true); }
   }, []);
 
+  // Publish the bar's live height as --wc-bar-h so full-viewport screens
+  // (TabsWorkspace, WhatsApp, SMS) can shrink by exactly the bar height instead
+  // of overflowing the viewport. A callback ref + ResizeObserver keeps it exact
+  // across states (offer/run/stopped) and when the popup banner adds a row;
+  // detaching (bar gone) resets it to 0.
+  const roRef = useRef<ResizeObserver | null>(null);
+  const setBarEl = useCallback((node: HTMLDivElement | null) => {
+    if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
+    const root = typeof document !== "undefined" ? document.documentElement : null;
+    if (!root) return;
+    if (!node) { root.style.setProperty("--wc-bar-h", "0px"); return; }
+    const apply = () => root.style.setProperty("--wc-bar-h", `${node.offsetHeight}px`);
+    apply();
+    try { roRef.current = new ResizeObserver(apply); roRef.current.observe(node); } catch { /* ignore */ }
+  }, []);
+  useEffect(() => () => {
+    if (roRef.current) roRef.current.disconnect();
+    try { document.documentElement.style.setProperty("--wc-bar-h", "0px"); } catch { /* ignore */ }
+  }, []);
+
   if (!enabled || !mounted || embedded) return null;
 
   if (showOffer) {
     return (
-      <div dir={dir} className="flex items-center gap-3 border-b border-primary/25 bg-primary/5 px-4 py-2 text-sm">
+      <div ref={setBarEl} dir={dir} className="flex items-center gap-3 border-b border-primary/25 bg-primary/5 px-4 py-2 text-sm">
         <Sun className="h-4 w-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate" dir="auto">{t("offerTitle")}</span>
         <Button size="sm" className="h-8 gap-1.5" onClick={start}>
@@ -121,7 +159,7 @@ export function WorkClockBar() {
   // run again from (not vanished).
   if (state.phase === "stopped") {
     return (
-      <div dir={dir} className="flex items-center gap-3 border-b bg-muted/20 px-4 py-1.5 text-sm">
+      <div ref={setBarEl} dir={dir} className="flex items-center gap-3 border-b bg-muted/20 px-4 py-1.5 text-sm">
         <div className="flex items-center gap-2">
           <span className="grid h-6 w-6 place-items-center rounded-md bg-muted text-muted-foreground">
             <Clock className="h-3.5 w-3.5" />
@@ -143,9 +181,17 @@ export function WorkClockBar() {
   const ritual = isRitual(state.phase);
   const esc = ritual ? { soft: false, popup: false, block: false } : escalationOf(state, config, now);
   const hasActiveTask = state.activeTaskId != null;
+  const closeState = ritual ? "none" : closeStateOf(config);
+  const closeExtended = now < closeExtendUntil;
+  const autostopSec = numFromCfg(config, "close_autostop_sec", 300);
+  const autostopLeft = promptSinceRef.current != null
+    ? Math.max(0, autostopSec - Math.floor((now - promptSinceRef.current) / 1000))
+    : autostopSec;
 
   return (
     <>
+      {/* In-flow bar rows (measured for --wc-bar-h); fixed overlays sit outside. */}
+      <div ref={setBarEl}>
       <div
         dir={dir}
         className={cn(
@@ -201,6 +247,12 @@ export function WorkClockBar() {
 
         {!ritual && (
           <div className="ms-auto flex items-center gap-1.5">
+            <ClaudeActions dir={dir} />
+            {closeState === "remind" && !closeExtended && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                <Moon className="h-3 w-3" />{t("closeRemind")}
+              </span>
+            )}
             {paused ? (
               <span className="inline-flex animate-pulse items-center gap-1 rounded-full bg-status-warn-bg px-2 py-0.5 text-[11px] font-bold text-status-warn">
                 <Volume2 className="h-3 w-3" />{t("resumeNag")}
@@ -248,6 +300,7 @@ export function WorkClockBar() {
           </button>
         </div>
       )}
+      </div>
 
       {/* Blocking screen — a medium/big task over its hard limit */}
       {esc.block && now >= blockSnoozeUntil && (
@@ -266,6 +319,31 @@ export function WorkClockBar() {
                 {t("blockMore")}
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* End-of-day close prompt */}
+      {closeState === "prompt" && !closeExtended && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-background/80 p-6 backdrop-blur-sm" dir={dir}>
+          <div className="w-full max-w-sm rounded-2xl border border-t-4 border-t-primary bg-card p-6 text-center shadow-xl">
+            <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary">
+              <Moon className="h-6 w-6" />
+            </span>
+            <h3 className="text-base font-bold" dir="auto">{t("closeTitle")}</h3>
+            <p className="mt-1 text-[13px] text-muted-foreground" dir="auto">
+              {t("closeHint", { total: fmtHMS(workedSeconds(state, now)) })}
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <Button size="sm" onClick={() => stop("manual")}>{t("stop")}</Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={() => { promptSinceRef.current = null; setCloseExtendUntil(Date.now() + 60 * 60 * 1000); }}
+              >
+                {t("closeExtend")}
+              </Button>
+            </div>
+            <p className="mt-3 text-[11px] text-muted-foreground/70" dir="auto">{t("closeAuto", { time: fmtMS(autostopLeft) })}</p>
           </div>
         </div>
       )}
@@ -295,6 +373,44 @@ function RitualMiddle({
       </Button>
     </div>
   );
+}
+
+function numFromCfg(config: Record<string, unknown>, key: string, fallback: number): number {
+  const v = config[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+/** Current minute-of-day in a timezone (0..1439), or null if the tz is bad. */
+function minutesNowInTz(tz: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+    const h = Number(parts.find((p) => p.type === "hour")?.value);
+    const m = Number(parts.find((p) => p.type === "minute")?.value);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return (h % 24) * 60 + m;
+  } catch { return null; }
+}
+
+function parseHHMM(s: unknown): number | null {
+  if (typeof s !== "string") return null;
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/** End-of-day close phase from config: none | remind | prompt (evening times in
+ *  close_tz). Only meaningful while a clock is running. */
+function closeStateOf(config: Record<string, unknown>): "none" | "remind" | "prompt" {
+  const tz = typeof config.close_tz === "string" && config.close_tz ? config.close_tz : "America/New_York";
+  const nowMin = minutesNowInTz(tz);
+  if (nowMin == null) return "none";
+  const remind = parseHHMM(config.close_remind_at) ?? 18 * 60 + 55;
+  const prompt = parseHHMM(config.close_prompt_at) ?? 19 * 60 + 20;
+  if (nowMin >= prompt) return "prompt";
+  if (nowMin >= remind) return "remind";
+  return "none";
 }
 
 function fmtHMS(total: number): string {

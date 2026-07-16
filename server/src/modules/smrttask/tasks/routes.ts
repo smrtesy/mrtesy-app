@@ -262,11 +262,12 @@ function pickUpdates(body: Record<string, unknown>) {
  *   has_source    — "true" → source_message_id IS NOT NULL  (AI-sourced)
  *                  "false" → source_message_id IS NULL       (manually created)
  *   task_type     — single type or comma-separated  ("action","project_suggestion",...)
+ *   tag           — rows whose `tags` array contains this value (e.g. "via-claude-session")
  */
-function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T }>(
+function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: string, v: unknown[]) => T; not: (k: string, op: string, v: unknown) => T; is: (k: string, v: unknown) => T; contains: (k: string, v: unknown[]) => T }>(
   q: T, query: Request["query"], userId?: string,
 ): T {
-  const { status, verified, project_id, assigned_to, has_source, task_type, today, mine, size, context } = query;
+  const { status, verified, project_id, assigned_to, has_source, task_type, today, mine, size, context, tag } = query;
   // mine=true → personal scope: rows the user owns (user_id). Used by the
   // suggestions inbox, which is per-user rather than org-wide.
   if (mine === "true" && userId) q = q.eq("user_id", userId);
@@ -288,6 +289,10 @@ function applyTaskFilters<T extends { eq: (k: string, v: unknown) => T; in: (k: 
   if (typeof assigned_to === "string") q = q.eq("assigned_to_user_id", assigned_to);
   if (has_source === "true")  q = q.not("source_message_id", "is", null);
   if (has_source === "false") q = q.is("source_message_id", null);
+  // tag=<value> → rows whose `tags` array contains this value. Used by the
+  // suggestions inbox to pull in sourceless proposals (e.g. Claude-session
+  // followups tagged `via-claude-session`) that the has_source filter excludes.
+  if (typeof tag === "string" && tag.trim()) q = q.contains("tags", [tag.trim()]);
   // today=true → today_position IS NOT NULL (tasks in the Today work-plan)
   // today=false → today_position IS NULL
   if (today === "true")  q = q.not("today_position", "is", null);
@@ -517,6 +522,147 @@ router.post("/tasks/work-clock/stop", async (req: Request, res: Response) => {
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ session: data });
+});
+
+/** POST /tasks/work-clock/span — record one closed active-task span (workclock
+ *  phase 4). Body: { work_date, task_id?, size, seconds, started_at?, ended_at? }. */
+router.post("/tasks/work-clock/span", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const workDate = String(body.work_date ?? "");
+  if (!ISO_DATE.test(workDate)) return res.status(400).json({ error: "work_date must be YYYY-MM-DD" });
+  if (!["quick", "medium", "big"].includes(body.size)) return res.status(400).json({ error: "size must be quick|medium|big" });
+  const seconds = nonNegInt(body.seconds);
+  if (seconds === undefined) return res.status(400).json({ error: "seconds must be a non-negative integer" });
+  if (seconds === 0) return res.json({ ok: true }); // nothing to log
+
+  const { error } = await db.from("work_task_spans").insert({
+    user_id: req.user!.id,
+    org_id: req.org!.id,
+    work_date: workDate,
+    task_id: typeof body.task_id === "string" && body.task_id ? body.task_id : null,
+    size: body.size,
+    seconds,
+    started_at: typeof body.started_at === "string" ? body.started_at : null,
+    ended_at: typeof body.ended_at === "string" ? body.ended_at : null,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/** GET /tasks/work-clock/insights — learning summary over the last N days:
+ *  average worked day length, per-size averages, day count. */
+router.get("/tasks/work-clock/insights", async (req: Request, res: Response) => {
+  const days = Math.min(90, Math.max(1, parseInt(String(req.query.days ?? "30"), 10) || 30));
+  const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+
+  const { data: sessions, error: sErr } = await db
+    .from("work_sessions")
+    .select("worked_seconds, quick_seconds, medium_seconds, big_seconds, alerts_soft, alerts_popup, alerts_block, closed_reason")
+    .eq("user_id", req.user!.id)
+    .gte("work_date", since);
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  const rows = sessions ?? [];
+  const closed = rows.filter((r) => r.closed_reason !== "open");
+  const n = closed.length || 1;
+  const sum = (f: (r: typeof rows[number]) => number) => closed.reduce((a, r) => a + (f(r) || 0), 0);
+
+  // Per-TASK size averages come from the granular span log (work_sessions only
+  // has per-day size totals). AVG(seconds) grouped by size.
+  const { data: spans, error: spErr } = await db
+    .from("work_task_spans")
+    .select("size, seconds")
+    .eq("user_id", req.user!.id)
+    .gte("work_date", since);
+  if (spErr) return res.status(500).json({ error: spErr.message });
+  const spanRows = spans ?? [];
+  const avgSize = (sz: string) => {
+    const rs = spanRows.filter((r) => r.size === sz);
+    if (!rs.length) return 0;
+    return Math.round(rs.reduce((a, r) => a + (r.seconds || 0), 0) / rs.length);
+  };
+
+  res.json({
+    days,
+    sessions: closed.length,
+    avg_worked_seconds: Math.round(sum((r) => r.worked_seconds) / n),
+    total_worked_seconds: sum((r) => r.worked_seconds),
+    avg_quick_seconds: avgSize("quick"),
+    avg_medium_seconds: avgSize("medium"),
+    avg_big_seconds: avgSize("big"),
+    alerts: { soft: sum((r) => r.alerts_soft), popup: sum((r) => r.alerts_popup), block: sum((r) => r.alerts_block) },
+  });
+});
+
+// ── claude-actions (workclock phase 5) ──────────────────────────────────────
+const CLAUDE_STATUSES = ["open", "running", "waiting", "done", "failed"];
+
+/** GET /tasks/claude-actions — the user's active (open/running/waiting) actions,
+ *  newest first. Pass ?all=1 for the full recent list. */
+router.get("/tasks/claude-actions", async (req: Request, res: Response) => {
+  let q = db.from("claude_actions").select("*").eq("user_id", req.user!.id);
+  if (req.query.all !== "1") q = q.in("status", ["open", "running", "waiting"]);
+  const { data, error } = await q.order("updated_at", { ascending: false }).limit(50);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ actions: data ?? [] });
+});
+
+/** POST /tasks/claude-actions — record/refresh a Claude launch.
+ *  Body: { title?, session_url?, status?, task_id? }. When session_url matches an
+ *  existing open-ish row it is updated (the extension refreshing a live session);
+ *  otherwise a new row is inserted (the bar opening Claude). */
+router.post("/tasks/claude-actions", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const status = CLAUDE_STATUSES.includes(body.status) ? body.status : "open";
+  const sessionUrl = typeof body.session_url === "string" && body.session_url ? body.session_url : null;
+  const title = typeof body.title === "string" ? body.title.slice(0, 200) : null;
+  // task_id is not accepted from the client yet (no linking UI); ignoring it
+  // avoids a cross-tenant FK link with only a valid JWT.
+
+  // Reuse an existing active row rather than spawning a new one on every launch:
+  // by session_url when the extension supplies one, else the latest null-URL
+  // "open" bar row (so repeated bar opens don't pile up orphan rows).
+  const dedup = sessionUrl
+    ? db.from("claude_actions").select("id").eq("user_id", req.user!.id).eq("session_url", sessionUrl)
+        .in("status", ["open", "running", "waiting"]).order("updated_at", { ascending: false }).limit(1).maybeSingle()
+    : db.from("claude_actions").select("id").eq("user_id", req.user!.id).is("session_url", null)
+        .eq("status", "open").order("updated_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: existing, error: findErr } = await dedup;
+  if (findErr) return res.status(500).json({ error: findErr.message });
+
+  if (existing) {
+    const { data, error } = await db
+      .from("claude_actions")
+      .update({ status, ...(title ? { title } : {}), updated_at: new Date().toISOString() })
+      .eq("id", existing.id).eq("user_id", req.user!.id)
+      .select("*").single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ action: data });
+  }
+
+  const { data, error } = await db
+    .from("claude_actions")
+    .insert({ user_id: req.user!.id, org_id: req.org!.id, title, session_url: sessionUrl, status })
+    .select("*").single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ action: data });
+});
+
+/** PATCH /tasks/claude-actions/:id — update status / pr_url / session_url. */
+router.patch("/tasks/claude-actions/:id", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (CLAUDE_STATUSES.includes(body.status)) patch.status = body.status;
+  if (typeof body.pr_url === "string") patch.pr_url = body.pr_url;
+  if (typeof body.session_url === "string") patch.session_url = body.session_url;
+  if (typeof body.title === "string") patch.title = body.title.slice(0, 200);
+  const { data, error } = await db
+    .from("claude_actions")
+    .update(patch).eq("id", req.params.id).eq("user_id", req.user!.id)
+    .select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "action not found" });
+  res.json({ action: data });
 });
 
 /** GET /tasks/:id */

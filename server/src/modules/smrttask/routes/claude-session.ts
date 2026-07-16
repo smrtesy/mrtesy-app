@@ -25,7 +25,7 @@ import { emitEvent } from "../../../lib/platform";
 
 const router = Router();
 
-/** Cap the transcript we summarize so a long chat can't blow up the Haiku bill. */
+/** Cap the transcript we summarize so a long chat can't blow up the summariser bill. */
 const MAX_TRANSCRIPT_CHARS = 24_000;
 
 interface SessionSummary {
@@ -42,7 +42,8 @@ const SUMMARY_SYSTEM = `אתה מסכם שיחת עבודה שהתנהלה ב-Cl
 פלט: JSON בלבד, ללא טקסט נוסף, במבנה:
 {"topic": "...", "summary": "...", "next_step": "..."}
 כללים:
-- הכול בעברית, קצר וענייני. topic = עד 8 מילים. summary = 1-3 משפטים. next_step = משפט אחד עם הפעולה המוצעת להשלמת הדיון/המשימה.
+- הכול בעברית בלבד, בשפה פשוטה ויומיומית. כתוב כמו שמסבירים לחבר: משפטים קצרים, בלי מונחים טכניים מיותרים ובלי מילים באנגלית כשיש חלופה עברית — כך שגם מי שאינו מפתח יבין בדיוק מה נעשה ומה הצעד הבא.
+- קצר וענייני. topic = עד 8 מילים. summary = 1-3 משפטים. next_step = משפט אחד עם הפעולה המוצעת להשלמת הדיון/המשימה.
 - שמר כל קישור (URL) שמופיע בשיחה מילה-במילה (verbatim), כולל פרמטרים — אל תקצר ל-domain.
 - אם השיחה טריוויאלית או ריקה, החזר topic="שיחת Claude Code" ו-next_step קצר בהתאם.`;
 
@@ -64,7 +65,7 @@ async function summarizeTranscript(
 
   try {
     const { content } = await simpleCall(
-      "haiku",
+      "sonnet",
       SUMMARY_SYSTEM,
       clipped,
       512,
@@ -84,21 +85,22 @@ async function summarizeTranscript(
   return fallback;
 }
 
-/** Resolve a user by explicit id or by email (super-admin's personal automation). */
+/** Resolve a user by explicit id or by email (super-admin's personal automation).
+ *  One bulk listUsers({ perPage: 1000 }) + local match — the exact pattern the
+ *  rest of this codebase uses (admin/users, platform/members). The earlier
+ *  paginated { page } loop failed to resolve even existing emails on the
+ *  deployed route; this mirrors the proven call so email resolution is reliable. */
 async function resolveUserId(userId?: string, email?: string): Promise<string | null> {
-  if (userId && typeof userId === "string") return userId;
+  if (userId && typeof userId === "string" && userId.trim()) return userId.trim();
   if (!email) return null;
   const target = email.trim().toLowerCase();
-  // Scan the auth user list in bounded pages — this is a small, single-tenant
-  // deployment, so a few pages of 200 covers it without an auth-schema RPC.
-  for (let page = 1; page <= 5; page++) {
-    const { data, error } = await db.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users?.length) return null;
-    const hit = data.users.find((u) => (u.email ?? "").toLowerCase() === target);
-    if (hit) return hit.id;
-    if (data.users.length < 200) return null; // last page, no match
+  const { data, error } = await db.auth.admin.listUsers({ perPage: 1000 });
+  if (error) {
+    console.error("[claude-session] listUsers failed:", error.message);
+    return null;
   }
-  return null;
+  const hit = (data?.users ?? []).find((u) => (u.email ?? "").toLowerCase() === target);
+  return hit?.id ?? null;
 }
 
 router.post("/claude-session/proposal", async (req: Request, res: Response) => {
@@ -226,7 +228,7 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
       description,
       action_links: actionLinks,
       tags: ["via-claude-session", dedupTag],
-      ai_model_used: MODELS.haiku,
+      ai_model_used: MODELS.sonnet,
     })
     .select("id")
     .single();

@@ -116,10 +116,20 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       // mine=true → personal scope; the API also hides draft-plan tasks.
       // Pull inbox suggestions AND pending_completion (suggestions that closed
       // themselves before approval), then split by status below.
-      const { tasks } = await api<{ tasks: Task[] }>(
-        "/api/tasks?status=inbox,pending_completion&verified=false&has_source=true&mine=true&limit=1000",
-      );
-      const all = tasks ?? [];
+      const [{ tasks }, sessionRes] = await Promise.all([
+        api<{ tasks: Task[] }>(
+          "/api/tasks?status=inbox,pending_completion&verified=false&has_source=true&mine=true&limit=1000",
+        ),
+        // Claude-Code session proposals ("הצעות") have no source message, so the
+        // has_source filter above skips them — pull them in by tag and merge.
+        api<{ tasks: Task[] }>(
+          "/api/tasks?status=inbox,pending_completion&verified=false&mine=true&tag=via-claude-session&limit=1000",
+        ).catch(() => ({ tasks: [] as Task[] })),
+      ]);
+      // Merge + dedupe by id (the two result sets are disjoint, but guard anyway).
+      const byId = new Map<string, Task>();
+      for (const t of [...(tasks ?? []), ...(sessionRes.tasks ?? [])]) byId.set(t.id, t);
+      const all = [...byId.values()];
       // Urgency order: earliest effective deadline first, undated last,
       // newest-first within each group.
       const sorted = all.filter((t) => t.status === "inbox").sort((a, b) => {

@@ -521,6 +521,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // Never return the password to the popup — only the fill outcome.
           return sendResponse(result.ok ? { ok: true, ...result } : { ok: false, error: result.reason });
         }
+        case "CLAUDE_STATUS":
+          // The claude-capture content script observed a claude.ai/code tab.
+          // Report its session URL + status to smrtesy (fire-and-forget). The
+          // backend upserts by session_url so refreshes update one row.
+          apiSend("POST", "/api/tasks/claude-actions", {
+            session_url: msg.data && msg.data.session_url,
+            status: msg.data && msg.data.status,
+            title: msg.data && msg.data.title,
+          }).catch(() => {});
+          return sendResponse({ ok: true });
         default:
           return sendResponse({ error: "unknown_message" });
       }

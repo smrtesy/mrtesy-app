@@ -101,8 +101,8 @@ async function loadSystemParams(): Promise<SystemParams> {
   };
 }
 
-const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "google_calendar", "google_drive", "gmail", "gmail_sent"];
-const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.sms,source_type.eq.google_calendar,source_type.eq.google_drive";
+const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "sms_echo", "google_calendar", "google_drive", "gmail", "gmail_sent"];
+const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.sms,source_type.eq.sms_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
 const DEFAULT_FILTERED_CATEGORY_KEYS = new Set(["promotions", "social", "forums"]);
 const CATEGORY_KEY_TO_GMAIL_LABEL: Record<string, string> = {
@@ -370,7 +370,10 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   // intentions), NOT messages sent to a third party awaiting a reply — they go
   // through normal analysis and become tasks immediately. Only sent EMAIL is
   // routed to the deferred 48-business-hour follow-up flow.
-  if (sourceType === "whatsapp_echo") return { result: "needs_claude" };
+  // sms_echo mirrors whatsapp_echo: an SMS the user texted to their OWN number
+  // as a task-capture channel. A deliberate self-note, never a sent message
+  // awaiting a reply — go straight to Claude, skip the check_followup defer.
+  if (sourceType === "whatsapp_echo" || sourceType === "sms_echo") return { result: "needs_claude" };
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
@@ -513,7 +516,7 @@ function isWhatsApp(msg: any): boolean {
 // routing, follow-up defer). isWhatsApp stays for the genuinely WhatsApp-only
 // spots (self-chat echo, placeholder text, delivery-status coalescing).
 function isConversational(msg: any): boolean {
-  return isWhatsApp(msg) || msg.source_type === "sms";
+  return isWhatsApp(msg) || msg.source_type === "sms" || msg.source_type === "sms_echo";
 }
 
 function threadKey(msg: any): string | null {
@@ -525,7 +528,9 @@ function threadKey(msg: any): string | null {
   // independent new intention and should NOT share thread memory with the
   // parent WhatsApp chat (which would link every voice memo to the same
   // task via related_task_id and lose 7 of 8 captures).
-  if (msg.source_type === "whatsapp_echo") return null;
+  // sms_echo (self-notes) are per-message intentions like whatsapp_echo — each
+  // is independent, so no shared thread memory.
+  if (msg.source_type === "whatsapp_echo" || msg.source_type === "sms_echo") return null;
   if (msg.source_type === "whatsapp" || msg.source_type === "sms") {
     const cid = msg.metadata?.chatId as string | undefined;
     return cid ? `${msg.source_type}:${cid}` : null;
@@ -670,8 +675,8 @@ async function analyzeWithMemory(
   const personalBlock = personalRules
     ? `\n\n═══ USER-SPECIFIC CORRECTION RULES (this user corrected the system on these; they OVERRIDE the general rules above on any conflict) ═══\n${personalRules}`
     : "";
-  const selfNote = msg.source_type === "whatsapp_echo"
-    ? `\n\nNOTE: This is a self-note the user wrote to themselves on their OWN WhatsApp number — a deliberate capture, not a message awaiting anyone's reply.`
+  const selfNote = (msg.source_type === "whatsapp_echo" || msg.source_type === "sms_echo")
+    ? `\n\nNOTE: This is a self-note the user wrote to themselves on their OWN ${msg.source_type === "sms_echo" ? "phone number via SMS" : "WhatsApp number"} — a deliberate capture, not a message awaiting anyone's reply.`
     : "";
 
   // Static, message-invariant instructions → cached prefix (admin-editable via
@@ -1984,10 +1989,10 @@ async function whatsappChatSiblingIds(userId: string, chatId: string, sourceType
 }
 
 async function tryLinkToExistingTask(msg: any, userId: string): Promise<{ id: string; updates: any[] } | null> {
-  // Self-chat voice memos (whatsapp_echo): each is an independent new intention
-  // (threadKey returns null for them), so we only re-link to a task born from
-  // THIS exact row — never to a sibling memo's task.
-  if (msg.source_type === "whatsapp_echo") {
+  // Self-chat voice memos (whatsapp_echo) and SMS self-notes (sms_echo): each is
+  // an independent new intention (threadKey returns null for them), so we only
+  // re-link to a task born from THIS exact row — never to a sibling memo's task.
+  if (msg.source_type === "whatsapp_echo" || msg.source_type === "sms_echo") {
     const { data: openTask, error: taskErr } = await supabase.from("tasks").select("id, updates").eq("user_id", userId).in("status", ["inbox", "in_progress"]).eq("source_message_id", msg.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (taskErr || !openTask) return null;
     return { id: openTask.id as string, updates: Array.isArray(openTask.updates) ? openTask.updates : [] };
@@ -2466,6 +2471,52 @@ async function findDuplicateOpenTask(
   return null;
 }
 
+// When a follow-up document is linked to an existing task, the follow-up may
+// CHANGE a material fact of the matter (a hearing that flips phone→in-person, a
+// moved date/time, a new deadline or amount). The plain cross-source link only
+// records "same matter" — it never tells the user WHAT changed, so a critical
+// change (show up in person instead of by phone) stays buried. This diffs the
+// existing task against the new document and returns the material changes plus
+// any concrete event date/place the follow-up supplies, so the caller can raise
+// a prominent alert and backfill the schedule. Best-effort: any failure → null.
+const MATERIAL_CHANGE_PROMPT = `You compare an EXISTING task against a NEW document about the SAME matter and report only MATERIAL changes.
+
+Return ONLY JSON: {"due_date": "YYYY-MM-DD"|null, "location": string|null, "changes": [{"he": "..."}]}.
+
+A MATERIAL change = the NEW document changes any of these versus what the existing task states: hearing/meeting MODALITY (phone / in-person / video), DATE, TIME, LOCATION or ADDRESS, DEADLINE, AMOUNT, or eligibility/aid/status.
+- Only report a change when the NEW document clearly contradicts or supersedes the existing task. If nothing material changed, return "changes": [].
+- Each "he" is a SHORT Hebrew alert in the format: "מה השתנה: היה A ← עכשיו B" (e.g. "אופן הדיון: היה טלפוני ← עכשיו פיזי ב-5 Beaver Street"). Preserve place names, addresses, amounts and any URLs VERBATIM.
+- "due_date" = the event/deadline date stated in the NEW document as YYYY-MM-DD, else null. "location" = the place/address stated in the NEW document, else null.`;
+
+async function detectMaterialChanges(
+  existing: { title_he?: string | null; description?: string | null; due_date?: string | null },
+  msgBody: string,
+  sys: SystemParams,
+  userId: string,
+  refId: string,
+): Promise<{ due_date: string | null; location: string | null; changes: string[] } | null> {
+  try {
+    const userMessage =
+      `EXISTING TASK:\nTitle: ${existing.title_he || "—"}\nDescription: ${String(existing.description || "—").slice(0, 1200)}\nCurrent due_date: ${existing.due_date || "—"}\n\n` +
+      `NEW RELATED DOCUMENT:\n${msgBody.slice(0, 3000)}`;
+    const result = await callClaude(sys.classification_model, cachedSystem(MATERIAL_CHANGE_PROMPT), userMessage, 500,
+      { component: "ai_process.material_change", userId, refId });
+    const m = result.text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const p = JSON.parse(m[0]);
+    const changes = Array.isArray(p.changes)
+      ? p.changes.filter((c: any) => c && typeof c.he === "string" && c.he.trim()).map((c: any) => c.he.trim()).slice(0, 5)
+      : [];
+    return {
+      due_date: typeof p.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.due_date) ? p.due_date : null,
+      location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
+      changes,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // HIGH-confidence: append the new message to the existing task as an update,
 // preserving any deep links from the body verbatim (system-wide rule), and
 // enrich the task with details the existing copy was missing (a source link,
@@ -2476,8 +2527,18 @@ async function linkAndEnrichDuplicate(
   msg: any,
   analysis: ThreadAnalysis,
   reasonHe: string,
+  sys: SystemParams,
+  opts?: { reopen?: boolean },
 ) {
   const urls = extractUrls(bodyForAI(msg));
+  // Was this exact message already linked here on a prior run? appendUpdateToTask
+  // dedups the TIMELINE entry, but the material-change/alert block below is not
+  // idempotent on its own — capture this BEFORE the append so a re-processed
+  // message can't re-prepend the ⚠️ alert or re-fire the notification.
+  const { data: pre } = await supabase.from("tasks").select("updates").eq("id", taskId).maybeSingle();
+  const alreadyLinked = Array.isArray(pre?.updates) && (pre!.updates as any[]).some(
+    (u) => u?.source_message_id === msg.id && typeof u?.source_received_at === "string" && u.source_received_at === msg.received_at,
+  );
   const linkAnalysis: ThreadAnalysis = {
     ...analysis,
     // Don't clobber the existing task's description with this message's summary;
@@ -2487,14 +2548,50 @@ async function linkAndEnrichDuplicate(
     completionReason: "",
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
   };
-  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable");
+  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable", opts);
 
-  // Backfill fields the existing task lacked.
+  // Backfill fields the existing task lacked, and detect any MATERIAL change the
+  // follow-up introduces (modality/date/place/amount) so it's surfaced, not buried.
   const { data: t } = await supabase
-    .from("tasks").select("source_link, related_contact_email").eq("id", taskId).maybeSingle();
+    .from("tasks").select("source_link, related_contact_email, title_he, description, due_date").eq("id", taskId).maybeSingle();
   const patch: Record<string, unknown> = {};
   if (t && !t.source_link && (msg.source_url || urls[0])) patch.source_link = msg.source_url || urls[0];
   if (t && !t.related_contact_email && msg.sender_email) patch.related_contact_email = msg.sender_email;
+
+  if (t && !alreadyLinked) {
+    const diff = await detectMaterialChanges(t, bodyForAI(msg), sys, msg.user_id, msg.id);
+    if (diff) {
+      // The follow-up supplies a concrete event/deadline date the task lacked →
+      // fill it, so "add to calendar" works and the matter stops reading
+      // "waiting for a date" when the date has in fact arrived.
+      if (diff.due_date && !t.due_date) patch.due_date = diff.due_date;
+      // A material change (e.g. a hearing that flipped phone→in-person) must be
+      // SEEN, not buried in the timeline: prepend a ⚠️ alert to the description
+      // (never dropping the prior content) and flag the task as unread.
+      if (diff.changes.length > 0) {
+        const alertBlock = diff.changes.map((c) => `⚠️ ${c}`).join("\n");
+        patch.description = `${alertBlock}\n\n${String(t.description || "").trim()}`.trim();
+        patch.has_unread_update = true;
+        // Push a notification so the change reaches the user even without opening
+        // the task. Best-effort; mirrors the shape used elsewhere (notifications
+        // type CHECK = info|warning|success|action_required).
+        try {
+          const { data: mem } = await supabase.from("org_members").select("org_id").eq("user_id", msg.user_id).limit(1).maybeSingle();
+          if (mem?.org_id) {
+            const { error: notifErr } = await supabase.from("notifications").insert({
+              user_id: msg.user_id, org_id: mem.org_id, app_slug: "smrttask",
+              type: "warning",
+              title: "שינוי בפרטי משימה",
+              body: diff.changes.join(" • ").slice(0, 300),
+              link: "/smrttask",
+            });
+            if (notifErr) console.error("material-change notification insert failed:", notifErr);
+          }
+        } catch { /* notification is best-effort — never block the link */ }
+      }
+    }
+  }
+
   if (Object.keys(patch).length > 0) {
     const { error } = await supabase.from("tasks").update(patch).eq("id", taskId);
     if (error) {
@@ -2847,7 +2944,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // (preserving the per-memo behavior). Only real two-party `whatsapp` burst
       // rows fan out across the chat's sibling set.
       const chatId = msg.metadata?.chatId as string | undefined;
-      const sibIds = msg.source_type === "whatsapp_echo"
+      const sibIds = (msg.source_type === "whatsapp_echo" || msg.source_type === "sms_echo")
         ? [msg.id]
         : (chatId ? await whatsappChatSiblingIds(msg.user_id, chatId, msg.source_type) : []);
       let candidates: WhatsAppCandidate[] = [];
@@ -3095,7 +3192,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         resendContext = `↩ חזרה של עניין ש${verb} (${dup.serial || dup.taskId}) — ${dup.reason}`;
         classificationReason = `escalation of ${dup.status} ${dup.serial || dup.taskId} (high) — tagged, not suppressed — ${dup.reason}`;
       } else if (dup && dup.confidence === "high") {
-        await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason);
+        await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason, sys);
         linkedTaskId = dup.taskId;
         classification = "actionable_followup";
         classificationReason = `cross-source duplicate of ${dup.serial || dup.taskId} (high) — ${dup.reason}`;
@@ -3325,6 +3422,27 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                   // T665→T685 respawn) stay suppressed.
                   const escalation = tDup.status !== "completed" && !isConversational(msg);
                   if (escalation) {
+                    // Reopen-when-strong: a dismissed/archived matter that
+                    // resurfaces carrying a CONCRETE new date/deadline
+                    // (task.due_date, extracted by the builder — e.g. an official
+                    // notice with a hearing date) is reopened as the SAME task
+                    // instead of spawned as a parallel duplicate. Gated tight so
+                    // the documented "tag, don't resurrect" rule still holds for
+                    // weak re-mentions: HIGH confidence (already) + non-conversational
+                    // (already, via `escalation`) + a real date on the new document.
+                    if (task.due_date) {
+                      await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason, sys, { reopen: true });
+                      if (!firstTaskId) firstTaskId = tDup.taskId;
+                      classification = "actionable_followup";
+                      classificationReason = `reopened ${tDup.status} ${tDup.serial || tDup.taskId} — strong continuation (has date) — ${tDup.reason}`;
+                      await supabase.from("log_entries").insert({
+                        // log_entries.status CHECK allows only ok|skipped|failed|duplicate;
+                        // the "reopened" detail lives in classification_reason.
+                        user_id: msg.user_id, level: "info", category: "ai_process_dupe", status: "ok",
+                        ...msgLogFields(msg), classification_reason: classificationReason,
+                      });
+                      continue;
+                    }
                     if (!resendContext) {
                       const verb = tDup.status === "dismissed" ? "דחית" : "העברת לארכיון";
                       resendContext = `↩ חזרה של עניין ש${verb} (${tDup.serial || tDup.taskId}) — ${tDup.reason}`;
@@ -3345,7 +3463,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                   // createdTaskIds — the deferred-follow-up snooze below must only
                   // touch tasks this burst actually created, never a pre-existing
                   // open task.
-                  await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason);
+                  await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason, sys);
                   if (!firstTaskId) firstTaskId = tDup.taskId;
                   continue;
                 }

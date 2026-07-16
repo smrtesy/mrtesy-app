@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
+import { extractText, getDocumentProxy } from "npm:unpdf@1.6.2";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -175,6 +176,14 @@ const OCR_API_TIMEOUT_MS = 50_000;
 // Worst case per run ≈ OCR_MAX_PER_RUN × (download + api) ≈ 2 × 75s = 150s, but
 // downloads are near-instant in practice, so realistic worst is ≈ 2 × 50s, well
 // under the runtime's ~150s wall-clock ceiling.
+// Longest an OCR call can occupy (both legs time-boxed). syncUserDrive refuses to
+// START an OCR that couldn't finish before the invocation deadline, so no single
+// op can push the request past the edge kill.
+const OCR_WORST_MS = OCR_DOWNLOAD_TIMEOUT_MS + OCR_API_TIMEOUT_MS; // 75s
+// Invocation-wide wall-clock ceiling, shared across all users in one request and
+// across self-kick chaining (each invocation gets its own). Set below the ~150s
+// edge kill with headroom so a bounded op started just under it still finishes.
+const SYNC_DEADLINE_MS = 130_000;
 
 // fetch() with a hard timeout — aborts (and the await rejects, caught by the
 // caller) instead of hanging until the platform kills the whole invocation.
@@ -198,8 +207,15 @@ function estimateHaikuCost(inputTokens: number, outputTokens: number): number {
 // text layer, so fetchFileContent returns "" and the document reaches
 // ai-process with an empty body and never becomes a task. Hand the raw bytes
 // to a vision-capable model and return the transcription, which gets stored as
-// body_text — the contract ai-process consumes. Best-effort: any failure
-// returns "" (unchanged from the pre-OCR behavior).
+// body_text — the contract ai-process consumes.
+//
+// Return contract distinguishes two kinds of "no text":
+//   • ""   → definitively no text (model said NO_TEXT, unsupported type, missing
+//            key, oversized). The file IS done — the caller writes a row so it's
+//            never re-processed.
+//   • null → TRANSIENT failure (download/API error or timeout). The file is NOT
+//            done — the caller must skip the upsert and retry it on a later pass,
+//            so a one-off blip can't silently drop a scanned document.
 async function ocrBinaryFile(
   token: string,
   fileId: string,
@@ -207,8 +223,8 @@ async function ocrBinaryFile(
   fileName: string,
   userId: string,
   sizeBytes?: number,
-): Promise<string> {
-  if (!ANTHROPIC_API_KEY) return "";
+): Promise<string | null> {
+  if (!ANTHROPIC_API_KEY) return ""; // OCR unconfigured — ingest with empty body rather than retry forever
   const isPdf = mimeType === "application/pdf";
   const isImage = mimeType.startsWith("image/");
   if (!isPdf && !isImage) return "";
@@ -221,12 +237,14 @@ async function ocrBinaryFile(
       { headers: { Authorization: `Bearer ${token}` } },
       OCR_DOWNLOAD_TIMEOUT_MS,
     );
-    if (!resp.ok) return "";
+    // 5xx/429 are transient (retry); 4xx (403/404/etc) is permanent — the file
+    // won't become fetchable, so mark it done ("") rather than retry forever.
+    if (!resp.ok) return (resp.status >= 500 || resp.status === 429) ? null : "";
     const bytes = new Uint8Array(await resp.arrayBuffer());
     if (bytes.byteLength > OCR_MAX_BYTES) return "";
     base64 = encodeBase64(bytes);
   } catch {
-    return "";
+    return null; // transient network error — retry next pass
   }
 
   const mediaBlock = isPdf
@@ -261,7 +279,9 @@ async function ocrBinaryFile(
         }],
       }),
     }, OCR_API_TIMEOUT_MS);
-    if (!resp.ok) return "";
+    // 5xx/429 are transient (retry); 4xx (e.g. 400 on a malformed PDF) is
+    // permanent — mark done ("") so a poison file can't loop the drain forever.
+    if (!resp.ok) return (resp.status >= 500 || resp.status === 429) ? null : "";
     const data = await resp.json();
     const text: string = (data.content?.[0]?.text || "").trim();
 
@@ -282,10 +302,72 @@ async function ocrBinaryFile(
       if (ocrUsageInsertError) console.error("ai_usage insert failed:", ocrUsageInsertError);
     } catch { /* ledger must not break the pipeline */ }
 
-    if (!text || text === "NO_TEXT") return "";
+    if (!text || text === "NO_TEXT") return ""; // genuinely no readable text — done
     return text.substring(0, 10000);
   } catch {
+    return null; // transient error (network/parse) — retry next pass
+  }
+}
+
+// ScanSnap and virtually every "scan to searchable PDF" tool embed an OCR text
+// layer (invisible text drawn over the page image). When that layer exists the
+// text is already there for free: extracting it is a cheap local parse — no
+// vision model, no per-run OCR cap, no ~150s edge timeout risk. Try this first
+// and only fall back to vision OCR for image-only PDFs that carry no text.
+// Best-effort: any failure (download error, encrypted/corrupt PDF, no text)
+// returns "" so the caller degrades to the existing OCR path exactly as before.
+const PDF_TEXT_LAYER_MIN_CHARS = 20;
+// Cap the pdf.js parse itself: the download is already time-boxed, but a large
+// or malformed PDF can make pdf.js spin. A caught exception returns "" (fine),
+// but a slow parse isn't interruptible on its own — race it against a timer so
+// it can't eat into the run's wall-clock budget.
+const PDF_PARSE_TIMEOUT_MS = 15_000;
+// Longest a text-layer probe can occupy: the download (time-boxed) plus the
+// raced parse. Same purpose as OCR_WORST_MS — used to refuse to start a probe
+// that couldn't finish before the invocation deadline.
+const TEXTLAYER_WORST_MS = OCR_DOWNLOAD_TIMEOUT_MS + PDF_PARSE_TIMEOUT_MS; // 40s
+
+async function extractPdfTextLayer(
+  token: string,
+  fileId: string,
+  sizeBytes?: number,
+): Promise<string> {
+  if (sizeBytes && sizeBytes > OCR_MAX_BYTES) return "";
+
+  let bytes: Uint8Array;
+  try {
+    const resp = await fetchWithTimeout(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      OCR_DOWNLOAD_TIMEOUT_MS,
+    );
+    if (!resp.ok) return "";
+    bytes = new Uint8Array(await resp.arrayBuffer());
+    if (bytes.byteLength > OCR_MAX_BYTES) return "";
+  } catch {
     return "";
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const parse = (async () => {
+      const pdf = await getDocumentProxy(bytes);
+      const { text } = await extractText(pdf, { mergePages: true });
+      return Array.isArray(text) ? text.join(" ") : (text || "");
+    })();
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), PDF_PARSE_TIMEOUT_MS);
+    });
+    const raw = await Promise.race([parse, timeout]);
+    if (raw === null) return ""; // parse timed out → fall back to vision OCR
+    const clean = raw.replace(/\s+/g, " ").trim();
+    // Too little text ⇒ treat as an image-only scan and let vision OCR handle it.
+    if (clean.length < PDF_TEXT_LAYER_MIN_CHARS) return "";
+    return clean.substring(0, 10000); // same 10KB cap as fetchFileContent / OCR
+  } catch {
+    return "";
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -338,7 +420,7 @@ async function expandFolderTree(token: string, rootIds: string[]): Promise<Set<s
   return all;
 }
 
-async function syncUserDrive(userId: string) {
+async function syncUserDrive(userId: string, deadline: number) {
   const { data: settings } = await supabase
     .from("user_settings")
     .select("drive_folder_id, drive_folder_ids, drive_sync_days")
@@ -548,9 +630,14 @@ async function syncUserDrive(userId: string) {
     (f) => Array.isArray(f.parents) && f.parents.some((p: string) => folderSet.has(p)),
   );
 
-  // Source ids we've already OCR'd in a previous run (body_text already filled).
-  // Lets a backlog drain over several runs without re-transcribing finished
-  // files and without blowing the per-invocation compute budget.
+  // Source ids we've already handled in a previous run. A drive row only gets
+  // written once a file has been fully processed (text-layer extracted or vision
+  // OCR attempted) — deferred files are `continue`d before the upsert and have no
+  // row yet — so "a row exists" means "done, skip it." This lets a backlog drain
+  // across runs without re-downloading finished files, and (unlike the old
+  // body_text-not-null check) also skips scans whose OCR legitimately yielded no
+  // text, so a blank/low-text page can't be re-transcribed forever and wedge the
+  // self-draining loop below.
   const ocrFileIds = files
     .filter((f) => f.id && (f.mimeType === "application/pdf" || (f.mimeType || "").startsWith("image/")))
     .map((f) => f.id);
@@ -561,37 +648,70 @@ async function syncUserDrive(userId: string) {
       .select("source_id")
       .eq("user_id", userId)
       .eq("source_type", "google_drive")
-      .not("body_text", "is", null)
       .in("source_id", ocrFileIds);
     for (const r of doneRows || []) alreadyOcred.add(r.source_id);
   }
 
   let synced = 0;
   let ocrCount = 0;
-  // True if we skipped at least one file that still needs OCR because we hit the
-  // per-run cap — tells the checkpoint logic below to keep scanning next run.
-  let ocrDeferred = false;
+  // True if we left files unprocessed this run (OCR cap or wall-clock deadline) —
+  // tells the checkpoint logic to hold position AND the handler to self-kick so
+  // the rest drains immediately instead of waiting for the next scheduled tick.
+  let deferred = false;
+  // `deadline` is INVOCATION-level (passed in), shared across every user in this
+  // request — the edge runtime's ~150s hard kill (HTTP 546) is per-invocation,
+  // not per-user, so a per-user budget would give a false guarantee when many
+  // users are processed in one loop. Once the shared deadline passes, each
+  // remaining user's loop breaks on its first iteration with `deferred=true` and
+  // the self-kick picks them up. Cheap text-layer files fly through; the deadline
+  // mainly guards against a large OCR/parse backlog overrunning the ceiling.
   for (const file of files) {
     if (!file.name) continue;
+    if (Date.now() >= deadline) { deferred = true; break; }
 
     // Text-based files (Docs/Sheets/plain text) export directly. Binary files
     // with no text layer (scanned PDFs, images) come back empty here, so fall
     // back to vision OCR — otherwise scanned documents never produce a task.
     let bodyText = await fetchFileContent(token, file.id, file.mimeType || "");
+    // PDFs come back empty from fetchFileContent (binary → skipped). Before
+    // paying for vision OCR, try the embedded OCR text layer that ScanSnap and
+    // similar scanners already produce. This path is cheap (local parse, no model
+    // call) and is bounded only by the wall-clock budget above, so a batch of
+    // searchable PDFs ingests without touching the OCR cap — only genuinely
+    // image-only PDFs fall through to the capped vision OCR below.
+    if (!bodyText && file.mimeType === "application/pdf") {
+      // Already handled on a prior run — don't fetch it again.
+      if (alreadyOcred.has(file.id)) continue;
+      // Don't START a probe that couldn't finish before the deadline.
+      if (Date.now() + TEXTLAYER_WORST_MS > deadline) { deferred = true; break; }
+      bodyText = await extractPdfTextLayer(
+        token, file.id,
+        file.size != null ? Number(file.size) : undefined,
+      );
+    }
     if (!bodyText) {
       const isBinary = file.mimeType === "application/pdf" || (file.mimeType || "").startsWith("image/");
       if (isBinary) {
-        // Already transcribed on a prior run — don't pay for it again.
+        // Already handled on a prior run — don't pay for it again.
         if (alreadyOcred.has(file.id)) continue;
-        // Per-run OCR budget spent — defer this file to the next run.
-        if (ocrCount >= OCR_MAX_PER_RUN) { ocrDeferred = true; continue; }
+        // Per-run OCR budget spent — defer this file to the next (self-kicked) run.
+        if (ocrCount >= OCR_MAX_PER_RUN) { deferred = true; continue; }
+        // Don't START a vision-OCR call that couldn't finish before the deadline
+        // (its worst case is ~75s) — this is what bounds the single-iteration tail
+        // and keeps the whole invocation under the ~150s edge kill.
+        if (Date.now() + OCR_WORST_MS > deadline) { deferred = true; break; }
         // Count the attempt (the expensive part), not just success, so the
         // per-run compute budget holds even when a file yields no text.
         ocrCount++;
-        bodyText = await ocrBinaryFile(
+        const ocrResult = await ocrBinaryFile(
           token, file.id, file.mimeType || "", file.name, userId,
           file.size != null ? Number(file.size) : undefined,
         );
+        // null = transient failure (download/API) → leave the file unprocessed
+        // (no row) and defer, so it retries next pass instead of being silently
+        // marked done with no text. "" (no text) falls through to the upsert.
+        if (ocrResult === null) { deferred = true; continue; }
+        bodyText = ocrResult;
       }
     }
 
@@ -610,13 +730,13 @@ async function syncUserDrive(userId: string) {
     synced++;
   }
 
-  // Advance the checkpoint only once the OCR backlog is drained. While work is
+  // Advance the checkpoint only once the backlog is drained. While work is
   // deferred we leave the position untouched (omit `checkpoint` from the upsert
   // so it keeps its current value) — the remaining files then reappear on the
-  // next run and get transcribed. Initial scan → startPageToken (go
+  // next run and get processed. Initial scan → startPageToken (go
   // incremental); incremental → the next /changes token.
   let checkpointToWrite: string | null | undefined; // undefined = leave unchanged
-  if (!ocrDeferred) {
+  if (!deferred) {
     if (!pageToken) {
       const tokenResp = await fetch(
         "https://www.googleapis.com/drive/v3/changes/startPageToken",
@@ -640,7 +760,7 @@ async function syncUserDrive(userId: string) {
   const { error: stateUpsertError } = await supabase.from("sync_state").upsert(stateUpdate, { onConflict: "user_id,source" });
   if (stateUpsertError) console.error("sync_state upsert failed:", stateUpsertError);
 
-  return { synced, ocrDeferred };
+  return { synced, deferred };
 }
 
 Deno.serve(async (req) => {
@@ -649,23 +769,70 @@ Deno.serve(async (req) => {
     const cronSecret = Deno.env.get("CRON_SECRET");
 
     if (authHeader === cronSecret || req.headers.get("x-cron-secret") === cronSecret) {
-      const { data: users } = await supabase
+      // A self-kick (below) carries how many times we've already chained (so a
+      // runaway can't loop forever) and which users still had a backlog (so we
+      // re-sync only those, not every connected account). The scheduled cron
+      // sends no body → iteration 0, no filter → all users.
+      let drainIteration = 0;
+      let onlyUserIds: string[] | null = null;
+      try {
+        const body = await req.json();
+        if (body && typeof body.drainIteration === "number") drainIteration = body.drainIteration;
+        if (body && Array.isArray(body.onlyUserIds) && body.onlyUserIds.length > 0) {
+          onlyUserIds = body.onlyUserIds.filter((v: unknown) => typeof v === "string");
+        }
+      } catch { /* no/invalid body — treat as a fresh scheduled run */ }
+
+      let usersQuery = supabase
         .from("user_settings")
         .select("user_id")
         .eq("drive_connected", true);
+      if (onlyUserIds) usersQuery = usersQuery.in("user_id", onlyUserIds);
+      const { data: users } = await usersQuery;
+
+      // Invocation-wide deadline shared by every user processed in THIS request.
+      const deadline = Date.now() + SYNC_DEADLINE_MS;
 
       const results = [];
       for (const user of users || []) {
+        // The invocation deadline is shared. Once it passes, don't even START the
+        // next user's pre-loop Drive fetching (token refresh, folder tree, up to
+        // 10 /changes pages — all untimed) — that stacked work is what could push
+        // the request past the ~150s edge kill. Mark them deferred so the
+        // self-kick drains them on the next invocation with a fresh deadline.
+        if (Date.now() >= deadline) { results.push({ user_id: user.user_id, deferred: true }); continue; }
         // Isolate per-user: a throw from one account (e.g. a Drive API error)
         // must not abort the sync for everyone after it in the loop.
         try {
-          const result = await syncUserDrive(user.user_id);
+          const result = await syncUserDrive(user.user_id, deadline);
           results.push({ user_id: user.user_id, ...result });
         } catch (e) {
           results.push({ user_id: user.user_id, error: (e as Error).message });
         }
       }
-      return new Response(JSON.stringify({ results }), {
+
+      // Immediate self-drain: re-invoke ourselves right away for the users that
+      // still have a backlog (OCR cap or the wall-clock deadline stopped this
+      // pass), instead of waiting ~6h for the next scheduled tick — so a batch of
+      // scans finishes in minutes. MAX_DRAIN_ITERATIONS is a hard stop against a
+      // runaway loop; the scheduled cron is always the backstop underneath.
+      const MAX_DRAIN_ITERATIONS = 30;
+      const deferredUserIds = results
+        .filter((r) => (r as { deferred?: boolean }).deferred === true)
+        .map((r) => r.user_id);
+      if (deferredUserIds.length > 0 && drainIteration < MAX_DRAIN_ITERATIONS) {
+        const selfUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/drive-sync`;
+        const kick = fetch(selfUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
+          body: JSON.stringify({ drainIteration: drainIteration + 1, onlyUserIds: deferredUserIds }),
+        }).then(() => {}, () => {});
+        // Keep the request alive past the Response so the kick is actually sent
+        // (a bare fire-and-forget fetch can be cancelled when the handler returns).
+        try { (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime?.waitUntil?.(kick); } catch { /* waitUntil unavailable — fetch was still initiated */ }
+      }
+
+      return new Response(JSON.stringify({ results, drainIteration }), {
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -677,7 +844,7 @@ Deno.serve(async (req) => {
     const { data: { user } } = await supabaseAuth.auth.getUser(authHeader);
     if (!user) return new Response("Unauthorized", { status: 401 });
 
-    const result = await syncUserDrive(user.id);
+    const result = await syncUserDrive(user.id, Date.now() + SYNC_DEADLINE_MS);
     return new Response(JSON.stringify(result), {
       headers: { "Content-Type": "application/json" },
     });
