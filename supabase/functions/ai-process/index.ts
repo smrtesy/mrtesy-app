@@ -753,6 +753,14 @@ R2. ACTIONABLE — match any one of:
        ב-", "I'll come by at…") → ACTIONABLE: the user must be available, grant
        access, or prepare. A heads-up about an in-person arrival is not mere
        info even when it phrases no explicit request.
+    i. The USER's own OUTGOING request asking the other party to do or fix
+       something with a real-world outcome — a payment / donation that must go
+       through, a card to update, a document / refund / payment to send —
+       → ACTIONABLE, state=pending_other_party. This holds even when the other
+       party acknowledged or asked a clarifying question and the exchange
+       continued: an in-chat Q&A about HOW to do the thing ("which card?" →
+       the user answers) is not the thing being DONE. Title: passive tracker
+       — "ממתין ש<הצד השני> יסדיר את <נושא>".
 
 R3. INFORMATIONAL — everything else; read-and-forget. Typical:
     • marketing / newsletters from the user's own providers, system / CI /
@@ -805,6 +813,11 @@ are independent — an INFORMATIONAL closure can still carry completion=true.
     "אשלח מחר" → false. "שלחתי" → true.
   • "I'll check and get back to you" is NOT completion — that is R2b
     tracking, still pending.
+  • A pending-outcome matter (R2i) completes ONLY on explicit evidence the
+    outcome actually happened — "עבר", "שולם", "סידרתי", "done", a payment /
+    donation confirmation. The other party merely replying, or the user
+    answering their clarifying question, does NOT complete it — completion
+    stays false and state stays pending_other_party.
   • A bare "תודה" with no linked task stays INFORMATIONAL, completion=false.
 
 ═══ STATE ↔ TITLE must agree ═══
