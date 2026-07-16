@@ -6,90 +6,35 @@
  * working turn in this repo. It creates — or refreshes, keyed by the session id
  * — a single smrtTask inbox item ("הצעה") that captures the chat: the topic
  * discussed, where it happened (repo / branch), a verbatim deep link back to
- * the web chat, and a proposed follow-up so the discussion/action can be closed.
+ * the web chat, and a proposed follow-up.
  *
- * Idempotent per session: the hook fires on every Stop, so repeated calls for
- * the same `session_id` update the same task instead of piling up duplicates.
- * The dedup key is the tag `claude-session:<session_id>`; we never resurrect a
- * task the user has since archived/dismissed — only its content is refreshed.
+ * COST MODEL (changed 2026-07): the backend NEVER calls an LLM here. The chat
+ * summary is produced by the Claude Code AGENT itself (on the user's Claude
+ * subscription) and passed in the request body as { topic, summary, next_step }.
+ * When those are absent (e.g. the plain Stop-hook fallback), we file a minimal
+ * no-AI trace instead — and, crucially, we do NOT overwrite an existing task's
+ * agent-written summary with the minimal one (partial update). Zero API tokens.
  *
- * Auth model mirrors /sync/run-scheduled: a shared CRON_SECRET lets the hook
- * file a proposal for a specific user (resolved by email or id) without a JWT.
+ * Idempotent per session: repeated calls for the same `session_id` update the
+ * same task (dedup tag `claude-session:<session_id>`); a status the user changed
+ * (archived/dismissed) is never overwritten.
  */
 
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
-import { simpleCall, parseJsonResponse, MODELS } from "../../../anthropic";
 import { emitEvent } from "../../../lib/platform";
 
 const router = Router();
 
-/** Cap the transcript we summarize so a long chat can't blow up the summariser bill. */
-const MAX_TRANSCRIPT_CHARS = 24_000;
-
-interface SessionSummary {
-  /** Short Hebrew topic — becomes the task title. */
-  topic: string;
-  /** 1–3 Hebrew sentences describing what was discussed/done. */
-  summary: string;
-  /** The proposed next step to close the discussion/action (Hebrew). */
-  next_step: string;
-}
-
-const SUMMARY_SYSTEM = `אתה מסכם שיחת עבודה שהתנהלה ב-Claude Code (כלי פיתוח קוד) לכדי "הצעה" קצרה במערכת משימות.
-קלט: תמליל שיחה בין מפתח ל-Claude (ייתכן בפורמט JSONL — התעלם ממטא-דאטה, קרא את התוכן).
-פלט: JSON בלבד, ללא טקסט נוסף, במבנה:
-{"topic": "...", "summary": "...", "next_step": "..."}
-כללים:
-- הכול בעברית בלבד, בשפה פשוטה ויומיומית. כתוב כמו שמסבירים לחבר: משפטים קצרים, בלי מונחים טכניים מיותרים ובלי מילים באנגלית כשיש חלופה עברית — כך שגם מי שאינו מפתח יבין בדיוק מה נעשה ומה הצעד הבא.
-- קצר וענייני. topic = עד 8 מילים. summary = 1-3 משפטים. next_step = משפט אחד עם הפעולה המוצעת להשלמת הדיון/המשימה.
-- שמר כל קישור (URL) שמופיע בשיחה מילה-במילה (verbatim), כולל פרמטרים — אל תקצר ל-domain.
-- אם השיחה טריוויאלית או ריקה, החזר topic="שיחת Claude Code" ו-next_step קצר בהתאם.`;
-
-async function summarizeTranscript(
-  transcript: string,
-  userId: string,
-): Promise<SessionSummary> {
-  const fallback: SessionSummary = {
-    topic: "שיחת Claude Code",
-    summary: "התנהלה שיחת עבודה ב-Claude Code על מאגר mrtesy-app.",
-    next_step: "לעבור על מה שנעשה ולהחליט אם נדרש המשך.",
-  };
-  const trimmed = transcript.trim();
-  if (!trimmed) return fallback;
-
-  // Keep the tail — the end of a chat holds the conclusions/next steps.
-  const clipped =
-    trimmed.length > MAX_TRANSCRIPT_CHARS ? trimmed.slice(-MAX_TRANSCRIPT_CHARS) : trimmed;
-
-  try {
-    const { content } = await simpleCall(
-      "sonnet",
-      SUMMARY_SYSTEM,
-      clipped,
-      512,
-      { component: "server.claude-session", userId },
-    );
-    const parsed = parseJsonResponse<SessionSummary>(content);
-    if (parsed && typeof parsed.topic === "string" && parsed.topic.trim()) {
-      return {
-        topic: parsed.topic.trim().slice(0, 120),
-        summary: (parsed.summary ?? "").trim(),
-        next_step: (parsed.next_step ?? "").trim(),
-      };
-    }
-  } catch (e) {
-    console.error("[claude-session] summarize failed:", (e as Error).message);
-  }
-  return fallback;
+const MAX_FIELD = 2000;
+function clean(v: unknown): string {
+  return typeof v === "string" ? v.trim().slice(0, MAX_FIELD) : "";
 }
 
 /** Resolve a user by explicit id or by email (super-admin's personal automation).
  *  One bulk listUsers({ perPage: 1000 }) + local match — the exact pattern the
- *  rest of this codebase uses (admin/users, platform/members). The earlier
- *  paginated { page } loop failed to resolve even existing emails on the
- *  deployed route; this mirrors the proven call so email resolution is reliable. */
+ *  rest of this codebase uses (admin/users, platform/members). */
 async function resolveUserId(userId?: string, email?: string): Promise<string | null> {
   if (userId && typeof userId === "string" && userId.trim()) return userId.trim();
   if (!email) return null;
@@ -104,30 +49,26 @@ async function resolveUserId(userId?: string, email?: string): Promise<string | 
 }
 
 router.post("/claude-session/proposal", async (req: Request, res: Response) => {
-  // Shared machine-to-machine secret. Accept SMRTBOT_INTERNAL_SECRET as well as
-  // CRON_SECRET — the same fallback the rest of this codebase's internal
-  // endpoints use (smrtbot/internal.ts, smrtplan/jobs.ts, …), and the value
-  // that is actually provisioned on the backend. Require it to be SET: comparing
-  // a header against an undefined env var would let an empty header through
-  // (`undefined !== undefined` is false), so an unset secret must hard-fail, not
-  // silently open the route.
+  // Shared machine-to-machine secret (SMRTBOT_INTERNAL_SECRET / CRON_SECRET).
+  // Require it SET so an unset var can't leave the route open.
   const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
   if (!expected || req.headers["x-cron-secret"] !== expected) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
   const body = req.body ?? {};
-  const sessionId: string | undefined =
-    typeof body.session_id === "string" && body.session_id.trim() ? body.session_id.trim() : undefined;
+  const sessionId = clean(body.session_id);
   if (!sessionId) return res.status(400).json({ error: "session_id is required" });
 
-  const sessionUrl: string | null =
-    typeof body.session_url === "string" && body.session_url.trim() ? body.session_url.trim() : null;
-  const gitBranch: string | null =
-    typeof body.git_branch === "string" && body.git_branch.trim() ? body.git_branch.trim() : null;
-  const repo: string =
-    typeof body.repo === "string" && body.repo.trim() ? body.repo.trim() : "mrtesy-app";
-  const transcript: string = typeof body.transcript === "string" ? body.transcript : "";
+  const sessionUrl = clean(body.session_url) || null;
+  const gitBranch = clean(body.git_branch) || null;
+  const repo = clean(body.repo) || "mrtesy-app";
+
+  // Agent-provided summary (made on the Claude subscription). No LLM here.
+  const topic = clean(body.topic);
+  const summary = clean(body.summary);
+  const nextStep = clean(body.next_step);
+  const hasSummary = Boolean(topic || summary);
 
   // 1. Resolve the target user + their primary org (mirrors /sync/run-scheduled).
   const userId = await resolveUserId(
@@ -155,37 +96,26 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
     .maybeSingle();
   if (!entitled) return res.status(403).json({ error: "smrttask not enabled for user's org" });
 
-  // 2. Summarize the chat.
-  const s = await summarizeTranscript(transcript, userId);
-
+  // 2. Build the proposal content from the agent-provided fields (no LLM).
   const whereLine = gitBranch ? `${repo} · ענף ${gitBranch}` : repo;
-  const descriptionParts = [
-    s.summary,
-    s.next_step ? `המשך מוצע: ${s.next_step}` : "",
+  const title = topic || "שיחת Claude Code";
+  const description = [
+    summary || (hasSummary ? "" : "התנהלה שיחת עבודה ב-Claude Code."),
+    nextStep ? `המשך מוצע: ${nextStep}` : "",
     `היכן: ${whereLine}`,
-  ].filter(Boolean);
-  const description = descriptionParts.join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
-  // Deep link back to the chat — verbatim, per the product's "preserve deep
-  // links" principle. Surfaced as a one-click action nugget, not buried in text.
+  // Deep link back to the chat — verbatim (product "preserve deep links" rule).
   const actionLinks = sessionUrl
     ? [{ label: "פתח את הצ'אט ב-Claude Code", url: sessionUrl }]
     : [];
 
   const dedupTag = `claude-session:${sessionId}`;
 
-  // 3. Upsert by the dedup tag. Refresh content only; never touch a status the
-  // user changed (archived/dismissed proposals stay put).
-  //
-  // The Stop hook fires at every turn-end via a detached POST, so a fast reply
-  // can race turn N's still-running insert against turn N+1's lookup. Two
-  // guards keep that from cascading into unbounded duplicates:
-  //   - `.limit(1)` so a transient duplicate can't turn maybeSingle() into a
-  //     "multiple rows" error that (previously, unhandled) made `existing` null
-  //     and forced yet another insert every turn;
-  //   - always bind + check `findErr` and bail without inserting on any error.
-  // We also order by created_at so we consistently reuse the earliest row —
-  // any duplicate a genuine race created is absorbed (updated), not grown.
+  // 3. Upsert by the dedup tag. Reuse the earliest matching row; .limit(1) so a
+  // transient race can't error out maybeSingle().
   const { data: existing, error: findErr } = await db
     .from("tasks")
     .select("id, status")
@@ -197,15 +127,21 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   if (findErr) return res.status(500).json({ error: findErr.message });
 
   if (existing) {
+    // Partial update: only refresh the summary when THIS call actually carries
+    // one — so a minimal Stop-hook fallback never clobbers the agent's richer
+    // summary from an earlier call this session. Always refresh the deep link.
+    const patch: Record<string, unknown> = {
+      action_links: actionLinks,
+      updated_at: new Date().toISOString(),
+    };
+    if (hasSummary) {
+      patch.title = title;
+      patch.title_he = title;
+      patch.description = description;
+    }
     const { data: updated, error } = await db
       .from("tasks")
-      .update({
-        title: s.topic,
-        title_he: s.topic,
-        description,
-        action_links: actionLinks,
-        updated_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq("organization_id", orgId)
       .eq("id", existing.id)
       .select("id")
@@ -223,19 +159,19 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
       status: "inbox",
       priority: "low",
       manually_verified: false, // AI-generated suggestion, awaits the user's review
-      title: s.topic,
-      title_he: s.topic,
+      title,
+      title_he: title,
       description,
       action_links: actionLinks,
       tags: ["via-claude-session", dedupTag],
-      ai_model_used: MODELS.sonnet,
+      ai_model_used: null, // summary produced by the Claude Code agent, not an API call
     })
     .select("id")
     .single();
   if (error) return res.status(500).json({ error: error.message });
 
   await emitEvent(orgId, "smrttask", "task.created", "task", created.id, {
-    title: s.topic,
+    title,
     priority: "low",
     source: "claude-session",
   });

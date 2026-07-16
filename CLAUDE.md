@@ -52,12 +52,23 @@ best-effort; the hook is the real mechanism. Moving parts:
 - **`POST /api/claude-session/proposal`** (server
   `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
   the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
-  JWT). Resolves the user → primary org → smrttask entitlement, summarizes the
-  transcript with Haiku, and **upserts one task per session** keyed by the tag
+  JWT). Resolves the user → primary org → smrttask entitlement and **upserts one
+  task per session** keyed by the tag
   `claude-session:<session_id>` (`task_type: "followup"`, `status: "inbox"`,
   `priority: "low"`, `manually_verified: false`, the deep link in
   `action_links`). Repeated Stop calls refresh the same task's content; a
   status the user changed (archived/dismissed) is never overwritten.
+
+  **Cost model (changed 2026-07): the backend NEVER calls an LLM here.** The
+  chat summary is produced by the Claude Code **agent** (on the user's Claude
+  subscription — no API tokens) and passed in the request body as
+  `{ topic, summary, next_step }`. When those are absent (the plain Stop-hook
+  fallback), the endpoint files a **minimal no-AI trace** instead, and a
+  no-summary call never overwrites an existing agent-written summary (partial
+  update). So the flow is BOTH: the Stop hook guarantees a trace every session;
+  the agent should, at the end of a substantive session, generate a short Hebrew
+  summary and POST it to `/api/claude-session/proposal` (with the same
+  `x-cron-secret`, `SMRTTASK_USER_ID`, `session_id`/`session_url`) to enrich it.
 
 **Provisioning (one-time):** the endpoint lives on the **Express backend
 (Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
