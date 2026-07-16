@@ -445,6 +445,22 @@ function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
 }
 
+// Transient / provider-outage errors (billing or low-credit, rate limit,
+// overload, 5xx, network) that a retry on a later cron tick will clear.
+// Anthropic bills no tokens on these, so re-processing through an outage is
+// free — and, crucially, they must NEVER count toward a permanent give-up or
+// page the admin, or an outage silently buries every message that arrives
+// during it (the 2026-06-14 low-credit outage did exactly that to 100+
+// messages, including real tasks). Shared by every AI-call catch that can
+// otherwise mark a message done — the classify pass AND the task-builder pass.
+function isTransientAIError(errMsg: string): boolean {
+  return (
+    /\b(429|500|502|503|504|529)\b/.test(errMsg) ||
+    /rate.?limit|overloaded|over capacity|timeout|timed out|network|fetch failed|ECONNRESET|connection (?:reset|error|closed)|socket hang/i.test(errMsg) ||
+    /credit balance|billing|insufficient|quota|payment|account is not active|spending limit|usage limit|regain access/i.test(errMsg)
+  );
+}
+
 async function callClaude(model: string, system: string | SystemBlock[], userMessage: string, maxTokens: number = 1024, meta?: { component: string; userId?: string; refId?: string }) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -3116,10 +3132,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
       // auto-reprocesses them every tick and they classify the moment the
       // outage clears — no manual reset, no give-up. Anthropic returns these
       // failures with no token billing, so retrying through an outage is free.
-      const isTransient =
-        /\b(429|500|502|503|504|529)\b/.test(errMsg) ||
-        /rate.?limit|overloaded|over capacity|timeout|timed out|network|fetch failed|ECONNRESET|connection (?:reset|error|closed)|socket hang/i.test(errMsg) ||
-        /credit balance|billing|insufficient|quota|payment|account is not active|spending limit|usage limit|regain access/i.test(errMsg);
+      const isTransient = isTransientAIError(errMsg);
       if (isTransient) {
         // Keep it pending so it auto-processes when the provider recovers, with
         // retry_count untouched — but bound the wait: a message that somehow
@@ -3870,7 +3883,33 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         }
       }
     } catch (e) {
-      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: (e as Error).message });
+      const errMsg = String((e as Error).message || "");
+      // A transient provider blip during task extraction (e.g. Claude 529
+      // "overloaded" from the Sonnet builder) is NOT an incident. The classify
+      // pass already succeeded, so classification is "actionable" — if we fall
+      // through to the final "processed" update below, an actionable message is
+      // silently buried with NO task ever created, exactly the failure mode the
+      // classify-stage catch guards against. Instead: keep it PENDING so the
+      // next cron tick re-runs the builder once the provider recovers, log at
+      // warning (so the error-fanout does NOT page the admin), and return early
+      // to skip the processed-marking. retry_count is left untouched — the
+      // builder bills nothing on these failures, so retrying through an outage
+      // is free. Same 24h dead_letter bound as the classify catch so a message
+      // that ALWAYS draws a transient-looking error is surfaced for review
+      // rather than looping forever.
+      if (isTransientAIError(errMsg)) {
+        const ageMs = msg.received_at ? Date.now() - new Date(msg.received_at).getTime() : 0;
+        const tooOld = ageMs > 24 * 60 * 60 * 1000;
+        const { error: transientUpdateError } = await supabase.from("source_messages").update(
+          tooOld
+            ? { processing_status: "processed", dead_letter: true, skip_reason: "ai_transient_failure_timeout", processing_lock_at: null }
+            : { processing_status: "pending", processing_lock_at: null },
+        ).eq("id", msg.id);
+        if (transientUpdateError) console.error("source_messages task-builder transient update failed:", transientUpdateError);
+        await supabase.from("log_entries").insert({ user_id: msg.user_id, level: tooOld ? "error" : "warning", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: `${tooOld ? "transient >24h — flagged dead_letter for review" : "transient — will auto-retry until provider recovers"}: ${errMsg}`.slice(0, 500), retry_count: msg.retry_count || 0 });
+        return;
+      }
+      await supabase.from("log_entries").insert({ user_id: msg.user_id, level: "error", category: "ai_process_tasks", status: "failed", ...msgLogFields(msg), error_message: errMsg });
     }
   }
 
