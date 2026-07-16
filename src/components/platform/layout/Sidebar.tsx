@@ -26,6 +26,7 @@ import {
   Send,
   Reply,
   KeyRound,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,10 @@ const smrtVaultItems = [
   { key: "vault", href: "/vault", icon: KeyRound },
 ] as const;
 
+const smrtInfoItems = [
+  { key: "info", href: "/info", icon: Info },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
@@ -102,6 +107,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtBot = enabledApps.includes("smrtbot");
   const hasSmrtPlan = enabledApps.includes("smrtplan");
   const hasSmrtVault = enabledApps.includes("smrtvault");
+  const hasSmrtInfo = enabledApps.includes("smrtinfo");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -287,6 +293,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtVault) moreSections.push({ app: APPS.smrtvault, items: [...smrtVaultItems] });
+  if (hasSmrtInfo) moreSections.push({ app: APPS.smrtinfo, items: [...smrtInfoItems] });
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
@@ -410,6 +417,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             <>
               <AppSectionHeader app={APPS.smrtvault} />
               {smrtVaultItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtInfo && (
+            <>
+              <AppSectionHeader app={APPS.smrtinfo} />
+              {smrtInfoItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

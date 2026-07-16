@@ -206,6 +206,7 @@
     "reach": "Outreach",
     "bots": "Bots",
     "vault": "Vault",
+    "info": "Info Center",
     "sectionBot": "smrtBot",
     "more": "More",
     "planBoard": "Board",
@@ -3421,6 +3422,62 @@
       "ranExternal": "External tool",
       "ranBoth": "Claude + external",
       "ranNone": "No experiment"
+    }
+  },
+  "smrtInfo": {
+    "title": "Info Center",
+    "subtitle": "All your important information in one place — ask in plain language and get an answer with its source.",
+    "ask": {
+      "title": "Ask your information",
+      "placeholder": "e.g. Who is FPL's insurer? When is Yehudit's life-insurance payment due?",
+      "button": "Ask",
+      "empty": "No answer found in your knowledge base. Try rephrasing or add the info.",
+      "sources": "Sources",
+      "vault": "Passwords in the vault",
+      "vaultHint": "The password is saved in smrtVault — open it and click 'reveal'."
+    },
+    "tabs": { "all": "All" },
+    "scope": { "personal": "Personal", "org": "Organization", "unclassified": "Unclassified" },
+    "facts": {
+      "empty": "No facts yet. Add one manually, or run extraction over your history.",
+      "unverified": "Unverified",
+      "verify": "Verify",
+      "source": "Source"
+    },
+    "search": "Search",
+    "searchPlaceholder": "Search facts…",
+    "add": "Add fact",
+    "addTitle": "New fact",
+    "editTitle": "Edit fact",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this fact?",
+    "field": {
+      "entity": "Subject (e.g. FPL, Yehudit's life insurance)",
+      "attribute": "Attribute (e.g. insurer, payment date)",
+      "value": "Value",
+      "sourceUrl": "Source link (optional)",
+      "required": "Subject, attribute and value are required"
+    },
+    "save": "Save",
+    "saved": "Saved",
+    "deleted": "Deleted",
+    "cancel": "Cancel",
+    "secrets": {
+      "title": "Detected passwords — save to vault?",
+      "approve": "Save to vault",
+      "dismiss": "Dismiss",
+      "saved": "Saved to vault"
+    },
+    "profile": {
+      "button": "Context profile",
+      "title": "Context profile",
+      "hint": "Helps the system tell personal from organizational info. Enter comma-separated names.",
+      "orgs": "Organizations",
+      "family": "Family",
+      "vendors": "Vendors",
+      "notes": "Notes",
+      "saved": "Profile saved"
     }
   },
   "smrtVault": {
