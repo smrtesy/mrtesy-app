@@ -258,13 +258,13 @@ router.post(
       return res.status(400).json({ error: "name is required" });
     }
 
-    // New characters inherit the org's default Resemble model (resemble-ultra).
-    const { data: orgSettings } = await db
-      .from("smrtvoice_settings")
-      .select("default_resemble_model")
-      .eq("org_id", req.org!.id)
-      .maybeSingle();
-
+    // Leave resemble_model NULL so the character INHERITS the org's current
+    // default model at generation time (routes below resolve
+    // `ch.resemble_model ?? defaultModel`). Snapshotting the default onto the
+    // row froze old characters on whatever model was active at creation, which
+    // silently overrode the system-wide model switch — the one-button
+    // ultra ⇄ chatterbox toggle only works if per-character stays NULL. The
+    // DB column still defaults to 'resemble-ultra', so we set null explicitly.
     const { data, error } = await db
       .from("smrtvoice_characters")
       .insert({
@@ -283,9 +283,7 @@ router.post(
         style_baseline_tags: Array.isArray(body.style_baseline_tags)
           ? body.style_baseline_tags
           : [],
-        ...(orgSettings?.default_resemble_model
-          ? { resemble_model: orgSettings.default_resemble_model }
-          : {}),
+        resemble_model: null,
       })
       .select()
       .single();
