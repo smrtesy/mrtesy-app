@@ -56,6 +56,33 @@ function renderFact(entity: string, attribute: string, value: string): string {
   return `${entity} — ${attribute}: ${value}`;
 }
 
+/**
+ * Collapse near-identical facts that differ only by scope/verification. The
+ * extractor can pull the SAME value from two messages and classify them
+ * differently (e.g. once "personal", once "unclassified"); both survive the
+ * per-scope supersede, so an answer would list the identical source twice. Keep
+ * one row per (entity|attribute|value), preferring a classified scope, then a
+ * verified row, then higher confidence.
+ */
+function dedupeFacts(facts: FactMatch[]): FactMatch[] {
+  const scopeRank = (s: string) => (s === "unclassified" ? 0 : 1);
+  const byKey = new Map<string, FactMatch>();
+  for (const f of facts) {
+    const key = `${f.entity.trim().toLowerCase()}|${f.attribute.trim().toLowerCase()}|${f.value.trim().toLowerCase()}`;
+    const cur = byKey.get(key);
+    if (!cur) {
+      byKey.set(key, f);
+      continue;
+    }
+    const better =
+      scopeRank(f.scope) - scopeRank(cur.scope) ||
+      (f.verified ? 1 : 0) - (cur.verified ? 1 : 0) ||
+      (f.confidence ?? 0) - (cur.confidence ?? 0);
+    if (better > 0) byKey.set(key, f);
+  }
+  return Array.from(byKey.values());
+}
+
 // ============================================================
 // FACTS — list / create / update / delete
 // ============================================================
@@ -264,8 +291,16 @@ router.post("/info/ask", async (req: Request, res: Response) => {
   if (!question) return res.status(400).json({ error: "question is required" });
   const scopes = requestedScopes((req.body ?? {}).scope);
 
-  // 1. Retrieve candidate facts — vector search, keyword fallback.
-  let facts: FactMatch[] = [];
+  // 1. Retrieve candidate facts — HYBRID: vector search + keyword search, always
+  // merged (not "keyword only when vector returns nothing"). Vector recall alone
+  // misses named-entity questions where the entity token appears verbatim but the
+  // phrasing differs — e.g. "מה החשבונית האחרונה מוויינגרטן" scored below the
+  // similarity cut-off against the fact "לוי ווינגרטן — מספר חשבונית פתוחה: …",
+  // yet the exact token "ווינגרטן" is right there in the entity. Running the
+  // keyword pass unconditionally and unioning by id keeps that fact in play.
+  const tokens = tokenize(question);
+  const byId = new Map<string, FactMatch>();
+
   const embedding = await embedText(question, "query", { userId: req.user!.id });
   if (embedding) {
     const { data, error } = await db.rpc("match_info_facts", {
@@ -280,30 +315,31 @@ router.post("/info/ask", async (req: Request, res: Response) => {
       match_count: 10,
     });
     if (error) return res.status(500).json({ error: error.message });
-    facts = (data as FactMatch[]) ?? [];
+    for (const f of (data as FactMatch[]) ?? []) byId.set(f.id, f);
   }
-  if (facts.length === 0) {
-    // keyword fallback (also used when Voyage is unconfigured)
-    const tokens = tokenize(question);
-    if (tokens.length) {
-      const orExpr = tokens
-        .map((t) => `entity.ilike.%${t}%,attribute.ilike.%${t}%,value.ilike.%${t}%`)
-        .join(",");
-      const { data, error } = await db
-        .from("info_facts")
-        .select(FACT_COLUMNS)
-        .eq("org_id", req.org!.id)
-        .is("superseded_by", null)
-        .or(`scope.neq.personal,user_id.eq.${req.user!.id}`)
-        .or(orExpr)
-        .limit(10);
-      if (error) console.error("[smrtinfo] ask keyword fallback:", error.message);
-      facts = (data as FactMatch[]) ?? [];
-    }
+  if (tokens.length) {
+    const orExpr = tokens
+      .map((t) => `entity.ilike.%${t}%,attribute.ilike.%${t}%,value.ilike.%${t}%`)
+      .join(",");
+    const { data, error } = await db
+      .from("info_facts")
+      .select(FACT_COLUMNS)
+      .eq("org_id", req.org!.id)
+      .is("superseded_by", null)
+      .in("scope", scopes)
+      .or(`scope.neq.personal,user_id.eq.${req.user!.id}`)
+      .or(orExpr)
+      .limit(10);
+    if (error) console.error("[smrtinfo] ask keyword search:", error.message);
+    for (const f of (data as FactMatch[]) ?? []) if (!byId.has(f.id)) byId.set(f.id, f);
   }
 
-  // 2. Vault matches (metadata only — never the password).
-  const tokens = tokenize(question);
+  // Collapse duplicates that differ only by scope/verified — the "same source
+  // shown twice, once אישי once לא מסווג" bug: the same value gets extracted from
+  // two messages and classified differently, so both survive supersede (which is
+  // per-scope). Keep one row per (entity|attribute|value), preferring a classified
+  // scope, then verified, then higher confidence. Then cap the candidate set.
+  const facts = dedupeFacts(Array.from(byId.values())).slice(0, 12);
   let vaultMatches: { id: string; label: string; username: string | null; url: string | null }[] = [];
   if (tokens.length) {
     const orExpr = tokens.map((t) => `label.ilike.%${t}%,username.ilike.%${t}%,url.ilike.%${t}%`).join(",");
