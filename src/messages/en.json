@@ -2780,7 +2780,10 @@
     },
     "audio": {
       "title": "Audio files",
-      "download": "Download all"
+      "download": "Download all",
+      "noFilesToDownload": "No files ready to download",
+      "filesDownloaded": "{count} files downloaded",
+      "filesSkipped": "{count} files skipped (download failed)"
     },
     "settings": {
       "title": "smrtVoice settings",

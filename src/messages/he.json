@@ -2779,7 +2779,10 @@
     },
     "audio": {
       "title": "קבצי אודיו",
-      "download": "הורד הכל"
+      "download": "הורד הכל",
+      "noFilesToDownload": "אין קבצים מוכנים להורדה",
+      "filesDownloaded": "{count} קבצים הורדו",
+      "filesSkipped": "{count} קבצים דולגו (הורדה נכשלה)"
     },
     "settings": {
       "title": "הגדרות smrtVoice",
