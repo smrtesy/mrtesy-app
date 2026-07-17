@@ -8,6 +8,7 @@
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp, rateLimit } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
 import { runPart4 } from "../parts/part4-projects";
@@ -17,7 +18,7 @@ import { notifyError } from "../../../lib/platform";
 const router = Router();
 
 // Every smrtTask route runs through this chain (except the cron webhook below).
-const smrttaskGate = [requireAuth, requireOrg, requireApp("smrttask")];
+const smrttaskGate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
 
 // Per-user cap on the heavy ingest/LLM endpoints. A genuine user never needs to
 // kick off a full sync or project-brief build more than a handful of times a

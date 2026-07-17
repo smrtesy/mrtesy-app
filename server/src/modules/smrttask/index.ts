@@ -51,3 +51,8 @@ export default router;
 // PART 3 (classifier) is intentionally absent: classification is handled
 // by the ai-process edge function running every minute via pg_cron.
 export { runPart1 } from "./parts/part1-collector";
+
+// Mounted separately in server/index.ts BEFORE the auth guards (like the
+// smrtbot/smrtplan job routers): it is x-cron-secret gated, not JWT gated, so
+// it must NOT sit behind platformRouter's requireAuth.
+export { default as claudeSessionRouter } from "./routes/claude-session";

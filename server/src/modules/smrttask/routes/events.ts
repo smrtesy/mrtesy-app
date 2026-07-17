@@ -26,12 +26,13 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { createCalendarEvent, listEvents } from "../../../services/calendar";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
 
 const router = Router();
 
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 const EVENT_TZ = "Asia/Jerusalem";
 const pad = (n: number) => String(n).padStart(2, "0");

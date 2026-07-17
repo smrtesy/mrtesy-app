@@ -14,6 +14,7 @@ import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
 import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
+import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 
 export default async function AppLayout({
   children,
@@ -99,6 +100,7 @@ export default async function AppLayout({
   // Which apps to show in the sidebar. Owners/admins/super-admins see every app
   // the org has enabled; regular members see only the apps granted to them.
   let enabledApps: string[] = [];
+  let resolvedOrgId: string | undefined = cookieOrgId;
   if (user) {
     if (appsQueries) {
       // Org known from the cookie — the queries have been running since before
@@ -112,12 +114,31 @@ export default async function AppLayout({
       const { data: memberships } = await orgFallbackPromise;
       const orgId = memberships?.[0]?.org_id;
       if (orgId) {
+        resolvedOrgId = orgId;
         enabledApps = await getEnabledAppsForUserInOrg(supabase, user.id, orgId, isAdmin);
       }
     }
   }
 
   const hasSmrtTask = enabledApps.includes("smrttask");
+
+  // smrtTask access level — "lite" means a project-only worker: the sidebar
+  // then shows only their task list (no inbox/projects/sources/etc.). Admins
+  // are always full, so we only pay for this lookup for a plain member who has
+  // smrtTask. An explicit app_user_access row wins; absence means "full".
+  let taskAccess: "full" | "lite" = "full";
+  if (user && hasSmrtTask && !isAdmin && resolvedOrgId) {
+    const { data: levelRow } = await supabase
+      .from("app_user_access")
+      .select("access_level, apps!inner(slug)")
+      .eq("org_id", resolvedOrgId)
+      .eq("user_id", user.id)
+      .eq("apps.slug", "smrttask")
+      .maybeSingle();
+    if ((levelRow as { access_level?: string } | null)?.access_level === "lite") {
+      taskAccess = "lite";
+    }
+  }
 
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
@@ -138,7 +159,7 @@ export default async function AppLayout({
       <QueryProvider>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
-        <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} />
+        <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} taskAccess={taskAccess} />
         {/* WhatsApp side-panel: lets the operator keep a conversation open
             alongside the task lists. Provider wraps the content so entry points
             (SourceLink / QuickAction / log) can open it; the docked panel + FAB
@@ -148,6 +169,9 @@ export default async function AppLayout({
               margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
               swaps the centered page for side-by-side panes when tabs are open. */}
           <main data-sidebar-main className="flex-1 min-w-0 pb-20 md:pb-0 md:ms-52">
+            {/* Workclock day-tool bar — a thin strip at the top of the workspace,
+                shown only while a clock session is active/offered. smrtTask only. */}
+            {hasSmrtTask && <WorkClockBar />}
             <TabsArea>{children}</TabsArea>
           </main>
           {hasSmrtTask && (

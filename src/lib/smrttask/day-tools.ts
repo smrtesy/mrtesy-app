@@ -8,7 +8,7 @@
  * + the component that hangs off one of the anchor points. No migration.
  */
 
-export type DayToolSlug = "method131" | "marathon" | "planfocus";
+export type DayToolSlug = "method131" | "marathon" | "planfocus" | "workclock";
 
 export interface DayToolConfig {
   enabled: boolean;
@@ -30,11 +30,41 @@ export interface DayToolDef {
  *   quiet icon button; users who never press it are unaffected).
  * - planfocus  — the daily focus block over a smrtPlan project. Default OFF —
  *   a deliberate, opt-in tool.
+ * - workclock  — the guided workday: a running work clock + morning ritual +
+ *   run mode with escalating time limits + end-of-day close. Default OFF — a
+ *   deliberate, opt-in tool. Config keys are FLAT (not nested objects) because
+ *   the server merges day_tools at the tool-key level (a PATCH replaces the
+ *   whole tool object), and resolveTool below merges shallowly. See
+ *   docs/workclock-plan.md §3.
  */
 export const DAY_TOOLS: readonly DayToolDef[] = [
   { slug: "method131", defaultConfig: { enabled: true, medium_quota: 3, big_quota: 1 } },
   { slug: "marathon", defaultConfig: { enabled: true } },
   { slug: "planfocus", defaultConfig: { enabled: false } },
+  {
+    slug: "workclock",
+    defaultConfig: {
+      enabled: false,
+      offer_daily: true,
+      // Morning-ritual step timers (seconds).
+      step_inbox_sec: 180,
+      step_plan_sec: 180,
+      step_run_sec: 30,
+      // Run-mode escalation thresholds (seconds).
+      limit_quick_task_sec: 300,     // 5m  → soft red
+      limit_quick_total_sec: 2700,   // 45m → popup banner
+      limit_medium_task_sec: 2700,   // 45m → blocking screen
+      limit_big_task_sec: 10800,     // 3h  → blocking screen
+      // Pause nag + sound.
+      pause_nag_sec: 300,
+      sound_enabled: true,
+      // End-of-day close (wall-clock times in close_tz).
+      close_tz: "America/New_York",
+      close_remind_at: "18:55",
+      close_prompt_at: "19:20",
+      close_autostop_sec: 300,
+    },
+  },
 ] as const;
 
 const BY_SLUG: Record<DayToolSlug, DayToolDef> =

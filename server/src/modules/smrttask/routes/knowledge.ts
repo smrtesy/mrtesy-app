@@ -21,13 +21,14 @@
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 import { requireRole } from "../../../middleware/require-role";
 import { saveKnowledge } from "../../../lib/knowledge";
 import { embedText } from "../../../services/voyage";
 
 const router = Router();
 
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 function isManager(req: Request): boolean {
   return req.member?.role === "owner" || req.member?.role === "admin";

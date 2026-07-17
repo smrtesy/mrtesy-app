@@ -20,9 +20,10 @@ import crypto from "node:crypto";
 import { Router, Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 
 const router = Router();
-const gate = [requireAuth, requireOrg, requireApp("smrttask")];
+const gate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
 
 /** Canonical public app URL (FRONTEND_URL may be a comma-separated CORS list). */
 function appBaseUrl(): string {

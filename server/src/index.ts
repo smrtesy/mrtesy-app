@@ -24,13 +24,14 @@ import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter from "./modules/platform";
 import adminRouter from "./modules/admin";
-import smrttaskRouter from "./modules/smrttask";
+import smrttaskRouter, { claudeSessionRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter } from "./modules/smrtplan";
 import smrtvaultRouter from "./modules/smrtvault";
+import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -158,6 +159,14 @@ app.use(smrtbotJobsRouter);
 // comes BEFORE the auth-guarded routers (same reasoning as smrtBot jobs).
 app.use(smrtplanJobsRouter);
 
+// smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
+// Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
+app.use("/api", claudeSessionRouter);
+
+// smrtInfo batch extraction — x-cron-secret guarded (the data-population runner
+// calls it), so it comes BEFORE the auth-guarded routers too.
+app.use("/api", smrtinfoCronRouter);
+
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
 app.use("/api", smrttaskRouter);
@@ -167,6 +176,7 @@ app.use("/api", smrtreachRouter);
 app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
 app.use("/api", smrtvaultRouter);
+app.use("/api", smrtinfoRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);

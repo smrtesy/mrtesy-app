@@ -30,7 +30,6 @@ import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
 import { FocusSession } from "./FocusSession";
 import { ReviewBanner } from "./ReviewBanner";
-import { BuildDayBanner } from "./BuildDayBanner";
 import { DecisionDialog } from "./DecisionDialog";
 import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
@@ -42,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { useDayTool } from "@/hooks/useDayTools";
+import { useWorkClock } from "@/hooks/useWorkClock";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -54,7 +54,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Sun, Timer } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -78,8 +78,10 @@ interface FocusTodayPlan {
   completed_today: boolean;
 }
 
-/** Sortable wrapper for a desk row: grip handle + dnd-kit transform. */
-function SortableDeskRow({ id, children }: { id: string; children: React.ReactNode }) {
+/** Sortable wrapper for a desk row: grip handle + dnd-kit transform. An optional
+ *  `index` renders a small ordinal at the side (used by the quick list so the
+ *  count of waiting items reads at a glance). */
+function SortableDeskRow({ id, index, children }: { id: string; index?: number; children: React.ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   return (
@@ -88,6 +90,11 @@ function SortableDeskRow({ id, children }: { id: string; children: React.ReactNo
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
       className="flex items-center gap-1"
     >
+      {typeof index === "number" && (
+        <span className="w-4 shrink-0 text-center font-mono text-[11px] tabular-nums text-muted-foreground/50">
+          {index + 1}
+        </span>
+      )}
       <button
         {...attributes}
         {...listeners}
@@ -166,7 +173,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [snoozeTaskId, setSnoozeTaskId] = useState<string | null>(null);
   const [decisionTask, setDecisionTask] = useState<Task | null>(null);
   const [debriefTask, setDebriefTask] = useState<Task | null>(null);
-  const [buildDayOpen, setBuildDayOpen] = useState(false);
   // Plan-focus day-tool: the daily focus block over a smrtPlan plan (default off).
   const planfocusEnabled = useDayTool("planfocus").enabled;
   const [focusPlans, setFocusPlans] = useState<FocusTodayPlan[]>([]);
@@ -180,6 +186,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const m131Enabled = method131.enabled;
   const mediumQuota = typeof method131.config.medium_quota === "number" ? method131.config.medium_quota : 3;
   const bigQuota = typeof method131.config.big_quota === "number" ? method131.config.big_quota : 1;
+  // Workclock run mode: opening a task starts its clock (no-op unless a clock
+  // session is running); completing the active task stops it (§9.5).
+  const workClock = useWorkClock();
 
   const focusId = searchParams.get("focus");
   const focusedRef = useRef<string | null>(null);
@@ -495,13 +504,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // must not inflate the quota or read as "picked" in the build-day picker.
   const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
   const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
-  // The set planned_for today — drives the build-day picker's selected state.
-  const pickedIds = useMemo(
-    () => new Set(
-      [...deskMedium, ...deskBig].filter((task) => task.planned_for === todayStr).map((task) => task.id),
-    ),
-    [deskMedium, deskBig, todayStr],
-  );
   // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
   // regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
@@ -563,6 +565,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   async function runToggleDone(task: Task, done: boolean, decision?: string, debrief?: DebriefPayload) {
     // Optimistically drop the row so the ✓ feels instant; the API call +
     // realtime refetch reconcile, and on failure we refetch to restore.
+    // Completing the workclock's active task stops its clock (§9.5).
+    if (done && workClock.state.activeTaskId === task.id) workClock.clearActiveTask();
     if (done) optimisticRemove(task.id);
     try {
       if (done) {
@@ -707,6 +711,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     }
     setSelectedTask({ ...task, seen_at: task.seen_at ?? nowIso, has_unread_update: false, woke_from_snooze_at: null });
     setDetailOpen(true);
+    // Run mode: the opened task becomes the active one (its clock starts).
+    const size = task.size === "quick" || task.size === "big" ? task.size : "medium";
+    workClock.setActiveTask(task.id, size, locale === "he" && task.title_he ? task.title_he : task.title);
   }
 
   function handleQuickAction(taskId: string, action: { label: string; prompt: string }) {
@@ -811,34 +818,36 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
   }
 
-  /** Snapshot today's committed plan to daily_plans (the build-day commit).
-   *  Fire-and-forget: the picks themselves already persisted via planned_for. */
-  const commitDayPlan = useCallback(() => {
-    api("/api/tasks/day-plan", {
-      method: "POST",
-      body: {
-        plan_date: todayStr,
-        picked_task_ids: [...pickedIds],
-        quick_total: deskQuick.length,
-      },
-    }).catch((e) => { if (e instanceof ApiError && e.status !== 401) toast.error(e.message); });
-  }, [todayStr, pickedIds, deskQuick.length]);
-
-  /** Add a task to / remove it from today's plan (planned_for). */
+  /** Add a task to / remove it from today's plan (planned_for), and snapshot the
+   *  day to daily_plans. The build-day modal was removed — picking inline (the
+   *  +/− on each row) IS building the day, so the snapshot happens on every pick
+   *  instead of behind a separate "done" button (docs/workclock-plan.md §6.7). */
   function handlePlanToggle(taskId: string, addToToday: boolean) {
     const planned_for = addToToday ? todayStr : null;
     patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
+    // Snapshot ALL picked medium/big tasks (not the context-filtered pickedIds —
+    // that would drop home/outside picks). `tasks` is pre-optimistic here, so
+    // apply the toggle to the derived set. Quick tasks are never "picked".
+    const nextPicked = new Set(
+      tasks.filter((tk) => tk.planned_for === todayStr && tk.size !== "quick").map((tk) => tk.id),
+    );
+    if (addToToday) nextPicked.add(taskId); else nextPicked.delete(taskId);
+    api("/api/tasks/day-plan", {
+      method: "POST",
+      body: { plan_date: todayStr, picked_task_ids: [...nextPicked], quick_total: deskQuick.length },
+    }).catch((e) => { if (e instanceof ApiError && e.status !== 401) toast.error(e.message); });
   }
 
-  /** One drop zone: sortable + droppable, with a grip per row. */
-  function renderList(listId: string, list: Task[], zone: RowZone, emptyMsg: string) {
+  /** One drop zone: sortable + droppable, with a grip per row. When `numbered`,
+   *  each row shows its 1-based position (used by the quick list). */
+  function renderList(listId: string, list: Task[], zone: RowZone, emptyMsg: string, numbered = false) {
     return (
       <DroppableList id={listId} items={list.map((task) => task.id)}>
         {list.length === 0 ? (
           <p className="rounded-lg border border-dashed py-3 text-center text-xs text-muted-foreground">{emptyMsg}</p>
         ) : (
-          list.map((task) => (
-            <SortableDeskRow key={task.id} id={task.id}>
+          list.map((task, i) => (
+            <SortableDeskRow key={task.id} id={task.id} index={numbered ? i : undefined}>
               {renderRow(task, zone)}
             </SortableDeskRow>
           ))
@@ -865,17 +874,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         <ExternalLink className="h-4 w-4" />
       </OpenTabLink>
       <InstallAppButton />
-      {m131Enabled && (
-        <button
-          type="button"
-          onClick={() => setBuildDayOpen(true)}
-          aria-label={t("buildDay.open")}
-          title={t("buildDay.open")}
-          className="text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <Sun className="h-4 w-4" />
-        </button>
-      )}
       <div className="ms-auto flex rounded-lg border p-0.5">
         {contextChips.map((chip) => (
           <button
@@ -903,21 +901,6 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         </div>
       ) : (
         <>
-          {m131Enabled && (
-            <BuildDayBanner
-              locale={locale}
-              mediumCandidates={[...deskMedium, ...rest.filter((task) => task.size !== "big")]}
-              bigCandidates={[...deskBig, ...rest.filter((task) => task.size === "big")]}
-              pickedIds={pickedIds}
-              mediumQuota={mediumQuota}
-              bigQuota={bigQuota}
-              onPlanToggle={handlePlanToggle}
-              onCommit={commitDayPlan}
-              open={buildDayOpen}
-              onOpenChange={setBuildDayOpen}
-            />
-          )}
-
           <ReviewBanner
             candidates={reviewCandidates}
             locale={locale}
@@ -994,23 +977,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   </Button>
                 )}
               </div>
-              {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"))}
+              {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>
 
             {m131Enabled ? (
               <>
-                {/* Big — the one deliberate focus of the day */}
-                <div>
-                  <div className="mb-2 flex items-center gap-2">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      {t("desk.big")}
-                      <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskBig.length}</span>
-                    </h3>
-                  </div>
-                  {renderList(LIST_BIG, deskBig, "desk", t("desk.emptyBig"))}
-                </div>
-
-                {/* Medium — the 3 picked for today; marathon runs over medium+big */}
+                {/* Medium — the 3 picked for today; marathon runs over medium+big.
+                    Ordered ABOVE big (docs/workclock-plan.md §9.6). */}
                 <div>
                   <div className="mb-2 flex items-center gap-2">
                     <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -1025,6 +998,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                     )}
                   </div>
                   {renderList(LIST_MEDIUM, deskMedium, "desk", t("desk.emptyMedium"))}
+                </div>
+
+                {/* Big — the one deliberate focus of the day, below medium */}
+                <div>
+                  <div className="mb-2 flex items-center gap-2">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      {t("desk.big")}
+                      <span className="ms-1 rounded-full bg-secondary px-1.5 text-[11px] font-medium">{deskBig.length}</span>
+                    </h3>
+                  </div>
+                  {renderList(LIST_BIG, deskBig, "desk", t("desk.emptyBig"))}
                 </div>
               </>
             ) : (

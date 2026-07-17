@@ -28,6 +28,10 @@ declare global {
       user?: AuthUser;
       org?: OrgContext;
       member?: OrgMembership;
+      /** smrtTask access level in the active org — set by attachTaskAccess /
+       *  requireFullTask (see modules/smrttask/lib/access.ts). "lite" = a
+       *  project-only worker restricted to tasks assigned to them. */
+      taskAccess?: "full" | "lite";
     }
   }
 }

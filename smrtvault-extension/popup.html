@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="sv-header">
+      <span class="sv-logo">smrt<b>Vault</b></span>
+      <button id="lockBtn" class="sv-icon-btn" title="Lock" hidden>🔒</button>
+    </header>
+
+    <main id="view" class="sv-main">
+      <div class="sv-loading">…</div>
+    </main>
+
+    <footer class="sv-footer">
+      <a id="openOptions" href="#">Settings</a>
+    </footer>
+
+    <!-- Templates -->
+    <template id="tpl-no-backend">
+      <p class="sv-msg">smrtVault isn't set up yet. Add your backend URL in settings.</p>
+      <button class="sv-btn" data-act="options">Open settings</button>
+    </template>
+
+    <template id="tpl-logged-out">
+      <p class="sv-msg">You're not signed in to smrtesy. Open the app and log in, then reopen this popup.</p>
+      <button class="sv-btn" data-act="open-app">Open smrtesy</button>
+    </template>
+
+    <template id="tpl-set-pin">
+      <p class="sv-msg">Create a PIN to lock the vault. You'll enter it to unlock each session.</p>
+      <input id="newPin" class="sv-input" type="password" inputmode="numeric" placeholder="New PIN (min 4)" autocomplete="new-password" />
+      <input id="newPin2" class="sv-input" type="password" inputmode="numeric" placeholder="Repeat PIN" autocomplete="new-password" />
+      <button class="sv-btn" data-act="set-pin">Set PIN</button>
+      <p id="pinErr" class="sv-err"></p>
+    </template>
+
+    <template id="tpl-locked">
+      <p class="sv-msg">Enter your PIN to unlock.</p>
+      <input id="pin" class="sv-input" type="password" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus />
+      <button class="sv-btn" data-act="unlock">Unlock</button>
+      <p id="unlockErr" class="sv-err"></p>
+    </template>
+
+    <template id="tpl-unlocked">
+      <div class="sv-search-wrap">
+        <input id="search" class="sv-input" type="search" placeholder="Search logins…" />
+      </div>
+      <ul id="list" class="sv-list"></ul>
+      <p id="listMsg" class="sv-msg"></p>
+    </template>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

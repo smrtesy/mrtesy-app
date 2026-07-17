@@ -25,7 +25,6 @@ import { api } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
-import { MorningStartBanner } from "@/components/smrttask/suggestions/MorningStart";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 import { LogPageClient } from "@/app/[locale]/(app)/(smrttask)/log/LogPageClient";
@@ -37,6 +36,7 @@ import { AutoReplyManager } from "@/components/smrttask/whatsapp/AutoReplyManage
 import { ContactsClient } from "@/components/smrtcrm/ContactsClient";
 import { CrmManagePanel } from "@/components/smrtcrm/CrmManagePanel";
 import { VaultClient } from "@/components/smrtvault/VaultClient";
+import { InfoClient } from "@/components/smrtinfo/InfoClient";
 import { PlanBoardClient } from "@/components/smrtplan/PlanBoardClient";
 import { TeamViewClient } from "@/components/smrtplan/TeamViewClient";
 import { PlanRepositoryClient } from "@/components/smrtplan/PlanRepositoryClient";
@@ -98,6 +98,19 @@ function VaultPane() {
   );
 }
 
+function InfoPane() {
+  const t = useTranslations("smrtInfo");
+  return (
+    <div className="p-6 space-y-8">
+      <div>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <p className="text-muted-foreground">{t("subtitle")}</p>
+      </div>
+      <InfoClient />
+    </div>
+  );
+}
+
 function TasksPane() {
   const t = useTranslations("tasks");
   return <TasksPageClient title={t("title")} />;
@@ -144,7 +157,6 @@ function InboxPane({ locale }: { locale: string }) {
           </div>
         )}
       </div>
-      {hasSmrtTask && <MorningStartBanner />}
       {/* Hold the tabs until the entitlement is known — mounting with
           hasSmrtTask=false and flipping would flash/reset the tab set. The
           query is cached, so reopening the pane renders immediately. On
@@ -240,6 +252,7 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },
   { match: (p) => p === "/vault", render: () => <VaultPane /> },
+  { match: (p) => p === "/info", render: () => <InfoPane /> },
   { match: (p) => p === "/plan", render: (locale) => <PlanBoardClient locale={locale} /> },
   { match: (p) => p === "/plan/team", render: (locale) => <TeamViewClient locale={locale} /> },
   {

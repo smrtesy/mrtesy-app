@@ -588,6 +588,144 @@ async function refreshSmsSourceThread(
   if (supErr) console.warn("[sms-webhook] supersede failed:", supErr.message);
 }
 
+/**
+ * Do two phone numbers identify the same line? Compares digits only, so
+ * "+1 929-333-0248" and "19293330248" match. Falls back to a national-suffix
+ * compare (last 9 digits) when the two are stored in different formats — a
+ * local "050…" vs an international "97250…" — but ONLY for real phone numbers
+ * (≥10 digits), so a 5–6 digit short code can never collide with the user's
+ * own number on a shared tail.
+ */
+function numbersMatch(a: string, b: string): boolean {
+  const aD = a.replace(/\D/g, "");
+  const bD = b.replace(/\D/g, "");
+  if (!aD || !bD) return false;
+  if (aD === bD) return true;
+  if (aD.length >= 10 && bD.length >= 10) {
+    return aD.endsWith(bD.slice(-9)) || bD.endsWith(aD.slice(-9));
+  }
+  return false;
+}
+
+/**
+ * The device's own phone line, used to recognise a self-note (the user texting
+ * their own number as a task-capture channel). Learned from the `recipient`
+ * field of any INCOMING sms — that is the device's receiving line — and cached
+ * on the connection so an OUTGOING self-note (which carries no self identifier
+ * of its own) can still be matched. When the very first message on a fresh
+ * connection is an outgoing self-note (no incoming recipient to read), we fall
+ * back to the device number recorded on the most recent prior INCOMING sms, so
+ * detection works from the first note as long as any inbound SMS was ever seen.
+ * Returns null only when the number has never been observed.
+ */
+async function resolveOwnNumber(
+  db: SupabaseAdmin,
+  userId: string,
+  deviceId: string,
+  incomingRecipient: string | null,
+): Promise<string | null> {
+  const { data, error } = await db
+    .from("sms_connections")
+    .select("display_phone_number")
+    .eq("user_id", userId)
+    .eq("device_id", deviceId)
+    .maybeSingle();
+  if (error) {
+    console.error("[sms-webhook] resolveOwnNumber query failed:", error.message);
+    return null;
+  }
+  const stored = String(data?.display_phone_number ?? "").trim();
+  if (stored) return stored;
+
+  let learned = String(incomingRecipient ?? "").trim();
+  // Cold-start fallback: an outgoing-first self-note carries no self identifier,
+  // so read the device's own receiving line from a prior incoming message.
+  if (!learned) {
+    const { data: recent } = await db
+      .from("sms_messages")
+      .select("to_phone")
+      .eq("user_id", userId)
+      .eq("direction", "incoming")
+      .not("to_phone", "is", null)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    learned = String(recent?.to_phone ?? "").trim();
+  }
+  if (!learned) return null;
+
+  // Cache it, but only fill a NULL column — never overwrite a user-set value.
+  const { error: updErr } = await db
+    .from("sms_connections")
+    .update({ display_phone_number: learned })
+    .eq("user_id", userId)
+    .eq("device_id", deviceId)
+    .is("display_phone_number", null);
+  if (updErr) console.error("[sms-webhook] cache own number failed:", updErr.message);
+  return learned;
+}
+
+/**
+ * SMS self-note (the user texting their OWN number). Mirrors the WhatsApp
+ * self-chat path (emitSelfChatPerMessageSourceRows): write ONE immutable
+ * source_messages row PER message with source_type='sms_echo', so every note is
+ * its own classifier candidate and becomes its own task — instead of the
+ * two-party thread builder coalescing a burst of 8 notes into a single
+ * classification and losing 7 of them (the reported bug). No supersede/coalesce,
+ * no thread key. ai-process treats sms_echo exactly like whatsapp_echo.
+ */
+async function emitSmsSelfNote(
+  db: SupabaseAdmin,
+  userId: string,
+  body: string,
+  receivedAt: string,
+  ownNumber: string,
+): Promise<void> {
+  const text = body.replace(/\s+/g, " ").trim();
+  if (!text) return;
+  const tz = await smsUserTz(db, userId);
+  const ts = fmtTsLocal(receivedAt, tz);
+  const rawContent = [
+    `SMS self-note — the user texted their OWN number (${ownNumber}) as a task-capture channel.`,
+    `Every such message is a deliberate self-note; treat as ACTIONABLE unless clearly a status remark.`,
+    `\n--- MESSAGE ---`,
+    `[OUTGOING ${ts}] ${text}`,
+  ].join("\n").slice(0, 3000);
+
+  // Key the row on the message CONTENT, not its provider messageId. Texting your
+  // own number can be delivered TWICE — once as the observed sent-box row and
+  // once as the carrier loopback into the inbox — with two different provider
+  // ids. Both carry the identical body, so a content hash collapses the pair to
+  // ONE row (ignoreDuplicates below no-ops the second). Distinct notes — even
+  // several fired within the same second/minute — have distinct bodies and so
+  // stay separate, which a time-bucket key would wrongly have merged.
+  const bodyKey = crypto.createHash("sha1").update(text).digest("hex").slice(0, 16);
+  const { error } = await db.from("source_messages").upsert(
+    {
+      user_id: userId,
+      source_type: "sms_echo",
+      source_id: `sms:self:${bodyKey}`,
+      sender: ownNumber,
+      sender_email: null,
+      subject: "פתק SMS",
+      body_text: text.slice(0, 1000),
+      raw_content: rawContent,
+      received_at: receivedAt,
+      source_url: `sms:${ownNumber}`,
+      reply_to_context: ownNumber,
+      processing_status: "pending",
+      ai_classification: null,
+      // No lastDirection stamp: that key drives the follow-up defer, which would
+      // wrongly snooze a self-note (technically an outgoing message). chatId is
+      // set for source_url/debug parity only — threadKey returns null for
+      // sms_echo, so it never keys thread memory or matter routing.
+      metadata: { chatId: ownNumber, peerPhone: ownNumber, channel: "sms", isSelfNote: true },
+    },
+    { onConflict: "user_id,source_type,source_id", ignoreDuplicates: true },
+  );
+  if (error) throw new Error(`sms_echo upsert: ${error.message}`);
+}
+
 async function ingestSms(
   db: SupabaseAdmin,
   userId: string,
@@ -643,6 +781,20 @@ async function ingestSms(
   //    nothing to classify. Both are still recorded in sms_messages above.
   if (isOtp) return { outcome: "ingested", reason: "otp_suppressed", direction, messageId, peer, bodyPreview: body };
   if (body.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: body };
+
+  // 3. Self-note: the user texting their OWN number as a task-capture channel —
+  //    the SMS twin of WhatsApp self-chat. The device's own line is the
+  //    `recipient` on any INCOMING sms; learn it once, cache it, then a message
+  //    whose peer matches it is a deliberate self-note. These bypass the
+  //    two-party thread builder (which would coalesce a burst and lose all but
+  //    the newest) and get ONE immutable sms_echo row per message — each its own
+  //    task, exactly like whatsapp_echo.
+  const ownNumber = await resolveOwnNumber(db, userId, deviceId, isIncoming ? (payload.recipient ?? null) : null);
+  const isSelfNote = !!ownNumber && numbersMatch(peer, ownNumber);
+  if (isSelfNote) {
+    await emitSmsSelfNote(db, userId, body, receivedAt, ownNumber!);
+    return { outcome: "ingested", reason: "self_note", direction, messageId, peer, bodyPreview: body };
+  }
 
   // Build the rolling conversation transcript for this peer and write ONE
   // per-burst source_messages row (mirrors WhatsApp) so the classifier sees the
