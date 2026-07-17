@@ -2885,6 +2885,7 @@
       "saveToDrive": "שמור ל-Drive",
       "saving": "שומר…",
       "savedToDrive": "נשמרו {uploaded} קבצים ל-Drive ({skipped} דולגו)",
+      "saveIncomplete": "השמירה ל-Drive לא הושלמה — נסה שוב",
       "openFolder": "פתח תיקייה",
       "settings": "הגדרות ששלחנו לרזמבל",
       "markRedo": "סמן להקלטה מחדש",

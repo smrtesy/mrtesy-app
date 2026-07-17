@@ -2886,6 +2886,7 @@
       "saveToDrive": "Save to Drive",
       "saving": "Saving…",
       "savedToDrive": "Saved {uploaded} files to Drive ({skipped} skipped)",
+      "saveIncomplete": "Save to Drive did not complete — please try again",
       "openFolder": "Open folder",
       "settings": "Settings sent to Resemble",
       "markRedo": "Mark for re-record",
