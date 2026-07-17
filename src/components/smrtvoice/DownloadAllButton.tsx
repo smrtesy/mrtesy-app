@@ -56,6 +56,7 @@ export function DownloadAllButton({ scriptId }: { scriptId: string }) {
         return;
       }
 
+      const namePrefix = pathSafe((script?.name || script?.code) ?? "voice");
       const zip = new JSZip();
       let files = 0;
       let skipped = 0;
@@ -67,10 +68,12 @@ export function DownloadAllButton({ scriptId }: { scriptId: string }) {
         const { items } = await api<{
           items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
         }>(`/api/voice/lines/${line.id}/selection`);
-        // Both the folder and the filename's speaker part are sanitized so a
-        // speaker name containing a slash can't inject an extra zip subfolder.
+        // Folder = the character (speaker); filename is prefixed with the script
+        // NAME + line number (matching the Save-to-Drive archive), e.g.
+        // "NM110 - 3_022.wav". pathSafe strips slashes so nothing injects an
+        // extra zip subfolder.
         const speaker = pathSafe(line.speaker_name);
-        const base = `${String(line.line_number).padStart(3, "0")}_${speaker}`;
+        const base = `${namePrefix}_${String(line.line_number).padStart(3, "0")}`;
         for (const it of items) {
           const name =
             it.take_number != null

@@ -1755,6 +1755,12 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return clean || "ללא שם";
   };
 
+  // Optional NDJSON progress stream: when the client passes ?stream=1 we push a
+  // { progress } line as each file is handled so the button can show a live %
+  // (like "Download all"), then a final { done, … } line. Declared out here so
+  // the catch below knows whether headers were already streamed.
+  const stream = req.query.stream === "1";
+
   try {
     const drive = await getDriveClient(req.user!.id);
     let folderId = script.archive_gdrive_folder_id as string | null;
@@ -1776,6 +1782,32 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
     const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
     if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
+
+    // Start streaming (only now that folder resolution succeeded, so pre-loop
+    // failures still return a normal JSON error the client can read).
+    if (stream) {
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no"); // ask proxies not to buffer
+      res.flushHeaders?.();
+    }
+    // Total files across all lines (good takes per line, else 1 fallback) so the
+    // percentage is over the real upload count, not the line count.
+    const totalFiles = (lines as Array<{ id: string }>).reduce(
+      (sum, l) => sum + Math.max(1, goodByLine.get(l.id)?.length ?? 0),
+      0,
+    );
+    let processed = 0;
+    let lastPct = -1;
+    const emitProgress = () => {
+      if (!stream) return;
+      const pct = totalFiles ? Math.min(99, Math.round((processed / totalFiles) * 100)) : 0;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        res.write(`${JSON.stringify({ progress: pct })}\n`);
+      }
+    };
+    emitProgress(); // 0%
 
     // Each character gets its own subfolder inside the script folder, named by
     // the speaker as it appears in the script (speaker_name — NOT the voice
@@ -1825,10 +1857,14 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       return entry;
     };
 
+    // Filenames are prefixed with the script NAME (not the code), matching the
+    // "Download all" ZIP so the two are consistent, e.g. "NM110 - 3_022.wav".
+    const namePrefix = folderSafe((script.name as string | null) || script.code);
+
     let uploaded = 0;
     let skipped = 0;
     for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string; speaker_name: string }>) {
-      const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
+      const base = `${namePrefix}_${String(line.line_number).padStart(3, "0")}`;
       const good = goodByLine.get(line.id) ?? [];
       // Good takes if any (each named with its take number + note); else the
       // single current output.
@@ -1840,6 +1876,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
         if (dlErr || !blob) {
           skipped += 1;
+          processed += 1;
+          emitProgress();
           continue;
         }
         const buffer = Buffer.from(await blob.arrayBuffer());
@@ -1862,12 +1900,18 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
           if (created.data.id) folder.files.set(f.name, created.data.id);
         }
         uploaded += 1;
+        processed += 1;
+        emitProgress();
       }
     }
 
     if (uploaded === 0) {
       const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
       if (revertErr) console.error("[smrtvoice] script status revert after failed archive failed:", revertErr);
+      if (stream) {
+        res.write(`${JSON.stringify({ error: "Failed to upload any audio to Drive" })}\n`);
+        return res.end();
+      }
       return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
@@ -1883,13 +1927,33 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       .eq("id", script.id)
       .select()
       .maybeSingle();
-    if (updErr) return res.status(500).json({ error: updErr.message });
+    if (updErr) {
+      if (stream) {
+        res.write(`${JSON.stringify({ error: updErr.message })}\n`);
+        return res.end();
+      }
+      return res.status(500).json({ error: updErr.message });
+    }
 
     await emitEvent(req.org!.id, "smrtvoice", "script.archived", "script", script.id, { folder_url: folderUrl, uploaded, skipped });
+    if (stream) {
+      res.write(`${JSON.stringify({ done: true, folder_url: folderUrl, uploaded, skipped })}\n`);
+      return res.end();
+    }
     res.json({ script: updated, folder_url: folderUrl, uploaded, skipped });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    // Don't leave the script stuck on the transient "archiving" status when the
+    // upload throws partway — put it back so the UI recovers.
+    const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+    if (revertErr) console.error("[smrtvoice] script status revert after archive error failed:", revertErr);
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to archive to Drive", body: message });
+    // If we already started streaming, headers/status are sent — surface the
+    // error as a final NDJSON line instead of a (failing) res.status().json().
+    if (stream && res.headersSent) {
+      try { res.write(`${JSON.stringify({ error: message })}\n`); } catch { /* socket gone */ }
+      return res.end();
+    }
     res.status(502).json({ error: message });
   }
 });
