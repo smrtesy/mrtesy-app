@@ -33,7 +33,7 @@ export default function OnboardingStep2() {
         <div className="flex items-center gap-3 rounded-lg border p-3">
           <FolderOpen className="h-5 w-5 text-status-ok" />
           <span className="flex-1">Google Drive</span>
-          <span className="text-xs text-muted-foreground">drive.readonly</span>
+          <span className="text-xs text-muted-foreground">drive</span>
         </div>
         <Button onClick={handleConnect} className="w-full min-h-[48px]">
           {t("connect")}
