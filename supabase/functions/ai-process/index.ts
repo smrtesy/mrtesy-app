@@ -667,6 +667,15 @@ function summaryAssertsCommitmentOrFailure(parsed: any): boolean {
 // The classifier already reads every message with Claude; we add a "facts" array
 // to its output and store it here — no second Claude call. Everything below is
 // fully guarded: a failure NEVER affects classification or task creation.
+//
+// KILL SWITCH: fact-extraction still costs extra OUTPUT tokens on every
+// ACTIONABLE/INFORMATIONAL message (the facts array). It is gated OFF by default
+// so ingestion never quietly spends on the information center. When disabled the
+// facts contract is omitted from the prompt (no extra tokens) AND nothing is
+// stored. Re-enable — once information collection is properly planned — by
+// setting the edge-function secret SMRTINFO_EXTRACT_ENABLED=1 (no code redeploy
+// needed; the secret is read at runtime).
+const INFO_EXTRACT_ENABLED = Deno.env.get("SMRTINFO_EXTRACT_ENABLED") === "1";
 
 const INFO_PROFILE_CACHE = new Map<string, { profile: any; ts: number }>();
 async function getInfoProfile(userId: string): Promise<any | null> {
@@ -1105,8 +1114,12 @@ content under the rules above.`;
   // ACTIONABLE/INFORMATIONAL — SPAM returns []). Scope via the user's context
   // profile. Appended to the cached prefix; per-user (identity is already here),
   // so cache stays warm.
-  const infoProfile = await getInfoProfile(msg.user_id);
-  const factsContract = `\n\n═══ INFORMATION-CENTER FACTS (additional output field) ═══
+  // Gated OFF by default (see INFO_EXTRACT_ENABLED). When off, the contract is
+  // empty so the classifier emits no facts array — zero extra output tokens.
+  let factsContract = "";
+  if (INFO_EXTRACT_ENABLED) {
+    const infoProfile = await getInfoProfile(msg.user_id);
+    factsContract = `\n\n═══ INFORMATION-CENTER FACTS (additional output field) ═══
 In the SAME JSON object you return, also include a "facts" array: durable,
 reusable facts worth keeping in the user's information center (insurer/company
 names, policy/account/reference numbers, due/payment/renewal dates, amounts,
@@ -1122,6 +1135,7 @@ contact details, addresses, plan names, where a credential lives). Rules:
   put a secret in value/entity/attribute. No fact for one-time codes / OTP.
 Scope each fact using this profile (never guess; "unclassified" when unsure):
 ${renderInfoProfile(infoProfile)}`;
+  }
 
   const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + personalBlock + whatsappNote;
   const systemBlocks: SystemBlock[] = [{ type: "text", text: systemPrefix, cache_control: { type: "ephemeral", ttl: "1h" } }];
@@ -3989,10 +4003,14 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 
   // smrtInfo: store the facts extracted IN THIS SAME classification pass (no
   // second Claude call). Fully guarded — never affects classification/tasks.
-  try {
-    await storeInfoFacts(msg, classification, (analysis as any)?.facts);
-  } catch (e) {
-    console.error("[smrtinfo] fold-store failed:", (e as Error).message);
+  // Gated OFF by default (see INFO_EXTRACT_ENABLED): when off, no facts are
+  // emitted anyway, but we also skip the store as a belt-and-suspenders stop.
+  if (INFO_EXTRACT_ENABLED) {
+    try {
+      await storeInfoFacts(msg, classification, (analysis as any)?.facts);
+    } catch (e) {
+      console.error("[smrtinfo] fold-store failed:", (e as Error).message);
+    }
   }
 
   await tagGmailReview(msg, classification);

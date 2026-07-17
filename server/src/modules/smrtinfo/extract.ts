@@ -208,6 +208,43 @@ export async function extractAndStore(
       ? f.effective_date
       : null;
 
+    // Dedup-on-write across scope: the exact same entity+attribute+value can be
+    // extracted from two messages and classified differently (once "personal",
+    // once "unclassified"), and the per-scope supersede below would let BOTH
+    // survive — the "same fact appears several times in the list" bug. If an
+    // identical current fact already exists in ANY visible scope, skip this one.
+    {
+      const { data: dupRows, error: dupErr } = await db
+        .from("info_facts")
+        .select("id, scope")
+        .eq("org_id", orgId)
+        .eq("entity", entity)
+        .eq("attribute", attribute)
+        .eq("value", value)
+        .is("superseded_by", null)
+        // personal facts are private to their owner; org/unclassified are org-wide
+        .or(`scope.neq.personal,user_id.eq.${userId}`)
+        .limit(1);
+      if (dupErr) console.error("[smrtinfo] dedup lookup:", dupErr.message);
+      const dup = (dupRows?.[0] as { id: string; scope: string } | undefined) ?? null;
+      if (dup) {
+        // Identical fact already stored — never create a second copy. But if the
+        // stored row is still "unclassified" and THIS message classifies the same
+        // value as "org", upgrade the existing row in place (a classification
+        // improvement). org is org-wide like unclassified, so no privacy change.
+        // (personal is intentionally not auto-upgraded: the stored row may belong
+        // to another user in the org.)
+        if (dup.scope === "unclassified" && scope === "org") {
+          const { error: upErr } = await db
+            .from("info_facts")
+            .update({ scope: "org" })
+            .eq("id", dup.id);
+          if (upErr) console.error("[smrtinfo] dedup scope upgrade:", upErr.message);
+        }
+        continue;
+      }
+    }
+
     const embedding = await embedText(renderFact({ entity, attribute, value }), "document", {
       userId,
       refId: src.sourceMessageId ?? undefined,
