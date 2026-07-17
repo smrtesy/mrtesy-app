@@ -2751,7 +2751,7 @@ async function linkAndEnrichDuplicate(
   // Was this exact message already linked here on a prior run? appendUpdateToTask
   // dedups the TIMELINE entry, but the material-change/alert block below is not
   // idempotent on its own — capture this BEFORE the append so a re-processed
-  // message can't re-prepend the ⚠️ alert or re-fire the notification.
+  // message can't re-prepend the ⚠️ alert to the description on every re-scan.
   const { data: pre } = await supabase.from("tasks").select("updates").eq("id", taskId).maybeSingle();
   const alreadyLinked = Array.isArray(pre?.updates) && (pre!.updates as any[]).some(
     (u) => u?.source_message_id === msg.id && typeof u?.source_received_at === "string" && u.source_received_at === msg.received_at,
@@ -2784,27 +2784,18 @@ async function linkAndEnrichDuplicate(
       if (diff.due_date && !t.due_date) patch.due_date = diff.due_date;
       // A material change (e.g. a hearing that flipped phone→in-person) must be
       // SEEN, not buried in the timeline: prepend a ⚠️ alert to the description
-      // (never dropping the prior content) and flag the task as unread.
+      // (never dropping the prior content) and flag the task as unread. That's
+      // the whole surfacing mechanism — the change rides on the TASK itself.
+      // We deliberately do NOT emit a separate `notifications` warning here:
+      // an update is not a standalone alert. An OPEN task simply updates (the
+      // ⚠️ block + has_unread_update makes it read as unread); a CLOSED task is
+      // reopened by the caller (opts.reopen → appendUpdateToTask resurfaces it
+      // into the inbox). Both paths already put the change in front of the user
+      // without a redundant warning notification (user decision 2026-07-16).
       if (diff.changes.length > 0) {
         const alertBlock = diff.changes.map((c) => `⚠️ ${c}`).join("\n");
         patch.description = `${alertBlock}\n\n${String(t.description || "").trim()}`.trim();
         patch.has_unread_update = true;
-        // Push a notification so the change reaches the user even without opening
-        // the task. Best-effort; mirrors the shape used elsewhere (notifications
-        // type CHECK = info|warning|success|action_required).
-        try {
-          const { data: mem } = await supabase.from("org_members").select("org_id").eq("user_id", msg.user_id).limit(1).maybeSingle();
-          if (mem?.org_id) {
-            const { error: notifErr } = await supabase.from("notifications").insert({
-              user_id: msg.user_id, org_id: mem.org_id, app_slug: "smrttask",
-              type: "warning",
-              title: "שינוי בפרטי משימה",
-              body: diff.changes.join(" • ").slice(0, 300),
-              link: "/smrttask",
-            });
-            if (notifErr) console.error("material-change notification insert failed:", notifErr);
-          }
-        } catch { /* notification is best-effort — never block the link */ }
       }
     }
   }
