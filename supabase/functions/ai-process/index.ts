@@ -4498,6 +4498,19 @@ Deno.serve(async (req) => {
       return await runSpamCostProbe(reqUrl);
     }
 
+    // Future calendar events are deferred in preClassify until
+    // MEETING_LEAD_HOURS (24 business hours) before they start. A recurring
+    // event materializes MANY future single-instance rows (e.g. a yearly event
+    // expanded out decades), each kept 'pending' by the defer path — which
+    // otherwise defeats the idle bail below and re-churns the same rows every
+    // cron tick forever. Gate them out of the work probes and the fetch with a
+    // generous wall-clock bound: 24 business hours back from an event is at most
+    // ~3 calendar days (across a weekend), so 5 days safely includes every event
+    // whose lead window has actually opened. preClassify still applies the exact
+    // business-hours defer to whatever is fetched. Non-calendar pending rows
+    // always carry a past received_at, so this bound never excludes real work.
+    const calendarReadyBefore = new Date(Date.now() + 5 * 86_400_000).toISOString();
+
     // Idle probe — most cron ticks have nothing pending, so bail with one
     // cheap query before loading params or sweeping locks. Deliberately
     // checked on processing_status alone (no processing_lock_at filter):
@@ -4508,6 +4521,7 @@ Deno.serve(async (req) => {
       .select("id")
       .eq("processing_status", "pending")
       .or("dead_letter.eq.false,dead_letter.is.null")
+      .lte("received_at", calendarReadyBefore)
       .limit(1);
     if (!probeErr && (pendingProbe?.length ?? 0) === 0) {
       return new Response(JSON.stringify({ processed: 0, deferred: 0, idle: true }), { headers: { "Content-Type": "application/json" } });
@@ -4522,7 +4536,7 @@ Deno.serve(async (req) => {
     const { error: staleLockClearError } = await supabase.from("source_messages").update({ processing_lock_at: null }).lt("processing_lock_at", new Date(Date.now() - sys.processing_lock_minutes * 60_000).toISOString()).not("processing_lock_at", "is", null);
     if (staleLockClearError) console.error("source_messages stale lock clear failed:", staleLockClearError);
 
-    const { data: pendingUsers } = await supabase.from("source_messages").select("user_id").eq("processing_status", "pending").is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER).limit(100);
+    const { data: pendingUsers } = await supabase.from("source_messages").select("user_id").eq("processing_status", "pending").is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER).lte("received_at", calendarReadyBefore).limit(100);
     const uniqueUserIds = [...new Set((pendingUsers || []).map((r) => r.user_id))];
     let totalProcessed = 0;
     let totalDeferred = 0;
@@ -4621,6 +4635,9 @@ Deno.serve(async (req) => {
         const remaining = sys.batch_size - allMessages.length;
         let q = supabase.from("source_messages").select("*").eq("user_id", userId).eq("processing_status", "pending").eq("source_type", st).is("processing_lock_at", null).or("dead_letter.eq.false,dead_letter.is.null").or(BODY_TEXT_FILTER);
         if (st === "whatsapp" || st === "sms") q = q.lte("received_at", whatsappReadyBefore);
+        // Don't pull future calendar events that preClassify would only defer —
+        // it re-churns the same rows every tick (see calendarReadyBefore above).
+        if (st === "google_calendar") q = q.lte("received_at", calendarReadyBefore);
         const { data: msgs } = await q.order("received_at", { ascending: true }).limit(remaining);
         if (msgs && msgs.length > 0) allMessages = allMessages.concat(msgs);
       }
