@@ -538,7 +538,8 @@ router.get("/voice/google/access-token", async (req: Request, res: Response) => 
 
 // POST /voice/drive/list-folders — folder source for the in-app browser.
 // Body: { parent? } drill under a folder (default My Drive root);
-//        { q } search folders by name across the user's Drive;
+//        { q } search folders by name across the user's Drive, OR — when q is a
+//              Drive folder ID / share URL — resolve that single folder directly;
 //        { shared: true } list folders shared with the user.
 // No Google API key needed (reuses the user's Drive OAuth).
 router.post("/voice/drive/list-folders", async (req: Request, res: Response) => {
@@ -546,22 +547,60 @@ router.post("/voice/drive/list-folders", async (req: Request, res: Response) => 
   const q = (req.body?.q ?? "").toString().trim();
   const shared = req.body?.shared === true;
 
-  let query: string;
-  if (q) {
-    // Escape backslashes then single quotes for the Drive query string.
-    const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    query = `${FOLDER} and name contains '${esc}'`;
-  } else if (shared) {
-    query = `${FOLDER} and sharedWithMe = true`;
-  } else {
-    const parentRaw = (req.body?.parent ?? "").toString().trim();
-    const parent = parentRaw ? parseFolderId(parentRaw) : "root";
-    if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
-    query = `'${parent}' in parents and ${FOLDER}`;
-  }
+  // Detect when the search box holds a folder ID or a Drive URL rather than a
+  // name to search for. A .../folders/<id> URL is unambiguous; a bare token is
+  // treated as an ID only when it's long and has no spaces (Drive IDs are 25+
+  // chars), so ordinary short search words still go through name-contains.
+  const directId = q
+    ? (q.match(/\/folders\/([a-zA-Z0-9_-]+)/)?.[1] ??
+       (/^[a-zA-Z0-9_-]{20,}$/.test(q) ? q : null))
+    : null;
 
   try {
     const drive = await getDriveClient(req.user!.id);
+
+    // Direct ID/URL lookup: fetch just that folder so the user can pick it or
+    // drill into it. If it isn't a folder or can't be read, fall through to a
+    // name search on the raw text.
+    if (directId) {
+      try {
+        const meta = await drive.files.get({
+          fileId: directId,
+          fields: "id, name, mimeType, webViewLink",
+          supportsAllDrives: true,
+        });
+        if (meta.data.mimeType === "application/vnd.google-apps.folder") {
+          return res.json({
+            folders: [
+              {
+                id: meta.data.id,
+                name: meta.data.name,
+                url:
+                  meta.data.webViewLink ??
+                  `https://drive.google.com/drive/folders/${meta.data.id}`,
+              },
+            ],
+          });
+        }
+      } catch {
+        // Not accessible / not a folder — fall back to treating q as a name.
+      }
+    }
+
+    let query: string;
+    if (q) {
+      // Escape backslashes then single quotes for the Drive query string.
+      const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      query = `${FOLDER} and name contains '${esc}'`;
+    } else if (shared) {
+      query = `${FOLDER} and sharedWithMe = true`;
+    } else {
+      const parentRaw = (req.body?.parent ?? "").toString().trim();
+      const parent = parentRaw ? parseFolderId(parentRaw) : "root";
+      if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+      query = `'${parent}' in parents and ${FOLDER}`;
+    }
+
     const out = await drive.files.list({
       q: query,
       pageSize: 100,
@@ -1614,7 +1653,7 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
 
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
-    .select("id, line_number, output_audio_path")
+    .select("id, line_number, output_audio_path, speaker_name")
     .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
     .eq("status", "completed")
@@ -1655,13 +1694,24 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return clean ? `_${clean}` : "";
   };
 
+  // Strip characters illegal in a Drive folder name; keep Hebrew/spaces so the
+  // name stays readable. Empty → a safe placeholder.
+  const folderSafe = (name: string): string => {
+    // eslint-disable-next-line no-control-regex
+    const clean = (name ?? "").replace(/[/\\:*?"<>|\x00-\x1f]/g, "").trim();
+    return clean || "ללא שם";
+  };
+
   try {
     const drive = await getDriveClient(req.user!.id);
     let folderId = script.archive_gdrive_folder_id as string | null;
     let folderUrl = script.archive_gdrive_folder_url as string | null;
     if (!folderId) {
+      // The per-script folder is named after the script (falling back to its
+      // code when unnamed) so it's identifiable in Drive at a glance.
+      const scriptFolderName = folderSafe((script.name as string | null) || script.code);
       const folder = await drive.files.create({
-        requestBody: { name: script.code, mimeType: "application/vnd.google-apps.folder", parents: [rootFolderId] },
+        requestBody: { name: scriptFolderName, mimeType: "application/vnd.google-apps.folder", parents: [rootFolderId] },
         fields: "id, webViewLink",
         supportsAllDrives: true,
       });
@@ -1669,13 +1719,48 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       folderUrl = folder.data.webViewLink ?? null;
     }
     if (!folderId) return res.status(502).json({ error: "Failed to create Drive folder" });
+    const scriptFolderId = folderId;
 
     const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
     if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
 
+    // Each character gets its own subfolder inside the script folder, named by
+    // the speaker as it appears in the script (speaker_name — NOT the voice
+    // name). Created lazily and cached so a folder is made at most once per
+    // character per archive, and only when there's actually a file to put in it.
+    const speakerFolders = new Map<string, string>();
+    const ensureSpeakerFolder = async (speaker: string): Promise<string> => {
+      const key = speaker?.trim() || "ללא דמות";
+      const cached = speakerFolders.get(key);
+      if (cached) return cached;
+      const safeName = folderSafe(key);
+      // Reuse an existing subfolder of this name (re-archive / partial archive
+      // reuses the same script folder) so we never create a duplicate
+      // character folder; only create when none exists yet.
+      const esc = safeName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const existing = await drive.files.list({
+        q: `'${scriptFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${esc}' and trashed = false`,
+        pageSize: 1,
+        fields: "files(id)",
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      let id = existing.data.files?.[0]?.id ?? null;
+      if (!id) {
+        const created = await drive.files.create({
+          requestBody: { name: safeName, mimeType: "application/vnd.google-apps.folder", parents: [scriptFolderId] },
+          fields: "id",
+          supportsAllDrives: true,
+        });
+        id = created.data.id!;
+      }
+      speakerFolders.set(key, id);
+      return id;
+    };
+
     let uploaded = 0;
     let skipped = 0;
-    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string }>) {
+    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string; speaker_name: string }>) {
       const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
       const good = goodByLine.get(line.id) ?? [];
       // Good takes if any (each named with its take number + note); else the
@@ -1690,8 +1775,9 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
           continue;
         }
         const buffer = Buffer.from(await blob.arrayBuffer());
+        const speakerFolderId = await ensureSpeakerFolder(line.speaker_name);
         await drive.files.create({
-          requestBody: { name: f.name, parents: [folderId] },
+          requestBody: { name: f.name, parents: [speakerFolderId] },
           media: { mimeType: "audio/wav", body: Readable.from(buffer) },
           fields: "id",
           supportsAllDrives: true,
