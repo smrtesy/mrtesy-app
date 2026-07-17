@@ -1651,17 +1651,23 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return res.status(400).json({ error: "No Drive folder configured. Set an archive folder in Voice settings or a target folder on the project." });
   }
 
+  // Archive every line that HAS a rendered file and isn't archived — the same
+  // criterion the "Download all" button and the audio list use. We deliberately
+  // do NOT filter status = 'completed': a line's status flips to
+  // processing/pending/failed while a redo is in flight, but its existing
+  // output_audio_path is still a real, playable take the user sees and expects
+  // to save. Filtering on the transient status dropped those lines from Drive
+  // (e.g. 45 visible → 34 saved).
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
     .select("id, line_number, output_audio_path, speaker_name")
     .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
-    .eq("status", "completed")
     .not("output_audio_path", "is", null)
     .is("archived_at", null)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
-  if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
+  if (!lines || lines.length === 0) return res.status(400).json({ error: "No audio to archive yet" });
 
   // Archive the SET of good takes per line (with the note in the filename) so a
   // multi-take line comes down as every version the user marked; a line with no
