@@ -36,7 +36,13 @@ export async function GET(request: Request) {
         "openid email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets.readonly";
       break;
     case "drive":
-      scopes = "openid email https://www.googleapis.com/auth/drive.readonly";
+      // Full read/write: smrtVoice archives audio into the user's chosen Drive
+      // folder (creates per-script / per-character subfolders + uploads files),
+      // which the read-only scope cannot do — it 403s with "Insufficient
+      // Permission". Writing into an EXISTING user-picked folder needs the full
+      // `drive` scope (drive.file only reaches app-created / Picker-granted
+      // files). Existing connections must reconnect to pick up the write scope.
+      scopes = "openid email https://www.googleapis.com/auth/drive";
       break;
     case "reach_gmail":
       // Independent Gmail inbox for smrtReach sending. Minimal scope: send only
