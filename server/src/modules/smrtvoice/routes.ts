@@ -1781,8 +1781,8 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     // the speaker as it appears in the script (speaker_name — NOT the voice
     // name). Created lazily and cached so a folder is made at most once per
     // character per archive, and only when there's actually a file to put in it.
-    const speakerFolders = new Map<string, string>();
-    const ensureSpeakerFolder = async (speaker: string): Promise<string> => {
+    const speakerFolders = new Map<string, { id: string; files: Map<string, string> }>();
+    const ensureSpeakerFolder = async (speaker: string): Promise<{ id: string; files: Map<string, string> }> => {
       const key = speaker?.trim() || "ללא דמות";
       const cached = speakerFolders.get(key);
       if (cached) return cached;
@@ -1799,6 +1799,10 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         includeItemsFromAllDrives: true,
       });
       let id = existing.data.files?.[0]?.id ?? null;
+      // name → fileId of what's already in the folder, so a re-archive updates
+      // the existing file in place (same name = current content, no duplicate
+      // and no stale copy) instead of adding a second copy.
+      const files = new Map<string, string>();
       if (!id) {
         const created = await drive.files.create({
           requestBody: { name: safeName, mimeType: "application/vnd.google-apps.folder", parents: [scriptFolderId] },
@@ -1806,9 +1810,19 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
           supportsAllDrives: true,
         });
         id = created.data.id!;
+      } else {
+        const listed = await drive.files.list({
+          q: `'${id}' in parents and trashed = false`,
+          pageSize: 1000,
+          fields: "files(id, name)",
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        });
+        for (const ff of listed.data.files ?? []) if (ff.name && ff.id) files.set(ff.name, ff.id);
       }
-      speakerFolders.set(key, id);
-      return id;
+      const entry = { id, files };
+      speakerFolders.set(key, entry);
+      return entry;
     };
 
     let uploaded = 0;
@@ -1822,19 +1836,31 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         ? good.map((g) => ({ path: g.path, name: `${base}_v${g.n}${noteSuffix(g.note)}.wav` }))
         : [{ path: line.output_audio_path, name: `${base}.wav` }];
       for (const f of files) {
+        const folder = await ensureSpeakerFolder(line.speaker_name);
         const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
         if (dlErr || !blob) {
           skipped += 1;
           continue;
         }
         const buffer = Buffer.from(await blob.arrayBuffer());
-        const speakerFolderId = await ensureSpeakerFolder(line.speaker_name);
-        await drive.files.create({
-          requestBody: { name: f.name, parents: [speakerFolderId] },
-          media: { mimeType: "audio/wav", body: Readable.from(buffer) },
-          fields: "id",
-          supportsAllDrives: true,
-        });
+        const existingId = folder.files.get(f.name);
+        if (existingId) {
+          // Same-named file from a prior save → replace its content in place.
+          await drive.files.update({
+            fileId: existingId,
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+        } else {
+          const created = await drive.files.create({
+            requestBody: { name: f.name, parents: [folder.id] },
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+          if (created.data.id) folder.files.set(f.name, created.data.id);
+        }
         uploaded += 1;
       }
     }
