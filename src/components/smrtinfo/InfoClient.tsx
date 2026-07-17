@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useParams } from "next/navigation";
 import {
   Search, Plus, Loader2, Trash2, ExternalLink, X, Pencil, Check,
-  ShieldCheck, KeyRound, Settings2, Sparkles,
+  ShieldCheck, KeyRound, Settings2, Sparkles, MessageCircle, MessageSquare,
 } from "lucide-react";
 
+import { useScreenRouter } from "@/lib/panes/nav";
+import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -50,6 +53,49 @@ interface SecretSuggestion {
 
 const emptyForm = { entity: "", attribute: "", value: "", scope: "unclassified" as Scope, effective_date: "", source_url: "" };
 const TABS: (Scope | "all")[] = ["all", "personal", "org", "unclassified"];
+
+/**
+ * Source link for a fact. WhatsApp/SMS sources open the IN-APP reader (docked
+ * panel or the /whatsapp,/sms screens) instead of an external wa.me / sms:
+ * link — the user wants the conversation inside the platform, not a new chat in
+ * the native client. Everything else (Gmail/Drive/Calendar) keeps its verbatim
+ * external deep link. Mirrors the routing in common/SourceLink.tsx.
+ */
+function InfoSourceLink({ sourceType, sourceUrl }: { sourceType: string | null; sourceUrl: string }) {
+  const t = useTranslations("smrtInfo");
+  const openWhatsApp = useOpenWhatsAppChat();
+  const router = useScreenRouter();
+  const { locale } = useParams() as { locale: string };
+  const cls = "text-primary text-xs inline-flex items-center gap-0.5";
+
+  if (sourceType === "whatsapp" || sourceType === "whatsapp_echo") {
+    const phone = (sourceUrl.match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "");
+    return (
+      <button type="button" onClick={() => openWhatsApp(phone || null)} className={cls}>
+        <MessageCircle className="h-3 w-3" />{t("facts.source")}
+      </button>
+    );
+  }
+  if (sourceType === "sms" || sourceType === "sms_echo") {
+    const peer = sourceUrl.startsWith("sms:") ? sourceUrl.slice(4) : "";
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}&ts=${Date.now()}` : `/${locale}/sms`)
+        }
+        className={cls}
+      >
+        <MessageSquare className="h-3 w-3" />{t("facts.source")}
+      </button>
+    );
+  }
+  return (
+    <a href={sourceUrl} target="_blank" rel="noreferrer" className={cls}>
+      <ExternalLink className="h-3 w-3" />{t("facts.source")}
+    </a>
+  );
+}
 
 export function InfoClient() {
   const t = useTranslations("smrtInfo");
@@ -283,9 +329,7 @@ export function InfoClient() {
                     <span className="text-muted-foreground">{f.attribute}:</span>
                     <span>{f.value}</span>
                     {f.source_url && (
-                      <a href={f.source_url} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-0.5">
-                        <ExternalLink className="h-3 w-3" />{t("facts.source")}
-                      </a>
+                      <InfoSourceLink sourceType={f.source_type} sourceUrl={f.source_url} />
                     )}
                   </div>
                 ))}
@@ -386,9 +430,7 @@ export function InfoClient() {
                 </div>
                 <div className="text-sm break-words">{f.value}{f.effective_date ? ` · ${f.effective_date}` : ""}</div>
                 {f.source_url && (
-                  <a href={f.source_url} target="_blank" rel="noreferrer" className="text-primary text-xs inline-flex items-center gap-0.5">
-                    <ExternalLink className="h-3 w-3" />{t("facts.source")}
-                  </a>
+                  <InfoSourceLink sourceType={f.source_type} sourceUrl={f.source_url} />
                 )}
                 {f.scope === "unclassified" && (
                   <div className="flex gap-1 pt-1">
