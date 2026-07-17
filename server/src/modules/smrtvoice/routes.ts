@@ -2077,6 +2077,27 @@ async function queueRegeneration(
   );
   if (castErr) return res.status(500).json({ error: castErr });
 
+  // A line whose speaker isn't cast to a voice is silently skipped by the engine
+  // ("speaker skipped — no voice cast"): the job completes but no audio is made,
+  // which looks like "nothing happened". Surface a clear error naming the uncast
+  // speaker(s) instead, so the user knows to cast a voice first.
+  const { data: reqLines } = await db
+    .from("smrtvoice_lines")
+    .select("speaker_name")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .in("line_number", lineNumbers);
+  const uncastSpeakers = [
+    ...new Set((reqLines ?? [])
+      .map((l: { speaker_name: string }) => l.speaker_name)
+      .filter((name: string) => !speakerMap[name])),
+  ];
+  if (uncastSpeakers.length > 0) {
+    return res.status(400).json({
+      error: `Can't regenerate: these speakers aren't cast to a voice — ${uncastSpeakers.join(", ")}. Assign a voice to them and try again.`,
+    });
+  }
+
   // Preserve the script's generation mode — regenerating a line in an STS
   // script must re-render via speech-to-speech (with the input recording),
   // not fall back to TTS and produce a mismatched take.
