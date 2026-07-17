@@ -113,6 +113,10 @@ async function buildSpeakerMap(
   scriptId: string,
   orgId: string,
   fallbackLang: string,
+  // Per-script model override. When set it wins over the org default for every
+  // voice in this script (characters no longer carry their own model). null →
+  // inherit the org's default_resemble_model.
+  scriptModel?: string | null,
 ): Promise<{
   map: Record<string, SpeakerMapEntry>;
   cast: Array<{ speaker_name: string; skip: boolean | null }>;
@@ -163,14 +167,22 @@ async function buildSpeakerMap(
     .select("default_resemble_model")
     .eq("org_id", orgId)
     .maybeSingle();
-  const defaultModel = orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  // Precedence: per-script override → org default → engine default. The
+  // per-character model was removed (characters inherit), so the script-level
+  // choice is the effective model for the whole script.
+  const defaultModel = scriptModel ?? orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
 
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      model: ch.resemble_model ?? defaultModel,
+      // Always the script's effective model — never the character's own. A
+      // legacy per-character model (frozen 'resemble-ultra' snapshot on old
+      // rows) must NOT win, or it would both defeat the per-script override and
+      // desync the emotion decision (which is computed from the same effective
+      // model). The per-character model is vestigial; the script/org choice governs.
+      model: defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -1103,7 +1115,28 @@ const SCRIPT_UPDATABLE = new Set([
   // Script language ('he'/'en'): drives which pronunciation-lexicon entries
   // apply to this script's renders (see /voice/scripts/:id/generate).
   "language",
+  // Per-script model override (null → inherit the org default from Settings)
+  // and emotion toggle (null → auto: off for Chatterbox, on for ultra).
+  "resemble_model",
+  "emotion_enabled",
 ]);
+
+// The models the per-script override may select. null clears the override
+// (inherit the org default). Anything else is rejected so a typo can't silently
+// route a script to a non-existent model.
+const SCRIPT_MODEL_CHOICES = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
+
+// Resolve whether emotion processing runs for a script. An explicit per-script
+// choice wins; otherwise auto by model — Chatterbox defaults OFF (no SSML; the
+// LLM emotion pass would be wasted, so render neutral fast/cheap), ultra
+// defaults ON (its emotion is tag-driven).
+function resolveEmotionEnabled(
+  scriptEmotion: boolean | null | undefined,
+  effectiveModel: string,
+): boolean {
+  if (typeof scriptEmotion === "boolean") return scriptEmotion;
+  return !(effectiveModel ?? "").toLowerCase().includes("chatterbox");
+}
 
 router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
   const updates: Record<string, unknown> = {};
@@ -1113,6 +1146,12 @@ router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
   if ("language" in updates && updates.language !== "he" && updates.language !== "en") {
     return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
+  if ("resemble_model" in updates && updates.resemble_model !== null && !SCRIPT_MODEL_CHOICES.has(updates.resemble_model as string)) {
+    return res.status(400).json({ error: "resemble_model must be null or one of: " + [...SCRIPT_MODEL_CHOICES].join(", ") });
+  }
+  if ("emotion_enabled" in updates && updates.emotion_enabled !== null && typeof updates.emotion_enabled !== "boolean") {
+    return res.status(400).json({ error: "emotion_enabled must be null or a boolean" });
   }
 
   const { data, error } = await db
@@ -1366,10 +1405,17 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
 
   // Build the speaker_map from casting (a speaker cast to several characters
   // fans out to a `voices` list — one take per voice).
+  // Per-script model override (null → org default), and the emotion toggle
+  // resolved from it. Both flow to the engine so the script renders on the
+  // chosen model with matching emotion behavior.
+  const effectiveModel = script.resemble_model ?? settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  const emotionEnabled = resolveEmotionEnabled(script.emotion_enabled, effectiveModel);
+
   const { map: speakerMap, error: castErr } = await buildSpeakerMap(
     script.id,
     req.org!.id,
     script.language ?? "he",
+    script.resemble_model,
   );
   if (castErr) return res.status(500).json({ error: castErr });
   if (Object.keys(speakerMap).length === 0) {
@@ -1419,6 +1465,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       // the emotion recipe destabilizes resemble-ultra. Checkbox on the
       // generate screen; absent/false → engine skips the baseline.
       apply_style_baseline: req.body?.apply_style_baseline === true,
+      emotion_enabled: emotionEnabled,
       pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
@@ -1965,6 +2012,8 @@ async function queueRegeneration(
     language?: string | null;
     generation_mode?: "sts" | "tts";
     input_recording_path?: string | null;
+    resemble_model?: string | null;
+    emotion_enabled?: boolean | null;
   },
   lineNumbers: number[],
   // Verbatim per-line text edits ("send again with edited text"). Each is sent
@@ -1977,9 +2026,14 @@ async function queueRegeneration(
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
+    .select("default_adapter, default_llm_model, default_resemble_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
     .eq("org_id", req.org!.id)
     .maybeSingle();
+
+  // Same per-script model + emotion resolution as a full generate, so a
+  // re-render matches the script's chosen model and emotion behavior.
+  const effectiveModel = script.resemble_model ?? settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  const emotionEnabled = resolveEmotionEnabled(script.emotion_enabled, effectiveModel);
 
   // Rebuild the casting map so regenerated lines use the current voices (and
   // fan out to multiple voices when a speaker is cast to several characters).
@@ -1987,6 +2041,7 @@ async function queueRegeneration(
     script.id,
     req.org!.id,
     script.language ?? "he",
+    script.resemble_model,
   );
   if (castErr) return res.status(500).json({ error: castErr });
 
@@ -2021,6 +2076,7 @@ async function queueRegeneration(
       line_numbers: lineNumbers,
       // Match the generate default: baseline off unless explicitly requested.
       apply_style_baseline: req.body?.apply_style_baseline === true,
+      emotion_enabled: emotionEnabled,
       pronunciation: await loadPronunciation(req.org!.id),
       line_overrides: lineOverrides,
       reprocess_line_numbers: reprocessLineNumbers,
@@ -2071,7 +2127,7 @@ async function loadScriptForLine(req: Request, lineId: string) {
   if (!line) return null;
   const { data: script } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, language, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path, resemble_model, emotion_enabled")
     .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -2142,7 +2198,7 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
 router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, language, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path, resemble_model, emotion_enabled")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();

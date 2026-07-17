@@ -331,6 +331,11 @@ export interface CreateJobRequest {
   // stacking the baseline on top of the emotion recipe produces deep SSML tag
   // stacks that destabilize resemble-ultra (spurious words / line restarts).
   apply_style_baseline?: boolean;
+  // Per-script emotion toggle. When false the engine skips the LLM emotion
+  // pass and renders neutral (faster/cheaper); resolved per-script on this side
+  // (Chatterbox defaults off, resemble-ultra defaults on). Omit → engine
+  // default (true).
+  emotion_enabled?: boolean;
   postprocess_enabled?: boolean;
   postprocess_compress?: boolean;
   postprocess_speed?: number;
