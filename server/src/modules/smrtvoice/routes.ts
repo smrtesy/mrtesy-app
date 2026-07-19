@@ -113,6 +113,10 @@ async function buildSpeakerMap(
   scriptId: string,
   orgId: string,
   fallbackLang: string,
+  // Per-script model override. When set it wins over the org default for every
+  // voice in this script (characters no longer carry their own model). null →
+  // inherit the org's default_resemble_model.
+  scriptModel?: string | null,
 ): Promise<{
   map: Record<string, SpeakerMapEntry>;
   cast: Array<{ speaker_name: string; skip: boolean | null }>;
@@ -163,14 +167,22 @@ async function buildSpeakerMap(
     .select("default_resemble_model")
     .eq("org_id", orgId)
     .maybeSingle();
-  const defaultModel = orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  // Precedence: per-script override → org default → engine default. The
+  // per-character model was removed (characters inherit), so the script-level
+  // choice is the effective model for the whole script.
+  const defaultModel = scriptModel ?? orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
 
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      model: ch.resemble_model ?? defaultModel,
+      // Always the script's effective model — never the character's own. A
+      // legacy per-character model (frozen 'resemble-ultra' snapshot on old
+      // rows) must NOT win, or it would both defeat the per-script override and
+      // desync the emotion decision (which is computed from the same effective
+      // model). The per-character model is vestigial; the script/org choice governs.
+      model: defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -258,13 +270,13 @@ router.post(
       return res.status(400).json({ error: "name is required" });
     }
 
-    // New characters inherit the org's default Resemble model (resemble-ultra).
-    const { data: orgSettings } = await db
-      .from("smrtvoice_settings")
-      .select("default_resemble_model")
-      .eq("org_id", req.org!.id)
-      .maybeSingle();
-
+    // Leave resemble_model NULL so the character INHERITS the org's current
+    // default model at generation time (routes below resolve
+    // `ch.resemble_model ?? defaultModel`). Snapshotting the default onto the
+    // row froze old characters on whatever model was active at creation, which
+    // silently overrode the system-wide model switch — the one-button
+    // ultra ⇄ chatterbox toggle only works if per-character stays NULL. The
+    // DB column still defaults to 'resemble-ultra', so we set null explicitly.
     const { data, error } = await db
       .from("smrtvoice_characters")
       .insert({
@@ -283,9 +295,7 @@ router.post(
         style_baseline_tags: Array.isArray(body.style_baseline_tags)
           ? body.style_baseline_tags
           : [],
-        ...(orgSettings?.default_resemble_model
-          ? { resemble_model: orgSettings.default_resemble_model }
-          : {}),
+        resemble_model: null,
       })
       .select()
       .single();
@@ -540,7 +550,8 @@ router.get("/voice/google/access-token", async (req: Request, res: Response) => 
 
 // POST /voice/drive/list-folders — folder source for the in-app browser.
 // Body: { parent? } drill under a folder (default My Drive root);
-//        { q } search folders by name across the user's Drive;
+//        { q } search folders by name across the user's Drive, OR — when q is a
+//              Drive folder ID / share URL — resolve that single folder directly;
 //        { shared: true } list folders shared with the user.
 // No Google API key needed (reuses the user's Drive OAuth).
 router.post("/voice/drive/list-folders", async (req: Request, res: Response) => {
@@ -548,22 +559,60 @@ router.post("/voice/drive/list-folders", async (req: Request, res: Response) => 
   const q = (req.body?.q ?? "").toString().trim();
   const shared = req.body?.shared === true;
 
-  let query: string;
-  if (q) {
-    // Escape backslashes then single quotes for the Drive query string.
-    const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    query = `${FOLDER} and name contains '${esc}'`;
-  } else if (shared) {
-    query = `${FOLDER} and sharedWithMe = true`;
-  } else {
-    const parentRaw = (req.body?.parent ?? "").toString().trim();
-    const parent = parentRaw ? parseFolderId(parentRaw) : "root";
-    if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
-    query = `'${parent}' in parents and ${FOLDER}`;
-  }
+  // Detect when the search box holds a folder ID or a Drive URL rather than a
+  // name to search for. A .../folders/<id> URL is unambiguous; a bare token is
+  // treated as an ID only when it's long and has no spaces (Drive IDs are 25+
+  // chars), so ordinary short search words still go through name-contains.
+  const directId = q
+    ? (q.match(/\/folders\/([a-zA-Z0-9_-]+)/)?.[1] ??
+       (/^[a-zA-Z0-9_-]{20,}$/.test(q) ? q : null))
+    : null;
 
   try {
     const drive = await getDriveClient(req.user!.id);
+
+    // Direct ID/URL lookup: fetch just that folder so the user can pick it or
+    // drill into it. If it isn't a folder or can't be read, fall through to a
+    // name search on the raw text.
+    if (directId) {
+      try {
+        const meta = await drive.files.get({
+          fileId: directId,
+          fields: "id, name, mimeType, webViewLink",
+          supportsAllDrives: true,
+        });
+        if (meta.data.mimeType === "application/vnd.google-apps.folder") {
+          return res.json({
+            folders: [
+              {
+                id: meta.data.id,
+                name: meta.data.name,
+                url:
+                  meta.data.webViewLink ??
+                  `https://drive.google.com/drive/folders/${meta.data.id}`,
+              },
+            ],
+          });
+        }
+      } catch {
+        // Not accessible / not a folder — fall back to treating q as a name.
+      }
+    }
+
+    let query: string;
+    if (q) {
+      // Escape backslashes then single quotes for the Drive query string.
+      const esc = q.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      query = `${FOLDER} and name contains '${esc}'`;
+    } else if (shared) {
+      query = `${FOLDER} and sharedWithMe = true`;
+    } else {
+      const parentRaw = (req.body?.parent ?? "").toString().trim();
+      const parent = parentRaw ? parseFolderId(parentRaw) : "root";
+      if (!parent) return res.status(400).json({ error: "Invalid parent folder" });
+      query = `'${parent}' in parents and ${FOLDER}`;
+    }
+
     const out = await drive.files.list({
       q: query,
       pageSize: 100,
@@ -1066,7 +1115,28 @@ const SCRIPT_UPDATABLE = new Set([
   // Script language ('he'/'en'): drives which pronunciation-lexicon entries
   // apply to this script's renders (see /voice/scripts/:id/generate).
   "language",
+  // Per-script model override (null → inherit the org default from Settings)
+  // and emotion toggle (null → auto: off for Chatterbox, on for ultra).
+  "resemble_model",
+  "emotion_enabled",
 ]);
+
+// The models the per-script override may select. null clears the override
+// (inherit the org default). Anything else is rejected so a typo can't silently
+// route a script to a non-existent model.
+const SCRIPT_MODEL_CHOICES = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
+
+// Resolve whether emotion processing runs for a script. An explicit per-script
+// choice wins; otherwise auto by model — Chatterbox defaults OFF (no SSML; the
+// LLM emotion pass would be wasted, so render neutral fast/cheap), ultra
+// defaults ON (its emotion is tag-driven).
+function resolveEmotionEnabled(
+  scriptEmotion: boolean | null | undefined,
+  effectiveModel: string,
+): boolean {
+  if (typeof scriptEmotion === "boolean") return scriptEmotion;
+  return !(effectiveModel ?? "").toLowerCase().includes("chatterbox");
+}
 
 router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
   const updates: Record<string, unknown> = {};
@@ -1076,6 +1146,12 @@ router.patch("/voice/scripts/:id", async (req: Request, res: Response) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
   if ("language" in updates && updates.language !== "he" && updates.language !== "en") {
     return res.status(400).json({ error: "language must be 'he' or 'en'" });
+  }
+  if ("resemble_model" in updates && updates.resemble_model !== null && !SCRIPT_MODEL_CHOICES.has(updates.resemble_model as string)) {
+    return res.status(400).json({ error: "resemble_model must be null or one of: " + [...SCRIPT_MODEL_CHOICES].join(", ") });
+  }
+  if ("emotion_enabled" in updates && updates.emotion_enabled !== null && typeof updates.emotion_enabled !== "boolean") {
+    return res.status(400).json({ error: "emotion_enabled must be null or a boolean" });
   }
 
   const { data, error } = await db
@@ -1329,10 +1405,17 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
 
   // Build the speaker_map from casting (a speaker cast to several characters
   // fans out to a `voices` list — one take per voice).
+  // Per-script model override (null → org default), and the emotion toggle
+  // resolved from it. Both flow to the engine so the script renders on the
+  // chosen model with matching emotion behavior.
+  const effectiveModel = script.resemble_model ?? settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  const emotionEnabled = resolveEmotionEnabled(script.emotion_enabled, effectiveModel);
+
   const { map: speakerMap, error: castErr } = await buildSpeakerMap(
     script.id,
     req.org!.id,
     script.language ?? "he",
+    script.resemble_model,
   );
   if (castErr) return res.status(500).json({ error: castErr });
   if (Object.keys(speakerMap).length === 0) {
@@ -1382,6 +1465,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
       // the emotion recipe destabilizes resemble-ultra. Checkbox on the
       // generate screen; absent/false → engine skips the baseline.
       apply_style_baseline: req.body?.apply_style_baseline === true,
+      emotion_enabled: emotionEnabled,
       pronunciation: await loadPronunciation(req.org!.id),
       postprocess_enabled: settings?.postprocess_enabled ?? undefined,
       postprocess_compress: settings?.postprocess_compress ?? undefined,
@@ -1614,17 +1698,23 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return res.status(400).json({ error: "No Drive folder configured. Set an archive folder in Voice settings or a target folder on the project." });
   }
 
+  // Archive every line that HAS a rendered file and isn't archived — the same
+  // criterion the "Download all" button and the audio list use. We deliberately
+  // do NOT filter status = 'completed': a line's status flips to
+  // processing/pending/failed while a redo is in flight, but its existing
+  // output_audio_path is still a real, playable take the user sees and expects
+  // to save. Filtering on the transient status dropped those lines from Drive
+  // (e.g. 45 visible → 34 saved).
   const { data: lines, error: linesErr } = await db
     .from("smrtvoice_lines")
-    .select("id, line_number, output_audio_path")
+    .select("id, line_number, output_audio_path, speaker_name")
     .eq("script_id", script.id)
     .eq("org_id", req.org!.id)
-    .eq("status", "completed")
     .not("output_audio_path", "is", null)
     .is("archived_at", null)
     .order("line_number");
   if (linesErr) return res.status(500).json({ error: linesErr.message });
-  if (!lines || lines.length === 0) return res.status(400).json({ error: "No completed audio to archive yet" });
+  if (!lines || lines.length === 0) return res.status(400).json({ error: "No audio to archive yet" });
 
   // Archive the SET of good takes per line (with the note in the filename) so a
   // multi-take line comes down as every version the user marked; a line with no
@@ -1657,13 +1747,30 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return clean ? `_${clean}` : "";
   };
 
+  // Strip characters illegal in a Drive folder name; keep Hebrew/spaces so the
+  // name stays readable. Empty → a safe placeholder.
+  const folderSafe = (name: string): string => {
+    // eslint-disable-next-line no-control-regex
+    const clean = (name ?? "").replace(/[/\\:*?"<>|\x00-\x1f]/g, "").trim();
+    return clean || "ללא שם";
+  };
+
+  // Optional NDJSON progress stream: when the client passes ?stream=1 we push a
+  // { progress } line as each file is handled so the button can show a live %
+  // (like "Download all"), then a final { done, … } line. Declared out here so
+  // the catch below knows whether headers were already streamed.
+  const stream = req.query.stream === "1";
+
   try {
     const drive = await getDriveClient(req.user!.id);
     let folderId = script.archive_gdrive_folder_id as string | null;
     let folderUrl = script.archive_gdrive_folder_url as string | null;
     if (!folderId) {
+      // The per-script folder is named after the script (falling back to its
+      // code when unnamed) so it's identifiable in Drive at a glance.
+      const scriptFolderName = folderSafe((script.name as string | null) || script.code);
       const folder = await drive.files.create({
-        requestBody: { name: script.code, mimeType: "application/vnd.google-apps.folder", parents: [rootFolderId] },
+        requestBody: { name: scriptFolderName, mimeType: "application/vnd.google-apps.folder", parents: [rootFolderId] },
         fields: "id, webViewLink",
         supportsAllDrives: true,
       });
@@ -1671,14 +1778,93 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       folderUrl = folder.data.webViewLink ?? null;
     }
     if (!folderId) return res.status(502).json({ error: "Failed to create Drive folder" });
+    const scriptFolderId = folderId;
 
     const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
     if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
 
+    // Start streaming (only now that folder resolution succeeded, so pre-loop
+    // failures still return a normal JSON error the client can read).
+    if (stream) {
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no"); // ask proxies not to buffer
+      res.flushHeaders?.();
+    }
+    // Total files across all lines (good takes per line, else 1 fallback) so the
+    // percentage is over the real upload count, not the line count.
+    const totalFiles = (lines as Array<{ id: string }>).reduce(
+      (sum, l) => sum + Math.max(1, goodByLine.get(l.id)?.length ?? 0),
+      0,
+    );
+    let processed = 0;
+    let lastPct = -1;
+    const emitProgress = () => {
+      if (!stream) return;
+      const pct = totalFiles ? Math.min(99, Math.round((processed / totalFiles) * 100)) : 0;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        res.write(`${JSON.stringify({ progress: pct })}\n`);
+      }
+    };
+    emitProgress(); // 0%
+
+    // Each character gets its own subfolder inside the script folder, named by
+    // the speaker as it appears in the script (speaker_name — NOT the voice
+    // name). Created lazily and cached so a folder is made at most once per
+    // character per archive, and only when there's actually a file to put in it.
+    const speakerFolders = new Map<string, { id: string; files: Map<string, string> }>();
+    const ensureSpeakerFolder = async (speaker: string): Promise<{ id: string; files: Map<string, string> }> => {
+      const key = speaker?.trim() || "ללא דמות";
+      const cached = speakerFolders.get(key);
+      if (cached) return cached;
+      const safeName = folderSafe(key);
+      // Reuse an existing subfolder of this name (re-archive / partial archive
+      // reuses the same script folder) so we never create a duplicate
+      // character folder; only create when none exists yet.
+      const esc = safeName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const existing = await drive.files.list({
+        q: `'${scriptFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${esc}' and trashed = false`,
+        pageSize: 1,
+        fields: "files(id)",
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      let id = existing.data.files?.[0]?.id ?? null;
+      // name → fileId of what's already in the folder, so a re-archive updates
+      // the existing file in place (same name = current content, no duplicate
+      // and no stale copy) instead of adding a second copy.
+      const files = new Map<string, string>();
+      if (!id) {
+        const created = await drive.files.create({
+          requestBody: { name: safeName, mimeType: "application/vnd.google-apps.folder", parents: [scriptFolderId] },
+          fields: "id",
+          supportsAllDrives: true,
+        });
+        id = created.data.id!;
+      } else {
+        const listed = await drive.files.list({
+          q: `'${id}' in parents and trashed = false`,
+          pageSize: 1000,
+          fields: "files(id, name)",
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        });
+        for (const ff of listed.data.files ?? []) if (ff.name && ff.id) files.set(ff.name, ff.id);
+      }
+      const entry = { id, files };
+      speakerFolders.set(key, entry);
+      return entry;
+    };
+
+    // Filenames are prefixed with the script NAME (not the code), matching the
+    // "Download all" ZIP so the two are consistent, e.g. "NM110 - 3_022.wav".
+    const namePrefix = folderSafe((script.name as string | null) || script.code);
+
     let uploaded = 0;
     let skipped = 0;
-    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string }>) {
-      const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
+    for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string; speaker_name: string }>) {
+      const base = `${namePrefix}_${String(line.line_number).padStart(3, "0")}`;
       const good = goodByLine.get(line.id) ?? [];
       // Good takes if any (each named with its take number + note); else the
       // single current output.
@@ -1686,25 +1872,46 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         ? good.map((g) => ({ path: g.path, name: `${base}_v${g.n}${noteSuffix(g.note)}.wav` }))
         : [{ path: line.output_audio_path, name: `${base}.wav` }];
       for (const f of files) {
+        const folder = await ensureSpeakerFolder(line.speaker_name);
         const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
         if (dlErr || !blob) {
           skipped += 1;
+          processed += 1;
+          emitProgress();
           continue;
         }
         const buffer = Buffer.from(await blob.arrayBuffer());
-        await drive.files.create({
-          requestBody: { name: f.name, parents: [folderId] },
-          media: { mimeType: "audio/wav", body: Readable.from(buffer) },
-          fields: "id",
-          supportsAllDrives: true,
-        });
+        const existingId = folder.files.get(f.name);
+        if (existingId) {
+          // Same-named file from a prior save → replace its content in place.
+          await drive.files.update({
+            fileId: existingId,
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+        } else {
+          const created = await drive.files.create({
+            requestBody: { name: f.name, parents: [folder.id] },
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+          if (created.data.id) folder.files.set(f.name, created.data.id);
+        }
         uploaded += 1;
+        processed += 1;
+        emitProgress();
       }
     }
 
     if (uploaded === 0) {
       const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
       if (revertErr) console.error("[smrtvoice] script status revert after failed archive failed:", revertErr);
+      if (stream) {
+        res.write(`${JSON.stringify({ error: "Failed to upload any audio to Drive" })}\n`);
+        return res.end();
+      }
       return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
@@ -1720,13 +1927,33 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       .eq("id", script.id)
       .select()
       .maybeSingle();
-    if (updErr) return res.status(500).json({ error: updErr.message });
+    if (updErr) {
+      if (stream) {
+        res.write(`${JSON.stringify({ error: updErr.message })}\n`);
+        return res.end();
+      }
+      return res.status(500).json({ error: updErr.message });
+    }
 
     await emitEvent(req.org!.id, "smrtvoice", "script.archived", "script", script.id, { folder_url: folderUrl, uploaded, skipped });
+    if (stream) {
+      res.write(`${JSON.stringify({ done: true, folder_url: folderUrl, uploaded, skipped })}\n`);
+      return res.end();
+    }
     res.json({ script: updated, folder_url: folderUrl, uploaded, skipped });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    // Don't leave the script stuck on the transient "archiving" status when the
+    // upload throws partway — put it back so the UI recovers.
+    const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+    if (revertErr) console.error("[smrtvoice] script status revert after archive error failed:", revertErr);
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to archive to Drive", body: message });
+    // If we already started streaming, headers/status are sent — surface the
+    // error as a final NDJSON line instead of a (failing) res.status().json().
+    if (stream && res.headersSent) {
+      try { res.write(`${JSON.stringify({ error: message })}\n`); } catch { /* socket gone */ }
+      return res.end();
+    }
     res.status(502).json({ error: message });
   }
 });
@@ -1881,6 +2108,8 @@ async function queueRegeneration(
     language?: string | null;
     generation_mode?: "sts" | "tts";
     input_recording_path?: string | null;
+    resemble_model?: string | null;
+    emotion_enabled?: boolean | null;
   },
   lineNumbers: number[],
   // Verbatim per-line text edits ("send again with edited text"). Each is sent
@@ -1893,9 +2122,14 @@ async function queueRegeneration(
 
   const { data: settings } = await db
     .from("smrtvoice_settings")
-    .select("default_adapter, default_llm_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
+    .select("default_adapter, default_llm_model, default_resemble_model, postprocess_enabled, postprocess_compress, postprocess_speed, postprocess_normalize, postprocess_target_db")
     .eq("org_id", req.org!.id)
     .maybeSingle();
+
+  // Same per-script model + emotion resolution as a full generate, so a
+  // re-render matches the script's chosen model and emotion behavior.
+  const effectiveModel = script.resemble_model ?? settings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  const emotionEnabled = resolveEmotionEnabled(script.emotion_enabled, effectiveModel);
 
   // Rebuild the casting map so regenerated lines use the current voices (and
   // fan out to multiple voices when a speaker is cast to several characters).
@@ -1903,8 +2137,30 @@ async function queueRegeneration(
     script.id,
     req.org!.id,
     script.language ?? "he",
+    script.resemble_model,
   );
   if (castErr) return res.status(500).json({ error: castErr });
+
+  // A line whose speaker isn't cast to a voice is silently skipped by the engine
+  // ("speaker skipped — no voice cast"): the job completes but no audio is made,
+  // which looks like "nothing happened". Surface a clear error naming the uncast
+  // speaker(s) instead, so the user knows to cast a voice first.
+  const { data: reqLines } = await db
+    .from("smrtvoice_lines")
+    .select("speaker_name")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .in("line_number", lineNumbers);
+  const uncastSpeakers = [
+    ...new Set((reqLines ?? [])
+      .map((l: { speaker_name: string }) => l.speaker_name)
+      .filter((name: string) => !speakerMap[name])),
+  ];
+  if (uncastSpeakers.length > 0) {
+    return res.status(400).json({
+      error: `Can't regenerate: these speakers aren't cast to a voice — ${uncastSpeakers.join(", ")}. Assign a voice to them and try again.`,
+    });
+  }
 
   // Preserve the script's generation mode — regenerating a line in an STS
   // script must re-render via speech-to-speech (with the input recording),
@@ -1937,6 +2193,7 @@ async function queueRegeneration(
       line_numbers: lineNumbers,
       // Match the generate default: baseline off unless explicitly requested.
       apply_style_baseline: req.body?.apply_style_baseline === true,
+      emotion_enabled: emotionEnabled,
       pronunciation: await loadPronunciation(req.org!.id),
       line_overrides: lineOverrides,
       reprocess_line_numbers: reprocessLineNumbers,
@@ -1987,7 +2244,7 @@ async function loadScriptForLine(req: Request, lineId: string) {
   if (!line) return null;
   const { data: script } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, language, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path, resemble_model, emotion_enabled")
     .eq("id", line.script_id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -2058,7 +2315,7 @@ router.delete("/voice/lines/:id/redo", async (req: Request, res: Response) => {
 router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
-    .select("id, project_id, code, language, generation_mode, input_recording_path")
+    .select("id, project_id, code, language, generation_mode, input_recording_path, resemble_model, emotion_enabled")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();

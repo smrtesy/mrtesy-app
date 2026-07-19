@@ -19,7 +19,7 @@ interface Character {
   display_name: string | null;
   description: string | null;
   resemble_voice_id: string | null;
-  resemble_model: string;
+  resemble_model: string | null;
   language: "he" | "en";
   age_years: number | null;
   gender: "male" | "female" | "neutral" | null;
@@ -127,7 +127,7 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
             />
           )}
           <Stat label="Voice ID" value={character.resemble_voice_id ?? "—"} />
-          <Stat label="Model" value={character.resemble_model} />
+          <Stat label="Model" value={character.resemble_model ?? "default (system setting)"} />
         </CardContent>
       </Card>
 

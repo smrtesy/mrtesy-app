@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Download } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
+import JSZip from "jszip";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
@@ -18,11 +19,21 @@ interface Line {
   archived_at?: string | null;
 }
 
+// Strip characters illegal in a file/folder name; keep Hebrew/spaces so the
+// character folder stays readable. Mirrors the server-side archive sanitizer.
+function pathSafe(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = (name ?? "").replace(/[/\\:*?"<>|\x00-\x1f]/g, "").trim();
+  return clean || "ללא דמות";
+}
+
 /**
- * Sequentially downloads each completed line as a separate file via the
- * browser. Not a ZIP — that would need server-side zipping which the spec
- * leaves for later. This is a "good enough" version that lets the editor
- * grab every clip in one click.
+ * Bundles every completed line's audio into a single ZIP and downloads it, with
+ * one subfolder per character (named by the speaker as it appears in the script
+ * — same structure as the Drive archive). Zipping is done in the browser: each
+ * signed URL is fetched as a blob (a plain `<a download>` on a cross-origin
+ * signed URL is ignored by the browser and just opens the file instead of
+ * saving it, which is why the old sequential-anchor approach failed).
  */
 export function DownloadAllButton({ scriptId }: { scriptId: string }) {
   const t = useTranslations("smrtVoice.audio");
@@ -33,44 +44,76 @@ export function DownloadAllButton({ scriptId }: { scriptId: string }) {
     setBusy(true);
     setProgress(0);
     try {
-      const { lines } = await api<{ lines: Line[] }>(
-        `/api/voice/scripts/${scriptId}/lines`,
-      );
+      const [{ lines }, { script }] = await Promise.all([
+        api<{ lines: Line[] }>(`/api/voice/scripts/${scriptId}/lines`),
+        api<{ script: { code: string; name: string | null } }>(
+          `/api/voice/scripts/${scriptId}`,
+        ),
+      ]);
       const completed = lines.filter((l) => l.output_audio_path && !l.archived_at);
       if (completed.length === 0) {
-        toast.error("אין קבצים מוכנים להורדה");
+        toast.error(t("noFilesToDownload"));
         return;
       }
 
+      const namePrefix = pathSafe((script?.name || script?.code) ?? "voice");
+      const zip = new JSZip();
       let files = 0;
+      let skipped = 0;
       for (let i = 0; i < completed.length; i++) {
         const line = completed[i];
-        // Download the line's "good" takes (note in the filename); falls back to
-        // the single current output when none are marked — same as the per-line
+        // The line's "good" takes (note in the filename); falls back to the
+        // single current output when none are marked — same as the per-line
         // download button.
         const { items } = await api<{
           items: { url: string; take_number: number | null; note: string | null; voice_label: string | null }[];
         }>(`/api/voice/lines/${line.id}/selection`);
-        const base = `${String(line.line_number).padStart(3, "0")}_${line.speaker_name}`;
+        // Folder = the character (speaker); filename is prefixed with the script
+        // NAME + line number (matching the Save-to-Drive archive), e.g.
+        // "NM110 - 3_022.wav". pathSafe strips slashes so nothing injects an
+        // extra zip subfolder.
+        const speaker = pathSafe(line.speaker_name);
+        const base = `${namePrefix}_${String(line.line_number).padStart(3, "0")}`;
         for (const it of items) {
           const name =
             it.take_number != null
               ? `${base}_v${it.take_number}${noteSuffix(it.voice_label)}${noteSuffix(it.note)}.wav`
               : `${base}.wav`;
-          // Anchor-click trick to download (works because the url is signed)
-          const a = document.createElement("a");
-          a.href = it.url;
-          a.download = name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          files += 1;
-          // Small delay so the browser doesn't choke on too many concurrent downloads.
-          await new Promise((r) => setTimeout(r, 200));
+          // One bad/expired signed URL must not lose the whole batch: skip it
+          // and keep going, then report how many were skipped.
+          try {
+            const res = await fetch(it.url);
+            if (!res.ok) throw new Error(`Download failed (${res.status})`);
+            zip.file(`${speaker}/${name}`, await res.blob());
+            files += 1;
+          } catch {
+            skipped += 1;
+          }
         }
-        setProgress(Math.round(((i + 1) / completed.length) * 100));
+        // First 90% tracks fetching; the final 10% is the zip generation below.
+        setProgress(Math.round(((i + 1) / completed.length) * 90));
       }
-      toast.success(`${files} קבצים הורדו`);
+
+      if (files === 0) {
+        toast.error(t("noFilesToDownload"));
+        return;
+      }
+
+      const blob = await zip.generateAsync({ type: "blob" }, (meta) => {
+        setProgress(90 + Math.round(meta.percent * 0.1));
+      });
+      const zipName = `${pathSafe((script?.name || script?.code) ?? "voice")}.zip`;
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = zipName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+
+      toast.success(t("filesDownloaded", { count: files }));
+      if (skipped > 0) toast.warning(t("filesSkipped", { count: skipped }));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {

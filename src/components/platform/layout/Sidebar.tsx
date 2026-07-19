@@ -26,6 +26,7 @@ import {
   Send,
   Reply,
   KeyRound,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -85,16 +86,28 @@ const smrtVaultItems = [
   { key: "vault", href: "/vault", icon: KeyRound },
 ] as const;
 
+const smrtInfoItems = [
+  { key: "info", href: "/info", icon: Info },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
-export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string; isAdmin?: boolean; enabledApps?: string[] }) {
+export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
+  // Project-only ("lite") worker: smrtTask collapses to just the task list — no
+  // inbox, projects, whatsapp/sms, knowledge, task-creation FABs or experiments.
+  const isLiteTask = hasSmrtTask && taskAccess === "lite";
+  const visibleSmrtTaskItems = isLiteTask
+    ? smrtTaskItems.filter((i) => i.key === "tasks")
+    : smrtTaskItems;
+  const showTaskExtras = hasSmrtTask && !isLiteTask;
   const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const hasSmrtCrm = enabledApps.includes("smrtcrm");
   const hasSmrtReach = enabledApps.includes("smrtreach");
   const hasSmrtBot = enabledApps.includes("smrtbot");
   const hasSmrtPlan = enabledApps.includes("smrtplan");
   const hasSmrtVault = enabledApps.includes("smrtvault");
+  const hasSmrtInfo = enabledApps.includes("smrtinfo");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -119,7 +132,12 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   // Spec: keep תיבה (inbox), משימות (tasks), פרויקטי קול (voice projects) /
   // WhatsApp fallback when no voice, הגדרות (settings), and "עוד" (more).
   const activeMobileItems: MobileNavItem[] =
-    !hasSmrtTask && !hasSmrtVoice
+    isLiteTask
+      ? [
+          { key: "tasks",    href: "/tasks",    icon: CheckSquare },
+          { key: "settings", href: "/settings", icon: Settings    },
+        ]
+      : !hasSmrtTask && !hasSmrtVoice
       ? [
           { key: "inbox",    href: "/inbox",    icon: Bell     },
           { key: "settings", href: "/settings", icon: Settings },
@@ -268,17 +286,18 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
   // its complete item set, then a management group. Each section gets the app
   // title above and a divider line between sections (when there's more than one).
   const moreSections: Array<{ app?: AppDef; titleKey?: string; items: MobileNavItem[] }> = [];
-  if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...smrtTaskItems] });
+  if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...visibleSmrtTaskItems] });
   if (hasSmrtVoice) moreSections.push({ app: APPS.smrtvoice, items: [...smrtVoiceItems] });
   if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtVault) moreSections.push({ app: APPS.smrtvault, items: [...smrtVaultItems] });
+  if (hasSmrtInfo) moreSections.push({ app: APPS.smrtinfo, items: [...smrtInfoItems] });
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
-    ...(hasSmrtTask ? [{ key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical }] : []),
+    ...(showTaskExtras ? [{ key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical }] : []),
     ...(isAdmin ? [{ key: "platformAdmin", href: "/admin", icon: Shield }] : []),
   ];
   if (managementMoreItems.length > 0) moreSections.push({ titleKey: "sectionManagement", items: managementMoreItems });
@@ -337,7 +356,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           {hasSmrtTask && (
             <>
               <AppSectionHeader app={APPS.smrttask} />
-              {smrtTaskItems.map((item) => (
+              {visibleSmrtTaskItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
@@ -404,6 +423,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
             </>
           )}
 
+          {hasSmrtInfo && (
+            <>
+              <AppSectionHeader app={APPS.smrtinfo} />
+              {smrtInfoItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
           <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
             {t("sectionManagement")}
           </p>
@@ -413,7 +442,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           )}
           <NavItem itemKey="settings" href="/settings" icon={Settings}
             basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
-          {hasSmrtTask && (
+          {showTaskExtras && (
             <NavItem itemKey="transcriptionExperiment" href="/transcription-experiment" icon={FlaskConical}
               basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
           )}
@@ -437,7 +466,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
           )}
         </nav>
 
-        {hasSmrtTask && (
+        {showTaskExtras && (
           <div className="p-3 border-t space-y-2">
             <Button onClick={() => setManualTaskOpen(true)} variant="outline" className="w-full gap-2">
               <ListPlus className="h-4 w-4" />
@@ -500,7 +529,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [] }: { locale: string;
 
       {/* FABs — bumped up so they don't sit on top of "More" in the tab bar.
           Manual "new task" sits above the AI "update" FAB. */}
-      {hasSmrtTask && (
+      {showTaskExtras && (
         <>
           <Button
             size="icon"

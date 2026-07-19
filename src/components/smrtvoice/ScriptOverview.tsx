@@ -24,6 +24,10 @@ interface Script {
   name: string | null;
   status: string;
   language: "he" | "en";
+  // Per-script model override (null = inherit the org default from Settings)
+  // and emotion toggle (null = auto: off for Chatterbox, on for ultra).
+  resemble_model: string | null;
+  emotion_enabled: boolean | null;
   google_doc_url: string | null;
   google_doc_id: string | null;
   google_doc_tab_title: string | null;
@@ -181,6 +185,37 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
     }
   }
 
+  // Per-script model override. "" (the "default" option) clears it back to
+  // inheriting the org default. Optimistic with rollback, like language.
+  async function onModelChange(value: string) {
+    if (!script) return;
+    const resemble_model = value === "" ? null : value;
+    if (resemble_model === script.resemble_model) return;
+    const prev = script.resemble_model;
+    setScript({ ...script, resemble_model });
+    try {
+      await api(`/api/voice/scripts/${scriptId}`, { method: "PATCH", body: { resemble_model } });
+    } catch (err) {
+      setScript((s) => (s ? { ...s, resemble_model: prev } : s));
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  // Per-script emotion toggle. "" = auto (off for Chatterbox, on for ultra).
+  async function onEmotionChange(value: string) {
+    if (!script) return;
+    const emotion_enabled = value === "" ? null : value === "on";
+    if (emotion_enabled === script.emotion_enabled) return;
+    const prev = script.emotion_enabled;
+    setScript({ ...script, emotion_enabled });
+    try {
+      await api(`/api/voice/scripts/${scriptId}`, { method: "PATCH", body: { emotion_enabled } });
+    } catch (err) {
+      setScript((s) => (s ? { ...s, emotion_enabled: prev } : s));
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!script) return <p className="text-sm text-muted-foreground">…</p>;
 
@@ -222,6 +257,34 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
           >
             <option value="he">{t("languageHe")}</option>
             <option value="en">{t("languageEn")}</option>
+          </select>
+          {/* Per-script model override. Default inherits the model chosen in
+              Settings; switching here affects only this script. */}
+          <select
+            className="rounded-md border bg-background px-2 py-1 text-sm"
+            value={script.resemble_model ?? ""}
+            onChange={(e) => onModelChange(e.target.value)}
+            disabled={busy || generating}
+            title={t("modelHint")}
+            aria-label={t("modelLabel")}
+          >
+            <option value="">{t("modelDefault")}</option>
+            <option value="resemble-ultra">resemble-ultra</option>
+            <option value="chatterbox">chatterbox</option>
+            <option value="chatterbox-turbo">chatterbox-turbo</option>
+          </select>
+          {/* Per-script emotion toggle. Auto = off for Chatterbox, on for ultra. */}
+          <select
+            className="rounded-md border bg-background px-2 py-1 text-sm"
+            value={script.emotion_enabled === null ? "" : script.emotion_enabled ? "on" : "off"}
+            onChange={(e) => onEmotionChange(e.target.value)}
+            disabled={busy || generating}
+            title={t("emotionHint")}
+            aria-label={t("emotionLabel")}
+          >
+            <option value="">{t("emotionAuto")}</option>
+            <option value="on">{t("emotionOn")}</option>
+            <option value="off">{t("emotionOff")}</option>
           </select>
           <ProjectStatusBadge status={script.status} />
           <Button variant="ghost" size="icon" onClick={onDelete} disabled={busy} title={t("delete")}>

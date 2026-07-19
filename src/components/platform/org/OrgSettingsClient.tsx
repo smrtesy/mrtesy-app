@@ -51,7 +51,12 @@ export function OrgSettingsClient() {
   const [noEmail, setNoEmail] = useState(false);
   const [inviteRole, setInviteRole] = useState<OrgMember["role"]>("member");
   const [inviteApps, setInviteApps] = useState<string[]>([]);
+  // Project-only ("lean") worker: uses smrtTask only for tasks assigned to them
+  // (from a plan or another user) — no sources, inbox, projects or initial scan.
+  const [inviteProjectOnly, setInviteProjectOnly] = useState(false);
   const [inviting, setInviting] = useState(false);
+  // App bundle a project-only worker gets: task list + read-only plan context.
+  const PROJECT_ONLY_APPS = ["smrttask", "smrtplan"];
   const [editingAppsFor, setEditingAppsFor] = useState<string | null>(null);
 
   // Populate inputs when active org loads or switches
@@ -98,11 +103,14 @@ export function OrgSettingsClient() {
     if (!inviteEmail.trim()) return;
     setInviting(true);
     try {
-      // Apps only matter for regular members — owners/admins see every org app.
-      const app_slugs = inviteRole === "member" ? inviteApps : [];
+      // Project-only worker → forced member, fixed lean app bundle, lite level.
+      // Otherwise apps only matter for regular members (owners/admins see all).
+      const projectOnly = inviteRole === "member" && inviteProjectOnly;
+      const app_slugs = projectOnly ? PROJECT_ONLY_APPS : inviteRole === "member" ? inviteApps : [];
+      const access_level = projectOnly ? "lite" : "full";
       const result = await api<{ invited?: boolean; warning?: string }>("/api/org/members", {
         method: "POST",
-        body: { email: inviteEmail.trim(), role: inviteRole, locale, app_slugs },
+        body: { email: inviteEmail.trim(), role: inviteRole, locale, app_slugs, access_level },
       });
       if (result.warning) {
         // Either the invite email failed to send, or (existing user) the app
@@ -113,6 +121,7 @@ export function OrgSettingsClient() {
       }
       setInviteEmail("");
       setInviteApps([]);
+      setInviteProjectOnly(false);
       refreshMembers();
       refreshInvites();
     } catch (e) {
@@ -126,15 +135,18 @@ export function OrgSettingsClient() {
     if (!inviteName.trim()) return;
     setInviting(true);
     try {
-      const app_slugs = inviteRole === "member" ? inviteApps : [];
+      const projectOnly = inviteRole === "member" && inviteProjectOnly;
+      const app_slugs = projectOnly ? PROJECT_ONLY_APPS : inviteRole === "member" ? inviteApps : [];
+      const access_level = projectOnly ? "lite" : "full";
       const result = await api<{ warning?: string }>("/api/org/members/placeholder", {
         method: "POST",
-        body: { name: inviteName.trim(), role: inviteRole, app_slugs },
+        body: { name: inviteName.trim(), role: inviteRole, app_slugs, access_level },
       });
       if (result.warning) toast.warning(tOrg("memberAppsSaveFailed"));
       else toast.success(tOrg("memberAdded"));
       setInviteName("");
       setInviteApps([]);
+      setInviteProjectOnly(false);
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
@@ -183,6 +195,24 @@ export function OrgSettingsClient() {
     setEditingAppsFor(m.user_id);
     try {
       await api(`/api/org/members/${m.user_id}/apps`, { method: "PATCH", body: { app_slugs: next } });
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setEditingAppsFor(null);
+    }
+  }
+
+  // Flip an existing member between project-only (smrtTask lite) and full,
+  // preserving their app grants — only the access level changes.
+  async function handleToggleProjectOnly(m: OrgMember) {
+    const next = m.access_level === "lite" ? "full" : "lite";
+    setEditingAppsFor(m.user_id);
+    try {
+      await api(`/api/org/members/${m.user_id}/apps`, {
+        method: "PATCH",
+        body: { app_slugs: m.app_slugs, access_level: next },
+      });
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
@@ -326,8 +356,27 @@ export function OrgSettingsClient() {
                 </div>
               </div>
 
-              {/* Per-user app selection (members only; owners/admins see every app) */}
-              {inviteRole === "member" && orgApps.length > 0 && (
+              {/* Project-only ("lean") worker toggle — members only. When on,
+                  the worker gets smrtTask (tasks assigned to them) + a read-only
+                  plan view, and skips the whole source-connection + scan flow. */}
+              {inviteRole === "member" && (
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={inviteProjectOnly}
+                    onChange={(e) => setInviteProjectOnly(e.target.checked)}
+                  />
+                  <span>
+                    {tOrg("projectOnlyToggle")}
+                    <span className="block text-xs text-muted-foreground">{tOrg("projectOnlyHint")}</span>
+                  </span>
+                </label>
+              )}
+
+              {/* Per-user app selection (members only; owners/admins see every
+                  app). Hidden for a project-only worker — their app bundle is fixed. */}
+              {inviteRole === "member" && !inviteProjectOnly && orgApps.length > 0 && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1.5">{tOrg("selectApps")}</div>
                   <div className="flex flex-wrap gap-1.5">
@@ -374,6 +423,9 @@ export function OrgSettingsClient() {
                           <span className="text-sm font-medium truncate">{m.email || personLabel(m)}</span>
                           {m.is_placeholder && (
                             <Badge variant="outline" className="shrink-0 text-[9px]">{tOrg("noEmailBadge")}</Badge>
+                          )}
+                          {!unrestricted && m.access_level === "lite" && (
+                            <Badge variant="secondary" className="shrink-0 text-[9px]">{tOrg("projectOnlyBadge")}</Badge>
                           )}
                         </div>
                         {m.is_placeholder && canManage && (
@@ -461,6 +513,19 @@ export function OrgSettingsClient() {
                           </>
                         )}
                       </div>
+                    )}
+
+                    {/* Project-only (lean) toggle — members only. */}
+                    {canManage && !unrestricted && (
+                      <label className="mt-1.5 ps-9 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          disabled={editingAppsFor === m.user_id}
+                          checked={m.access_level === "lite"}
+                          onChange={() => handleToggleProjectOnly(m)}
+                        />
+                        {tOrg("projectOnlyToggle")}
+                      </label>
                     )}
                   </div>
                 );

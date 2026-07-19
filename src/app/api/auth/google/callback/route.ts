@@ -296,7 +296,7 @@ export async function GET(request: Request) {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: expiresAt,
-        scopes: ["drive.readonly"],
+        scopes: ["drive"],
         email: connectedEmail,
       },
       { onConflict: "user_id,service" }

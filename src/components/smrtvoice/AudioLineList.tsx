@@ -23,7 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/api/client";
+import { api, apiStream } from "@/lib/api/client";
 import { createClient } from "@/lib/supabase/client";
 
 import { DownloadAllButton } from "./DownloadAllButton";
@@ -106,6 +106,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
   const [playingAll, setPlayingAll] = useState(false);
   const [paused, setPaused] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [archiveProgress, setArchiveProgress] = useState(0);
   const [rerunning, setRerunning] = useState(false);
   // Line numbers from the most recent re-run, so the user can "play the new ones".
   const [newLineNumbers, setNewLineNumbers] = useState<number[]>([]);
@@ -544,12 +545,59 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
 
   async function saveToDrive() {
     setArchiving(true);
+    setArchiveProgress(0);
     try {
-      const { folder_url, uploaded, skipped } = await api<{
-        folder_url: string | null;
-        uploaded: number;
-        skipped: number;
-      }>(`/api/voice/scripts/${scriptId}/archive`, { method: "POST" });
+      // Stream progress (?stream=1): the backend emits { progress } per file and
+      // a final { done, … } line, so the button shows a live % like "Download
+      // all" instead of freezing on a single blocking request.
+      const res = await apiStream(`/api/voice/scripts/${scriptId}/archive?stream=1`, {
+        method: "POST",
+      });
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result: { folder_url: string | null; uploaded: number; skipped: number } | null = null;
+      const applyEvent = (evt: {
+        progress?: number; done?: boolean; error?: string;
+        folder_url?: string | null; uploaded?: number; skipped?: number;
+      }) => {
+        if (typeof evt.progress === "number") setArchiveProgress(evt.progress);
+        else if (evt.error) throw new Error(evt.error);
+        // `done` line, or — when the backend predates streaming and returns a
+        // single JSON object with no newline (Vercel/Railway deploy skew) — any
+        // payload that carries an upload count.
+        else if (evt.done || typeof evt.uploaded === "number") {
+          setArchiveProgress(100);
+          result = { folder_url: evt.folder_url ?? null, uploaded: evt.uploaded ?? 0, skipped: evt.skipped ?? 0 };
+        }
+      };
+      if (reader) {
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, nl).trim();
+              buffer = buffer.slice(nl + 1);
+              if (!line) continue;
+              try { applyEvent(JSON.parse(line)); }
+              catch (e) { if (e instanceof SyntaxError) continue; throw e; }
+            }
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
+      }
+      // Parse whatever is left with no trailing newline (a final line, or the
+      // whole old-style single-JSON body).
+      if (!result && buffer.trim()) {
+        try { applyEvent(JSON.parse(buffer.trim())); }
+        catch (e) { if (!(e instanceof SyntaxError)) throw e; }
+      }
+      if (!result) throw new Error(t("studio.saveIncomplete"));
+      const { folder_url, uploaded, skipped } = result;
       toast.success(
         t("studio.savedToDrive", { uploaded, skipped: skipped ?? 0 }),
         folder_url ? { action: { label: t("studio.openFolder"), onClick: () => window.open(folder_url, "_blank") } } : undefined,
@@ -558,6 +606,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setArchiving(false);
+      setArchiveProgress(0);
     }
   }
 
@@ -723,7 +772,7 @@ export function AudioLineList({ scriptId }: { scriptId: string }) {
               {!showArchived && rendered.length > 0 && (
                 <Button size="sm" onClick={saveToDrive} disabled={archiving}>
                   <FolderUp className="h-4 w-4 me-1" />
-                  {archiving ? t("studio.saving") : t("studio.saveToDrive")}
+                  {archiving ? `${t("studio.saving")} ${archiveProgress}%` : t("studio.saveToDrive")}
                 </Button>
               )}
             </>

@@ -16,6 +16,9 @@ export interface OrgMember {
   is_placeholder?: boolean;
   /** App slugs explicitly granted to this user (only enforced for role='member'). */
   app_slugs: string[];
+  /** smrtTask access level. "lite" = a project-only worker (tasks assigned to
+   *  them only, no sources/inbox/projects). Defaults to "full". */
+  access_level?: "full" | "lite";
 }
 
 /**

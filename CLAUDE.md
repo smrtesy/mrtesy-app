@@ -3,6 +3,62 @@
 Operating instructions for Claude working in this repo. Read this at the start
 of every session before touching code.
 
+## Response language — always Hebrew
+
+Always respond to the user in **Hebrew**, in every reply, regardless of the
+language of their message, the codebase, or these (English) instructions. This
+is the user's standing preference and it applies to **all** sessions —
+including Claude Code on the web, which does not load personal `~/.claude`
+config, so this repo-level rule is what enforces it there. Write all prose
+directed at the user (chat replies, explanations, questions, summaries) in
+Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
+existing repo conventions (English where the repo already uses English) — only
+the text you address to the user is Hebrew.
+
+## Timezone — always New York (America/New_York)
+
+The user is based in **New York**. Present **all** dates, times, and
+time-of-day the user sees in the **America/New_York** timezone (US Eastern,
+EST/EDT with DST) — **never** in Israel time (`Asia/Jerusalem`) and never in
+raw UTC. This is a standing preference and applies to **all** sessions,
+including Claude Code on the web.
+
+- Any time/date in prose you address to the user (chat replies, summaries,
+  explanations, reminders, task previews) is stated in New York time. When it
+  helps avoid ambiguity, label it (e.g. "14:00 ניו יורק").
+- When you write or review code that formats a date/time for the user, or
+  schedules something on the user's behalf (reminders, cron/`send_later`,
+  calendar events, task due dates shown in the UI), use `America/New_York`
+  as the display/target timezone unless the code deliberately needs UTC for
+  storage. Store timestamps in UTC as usual; convert to New York only at the
+  display / user-facing boundary.
+- If you're given a time without a zone from a user-facing context, assume
+  it's New York time.
+
+## Cost approval — explicit, up-front, non-negotiable
+
+**Any action that will spend the user's money requires the user's explicit,
+up-front approval of the estimated cost — every time.** This covers anything
+that consumes **paid API / LLM tokens billed to the user's services**
+(Anthropic, Voyage, Gemini, or any paid API), in particular when triggered on
+the backend — e.g. the smrtInfo extraction / `/info/extract/batch`, running the
+classifier or any summarizer manually, `quick-action`, or any batch/loop that
+racks up such calls. Before running such an action you MUST:
+
+1. State what it will do and which service gets billed.
+2. Give a concrete cost estimate — per-item **and** total.
+3. Wait for an explicit **"go"** on the cost. A generic "should I proceed?" is
+   NOT enough — the user must approve the **cost** specifically.
+
+Work the Claude Code **agent** does itself runs on the user's Claude
+subscription and is **not** billed as API tokens — that does not need cost
+approval. The line is **paid API/token spend billed to the user**. When unsure
+whether something costs money, assume it does and ask first.
+
+Why this rule exists: a large batch-extraction run and repeated backend LLM
+summaries were triggered without the user approving the spend. Standing
+instruction (2026-07): no money-spending action without explicit cost sign-off.
+
 ## smrtTask task-ingest mode (trigger-gated)
 
 If the user's first message in the session begins with the phrase
@@ -12,6 +68,103 @@ in that mode is to send the user an explicit acknowledgement that the
 file is active and that the rules apply (project matching, table
 preview, no DB writes without explicit approval). Do not invoke
 that flow unless the trigger phrase is present at the start.
+
+## smrtTask session proposals (Stop hook)
+
+**Requirement:** every Claude Code chat in this repo must leave a trace in
+smrtTask. When a chat here stops, a "הצעה" (proposal) is filed into the
+user's smrtTask inbox summarizing the session: the topic discussed, where it
+happened (repo / branch), a verbatim deep link back to the web chat, and a
+proposed next step to close the discussion/action.
+
+This is enforced by a **`Stop` hook**, not by Claude remembering to do it —
+the harness runs the hook on every turn-end, so it fires reliably even if the
+session ends abruptly. Claude following a CLAUDE.md line alone would be
+best-effort; the hook is the real mechanism. Moving parts:
+
+- **`.claude/settings.json`** → `hooks.Stop` runs
+  `.claude/hooks/smrttask-session-proposal.sh`.
+- **`.claude/hooks/smrttask-session-proposal.sh`** — the enforcer. Two free
+  mechanisms (no paid API tokens):
+  1. **Enforce the agent summary.** On the FIRST stop of a turn-cycle it emits
+     `{"decision":"block","reason":…}`, which the harness feeds back to the
+     agent as its next instruction: write a short Hebrew summary and run
+     `.claude/hooks/post-session-summary.sh`. The harness sets
+     `stop_hook_active=true` when it re-runs the hook after the agent
+     continued — that's the loop-guard, so it blocks **at most once** per
+     turn-cycle. This is what makes the summary reliable instead of
+     best-effort — a plain CLAUDE.md line was NOT firing (2026-07: proposals
+     were landing as the minimal placeholder because the agent never posted).
+  2. **Safety net.** On the second stop it fire-and-forgets a minimal metadata
+     trace (via `build-session-proposal.mjs`), detached so it never delays a
+     turn. So even a session where the agent failed to post still leaves a row.
+  Fully guarded: not a web session (`CLAUDE_CODE_REMOTE_SESSION_ID` unset),
+  or a missing secret / URL / `node`/`curl`/`jq`, makes it a no-op that
+  neither blocks nor fails a turn.
+- **`.claude/hooks/post-session-summary.sh`** — the helper the agent runs when
+  blocked. Takes `"<topic>" "<summary>" "<next_step>"` (or `--json <file>`),
+  resolves session/secret/URL/identity exactly like the Stop hook, builds the
+  body with `jq --arg` (safe escaping), and POSTs `{ topic, summary, next_step }`
+  so the backend enriches the SAME task. Prints the endpoint response so the
+  agent can confirm `"ok":true`. The summary is written by the agent on the
+  user's Claude subscription — ZERO paid API tokens.
+- **`.claude/hooks/build-session-proposal.mjs`** — builds the minimal safety-net
+  body. Derives everything from the environment: `session_id`/`session_url` from
+  `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_<slug>` →
+  `https://claude.ai/code/session_<slug>`), `user_email` from
+  `CLAUDE_CODE_USER_EMAIL`, `git_branch` from `.git/HEAD`, and a compact
+  transcript from `transcript_path` (metadata only — NO topic/summary).
+- **`POST /api/claude-session/proposal`** (server
+  `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
+  the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
+  JWT). Resolves the user → primary org → smrttask entitlement and **upserts one
+  task per session** keyed by the tag
+  `claude-session:<session_id>` (`task_type: "followup"`, `status: "inbox"`,
+  `priority: "low"`, `manually_verified: false`, the deep link in
+  `action_links`). Repeated Stop calls refresh the same task's content; a
+  status the user changed (archived/dismissed) is never overwritten.
+
+  **Cost model (changed 2026-07): the backend NEVER calls an LLM here.** The
+  chat summary is produced by the Claude Code **agent** (on the user's Claude
+  subscription — no API tokens) and passed in the request body as
+  `{ topic, summary, next_step }`. When those are absent (the safety-net
+  Stop-hook fallback), the endpoint files a **minimal no-AI trace** instead, and
+  a no-summary call never overwrites an existing agent-written summary (partial
+  update). So the flow is BOTH: the Stop hook's block step drives the agent to
+  post a real summary every turn-cycle; the safety-net trace guarantees a row
+  even if that post fails. Because the block re-fires each turn-cycle, the
+  summary refreshes to reflect the latest state of the chat (a few extra seconds
+  at each turn-end — the accepted trade for a $0, reliable summary).
+
+**Provisioning (one-time):** the endpoint lives on the **Express backend
+(Railway)**, not on the Next.js app at `app.smrtesy.com` (that host has no
+`/api/claude-session` route and would 404). Set two things in the Claude Code
+environment, copying the values from the Railway backend's service variables:
+- the shared secret — `SMRTBOT_INTERNAL_SECRET` (or `CRON_SECRET`). The backend
+  accepts either (`process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET`);
+  Railway currently provisions `SMRTBOT_INTERNAL_SECRET`, so copy that value.
+- the backend base URL — `SMRTESY_BACKEND_URL`, set to the value of the
+  backend's `SMRTESY_PUBLIC_URL` (same as the app's `NEXT_PUBLIC_BACKEND_URL`,
+  e.g. `https://<app>.up.railway.app`); the hook builds
+  `…/api/claude-session/proposal` from it. Or set the full
+  `SMRTTASK_PROPOSAL_URL` directly. Include the `https://` scheme — a
+  schemeless value makes curl use `http://`, which Railway 301-redirects and a
+  POST does not replay (the hook now normalizes a missing scheme to `https://`
+  and follows redirects, but set it correctly anyway).
+
+**Identity override (often required):** the endpoint files the proposal for the
+smrtesy *platform* account, which may differ from the Claude Code *login* email
+(e.g. a `@maor.org` Claude login vs a `@gmail.com` platform account). When they
+differ, set one of `SMRTTASK_USER_ID` (most robust — bypasses email lookup) or
+`SMRTTASK_USER_EMAIL` in the Claude Code environment; otherwise the hook sends
+`CLAUDE_CODE_USER_EMAIL` and the backend 404s with "user not found". The
+backend resolves email via a single `listUsers({ perPage: 1000 })` + local
+match (the repo's proven pattern; a paginated `{ page }` loop did not resolve).
+
+There is no baked-in URL default on purpose (a wrong host silently 404s every
+turn). A missing secret **or** URL makes the hook a silent no-op. The backend
+also hard-fails the auth check when neither secret env var is set, so an unset
+secret can never leave the route open.
 
 ## Push target — main by default
 
@@ -321,6 +474,18 @@ persisted, create a numbered file under `supabase/migrations/` named
 `YYYYMMDDHHMMSS_<slug>.sql` and tell the user to run it via Supabase
 CLI. Do not call `mcp__supabase__apply_migration` on a production
 project without explicit user authorization.
+
+## Planning / design docs — commit and share a GitHub link
+
+The user strongly prefers reading docs **on GitHub**, not in chat or as
+attachments. Whenever you author a substantial doc — a `docs/*-plan.md`,
+a design spec, an investigation write-up — **commit it to the repo and
+push**, then give the user the GitHub link to the file (on the branch you
+pushed to, e.g. `https://github.com/smrtesy/mrtesy-app/blob/<branch>/docs/<file>.md`).
+A docs-only commit doesn't need the full pre-push build protocol (it
+touches no code) — just commit and push. Do this by default for any plan
+you write for approval, so the user can read it comfortably before saying
+go.
 
 ## When the user is mid-onboarding and stuck
 

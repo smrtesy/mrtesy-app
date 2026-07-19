@@ -11,11 +11,12 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireFullTask } from "../lib/access";
 
 const router = Router();
 
 // Every reminder route requires auth + active org + smrtTask enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrttask"));
+router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 const UPDATABLE_FIELDS = new Set([
   "remind_at", "channel", "message", "message_he", "title_he",

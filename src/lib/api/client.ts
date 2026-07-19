@@ -191,3 +191,39 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   // Exhausted retries on repeated network failures.
   throw lastNetworkErr ?? new ApiError(0, "Network error");
 }
+
+/**
+ * Like `api()`, but returns the raw streaming `Response` instead of parsing the
+ * body — for endpoints that stream progress (NDJSON) rather than a single JSON
+ * payload. Attaches the same Authorization / X-Org-Id headers. The caller reads
+ * `res.body` itself; a non-OK status is thrown as an ApiError (with the parsed
+ * error body) before any streaming begins. Not retried (used for POSTs).
+ */
+export async function apiStream(path: string, opts: ApiOptions = {}): Promise<Response> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new ApiError(401, "Not authenticated");
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${session.access_token}`,
+    ...(opts.headers as Record<string, string> | undefined),
+  };
+  if (!opts.noOrg) {
+    const orgId = opts.orgId ?? await getActiveOrgId();
+    if (!orgId) throw new ApiError(400, "No active organization");
+    headers["X-Org-Id"] = orgId;
+  }
+
+  const res = await fetch(`${BACKEND}${path}`, {
+    ...opts,
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let json: unknown;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+    throw new ApiError(res.status, (json as { error?: string })?.error ?? `HTTP ${res.status}`, json);
+  }
+  return res;
+}
