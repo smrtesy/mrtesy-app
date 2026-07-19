@@ -1,0 +1,295 @@
+{
+  "_meta": {
+    "title": "מרשם-כללים מכונתי — smrtTrade (מקור-אמת יחיד למנוע הסריקה/יציאה)",
+    "purpose": "גרסה מכונתית של docs/stock-course-rulebook.md. מנוע הסריקה (T3.2) ומנוע היציאה (T5.1) נטענים מכאן; מנגנון הבטחת-הכיסוי מוודא כלל==מעריך==משבצת-פנקס. כלל בלי evaluator (מסוג computable) שאין לו מעריך בקוד → הבנייה נכשלת.",
+    "source_of_truth": "docs/stock-course-rulebook.md (192 כללים) + docs/stock-course-rules.raw.json (644 מופעים מאומתים)",
+    "status": "IN PROGRESS — קטגוריה יא הושלמה כדוגמת-ייחוס; 12 קטגוריות נותרו (א,ב,ג,ד,ה,ו,ז,ח,ט,י,יב,יג)",
+    "field_schema": {
+      "id": "מזהה ייחודי: אות-קטגוריה + מספר (למשל 'יא-3'). כלל-הנדסה שאינו בקורס: קידומת 'ENG-'.",
+      "category": "אות הקטגוריה בספר-הכללים (א..יג)",
+      "category_name": "שם הקטגוריה המלא",
+      "statement": "ניסוח הכלל (מתומצת מספר-הכללים)",
+      "type": "numeric | visual | procedural — תג-הסוג מספר-הכללים",
+      "applies_to": "מערך: filter | entry | exit | sizing | portfolio | timing — היכן הכלל פועל בצינור",
+      "gate": "boolean — האם הכלל חוסם החלטה (שער כניסה/יציאה) לעומת כלל-רקע/הנחיה",
+      "evaluable": "computable (מ-OHLCV/מצב) | vision (דורש תמונה) | manual (שיפוט אנושי/מודעות)",
+      "evaluator": "מפרט-בדיקה ל-computable: {inputs[], predicate}. null אם vision/manual. הקוד עצמו נבנה ב-T3.2/T5.1.",
+      "sources": "מערך מקורות (מספרי-שיעור / DOC-n) כפי שמופיעים בספר-הכללים",
+      "quote": "ציטוט מייצג מאומת מהמקור",
+      "source_status": "course (מצוטט-קורס) | engineering (תוספת הנדסית, לא בקורס) | half-course (עקרון בקורס, מכניזציה הנדסית) | designated-external (מקור חיצוני שהמשתמש הגדיר כמוסמך, למשל מסגרת שלמה)"
+    },
+    "notes": [
+      "applies_to יכול להכיל כמה ערכים (כלל שמשמש גם פילטר וגם יציאה).",
+      "evaluator.predicate כתוב כ-pseudo-DSL תיאורי; המימוש בפועל ב-T3.2/T5.1.",
+      "fail-closed: כלל gate מסוג computable שלא ניתן להערכה (חוסר דאטה) → UNKNOWN → המנוע לא מציע."
+    ]
+  },
+  "rules": [
+    {
+      "id": "יא-1",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופ עוקב: מעלים את הסטופ אל מתחת לכל שפל חדש — אך רק אחרי שנר סוגר/קופץ מעל הרמה",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["ohlc_series", "current_stop", "last_confirmed_swing_low", "position_direction"],
+        "predicate": "position_direction=='long' AND exists new_swing_low > prev_swing_low AND candle_closed_above(level) → raise stop to just-below(new_swing_low)"
+      },
+      "sources": [13, 34, 49, "DOC-15"],
+      "quote": "מעלים את הסטופ אל מתחת לכל שפל חדש, רק אחרי שנר סוגר מעל הרמה",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-2",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "הזזת הסטופ תמיד בכיוון העסקה בלבד ולעולם לא נגדה (בלונג רק מעלים)",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["proposed_stop", "current_stop", "position_direction"],
+        "predicate": "long: proposed_stop >= current_stop ; short: proposed_stop <= current_stop (אחרת נדחה)"
+      },
+      "sources": [14],
+      "quote": "הזזת הסטופ תמיד בכיוון העסקה בלבד ולעולם לא נגדה",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-3",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בהגעה ל-2 יחידות רווח העסקה 'כבר לא יכולה להפסיד': מזיזים סטופ ל-break-even או סוגרים חצי",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["profit_in_risk_units"],
+        "predicate": "profit_in_risk_units >= 2 → alert('סטופ ל-break-even או סגירת חצי')"
+      },
+      "sources": [34, 13],
+      "quote": "בהגעה ל-2 יחידות רווח... מזיזים סטופ לנקודת הכניסה או סוגרים חצי",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-4",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין להזיז ל-break-even / לצמצם סטופ מוקדם מדי — פולט מעסקאות טובות",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["profit_in_risk_units"],
+        "predicate": "guard: אין להמליץ break-even כל עוד profit_in_risk_units < 2 (מונע יא-3 מוקדם)"
+      },
+      "sources": [33, 28],
+      "quote": "אין להזיז ל-break-even או לצמצם סטופ מוקדם מדי — פולט מעסקאות טובות",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-5",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "מימוש חלקי ביעד/התנגדות: לפחות 50% (ולעיתים 75%), במיוחד אם המחזורים לא גדלו בעליות; משאירים שארית 10%–20% לרוץ (חוק פרטו)",
+      "type": "numeric",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["price_at_resistance", "volume_trend_on_up_moves", "profit_in_risk_units"],
+        "predicate": "profit_in_risk_units>=2 AND at_resistance: אם volume_trend דועך → המלץ ~50%; אם סיגנל-סגירה ממשי → ~75%; תמיד השאר 10-20% אלא אם שינוי-מגמה"
+      },
+      "sources": ["DOC-17", 45, 22, 49, 13],
+      "quote": "מחזורים יורדים בהגעה ל-C... לממש אולי 50% מהעסקה ולא להשאיר את הכל בפנים",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-6",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין לממש לפני הגעה ל-1:2; רק מ-1:2 מתחילים לממש חלקים (לפי הגרף, לא אוטומטית)",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["profit_in_risk_units"],
+        "predicate": "GATE: כל המלצת-מימוש חסומה כל עוד profit_in_risk_units < 2. מ-1:2 והלאה = שיפוט מונחה-סיגנל (לא אוטומטי)"
+      },
+      "sources": [49, "DOC-16"],
+      "quote": "לא לממש עסקה לפני שמגיעים ל-1 ל-2, רק ב-1 ל-2 אתם רשאים להתחיל לממש",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-7",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "יציאה מבנית: שבירת רמת השפל האחרונה כלפי מטה = שינוי מגמה, וסטופ אחד סוגר את כל העסקאות הפתוחות",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["ohlc_series", "last_swing_low", "position_direction"],
+        "predicate": "GATE(long): close < last_swing_low → יציאה מלאה (100%) של כל העסקאות בנכס"
+      },
+      "sources": [13, 45, 49],
+      "quote": "שבירת רמת השפל האחרונה כלפי מטה = שינוי מגמה, וסטופ אחד סוגר את כל העסקאות",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-8",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "יציאת מומנטום: בלונג — נר סוגר מתחת לנמוך הנר הקודם; בשורט — נר סוגר מעל הגבוה הקודם (ביקור בלבד אינו מספיק)",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["current_candle", "prev_candle", "position_direction"],
+        "predicate": "long: current.close < prev.low → יציאת-מומנטום ; short: current.close > prev.high. (נגיעה בלבד לא מספיקה — צריך סגירה)"
+      },
+      "sources": [40],
+      "quote": "בלונג — נר סוגר מתחת לנמוך הנר הקודם; ביקור בלבד אינו מספיק",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-9",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אף פעם לא סוגרים עסקה 'סתם' — יוצאים רק בסטופ או ביעד; המתנה בסבלנות, לא לצאת בהפסד נייר",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": ["DOC-18", 12, 29],
+      "quote": "אף פעם לא סוגרים עסקה סתם — יוצאים רק בסטופ או ביעד",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-10",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אינוולידציה: אם המחיר הגיע לסטופ — הרמה 'לא עבדה', יוצאים; אין הצדקה להישאר מעבר לכך",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["price", "stop_level", "position_direction"],
+        "predicate": "GATE(long): price <= stop_level → יציאה מלאה (אינוולידציה)"
+      },
+      "sources": [12],
+      "quote": "אם המחיר הגיע לסטופ — הרמה לא עבדה, יוצאים",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-11",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בספק ליד התנגדות משמעותית — סוגרים/מצמצמים; עדיף לקבע רווח מלהחזירו",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["price", "nearest_resistance", "profit_in_risk_units"],
+        "predicate": "profit_in_risk_units>=2 AND near(price, resistance) → המלץ מימוש חלקי/הידוק (עדיף לקבע רווח)"
+      },
+      "sources": [32],
+      "quote": "בספק ליד התנגדות משמעותית — סוגרים או מצמצמים; עדיף לקבע רווח מלהחזירו",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-12",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "תיק ההשקעות יכיל לכל היותר 15 מניות פעילות (שליטה ומניעת טעויות)",
+      "type": "numeric",
+      "applies_to": ["portfolio"],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["open_positions_count"],
+        "predicate": "GATE: אם open_positions_count >= 15 → חסום כניסה חדשה"
+      },
+      "sources": ["DOC-20"],
+      "quote": "תיק ההשקעות יכיל לכל היותר 15 מניות פעילות",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-13",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בדיקת סטופ שבועית: אחת לשבוע בודקים אם נוצר שפל חדש בשבועי ומעלים את הסטופ ל-~2% מתחתיו",
+      "type": "numeric",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["weekly_ohlc", "current_stop"],
+        "predicate": "weekly: exists new_weekly_swing_low > previous → alert('העלה סטופ ל-~2% מתחת לשפל השבועי')"
+      },
+      "sources": ["DOC-15"],
+      "quote": "אחת לשבוע בודקים אם נוצר שפל חדש בשבועי ומעלים את הסטופ ל-2% מתחתיו",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-14",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופ אחד משרת את כל העסקאות המצטברות באותו נכס",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["positions_in_asset"],
+        "predicate": "כל העסקאות באותו נכס מנוהלות תחת סטופ אחד משותף"
+      },
+      "sources": [49],
+      "quote": "סטופ אחד משרת את כל העסקאות המצטברות באותו נכס",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-15",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין לסגור לפני 2 יחידות רווח — אלא בסיבה יוצאת דופן (דוחות בימים הקרובים)",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": ["profit_in_risk_units", "earnings_within_days"],
+        "predicate": "אין המלצת-סגירה מלאה אם profit_in_risk_units < 2, אלא אם earnings_within_days <= 7 (חריג)"
+      },
+      "sources": ["DOC-16"],
+      "quote": "אין לסגור לפני 2 יחידות רווח, אלא בסיבה יוצאת דופן כמו דוחות",
+      "source_status": "course"
+    },
+    {
+      "id": "יא-16",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופלוס אינו מגן מפני פער-פתיחה (גאפ): אם נפתח למחרת ב-30%–50% מתחת לסטופ בזמן שהמסחר סגור — הסטופ לא מתבצע במחירו",
+      "type": "procedural",
+      "applies_to": ["exit"],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [15],
+      "quote": "סטופלוס אינו מגן מפני פער-פתיחה — הסטופ לא מתבצע במחירו",
+      "source_status": "course"
+    }
+  ]
+}
