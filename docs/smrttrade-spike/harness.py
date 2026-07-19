@@ -14,6 +14,7 @@
 import json, sys, os, time, urllib.request, datetime
 import numpy as np
 import indicators as I
+import levels as L
 
 CUTOFF = "2026-07-14"                       # חומת אי-דליפה: נקודת-בזמן, בלי הצצה קדימה
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,21 +65,34 @@ def build_context(ticker, daily, weekly, spy_ctx):
     price = dc[-1]
     d_trend, d_highs, d_lows = I.trend_structure(dh, dl, k=5)
     w_trend, w_highs, w_lows = I.trend_structure(wh, wl, k=3)
-    res = I.nearest_resistance(price, d_highs, max(dh))
-    sup = I.nearest_support(price, d_lows)
     macd_d, sig_d = I.macd(dc)
+    atr = I.atr(dh, dl, dc, 14)
     ath = max(dh)
+    # ── רמות משמעותיות (גלאי-אשכול) + סטאפ-כניסה אידיאלי ──
+    lv = L.levels(daily, weekly)
+    tgt = L.significant_target(lv)                 # התנגדות משמעותית מעל
+    sup_zone = L.significant_stop_support(lv)      # תמיכה משמעותית מתחת (יעד-פולבק)
+    res_c = tgt["center"] if tgt else None
+    sup_c = sup_zone["center"] if sup_zone else None
+    # סטאפ אידיאלי: כניסה בפולבק לתמיכה (ז-2: מעט מעל), סטופ מתחת עם אוויר-ATR
+    entry_ideal = sup_c * 1.005 if sup_c else None
+    stop_ideal = (sup_c - 0.25 * atr) if sup_c else None
+    rr_setup = None
+    if entry_ideal and stop_ideal and res_c and (entry_ideal - stop_ideal) > 0:
+        rr_setup = (res_c - entry_ideal) / (entry_ideal - stop_ideal)
+    at_support = sup_c is not None and price <= sup_c * 1.02   # המחיר כבר באזור-הכניסה
     ctx = dict(
         ticker=ticker, price=price, date=daily[-1][0],
         sma20=I.sma(dc, 20), sma50=I.sma(dc, 50), sma200=I.sma(dc, 200),
         rsi_d=I.rsi(dc, 14), rsi_w=I.rsi(wc, 14),
-        macd_d=macd_d, macd_sig_d=sig_d,
-        atr_d=I.atr(dh, dl, dc, 14),
+        macd_d=macd_d, macd_sig_d=sig_d, atr_d=atr,
         vol_avg20=float(np.mean(dv[-20:])) if len(dv) >= 20 else float(np.mean(dv)),
         d_trend=d_trend, w_trend=w_trend,
-        resistance=res, support=sup,
+        resistance=res_c, support=sup_c,
+        entry_ideal=entry_ideal, stop_ideal=stop_ideal, target_ideal=res_c,
+        rr_setup=rr_setup, at_support=at_support,
         ath=ath, pct_from_high=(price / ath - 1) * 100,
-        dist_to_res_pct=(res / price - 1) * 100 if res else None,
+        dist_to_res_pct=(res_c / price - 1) * 100 if res_c else None,
         n_candles=len(daily),
         spy_above_200=spy_ctx["above_200"] if spy_ctx else None,
     )
@@ -125,17 +139,13 @@ EVAL = {
 }
 
 def _rr(c, gate=False):
-    """יחס סיכוי/סיכון: יעד=התנגדות קרובה, סטופ=מתחת לתמיכה (או ATR)."""
-    price, res, sup, atr = c["price"], c["resistance"], c["support"], c["atr_d"]
-    stop = sup * 0.98 if sup and sup < price else price - 1.5 * atr
-    target = res if res and res > price else price + 3 * atr
-    risk = price - stop; reward = target - price
-    if risk <= 0:
-        return (NA, "אין סטופ תקף מתחת למחיר")
-    rr = reward / risk
-    ok = rr >= 2
-    txt = f"R:R≈1:{rr:.1f} (יעד {target:.1f} / סטופ {stop:.1f})"
-    return (P, txt) if ok else (F, txt + " < 1:2")
+    """יחס סיכוי/סיכון של הסטאפ: כניסה בפולבק לתמיכה, סטופ מתחתיה, יעד=התנגדות."""
+    rr = c.get("rr_setup")
+    if rr is None:
+        return (NA, "אין סטאפ תקף (חסרה תמיכה/התנגדות משמעותית)")
+    txt = (f"R:R≈1:{rr:.1f} (כניסה {c['entry_ideal']:.1f} / "
+           f"סטופ {c['stop_ideal']:.1f} / יעד {c['target_ideal']:.1f})")
+    return (P, txt) if rr >= 2 else (F, txt + " < 1:2")
 
 
 def decide(c, ledger):
@@ -154,16 +164,15 @@ def decide(c, ledger):
     # 3) צמוד להתנגדות → מעקב
     if st("ג-10") == F:
         return "מעקב", "צמוד להתנגדות — לא קונים לפני התנגדות (ג-10)"
-    # 4) יחס לא מספיק → מעקב
+    # 4) יחס-סטאפ לא מספיק → מעקב/הימנעות
     if st("י-3") == F:
-        return "מעקב", "יחס סיכוי/סיכון < 1:2 (י-3)"
-    # 5) מצב כניסה: פולבק בריא במגמה עולה + RSI סביר
-    entry_setup = st("ו-4") == P and st("ב-10") == P
-    if entry_setup and not spy_block:
-        return "כניסה", "פולבק בריא במגמה עולה, יחס≥1:2, לא צמוד להתנגדות"
+        return "מעקב", f"יחס-סטאפ < 1:2 (י-3) — {ledger['י-1'][1]}"
+    # 5) טריגר-כניסה: המחיר כבר באזור-הכניסה (פולבק לתמיכה) במגמה עולה
     if spy_block:
         return "מעקב", "השוק הכללי (SPY) לא תומך — כניסה מוקפאת"
-    return "מעקב", "מגמה תומכת אך אין טריגר-כניסה בשל כרגע"
+    if c["at_support"] and c["w_trend"] == "up":
+        return "כניסה", f"פולבק לתמיכה במגמה עולה, {ledger['י-1'][1]}"
+    return "מעקב", f"מגמה תומכת ויחס טוב, אך אין טריגר עדיין — ממתין לפולבק לכניסה {c['entry_ideal']:.1f}"
 
 
 def evaluate(reg, ctx):
