@@ -186,6 +186,24 @@ Deno.serve(async (req) => {
         suppressed++;
         continue;
       }
+      // Hybrid auto-close (option ג): a follow-up tracker whose matter was
+      // already recorded resolved must NOT bounce back into the inbox when its
+      // snooze expires — close it automatically instead of nagging. Guarded to
+      // task_type="followup" (system-generated trackers), never user cards.
+      if (task.task_type === "followup" && task.completion_signal_detected === true) {
+        const { error: autoCloseError } = await supabase.from("tasks").update({
+          snoozed_until: null,
+          status: "dismissed",
+          dismissal_reason_code: "auto_resolved",
+          dismissal_reason_text: "העניין נסגר — המעקב נסגר אוטומטית",
+          last_updated_reason: "followup_auto_resolved",
+          status_changed_at: now,
+          updated_at: now,
+        }).eq("id", task.id);
+        if (autoCloseError) console.error("tasks followup auto-close failed:", autoCloseError);
+        suppressed++;
+        continue;
+      }
       const { error: wakeError } = await supabase.from("tasks").update({
         snoozed_until: null,
         status: "inbox",
