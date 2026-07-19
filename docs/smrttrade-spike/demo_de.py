@@ -42,8 +42,15 @@ for z in lv["support"][:4]:
     ax.text(len(d) + 0.5, z["center"], f"{z['center']:.0f} (w{z['weight']})", color="#2e7d32", va="center", fontsize=8)
 ax.axhline(lv["price"], color="#1565c0", lw=1.4, ls="--", zorder=2)
 ax.text(0, lv["price"], f"price {lv['price']:.1f}", color="#1565c0", va="bottom", fontsize=9)
-ax.set_title(f"{TK} — daily (point-in-time to {H.CUTOFF}) with algorithmic levels")
-ax.set_xlabel("days"); ax.set_ylabel("price $"); ax.margins(x=0.02)
+# ── תאריכים אמיתיים על ציר-ה-X (חודש+יום) להשוואה מול גרף אמיתי ──
+dates = [r[0] for r in d]                      # 'YYYY-MM-DD'
+import datetime as _dt
+ticks = list(range(0, len(d), 10)) + [len(d) - 1]
+labels = [_dt.date.fromisoformat(dates[i]).strftime("%d %b") for i in ticks]  # e.g. 14 Jul
+ax.set_xticks(ticks); ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+ax.set_title(f"{TK} — daily  {dates[0]} → {dates[-1]}  (point-in-time, cutoff {H.CUTOFF})")
+ax.set_xlabel("date (day mon)"); ax.set_ylabel("price $"); ax.margins(x=0.02)
+ax.grid(axis="x", color="#eeeeee", lw=0.6, zorder=0)
 plt.tight_layout()
 out = "de_levels.png"
 plt.savefig(out, dpi=110)
