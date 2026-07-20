@@ -1,34 +1,58 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Plus, Trash2, Loader2, Play } from "lucide-react";
+import { Plus, Trash2, Loader2, Play, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api/client";
-import { useDayTool } from "@/hooks/useDayTools";
-import { useDayTools } from "@/hooks/useDayTools";
+import { useDayTool, useDayTools } from "@/hooks/useDayTools";
 import type { DailyReportItem } from "@/types/daily-report";
+
+/** Local editor item — carries a stable client-only key for drag-and-drop
+ *  (new items have no server id yet, so we can't sort on that). */
+type EditorItem = DailyReportItem & { _key: string };
 
 /**
  * The daily-report tool's config editor (revealed under its toggle in
  * DayToolsSettings). Lets the user define report questions + per-answer scores,
- * pick the period + delivery hour, and generate a report on demand. Compact by
- * default (docs/day-tools-plan.md UI principle) — one card, grows on add.
+ * reorder them by dragging, pick the period + delivery hour, and generate a
+ * report on demand. Compact by default (docs/day-tools-plan.md UI principle).
  */
 export function DailyReportSettings() {
   const t = useTranslations("dailyReport");
   const { config } = useDayTool("dailyreport");
   const { setToolConfig } = useDayTools();
 
-  const [items, setItems] = useState<DailyReportItem[]>([]);
+  const [items, setItems] = useState<EditorItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  // Stable keys for the sortable list (independent of server ids).
+  const keySeq = useRef(0);
+  const nextKey = () => `k${keySeq.current++}`;
 
   const period = typeof config.period === "string" ? config.period : "weekly";
   const reportHour = typeof config.report_hour === "number" ? config.report_hour : 8;
@@ -37,7 +61,7 @@ export function DailyReportSettings() {
     let alive = true;
     api<{ items: DailyReportItem[] }>("/api/daily-report/config")
       .then((res) => {
-        if (alive) setItems(res.items ?? []);
+        if (alive) setItems((res.items ?? []).map((it) => ({ ...it, _key: nextKey() })));
       })
       .catch(() => {
         if (alive) toast.error(t("loadError"));
@@ -50,9 +74,25 @@ export function DailyReportSettings() {
     };
   }, [t]);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setItems((prev) => {
+      const oldIndex = prev.findIndex((it) => it._key === active.id);
+      const newIndex = prev.findIndex((it) => it._key === over.id);
+      if (oldIndex < 0 || newIndex < 0) return prev;
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+  };
+
   // ── item/option editing (local state until Save) ──────────────────────────
   const addItem = () =>
-    setItems((prev) => [...prev, { label: "", options: [{ label: "", score: null }] }]);
+    setItems((prev) => [...prev, { _key: nextKey(), label: "", options: [{ label: "", score: null }] }]);
   const removeItem = (i: number) => setItems((prev) => prev.filter((_, idx) => idx !== i));
   const setItemLabel = (i: number, label: string) =>
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, label } : it)));
@@ -92,6 +132,7 @@ export function DailyReportSettings() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
+      // Array order = display order → the server derives `position` from it.
       const payload = {
         items: items
           .map((it) => ({
@@ -137,73 +178,79 @@ export function DailyReportSettings() {
 
   return (
     <div className="ms-1 space-y-4 border-s ps-3">
-      {/* Questions */}
+      {/* Questions — draggable to reorder */}
       <div className="space-y-3">
-        {items.map((item, i) => (
-          <div key={item.id ?? `new-${i}`} className="space-y-2 rounded-md border p-2">
-            <div className="flex items-center gap-2">
-              <Input
-                value={item.label}
-                placeholder={t("questionPlaceholder")}
-                dir="auto"
-                className="h-8 text-sm"
-                onChange={(e) => setItemLabel(i, e.target.value)}
-              />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8 shrink-0 text-muted-foreground"
-                aria-label={t("removeQuestion")}
-                onClick={() => removeItem(i)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext items={items.map((it) => it._key)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-3">
+              {items.map((item, i) => (
+                <SortableQuestion key={item._key} id={item._key} dragLabel={t("reorder")}>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={item.label}
+                      placeholder={t("questionPlaceholder")}
+                      dir="auto"
+                      className="h-8 text-sm"
+                      onChange={(e) => setItemLabel(i, e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 text-muted-foreground"
+                      aria-label={t("removeQuestion")}
+                      onClick={() => removeItem(i)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
 
-            <div className="space-y-1.5 ps-2">
-              {item.options.map((opt, j) => (
-                <div key={opt.id ?? `new-${j}`} className="flex items-center gap-2">
-                  <Input
-                    value={opt.label}
-                    placeholder={t("answerPlaceholder")}
-                    dir="auto"
-                    className="h-7 flex-1 text-sm"
-                    onChange={(e) => setOptionLabel(i, j, e.target.value)}
-                  />
-                  <Input
-                    value={opt.score ?? ""}
-                    placeholder={t("scorePlaceholder")}
-                    type="number"
-                    inputMode="numeric"
-                    className="h-7 w-20 text-sm"
-                    aria-label={t("scoreLabel")}
-                    onChange={(e) => setOptionScore(i, j, e.target.value)}
-                  />
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 shrink-0 text-muted-foreground"
-                    aria-label={t("removeAnswer")}
-                    onClick={() => removeOption(i, j)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                  <div className="space-y-1.5 ps-2">
+                    {item.options.map((opt, j) => (
+                      <div key={opt.id ?? `new-${j}`} className="flex items-center gap-2">
+                        <Input
+                          value={opt.label}
+                          placeholder={t("answerPlaceholder")}
+                          dir="auto"
+                          className="h-7 flex-1 text-sm"
+                          onChange={(e) => setOptionLabel(i, j, e.target.value)}
+                        />
+                        <Input
+                          value={opt.score ?? ""}
+                          placeholder={t("scorePlaceholder")}
+                          type="number"
+                          inputMode="numeric"
+                          className="h-7 w-20 text-sm"
+                          aria-label={t("scoreLabel")}
+                          onChange={(e) => setOptionScore(i, j, e.target.value)}
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 text-muted-foreground"
+                          aria-label={t("removeAnswer")}
+                          onClick={() => removeOption(i, j)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 text-xs text-muted-foreground"
+                      onClick={() => addOption(i)}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> {t("addAnswer")}
+                    </Button>
+                  </div>
+                </SortableQuestion>
               ))}
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-7 gap-1 text-xs text-muted-foreground"
-                onClick={() => addOption(i)}
-              >
-                <Plus className="h-3.5 w-3.5" /> {t("addAnswer")}
-              </Button>
             </div>
-          </div>
-        ))}
+          </SortableContext>
+        </DndContext>
 
         <Button type="button" size="sm" variant="outline" className="gap-1 text-xs" onClick={addItem}>
           <Plus className="h-3.5 w-3.5" /> {t("addQuestion")}
@@ -263,6 +310,30 @@ export function DailyReportSettings() {
           {t("generateNow")}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** One draggable question card: a grip handle (drag) + the question's editable
+ *  content. Mirrors the SortableDeskRow pattern in TaskList. */
+function SortableQuestion({ id, dragLabel, children }: { id: string; dragLabel: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
+      className="flex items-start gap-1 rounded-md border p-2"
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        type="button"
+        className="mt-1 shrink-0 touch-none cursor-grab text-muted-foreground/30 hover:text-muted-foreground active:cursor-grabbing"
+        aria-label={dragLabel}
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <div className="min-w-0 flex-1 space-y-2">{children}</div>
     </div>
   );
 }

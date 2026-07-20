@@ -1092,6 +1092,7 @@
     "addAnswer": "Add answer",
     "removeQuestion": "Remove question",
     "removeAnswer": "Remove answer",
+    "reorder": "Drag to reorder",
     "periodLabel": "Report period",
     "periodWeekly": "Weekly",
     "periodMonthly": "Monthly",
