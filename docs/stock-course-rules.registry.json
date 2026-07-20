@@ -22,7 +22,14 @@
       "applies_to יכול להכיל כמה ערכים (כלל שמשמש גם פילטר וגם יציאה).",
       "evaluator.predicate כתוב כ-pseudo-DSL תיאורי; המימוש בפועל ב-T3.2/T5.1.",
       "fail-closed: כלל gate מסוג computable שלא ניתן להערכה (חוסר דאטה) → UNKNOWN → המנוע לא מציע."
-    ]
+    ],
+    "scope_convention": "core = כללי הסווינג/ניתוח-טכני הרגילים (smrtTrade). report-cycles = מסחר על-פי הדוח-החודשי/גאן/סייקלים — מחוץ-לתחום כרגע, נשמר ולא נמחק. investing = השקעת-מדד ארוכת-טווח.",
+    "counts": {
+      "total": 192,
+      "core": 176,
+      "report-cycles": 15,
+      "investing": 1
+    }
   },
   "rules": [
     {
@@ -48,7 +55,8 @@
         36
       ],
       "quote": "שהשוו…שלהם יהיה מעל 300 מיליון… לא חברות קטנות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-2",
@@ -71,7 +79,8 @@
         37
       ],
       "quote": "אני רוצה מניות, ולהוציא תעודות סל החוצה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-3",
@@ -94,7 +103,8 @@
         36
       ],
       "quote": "נזדאק ו…ניו יורק סטוק אקסצ'יינג'… הוריד את כל המניות של האוטיסי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-4",
@@ -122,7 +132,8 @@
         7
       ],
       "quote": "מעל מיליון מניות נסחרות ביום",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-5",
@@ -145,7 +156,8 @@
         37
       ],
       "quote": "מעל חמישה דולרים… המסחר הממוצע היומי… מיליון וחצי דולר לכל הפחות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-6",
@@ -169,7 +181,8 @@
         30
       ],
       "quote": "ה-RSI שלהם נמצא מתחת או אפילו שווה ל-30… RSI של 14 יחידות זמן",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-7",
@@ -193,7 +206,8 @@
         32
       ],
       "quote": "כל מה שה-CCI נמצא בלו… מתחת ל-200",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-8",
@@ -219,7 +233,8 @@
         6
       ],
       "quote": "מתחת למכפיל… 25",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-9",
@@ -244,7 +259,8 @@
         37
       ],
       "quote": "מעל ה-200, אבל מתחת ל-50",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-10",
@@ -268,7 +284,8 @@
         36
       ],
       "quote": "המגמה השולטת היא מגמת ירידה ולכן לא מעניין אותי הרמה של השלושים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-11",
@@ -287,7 +304,8 @@
         36
       ],
       "quote": "התמקדות ב-40-50, לכל היותר 100 מניות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-12",
@@ -311,7 +329,8 @@
         18
       ],
       "quote": "המחזור היומי המינימלי הממוצע… לפחות 500 אלף שקל",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-13",
@@ -335,7 +354,8 @@
         10
       ],
       "quote": "אף פעם לא נקנה מנייה שרק הונפקה… אין לה גרף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-14",
@@ -359,7 +379,8 @@
         44
       ],
       "quote": "מקסימום 3 עסקאות תוך-יומיות בכל 5 ימי מסחר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-15",
@@ -378,7 +399,8 @@
         "DOC-02"
       ],
       "quote": "הבדיקה נערכת אך ורק על הגרף השבועי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-16",
@@ -397,7 +419,8 @@
         30
       ],
       "quote": "שיעור 29 הוא שיעור פסיכולוגיה — אין בו קריטריוני סינון מספריים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-17",
@@ -415,7 +438,8 @@
         13
       ],
       "quote": "השדה `Pattern = Channel` (ריק, ללא נטייה כלפי מעלה/מטה) מסמן מניה בדשדוש",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "א-18",
@@ -438,7 +462,8 @@
         13
       ],
       "quote": "`Mid = 2–10 מיליארד דולר` (מיליארד, לא מיליון — קטגוריית ה-Market Cap הבינונית של Finviz)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-1",
@@ -460,7 +485,8 @@
         28
       ],
       "quote": "מתחילים תמיד תמיד מטווח זמן גבוה יותר, לא מהגרף היומי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-2",
@@ -482,7 +508,8 @@
         24
       ],
       "quote": "הבנו את התבנית אבל אנחנו מחכים לראות את הגרף היומי... בואו נעבור לגרף היומי ונראה האם מדובר פה אכן בפריצה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-3",
@@ -512,7 +539,8 @@
         30
       ],
       "quote": "הלכנו עם המגמה השלטת… לא לקחנו שורט בכלל",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-4",
@@ -531,7 +559,8 @@
         11
       ],
       "quote": "סדרה עולה של רמות C עולות ורמות שפל עולות… השפל יכול להיות גם זהה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-5",
@@ -550,7 +579,8 @@
         11
       ],
       "quote": "נדרשות לפחות שתי נקודות כדי לדבר על סדרה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-6",
@@ -569,7 +599,8 @@
         10
       ],
       "quote": "בשתיהן נקודות C חייבות לעלות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-7",
@@ -588,7 +619,8 @@
         10
       ],
       "quote": "תבניות תחילת מגמת ירידה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-8",
@@ -607,7 +639,8 @@
         10
       ],
       "quote": "תבנית 'מוטציה'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-9",
@@ -632,7 +665,8 @@
         10
       ],
       "quote": "גל עליות שעולה מעל שיא (C) האחרון",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-10",
@@ -658,7 +692,8 @@
         8
       ],
       "quote": "מגמת עלייה נמשכת כל עוד רמת השפל האחרונה לא נשברה כלפי מטה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-11",
@@ -683,7 +718,8 @@
         10
       ],
       "quote": "היפוך מעלה→מטה מאושר בשבירת השפל האחרון",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-12",
@@ -702,7 +738,8 @@
         10
       ],
       "quote": "שפלים מתחילים לרדת (בעלייה) / שיאים מתחילים לעלות (בירידה)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-13",
@@ -721,7 +758,8 @@
         10
       ],
       "quote": "מגמה נחשבת נמשכת עד למתן סימנים מוחלטים להתהפכותה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-14",
@@ -739,7 +777,8 @@
         10
       ],
       "quote": "בנקודה שבה החל לטפס שוב נקבע השפל (בדיעבד)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-15",
@@ -757,7 +796,8 @@
         10
       ],
       "quote": "הארוכה = ראשית, הביניים = משנית, הקצרה = מינורית",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-16",
@@ -776,7 +816,8 @@
         10
       ],
       "quote": "מגמה ראשית נבחנת בגרף שבועי/חודשי; משכה חודשים ואף שנים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-17",
@@ -801,7 +842,8 @@
         10
       ],
       "quote": "2 שפלים עולים + 2 שיאים עולים במרחק ≥ 4 חודשים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-18",
@@ -820,7 +862,8 @@
         10
       ],
       "quote": "מגמה ראשית עולה נמשכת שנים; מגמה ראשית יורדת — כשנה עד שנתיים בלבד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-19",
@@ -846,7 +889,8 @@
         15
       ],
       "quote": "ניסיון פריצה לשיא חדש המרוחק ≥ 3 חודשים מהשיא הקודם, שנכשל ומתחיל לרדת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-20",
@@ -864,7 +908,8 @@
         10
       ],
       "quote": "קריטריוני זיהוי המגמה זהים בכל טיים-פריים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-21",
@@ -889,7 +934,8 @@
         11
       ],
       "quote": "שינוי מגמה לעלייה מאושר רק בפריצה מעל נקודת C האחרונה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-22",
@@ -909,7 +955,8 @@
         5
       ],
       "quote": "במגמת ירידה שולטת אין לתפוס 'סכין נופלת'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-23",
@@ -934,7 +981,8 @@
         8
       ],
       "quote": "דיברגנס בין מדדים דומים… = אזהרת שינוי מגמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ב-24",
@@ -953,7 +1001,8 @@
         7
       ],
       "quote": "מזהים מי חזק — קונים או מוכרים — ומצטרפים לצד החזק",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-1",
@@ -977,7 +1026,8 @@
         11
       ],
       "quote": "רמת תמיכה = אזור מתחת למחיר שבו ביקוש בלם ירידה; רמת התנגדות = אזור מעל המחיר שבו היצע בלם עלייה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-2",
@@ -996,7 +1046,8 @@
         10
       ],
       "quote": "במגמת עלייה כל שפל = תמיכה; כל שיא (C) = התנגדות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-3",
@@ -1015,7 +1066,8 @@
         11
       ],
       "quote": "במגמת עלייה התמיכות לא אמורות להישבר; במגמת ירידה הן נשברות בסוף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-4",
@@ -1034,7 +1086,8 @@
         11
       ],
       "quote": "במגמת ירידה ההתנגדויות לא אמורות להיפרץ; במגמת עלייה הן נפרצות בסוף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-5",
@@ -1058,7 +1111,8 @@
         11
       ],
       "quote": "עוצמת רמה עולה עם הטיים-פריים: חודשי > שבועי > יומי > דקה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-6",
@@ -1082,7 +1136,8 @@
         11
       ],
       "quote": "עוצמת רמה עולה עם מספר הנגיעות: יותר נגיעות = רמה חזקה יותר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-7",
@@ -1110,7 +1165,8 @@
         43
       ],
       "quote": "החלפת תפקידים: התנגדות שנפרצה 'אמורה' (לא 'חייבת') להפוך לתמיכה, ותמיכה שנשברה — להתנגדות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-8",
@@ -1128,7 +1184,8 @@
         11
       ],
       "quote": "חזרת המחיר לרמה שהחליפה תפקיד וקפיצה ממנה — סבירה ב-> 50% מהמקרים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-9",
@@ -1154,7 +1211,8 @@
         11
       ],
       "quote": "רמה נחשבת שבורה רק בסגירת נר מעבר לה — מחכים לסוף הנר, לא יוצאים על נגיעה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-10",
@@ -1178,7 +1236,8 @@
         11
       ],
       "quote": "אין לקנות לפני רמת התנגדות (סיכון מיותר)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-11",
@@ -1196,7 +1255,8 @@
         11
       ],
       "quote": "רמה משמעותית = נקודה בולטת וברורה על הגרף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-12",
@@ -1214,7 +1274,8 @@
         11
       ],
       "quote": "לרמות חזקות מסמנים את גוף הנרות (לא רק את הפתיל); האזור בין גוף לפתיל נחשב אזור הרמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-13",
@@ -1232,7 +1293,8 @@
         11
       ],
       "quote": "קו מגמה: במגמת עלייה מחבר שפלים עולים; במגמת ירידה מחבר שיאים יורדים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-14",
@@ -1256,7 +1318,8 @@
         11
       ],
       "quote": "תוקף קו מגמה: 2 נקודות למתיחה + נגיעה שלישית שבה הקו מחזיק לאימות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-15",
@@ -1275,7 +1338,8 @@
         11
       ],
       "quote": "שבירת קו מגמה אינה מעידה בהכרח על שינוי מגמה — ייתכן רק התמתנות שיפוע",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-16",
@@ -1300,7 +1364,8 @@
         11
       ],
       "quote": "קו מגמה שקיבל תוקף ונפרץ מחליף תפקיד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-17",
@@ -1318,7 +1383,8 @@
         11
       ],
       "quote": "שיפוע קו המגמה = תשואה ליחידת זמן; תלול יותר = מומנטום חזק יותר אך לא בר-קיימא",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ג-18",
@@ -1341,7 +1407,8 @@
         38
       ],
       "quote": "מספרים עגולים (50/100/200) משמשים תמיכה/התנגדות; בקנייה על מספר עגול קונים מעט מעליו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-1",
@@ -1360,7 +1427,8 @@
         7
       ],
       "quote": "נכנסים רק לתבניות מוכרות בהסתברות > 60%, אחרת נשארים בחוץ",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-2",
@@ -1388,7 +1456,8 @@
         13
       ],
       "quote": "בדשדוש נכנסים בנגיעה ה-3, אבל במגמת עלייה נכנסים כבר בחזרה לרמת התמיכה (נגיעה 2)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-3",
@@ -1407,7 +1476,8 @@
         12
       ],
       "quote": "תבנית N / מ = דשדוש; היא המינימום הנדרש לכניסת לונג",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-4",
@@ -1431,7 +1501,8 @@
         16
       ],
       "quote": "יעד פריצת דשדוש (מינימלי) = עומק הדשדוש באחוזים, מוקרן מנקודת הפריצה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-5",
@@ -1456,7 +1527,8 @@
         16
       ],
       "quote": "יעד פריצת תבנית N (מינימלי) = לפחות גודל הרגל הקודמת, או עד ההתנגדות ההיסטורית הבאה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-6",
@@ -1476,7 +1548,8 @@
         22
       ],
       "quote": "ראש וכתפיים: מאושרת רק בשבירת קו הצוואר כלפי מטה; יעד = מרחק ראש-צוואר מוקרן מטה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-7",
@@ -1496,7 +1569,8 @@
         22
       ],
       "quote": "משולש סימטרי: אין תמיכה ברורה; בפריצה חובה מחזור גבוה, סטופ מתחת לקו המגמה שנפרץ",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-8",
@@ -1520,7 +1594,8 @@
         24
       ],
       "quote": "משולש עולה (שורי): יעד הרווח = גובה בסיס המשולש",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-9",
@@ -1539,7 +1614,8 @@
         24
       ],
       "quote": "ספל וידית: מתזמנים כניסה בתוך הידית ע\"י ירידה לטיים-פריים נמוך",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-10",
@@ -1558,7 +1634,8 @@
         23
       ],
       "quote": "חמישה סוגים — רגיל, פריצה, בריחה, מיצוי, ארביטראז'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-11",
@@ -1577,7 +1654,8 @@
         23
       ],
       "quote": "יום/שבוע היפוך: שיא חדש ואז סגירה נמוכה יותר (או שפל חדש וסגירה גבוהה יותר)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-12",
@@ -1603,7 +1681,8 @@
         22
       ],
       "quote": "תיקון טכני בריא = ביטול 38%–62% מהמהלך הקודם",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-13",
@@ -1628,7 +1707,8 @@
         15
       ],
       "quote": "פולבק ~1–3% / 2–5 ימים · קורקשן ~8–10% / ימים-חודש · רטרסמנט ~10–25% / שבועות-חודשים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-14",
@@ -1654,7 +1734,8 @@
         22
       ],
       "quote": "ניקוי 100% מהגל האחרון (בד\"כ במחזור גבוה) = איפוך מגמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-15",
@@ -1673,7 +1754,8 @@
         15
       ],
       "quote": "סיום תיקון → תנועה שמחדשת את המגמה מעבר ל-C (בעלייה) / לשפל (בירידה)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ד-16",
@@ -1691,7 +1773,8 @@
         23
       ],
       "quote": "פערים לסחר תוך-יומי מתאימים למתקדמים בלבד; לא מומלץ למתחילים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-1",
@@ -1709,7 +1792,8 @@
         9
       ],
       "quote": "מנתחים אך ורק בגרף נרות יפניים; סקאלה לוגריתמית לטווחי זמן ארוכים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-2",
@@ -1727,7 +1811,8 @@
         9
       ],
       "quote": "משמעות נר בודד עולה כשהוא מגיע באזור משמעותי (תמיכה/התנגדות)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-3",
@@ -1747,7 +1832,8 @@
         52
       ],
       "quote": "רק לאחר נר ירוק אפשר לקנות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-4",
@@ -1765,7 +1851,8 @@
         9
       ],
       "quote": "בליעה... מרובוזו... דוג'י/ספינינג... פטיש/Hanging Man, שוטינג סטאר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-5",
@@ -1791,7 +1878,8 @@
         24
       ],
       "quote": "כללי נמ\"ס במצטבר: נר בריא + מחזור גבוה + סגירה... אם תנאי אחד חסר — פריצת שווא/חשודה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-6",
@@ -1817,7 +1905,8 @@
         16
       ],
       "quote": "פריצה 'סבירה' = כ-1%–3% מעל הרמה; לא רודפים פריצה שקפצה חזק מדי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-7",
@@ -1835,7 +1924,8 @@
         24
       ],
       "quote": "כניסת ריטסט עדיפה על כניסה בפריצה — מחיר טוב יותר, סטופ קרוב יותר, יעד גדול יותר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-8",
@@ -1860,7 +1950,8 @@
         30
       ],
       "quote": "כל עוד לא עברו ארבעה נרות מלאים... ורק אם יחזור זה יהיה נר החמישי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-9",
@@ -1883,7 +1974,8 @@
         49
       ],
       "quote": "פיבונאצ'י לכניסת ריטסט: 38 / 50 / 62; 62% הוא האזור המועדף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-10",
@@ -1901,7 +1993,8 @@
         "DOC-06"
       ],
       "quote": "אזור קונפלואנס טכני לכניסה: ממוצע נע תומך, רצועת בולינגר תחתונה, RSI ו-CCI במכירת-יתר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-11",
@@ -1928,7 +2021,8 @@
         8
       ],
       "quote": "מחזור המסחר חייב תמיד לאשר את המגמה: כל C חדש בעלייה במחזור גבוה מקודמו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-12",
@@ -1956,7 +2050,8 @@
         30
       ],
       "quote": "מותר לקנות נר אדום על רמת תמיכה... אם הנר האדום במחזור גבוה מהממוצע — מחכים לנר ירוק",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-13",
@@ -1976,7 +2071,8 @@
         18
       ],
       "quote": "דיברגנס מחיר/מחזור (מחיר לשיא חדש אך מחזור מתכווץ) = דגל אדום",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-14",
@@ -1995,7 +2091,8 @@
         22
       ],
       "quote": "אין להמתין אינסוף לריטסט — לא תמיד המחיר חוזר לרמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-15",
@@ -2014,7 +2111,8 @@
         9
       ],
       "quote": "Dark Cloud... נר שנפתח גבוה, סוגר נמוך ואוכל ≥ 50% מגוף הנר הקודם — אות לחולשה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-16",
@@ -2033,7 +2131,8 @@
         9
       ],
       "quote": "Bearish Harami... נר קטן שגופו בלוע בתוך גוף הנר (העולה) הקודם",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-17",
@@ -2052,7 +2151,8 @@
         9
       ],
       "quote": "Bearish Kicker: נר שנפתח משמעותית מתחת לסגירה הקודמת ויורד חד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-18",
@@ -2071,7 +2171,8 @@
         9
       ],
       "quote": "Tweezer Top... נר ירידה שמתחיל בראש (הגבוה) של הנר הקודם ויורד מתחתיו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ה-19",
@@ -2090,7 +2191,8 @@
         9
       ],
       "quote": "Dragonfly Doji... דוג'י עם פתיל תחתון ארוך וגוף זעיר בראשו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-1",
@@ -2115,7 +2217,8 @@
         30
       ],
       "quote": "RSI: סקלה 0–100; קו אמצע 50, עליון 70 (קניית-יתר), תחתון 30 (מכירת-יתר); ברירת מחדל 14 יחידות זמן",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-2",
@@ -2140,7 +2243,8 @@
         26
       ],
       "quote": "RSI לפי מגמה: בעלייה ראשית לרוב מעל 50 ומתקשה לרדת ל-30 (ובחלק מהזמן מעל 70); בירידה — הפוך",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-3",
@@ -2160,7 +2264,8 @@
         26
       ],
       "quote": "סטיות RSI: שלילית (מחיר שיא עולה, RSI שיא יורד) = אות היפוך מטה; חיובית (מחיר שפל יורד, RSI שפל עולה) = אות היפוך מעלה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-4",
@@ -2186,7 +2291,8 @@
         30
       ],
       "quote": "כניסה על RSI רק עם המגמה: מכירת-יתר במגמה עולה / קניית-יתר במגמה יורדת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-5",
@@ -2212,7 +2318,8 @@
         25
       ],
       "quote": "MACD = הפרש EMA מהיר (12) ואיטי (26) + קו איתות; מתחת לגרף המחירים; שייך למתנדים עוקבי-מגמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-6",
@@ -2231,7 +2338,8 @@
         25
       ],
       "quote": "שלושה סוגי איתות MACD: (1) חציית קו הפעולה (2) חציית קו האפס (3) סטיות (דיברגנס)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-7",
@@ -2251,7 +2359,8 @@
         25
       ],
       "quote": "MACD מאשר עוצמת מגמה כל עוד נע בכיוונה; מרחק גדל בין MACD לקו הפעולה = התחזקות; סטיות בגרף שבועי/חודשי משמעותיות יותר ועשויות לרמז על מפולת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-8",
@@ -2277,7 +2386,8 @@
         33
       ],
       "quote": "רצועות בולינגר: קו אמצע = SMA(20), רצועות ±2 סטיות תקן; מודדות תנודתיות בלבד — לא מנבאות כיוון/מועד פריצה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-9",
@@ -2304,7 +2414,8 @@
         28
       ],
       "quote": "בולינגר לפי מגמה + אסטרטגיה: מגמה בשבועי → כניסה ביומי כשהמחיר נוגע ברצועה התחתונה (לונג) / העליונה (שורט)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-10",
@@ -2329,7 +2440,8 @@
         33
       ],
       "quote": "קנייה בנגיעה ברצועה התחתונה במגמת עלייה: אחוזי הצלחה ~67–70%",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-11",
@@ -2353,7 +2465,8 @@
         32
       ],
       "quote": "CCI: ברירת מחדל 20; אינו מוגבל; רמות קיצון ±100 ו-±200 (למניות תנודתיות ±200)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-12",
@@ -2378,7 +2491,8 @@
         24
       ],
       "quote": "ממוצעים נעים: ממוצע עולה = מגמת עלייה; חיתוך קצר מעל ארוך = כניסה, מתחת = יציאה; יעילים בשוק מגמתי, לא בשוק משדשד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-13",
@@ -2408,7 +2522,8 @@
         "DOC-33"
       ],
       "quote": "אסטרטגיית EMA 5/13 (גרף חודשי, מדד): כניסה בסוף חודש כשהקצר חוצה את הארוך מלמטה מעלה; יציאה בחיתוך מטה; הימנעות מוחלטת משורט",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-14",
@@ -2433,7 +2548,8 @@
         24
       ],
       "quote": "VWAP: מתאפס יומית; מחיר מתחת = 'זול', מעל = 'יקר'; שימושי בעיקר תוך-יומי (15 דקות ומטה)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-15",
@@ -2459,7 +2575,8 @@
         31
       ],
       "quote": "ATR(14) (ממוצע טווח גבוה-נמוך) לכיול גודל הסטופ; סטופ בגודל ATR שלם מהרמה נחשב רחב מדי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-16",
@@ -2483,7 +2600,8 @@
         31
       ],
       "quote": "אינדיקטור D9 (DeMark): נר נספר כשסגירתו גבוהה מסגירת הנר 4 יחידות לפניו; בהגעה ל-9 השוק מתוח וצפוי היפוך",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-17",
@@ -2502,7 +2620,8 @@
         28
       ],
       "quote": "סדר עבודה: קוראים תנועת מחיר על גרף ריק לפני הוספת אינדיקטורים; משלבים כמה כלים (בולינגר + RSI + CCI + פיבונאצ'י)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ו-18",
@@ -2524,7 +2643,8 @@
         28
       ],
       "quote": "שום אינדיקטור אינו כלי בלעדי — כולם תומכי-החלטה ומשולבים עם ניתוח רמות וניהול סיכונים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-1",
@@ -2544,7 +2664,8 @@
         "DOC-08"
       ],
       "quote": "פקודת כניסה = Buy Limit עם סכום העסקה המחושב מראש, מוזנת למערכת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-2",
@@ -2570,7 +2691,8 @@
         49
       ],
       "quote": "לא נכנסים בדיוק על הרמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-3",
@@ -2598,7 +2720,8 @@
         16
       ],
       "quote": "הזנת התראה ~2%–5% מעל/לפני הרמה במקום מעקב ידני יומי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-4",
@@ -2616,7 +2739,8 @@
         "DOC-09"
       ],
       "quote": "עדיף התראה על הוראה עתידית קבועה — הוראה עתידית 'משעבדת' את הסכום",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-5",
@@ -2640,7 +2764,8 @@
         16
       ],
       "quote": "כניסה בפריצה: התראה/הוראה 2% מעל נקודת C",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-6",
@@ -2659,7 +2784,8 @@
         52
       ],
       "quote": "אל תרדוף אחרי המחיר — תן למחיר לחזור אליך",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-7",
@@ -2677,7 +2803,8 @@
         24
       ],
       "quote": "כניסה אגרסיבית על קו מגמה: ממתינים תחילה לנר ירוק כאישור",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ז-8",
@@ -2696,7 +2823,8 @@
         "שיעור-קורס 4"
       ],
       "quote": "ארבעת סוגי הפקודות: Buy Stop = קנייה כשהמחיר עולה מעל מחיר נתון",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-1",
@@ -2725,7 +2853,8 @@
         "DOC-23"
       ],
       "quote": "תמיד לקבוע סטופלוס מוגדר מראש במערכת בכל עסקה — לעולם לא להיכנס בלי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-2",
@@ -2753,7 +2882,8 @@
         13
       ],
       "quote": "מתחת לרמת התמיכה (לונג) / מעל ההתנגדות (שורט), עם מרווח 'אוויר'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-3",
@@ -2772,7 +2902,8 @@
         49
       ],
       "quote": "לא קרוב מדי (נתפס ופולט) ולא רחוק מדי (הורס את יחס הסיכוי/סיכון)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-4",
@@ -2796,7 +2927,8 @@
         12
       ],
       "quote": "שבועי ~10%–25% (לעיתים 6% מספיק) · יומי 5%–10% · 4 שעות 0.5%–5% · שעתי 0.5%–2%",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-5",
@@ -2821,7 +2953,8 @@
         "DOC-10"
       ],
       "quote": "בגרף שבועי: מיקום ~0.5%–1% מעבר לרמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-6",
@@ -2845,7 +2978,8 @@
         12
       ],
       "quote": "כיול לפי ATR(14); סטופ בגודל ATR שלם מהרמה = רחב מדי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-7",
@@ -2870,7 +3004,8 @@
         14
       ],
       "quote": "מרווח מומלץ לסטופ עוקב מתחת לשפל: יומי 2%–3% · שבועי 5% · 4 שעות 1%–2% · שעתי 0.5%",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ח-8",
@@ -2895,7 +3030,8 @@
         40
       ],
       "quote": "בכניסת מומנטום: סטופ קצר מתחת לנמוך של נר-הכניסה עצמו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "ט-1",
@@ -2929,7 +3065,8 @@
         "שיעור-קורס-5"
       ],
       "quote": "יחידת סיכון = 1% משווי התיק לעסקה בודדת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-2",
@@ -2956,7 +3093,8 @@
         43
       ],
       "quote": "נוסחת גודל פוזיציה = סכום הסיכון בדולרים ÷ אחוז הסטופלוס",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-3",
@@ -2979,7 +3117,8 @@
         8
       ],
       "quote": "מחשבים מחדש את ה-1% על שווי התיק העדכני",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-4",
@@ -3002,7 +3141,8 @@
         34
       ],
       "quote": "מקסימום 2 יחידות סיכון לעסקה בודדת — אין לחרוג",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-5",
@@ -3027,7 +3167,8 @@
         8
       ],
       "quote": "סטופ גדול מותר רק אם פוטנציאל הרווח ≥ פי 2 מהסטופ",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-6",
@@ -3053,7 +3194,8 @@
         33
       ],
       "quote": "פיצול כניסה לשתי רמות קרובות = חצי יחידת סיכון כל אחת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-7",
@@ -3073,7 +3215,8 @@
         "שיעור-קורס-3"
       ],
       "quote": "אין מינוף עד רווחיות עקבית לאורך זמן ... בשנה הראשונה סוחרים ללא מינוף",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-8",
@@ -3098,7 +3241,8 @@
         "שיעור-קורס-3"
       ],
       "quote": "מגבלת מינוף ברוקר אמריקאי: עד פי 2 מהחשבון; תוך-יומי עד פי 4",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-9",
@@ -3117,7 +3261,8 @@
         "DOC-25"
       ],
       "quote": "מינוף מוגזם הוא 'פצצה מתקתקת' שיכולה למחוק חשבון בטעות אחת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-10",
@@ -3142,7 +3287,8 @@
         34
       ],
       "quote": "הזליגה המקסימלית מעבר לסטופ = עוד יחידת סיכון בלבד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-11",
@@ -3164,7 +3310,8 @@
         "DOC-28"
       ],
       "quote": "היערכות מראש ל-10 (עד 20) עסקאות מופסדות ברצף מבלי להימחק",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-12",
@@ -3183,7 +3330,8 @@
         34
       ],
       "quote": "אסימטריית רווח/הפסד: הפסד 50% מחייב עלייה 100% לחזרה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "ט-13",
@@ -3202,7 +3350,8 @@
         43
       ],
       "quote": "סיכון פר-עסקה מוגדר בכלי הפוזיציה (TradingView) — כמות המניות נגזרת אוטומטית",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-1",
@@ -3238,7 +3387,8 @@
         "DOC-12"
       ],
       "quote": "יחס סיכון:סיכוי מינימלי 1:2 — יעד הרווח לפחות פי 2 מגודל הסטופ",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-2",
@@ -3263,7 +3413,8 @@
         32
       ],
       "quote": "רצוי לשאוף ל-1:3 עד 1:5",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-3",
@@ -3290,7 +3441,8 @@
         "DOC-11"
       ],
       "quote": "אם השוק לא יכול להגיע ל-1:2 (למשל התנגדות קרובה) — מוותרים על העסקה מלכתחילה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-4",
@@ -3308,7 +3460,8 @@
         13
       ],
       "quote": "עם יחס 1:2, גם 50% הצלחה מניב רווח",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-5",
@@ -3326,7 +3479,8 @@
         22
       ],
       "quote": "לא משנים את הכלל בגלל היוצא מן הכלל",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-6",
@@ -3345,7 +3499,8 @@
         52
       ],
       "quote": "לא מזינים טייק-פרופיט אוטומטי — נותנים למניה לרוץ",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "י-7",
@@ -3365,7 +3520,8 @@
         40
       ],
       "quote": "מטרת תשואה: ~20%–24% שנתי בממוצע",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-1",
@@ -3394,7 +3550,8 @@
         "DOC-15"
       ],
       "quote": "מעלים את הסטופ אל מתחת לכל שפל חדש, רק אחרי שנר סוגר מעל הרמה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-2",
@@ -3419,7 +3576,8 @@
         14
       ],
       "quote": "הזזת הסטופ תמיד בכיוון העסקה בלבד ולעולם לא נגדה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-3",
@@ -3443,7 +3601,8 @@
         13
       ],
       "quote": "בהגעה ל-2 יחידות רווח... מזיזים סטופ לנקודת הכניסה או סוגרים חצי",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-4",
@@ -3467,7 +3626,8 @@
         28
       ],
       "quote": "אין להזיז ל-break-even או לצמצם סטופ מוקדם מדי — פולט מעסקאות טובות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-5",
@@ -3496,7 +3656,8 @@
         13
       ],
       "quote": "מחזורים יורדים בהגעה ל-C... לממש אולי 50% מהעסקה ולא להשאיר את הכל בפנים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-6",
@@ -3520,7 +3681,8 @@
         "DOC-16"
       ],
       "quote": "לא לממש עסקה לפני שמגיעים ל-1 ל-2, רק ב-1 ל-2 אתם רשאים להתחיל לממש",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-7",
@@ -3547,7 +3709,8 @@
         49
       ],
       "quote": "שבירת רמת השפל האחרונה כלפי מטה = שינוי מגמה, וסטופ אחד סוגר את כל העסקאות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-8",
@@ -3572,7 +3735,8 @@
         40
       ],
       "quote": "בלונג — נר סוגר מתחת לנמוך הנר הקודם; ביקור בלבד אינו מספיק",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יא-9",
@@ -3592,7 +3756,8 @@
         29
       ],
       "quote": "אף פעם לא סוגרים עסקה סתם — יוצאים רק בסטופ או ביעד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-10",
@@ -3617,7 +3782,8 @@
         12
       ],
       "quote": "אם המחיר הגיע לסטופ — הרמה לא עבדה, יוצאים",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-11",
@@ -3642,7 +3808,8 @@
         32
       ],
       "quote": "בספק ליד התנגדות משמעותית — סוגרים או מצמצמים; עדיף לקבע רווח מלהחזירו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-12",
@@ -3665,7 +3832,8 @@
         "DOC-20"
       ],
       "quote": "תיק ההשקעות יכיל לכל היותר 15 מניות פעילות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-13",
@@ -3689,7 +3857,8 @@
         "DOC-15"
       ],
       "quote": "אחת לשבוע בודקים אם נוצר שפל חדש בשבועי ומעלים את הסטופ ל-2% מתחתיו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-14",
@@ -3712,7 +3881,8 @@
         49
       ],
       "quote": "סטופ אחד משרת את כל העסקאות המצטברות באותו נכס",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-15",
@@ -3736,7 +3906,8 @@
         "DOC-16"
       ],
       "quote": "אין לסגור לפני 2 יחידות רווח, אלא בסיבה יוצאת דופן כמו דוחות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יא-16",
@@ -3754,7 +3925,8 @@
         15
       ],
       "quote": "סטופלוס אינו מגן מפני פער-פתיחה — הסטופ לא מתבצע במחירו",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יב-1",
@@ -3781,7 +3953,8 @@
         "DOC-16"
       ],
       "quote": "לא נכנסים לפוזיציה בזמן הודעות כלכליות משמעותיות (ריבית, אינפלציה, תעסוקה) או דוחות כספיים של המניה — בודקים ביומן האירועים והדוחות מראש",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יב-2",
@@ -3800,7 +3973,8 @@
         31
       ],
       "quote": "שיא שבועי ביום שישי → צפה לשבוע גבוה יותר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-3",
@@ -3827,7 +4001,8 @@
         31
       ],
       "quote": "חציית שיא ארבעת השבועות האחרונים = אינדיקציה מוקדמת למחירים גבוהים יותר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-4",
@@ -3853,7 +4028,8 @@
         31
       ],
       "quote": "עלייה של 100 נקודות או 100% מרמת התחלה (המוקדם) עלולה לשמש התנגדות, גם ללא סיבה טכנית",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-5",
@@ -3879,7 +4055,8 @@
         31
       ],
       "quote": "ירידה של 50% מהשיא = תמיכה חזקה; מנייה מתחת ל-50% מהשיא אינה איכותית, ויעדה הבא -75%",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-6",
@@ -3904,7 +4081,8 @@
         3
       ],
       "quote": "מדד אמריקאי שיורד ~50% = הזדמנות קנייה — היסטורית שום מדד אמריקאי לא ירד מעבר ל-56%",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-7",
@@ -3922,7 +4100,8 @@
         38
       ],
       "quote": "מחזור 154 חודשים בין נקודות קיצון; מחזור 7 שנים (84 ח') ושבריו; שנת שמיטה — ב-83% מהמקרים השוק ירד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-8",
@@ -3942,7 +4121,8 @@
         39
       ],
       "quote": "מודדים מרווח בין שתי נקודות קיצון ומקרינים קדימה מכל קיצון חדש; סטייה מותרת של יחידת זמן אחת",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-9",
@@ -3962,7 +4142,8 @@
         57
       ],
       "quote": "מחיר מעל 45° = עלייה, מתחת = ירידה; אין לסחור על סמך המניפה בלבד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-10",
@@ -3980,7 +4161,8 @@
         56
       ],
       "quote": "מנעילים Price Ratio לפני הסרטוט; מותחים בתחילת תיקון; קווים אנכיים = תאריכי מפנה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-11",
@@ -3998,7 +4180,8 @@
         59
       ],
       "quote": "חפיפת שני סייקלים על אותו שבוע = שבוע סופר-משמעותי לפעולה; אחוז הצלחה ~70% נחשב מצוין",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-12",
@@ -4017,7 +4200,8 @@
         39
       ],
       "quote": "אין לפתוח פוזיציה רק כי הגיע תאריך הפיווט — 'סוחרים את השוק, לא את התחזית'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-13",
@@ -4037,7 +4221,8 @@
         59
       ],
       "quote": "מגיע בעלייה → צפה לירידה (שורט); מגיע בירידה → צפה לעלייה (לונג)",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-14",
@@ -4055,7 +4240,8 @@
         59
       ],
       "quote": "אין חובה בשילוב כל כלי הגאן והלוח — מספיק כלי אחד או שניים; לא להעמיס",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "report-cycles"
     },
     {
       "id": "יב-15",
@@ -4079,7 +4265,8 @@
         1
       ],
       "quote": "כניסה למדד לאחר ירידת ~40%–50% מהשיא, החזקה לטווח ארוך",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "investing"
     },
     {
       "id": "יג-1",
@@ -4106,7 +4293,8 @@
         4
       ],
       "quote": "תמיד סטופלוס — אין עסקה בלי הגנה מוגדרת מראש",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-2",
@@ -4132,7 +4320,8 @@
         35
       ],
       "quote": "לא ממצעים הפסד — לא מוסיפים כסף/מגדילים עסקה מפסידה מתוך תקווה לתיקון",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-3",
@@ -4152,7 +4341,8 @@
         35
       ],
       "quote": "לא מסחר נקמה — לא פותחים עוד ועוד עסקאות כדי 'להחזיר' הפסד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-4",
@@ -4171,7 +4361,8 @@
         35
       ],
       "quote": "בדיקה 10 פעמים לפני לחיצה: סימבול, מחיר, כמות, סטופלוס — לא ממהרים ללחוץ אנטר",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-5",
@@ -4194,7 +4385,8 @@
         "DOC-21"
       ],
       "quote": "יומן מסחר לכל עסקה בנפרד",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-6",
@@ -4214,7 +4406,8 @@
         "DOC-34"
       ],
       "quote": "דמו לפני לייב — לא עוברים לכסף אמיתי בלי אישור הצוות",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-7",
@@ -4232,7 +4425,8 @@
         35
       ],
       "quote": "אחרי סטופ — עוצרים ונחים שבוע-שבועיים, וחוזרים 'עם נפש נקייה'",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-8",
@@ -4251,7 +4445,8 @@
         50
       ],
       "quote": "בהתחלה 'משחקים הגנה' — שמירת ההון קודמת לרדיפה אחרי רווח",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-9",
@@ -4270,7 +4465,8 @@
         5
       ],
       "quote": "רצפי הפסדים הם חלק מהשיטה — נשארים בשיטה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-10",
@@ -4289,7 +4485,8 @@
         29
       ],
       "quote": "מוכרים ללא היסוס אם המניה לא מתנהגת כמצופה",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-11",
@@ -4308,7 +4505,8 @@
         39
       ],
       "quote": "סוחרים את השוק, לא את התחזית",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     },
     {
       "id": "יג-12",
@@ -4326,7 +4524,8 @@
         1
       ],
       "quote": "אי-משיכת רווחים/קרן בהשקעה ארוכת-טווח — משיכה שוברת את מודל הריבית-דריבית",
-      "source_status": "course"
+      "source_status": "course",
+      "scope": "core"
     }
   ]
 }

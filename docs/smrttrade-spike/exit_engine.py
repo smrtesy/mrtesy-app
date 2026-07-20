@@ -13,6 +13,9 @@ RR_TARGET    = 2.0        # יעד ראשון = 1:2 (י-1)
 SCALE_FRAC       = 0.50   # מימוש ביעד (יא-5)
 SCALE_FRAC_WEAK  = 0.75   # אם המחזור לא-אישר (יא-5)
 TRAIL_AIR_PCT = 0.02      # אוויר סטופ-עוקב מתחת לשפל (ח-7 יומי 2-3%)
+# יא-8 (יציאת-מומנטום) מקורה בשיעור-הדוח-החודשי (report-cycles), שיטה ידנית-סלקטיבית —
+# כבויה כברירת-מחדל בליבה. ראה scope-separation-changelog.md.
+MOMENTUM_ENABLED = False
 
 
 def simulate_exit(daily, i0, support_low, atr, vol_weak=False, cost_pct=0.30):
@@ -60,8 +63,8 @@ def simulate_exit(daily, i0, support_low, atr, vol_weak=False, cost_pct=0.30):
         last_low = lows[-1][1] if lows else None
         if last_low and c < last_low and stop < last_low:
             close_frac(remaining, c, "structural"); break
-        # 5. מומנטום על הרץ (יא-8): אחרי מימוש, נר סוגר מתחת לנמוך הקודם
-        if scaled and c < daily[j - 1][3]:
+        # 5. מומנטום על הרץ (יא-8) — report-cycles, כבוי כברירת-מחדל בליבה
+        if MOMENTUM_ENABLED and scaled and c < daily[j - 1][3]:
             close_frac(remaining, c, "momentum"); break
         # 6. סטופ עוקב (יא-1/2/13): מתחת לשפל-ציר מאושר, רק כלפי מעלה
         if last_low and c > last_low:
