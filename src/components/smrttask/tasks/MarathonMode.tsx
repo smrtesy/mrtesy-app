@@ -14,6 +14,7 @@ import { DueDateChip } from "./DueDateChip";
 import { SnoozeDialog } from "./SnoozeDialog";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { useWorkClock } from "@/hooks/useWorkClock";
 import { effectiveDeadline } from "@/lib/workdays";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -72,6 +73,7 @@ export function MarathonMode({
   const tWa = useTranslations("whatsappPage");
   const openWhatsApp = useOpenWhatsAppChat();
   const blocked = useWorkCalendar();
+  const workClock = useWorkClock();
   // Snapshot the queue at start: list refetches during the run must not
   // reshuffle what the runner sees.
   const [queue] = useState<Task[]>(() => tasks);
@@ -122,6 +124,29 @@ export function MarathonMode({
     } catch { /* fall back to the list row's fields */ }
   }, [currentId]);
   useEffect(() => { setDetail(null); void loadDetail(); }, [loadDetail]);
+
+  // Drive the workclock's active task from the run so the day-bar reflects the
+  // task actually in focus (and its time is attributed per size). No-op unless
+  // the day clock is running. `ownedIdRef` records the id the run put on the
+  // clock so we only ever release a task the run actually owns — never one that
+  // was already active (e.g. restored from localStorage) when the run mounted.
+  const ownedIdRef = useRef<string | null>(null);
+  const wcRef = useRef(workClock);
+  wcRef.current = workClock;
+  useEffect(() => {
+    if (!current) return;
+    const size = current.size === "quick" ? "quick" : current.size === "big" ? "big" : "medium";
+    workClock.setActiveTask(current.id, size, locale === "he" && current.title_he ? current.title_he : current.title);
+    ownedIdRef.current = current.id;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentId]);
+  // Clear on unmount, but only if the clock still holds the task the run set —
+  // stable [] deps so this runs once and fires only on real unmount; wcRef gives
+  // the cleanup live state instead of a mount-time snapshot.
+  useEffect(() => () => {
+    const wc = wcRef.current;
+    if (wc.state.activeTaskId != null && wc.state.activeTaskId === ownedIdRef.current) wc.clearActiveTask();
+  }, []);
 
   // The same task-window actions (size/home/snooze/assign/due/info/delete) are
   // offered in-run. Edits PATCH the shared task row and refresh the detail; the
@@ -179,6 +204,11 @@ export function MarathonMode({
   }
 
   async function finishRun(done: number, skipped: number) {
+    // The quick-task run has stopped — release the workclock's active task so the
+    // day-bar stops showing the last run task (and its "open too long" alert).
+    // Guarded so a run that never took the clock (day clock off) can't clobber a
+    // task it doesn't own.
+    if (workClock.state.activeTaskId != null && workClock.state.activeTaskId === ownedIdRef.current) workClock.clearActiveTask();
     const result = await closeRun(done, skipped);
     if (result && done > 0) {
       setFinish({ stats: result.stats, prev: result.prev, seconds });
@@ -367,7 +397,16 @@ export function MarathonMode({
                 label={isQuickNow ? tTasks("row.sizeQuickHint") : tTasks("row.sizeRegularHint")}
                 color="amber"
                 className={isQuickNow ? "text-status-warn" : undefined}
-                onClick={() => patchCurrent({ size: isQuickNow ? "medium" : "quick" })}
+                onClick={() => {
+                  const nextSize = isQuickNow ? "medium" : "quick";
+                  patchCurrent({ size: nextSize });
+                  // Re-attribute the workclock too (same as the list's size
+                  // toggle) so an in-run size change stops the wrong-size alert.
+                  if (current && workClock.state.activeTaskId === current.id) {
+                    workClock.setActiveTask(current.id, nextSize, locale === "he" && current.title_he ? current.title_he : current.title);
+                    ownedIdRef.current = current.id;
+                  }
+                }}
               >
                 <Zap className={isQuickNow ? "fill-current" : undefined} />
               </IconButton>
