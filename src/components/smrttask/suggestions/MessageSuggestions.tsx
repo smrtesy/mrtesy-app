@@ -64,10 +64,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   // so without this they vanished silently. Surfaced as a "resolved itself"
   // strip you can confirm (→done) or reopen (→back to a suggestion).
   const [resolved, setResolved] = useState<Task[]>([]);
-  // "Returned" — verified, undated, not-picked-today tasks that resurface in the
-  // inbox each day for a decision (the daily-method forcing function). They also
-  // live in the pool on the tasks screen (intended overlap: inbox = the prompt).
-  const [returned, setReturned] = useState<Task[]>([]);
   // Plan tasks whose deadline is near — surfaced in the inbox to pick for today.
   // Plan tasks flow through the inbox (never auto-onto the desk); this is where
   // you commit one to "היום".
@@ -132,35 +128,45 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       const byId = new Map<string, Task>();
       for (const t of [...(tasks ?? []), ...(sessionRes.tasks ?? [])]) byId.set(t.id, t);
       const all = [...byId.values()];
-      // Urgency order: earliest effective deadline first, undated last,
-      // newest-first within each group.
-      const sorted = all.filter((t) => t.status === "inbox").sort((a, b) => {
-        const da = effectiveDeadline(a);
-        const db = effectiveDeadline(b);
-        if (da && db && da !== db) return da.localeCompare(db);
-        if (da && !db) return -1;
-        if (!da && db) return 1;
-        return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-      });
-      setSuggestions(sorted);
       // Newest-resolved first — these are "did you notice this closed?" cards.
       setResolved(
         all.filter((t) => t.status === "pending_completion")
           .sort((a, b) => (b.status_changed_at ?? b.created_at ?? "").localeCompare(a.status_changed_at ?? a.created_at ?? "")),
       );
-      // Daily-method "returned" set — verified, active, undated, not picked for
-      // today, not quick — resurfaced here for a daily decision.
+      // "Returned" tasks — verified, active, undated, non-quick tasks that the
+      // nightly rollover un-planned at least once (return_count >= 1). These, and
+      // ONLY these, come back into the inbox for a fresh decision — an approved or
+      // undated task that has never been committed to a day (return_count 0) just
+      // lives on the desk and never nags here. Merged into the normal inbox list
+      // (no separate "לתכנן להיום" section) and marked with a "×N" badge.
+      let returnedTasks: Task[] = [];
       try {
         const { tasks: verified } = await api<{ tasks: Task[] }>(
           "/api/tasks?status=inbox,in_progress&verified=true&mine=true&limit=1000",
         );
         const today = todayISO();
-        setReturned(
-          (verified ?? [])
-            .filter((t) => t.size !== "quick" && !t.due_date && t.planned_for !== today)
-            .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
+        returnedTasks = (verified ?? []).filter(
+          (t) => (t.return_count ?? 0) >= 1
+            && t.size !== "quick" && !t.due_date && t.planned_for !== today,
         );
-      } catch { /* keep prior returned set */ }
+      } catch { /* endpoint unavailable → no returned tasks this pass */ }
+      // Inbox = unverified suggestions + genuinely-returned tasks, one list.
+      // Urgency order: earliest effective deadline first, undated last; within the
+      // undated group the most-returned float up, then newest-first.
+      const inboxById = new Map<string, Task>();
+      for (const t of [...all.filter((t) => t.status === "inbox"), ...returnedTasks]) inboxById.set(t.id, t);
+      const sorted = [...inboxById.values()].sort((a, b) => {
+        const da = effectiveDeadline(a);
+        const db = effectiveDeadline(b);
+        if (da && db && da !== db) return da.localeCompare(db);
+        if (da && !db) return -1;
+        if (!da && db) return 1;
+        const ra = a.return_count ?? 0;
+        const rb = b.return_count ?? 0;
+        if (ra !== rb) return rb - ra;
+        return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      });
+      setSuggestions(sorted);
       // MY plan tasks with a near deadline (due within ~4 days or overdue), not
       // blocked, not already picked — surfaced here to pick for today. Plan tasks
       // never auto-fill the desk; the inbox is where you commit one. smrtPlan
@@ -237,14 +243,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
   // Optimistically drop card(s) from EVERY local list so an action feels
   // instant, no matter which section the item is showing in — the AI-suggestion
-  // list, the "לתכנן להיום" returned list, or the self-resolved list. (Approve /
-  // dismiss from inside the detail window go through here; without clearing all
-  // three, acting on a returned-list item closed the sheet but left the row.)
+  // list (which now also carries returned tasks) or the self-resolved strip.
+  // (Approve / dismiss from inside the detail window go through here too.)
   // The API call + background refetch reconcile; on failure we refetch to restore.
   function removeLocal(ids: string[]) {
     const set = new Set(ids);
     setSuggestions((prev) => prev.filter((s) => !set.has(s.id)));
-    setReturned((prev) => prev.filter((s) => !set.has(s.id)));
     setResolved((prev) => prev.filter((s) => !set.has(s.id)));
     setPlanTasks((prev) => prev.filter((s) => !set.has(s.id)));
     setSelected((prev) => {
@@ -275,10 +279,16 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     // An event's whole purpose is the reminder, so "approve" CLOSES it via the
     // canonical complete flow (status=archived + completed_at, recurrence spawn)
     // rather than promoting it to a verified task.
-    // The item may be an unverified AI suggestion OR a verified row opened from
-    // the returned list — look in both.
-    const task = suggestions.find((s) => s.id === taskId) ?? returned.find((s) => s.id === taskId);
+    const task = suggestions.find((s) => s.id === taskId);
     const isEvent = task?.task_type === "meeting";
+    // A returned task (already verified) is committed to today, not "approved"
+    // again — otherwise the manually_verified no-op leaves planned_for null and
+    // the card just comes back. Covers the TaskDetail approve path (the card CTA
+    // already calls handlePlanToday directly).
+    if (!isEvent && (task?.return_count ?? 0) >= 1) {
+      handlePlanToday(taskId);
+      return;
+    }
     removeLocal([taskId]);
     // Daily method: quick → today, dated → its date, undated regular/big → pool.
     // Say WHERE it landed so an approved task never feels lost in the collapsed pool.
@@ -416,9 +426,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setDismissTarget({ id: taskId, title, sourceType });
   }
 
-  // Returned-task triage: commit to today (planned_for = today).
-  function handlePickToday(taskId: string) {
-    setReturned((prev) => prev.filter((task) => task.id !== taskId));
+  // Returned-task triage: commit it to today (planned_for = today). Clears the
+  // "×N returned" nag by putting it on today's desk; leaves the inbox list.
+  function handlePlanToday(taskId: string) {
+    removeLocal([taskId]);
     api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
@@ -429,43 +440,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   function handlePlanPickToday(taskId: string) {
     setPlanTasks((prev) => prev.filter((task) => task.id !== taskId));
     api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
-      .then(() => onUpdate?.())
-      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
-  }
-
-  // Returned-task triage: drop it (dismiss).
-  function handleReturnedDismiss(taskId: string) {
-    setReturned((prev) => prev.filter((task) => task.id !== taskId));
-    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { status: "dismissed" } })
-      .then(() => onUpdate?.())
-      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
-  }
-
-  // Returned-task triage: change effort size in place. Picking "quick" auto-
-  // plans it for today (quick tasks always land on today's list), so it also
-  // leaves this returned set; regular/big just update the size shown.
-  function handleReturnedSizeChange(taskId: string, newSize: "quick" | "medium" | "big") {
-    const body: { size: string; planned_for?: string } = { size: newSize };
-    if (newSize === "quick") {
-      body.planned_for = todayISO();
-      setReturned((prev) => prev.filter((task) => task.id !== taskId));
-    } else {
-      setReturned((prev) => prev.map((task) => (task.id === taskId ? { ...task, size: newSize } : task)));
-    }
-    api(`/api/tasks/${taskId}`, { method: "PATCH", body })
-      .then(() => onUpdate?.())
-      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
-  }
-
-  // Returned-task triage: give it a real due date. A dated task is scheduled
-  // (floats in at its time via the inbox scheduled track), so it leaves the
-  // returned set and the pool. A date WITH a time makes it an event (meeting).
-  function handleReturnedDueChange(taskId: string, date: string | null, time: string | null) {
-    if (!date) return;
-    setReturned((prev) => prev.filter((task) => task.id !== taskId));
-    const patch: Record<string, unknown> = { due_date: date, due_time: time };
-    if (date && time) patch.task_type = "meeting";
-    api(`/api/tasks/${taskId}`, { method: "PATCH", body: patch })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -508,60 +482,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         </div>
       )}
 
-      {/* Returned — undated tasks resurfaced for today's decision (daily method):
-          pick for today, give a date, or drop. They also live in the pool. */}
-      {returned.length > 0 && (
-        <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-            <span dir="auto">{t("returnedTitle", { count: returned.length })}</span>
-          </p>
-          <p className="text-[11px] text-muted-foreground" dir="auto">{t("returnedHint")}</p>
-          {returned.map((task) => {
-            const rTitle = locale === "he" && task.title_he ? task.title_he : task.title;
-            return (
-              <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
-                <button type="button" className="min-w-0 flex-1 truncate text-start text-sm" dir="auto" onClick={() => setEditTask(task)}>{rTitle}</button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      title={tTasks("sizeChange")}
-                      className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
-                    >
-                      {task.size === "quick" ? tTasks("sizeQuick") : task.size === "big" ? tTasks("sizeBig") : tTasks("sizeMedium")}
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="center" className="min-w-[7rem]">
-                    <DropdownMenuRadioGroup
-                      value={task.size ?? "medium"}
-                      onValueChange={(v) => handleReturnedSizeChange(task.id, v as "quick" | "medium" | "big")}
-                    >
-                      <DropdownMenuRadioItem value="big">{tTasks("sizeBig")}</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="medium">{tTasks("sizeMedium")}</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="quick">{tTasks("sizeQuick")}</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePickToday(task.id)}>
-                  <ListPlus />
-                </IconButton>
-                <DueDateChip
-                  deadline={null}
-                  time={null}
-                  locale={locale}
-                  blocked={blocked}
-                  onChange={(d, tm) => handleReturnedDueChange(task.id, d, tm)}
-                />
-                <IconButton label={t("fastDismiss")} color="red" className="h-7 w-7" onClick={() => handleReturnedDismiss(task.id)}>
-                  <X />
-                </IconButton>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {/* Plan tasks with a near deadline — pick one for today. Plan tasks flow
           through the inbox and live on their own board; the desk never
           auto-fills them, so this is where you commit one to "היום". */}
@@ -592,7 +512,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         </div>
       )}
 
-      {suggestions.length === 0 && resolved.length === 0 && returned.length === 0 && planTasks.length === 0 ? (
+      {suggestions.length === 0 && resolved.length === 0 && planTasks.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noSuggestions")}</p>
@@ -631,6 +551,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             const visibleTags = (task.tags ?? []).filter(
               (tag) => tag.toLowerCase() !== "via-claude-session" && !/^claude-session:/i.test(tag),
             );
+            // A "returned" task — the nightly rollover un-planned it at least once
+            // (committed to a day, day passed, not done). Show a "↻N" badge and
+            // turn its primary CTA into "plan for today" instead of "approve"
+            // (it's already verified — approve would be a no-op).
+            const returnCount = task.return_count ?? 0;
+            const isReturned = returnCount >= 1;
 
             return (
               <Card
@@ -663,6 +589,15 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       {displayTitle}
                     </h4>
                     <div dir="ltr" className="flex shrink-0 items-center gap-1">
+                      {isReturned && (
+                        <span
+                          title={t("returnedBadgeTooltip", { count: returnCount })}
+                          className="inline-flex items-center gap-0.5 rounded-full border border-status-warn/40 bg-status-warn-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-status-warn"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          {returnCount}
+                        </span>
+                      )}
                       {source && <SourceLink source={source} stopPropagation />}
                       <DueDateChip
                         deadline={effectiveDeadline(task)}
@@ -709,12 +644,14 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoProjectId={task.project_id}
                     infoTitle={title}
                     infoBody={task.description}
+                    isReturned={isReturned}
                     onSizeChange={(size) => handleSizeSet(task.id, size)}
                     onContextToggle={(ctx) => handleContextToggle(task, ctx)}
                     onAssign={(uid) => handleAssign(task.id, uid)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
+                    onPlanToday={() => handlePlanToday(task.id)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
                     onAddEvent={() => setAddEventTaskId(task.id)}
                   />
@@ -825,12 +762,14 @@ function SuggestionActions({
   infoProjectId,
   infoTitle,
   infoBody,
+  isReturned,
   onSizeChange,
   onContextToggle,
   onAssign,
   onFastDismiss,
   onDismissWithReason,
   onApprove,
+  onPlanToday,
   onSnooze,
   onAddEvent,
 }: {
@@ -839,12 +778,14 @@ function SuggestionActions({
   infoProjectId: string | null;
   infoTitle: string;
   infoBody: string | null;
+  isReturned: boolean;
   onSizeChange: (size: "quick" | "medium" | "big") => void;
   onContextToggle: (ctx: "home" | "outside") => void;
   onAssign: (userId: string | null) => void;
   onFastDismiss: () => void;
   onDismissWithReason: () => void;
   onApprove: () => void;
+  onPlanToday: () => void;
   onSnooze: () => void;
   onAddEvent: () => void;
 }) {
@@ -929,8 +870,14 @@ function SuggestionActions({
           so "בוצע" makes no sense here — and the green ✓ sat next to "אשר"
           and read as approve, silently archiving suggestions one tap at a
           time (the June-2026 "suggestions vanished" incident). Completing
-          belongs to the task list, after approval. */}
-      <IconButton label={isEvent ? t("closeReminder") : t("approve")} color="blue" onClick={onApprove}>
+          belongs to the task list, after approval.
+          A returned task is already verified — its primary CTA is "commit to
+          today" (planned_for=today), not another "approve" no-op. */}
+      <IconButton
+        label={isEvent ? t("closeReminder") : isReturned ? tTasks("row.addToToday") : t("approve")}
+        color="blue"
+        onClick={isEvent ? onApprove : isReturned ? onPlanToday : onApprove}
+      >
         {isEvent ? <Check /> : <ListPlus />}
       </IconButton>
     </div>
