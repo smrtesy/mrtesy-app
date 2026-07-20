@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { DAY_TOOLS, resolveTool } from "@/lib/smrttask/day-tools";
 import { useDayTools } from "@/hooks/useDayTools";
 import { WorkClockInsights } from "@/components/smrttask/workclock/WorkClockInsights";
+import { DailyReportSettings } from "@/components/smrttask/dailyreport/DailyReportSettings";
 
 /**
  * "כלי היום" settings section — one quiet toggle row per day-tool. Per-tool
@@ -73,6 +74,10 @@ export function DayToolsSettings() {
                   <WorkClockInsights />
                 </div>
               )}
+
+              {/* Daily-report config: the question editor + period/hour + a
+                  manual "generate now", revealed only when the tool is on. */}
+              {tool.slug === "dailyreport" && enabled && <DailyReportSettings />}
             </div>
           );
         })}

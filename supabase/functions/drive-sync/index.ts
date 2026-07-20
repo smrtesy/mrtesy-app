@@ -630,6 +630,17 @@ async function syncUserDrive(userId: string, deadline: number) {
     (f) => Array.isArray(f.parents) && f.parents.some((p: string) => folderSet.has(p)),
   );
 
+  // Age floor (mirrors the initial-scan `modifiedTime > cutoff` clause). The
+  // account-wide /changes feed surfaces a file for ANY change — a re-share,
+  // permission/label change, comment, or move that leaves the CONTENT
+  // untouched — so a document last edited long ago can reappear and spawn a
+  // task months later (the "08062025_Unit Price.pdf" case: ingested 2026-07
+  // with a 2025-08 modifiedTime, via /changes, no prior row to dedupe it).
+  // Apply the same cutoff here: a genuinely re-edited old doc has a FRESH
+  // modifiedTime and still passes, while a merely-touched stale file is
+  // skipped. (Harmless on the initial-scan path — its `q` already filtered.)
+  files = files.filter((f) => typeof f.modifiedTime === "string" && f.modifiedTime >= cutoff);
+
   // Source ids we've already handled in a previous run. A drive row only gets
   // written once a file has been fully processed (text-layer extracted or vision
   // OCR attempted) — deferred files are `continue`d before the upsert and have no

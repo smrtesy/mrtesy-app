@@ -10,6 +10,15 @@ import { api } from "@/lib/api/client";
 
 import { DriveFolderPicker } from "./DriveFolderPicker";
 
+// Claude models the studio can pick for script preprocessing. IDs mirror
+// server/src/anthropic.ts (MODELS) so there's one source of truth for the exact
+// strings. Empty selection = use voice-engine's default (currently Haiku).
+const LLM_MODEL_OPTIONS = [
+  { id: "claude-haiku-4-5-20251001", labelKey: "llmModelHaiku" },
+  { id: "claude-sonnet-4-6", labelKey: "llmModelSonnet" },
+  { id: "claude-opus-4-7", labelKey: "llmModelOpus" },
+] as const;
+
 interface Settings {
   monthly_budget_usd: number;
   default_adapter: "resemble" | "chatterbox_local" | "chatterbox_runpod";
@@ -133,20 +142,34 @@ export function SettingsForm() {
 
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("defaultLlmModel")}</label>
-        {/* Free text rather than a fixed dropdown — Claude model IDs change
-            over time, and the studio may have access to specific models.
-            Empty = use voice-engine's LLM_MODEL env default. */}
-        <Input
-          type="text"
+        {/* Fixed dropdown of the known models (IDs mirror server anthropic.ts)
+            so the studio picks by name instead of typing an exact model id.
+            Empty = use voice-engine's default. A custom/legacy id already saved
+            is kept as an extra option so switching to the dropdown never drops
+            it silently. */}
+        <select
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={settings.default_llm_model ?? ""}
           onChange={(e) =>
             setSettings({
               ...settings,
-              default_llm_model: e.target.value.trim() || null,
+              default_llm_model: e.target.value || null,
             })
           }
-          placeholder={t("defaultLlmModelDefault")}
-        />
+        >
+          <option value="">{t("defaultLlmModelDefault")}</option>
+          {LLM_MODEL_OPTIONS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {t(m.labelKey)}
+            </option>
+          ))}
+          {settings.default_llm_model &&
+            !LLM_MODEL_OPTIONS.some((m) => m.id === settings.default_llm_model) && (
+              <option value={settings.default_llm_model}>
+                {settings.default_llm_model}
+              </option>
+            )}
+        </select>
       </div>
 
       <div className="space-y-1">

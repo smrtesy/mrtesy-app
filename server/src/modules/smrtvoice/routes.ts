@@ -1755,6 +1755,12 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     return clean || "ללא שם";
   };
 
+  // Optional NDJSON progress stream: when the client passes ?stream=1 we push a
+  // { progress } line as each file is handled so the button can show a live %
+  // (like "Download all"), then a final { done, … } line. Declared out here so
+  // the catch below knows whether headers were already streamed.
+  const stream = req.query.stream === "1";
+
   try {
     const drive = await getDriveClient(req.user!.id);
     let folderId = script.archive_gdrive_folder_id as string | null;
@@ -1777,12 +1783,38 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
     const { error: archivingErr } = await db.from("smrtvoice_scripts").update({ status: "archiving" }).eq("id", script.id);
     if (archivingErr) console.error("[smrtvoice] script archiving-status update failed:", archivingErr);
 
+    // Start streaming (only now that folder resolution succeeded, so pre-loop
+    // failures still return a normal JSON error the client can read).
+    if (stream) {
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no"); // ask proxies not to buffer
+      res.flushHeaders?.();
+    }
+    // Total files across all lines (good takes per line, else 1 fallback) so the
+    // percentage is over the real upload count, not the line count.
+    const totalFiles = (lines as Array<{ id: string }>).reduce(
+      (sum, l) => sum + Math.max(1, goodByLine.get(l.id)?.length ?? 0),
+      0,
+    );
+    let processed = 0;
+    let lastPct = -1;
+    const emitProgress = () => {
+      if (!stream) return;
+      const pct = totalFiles ? Math.min(99, Math.round((processed / totalFiles) * 100)) : 0;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        res.write(`${JSON.stringify({ progress: pct })}\n`);
+      }
+    };
+    emitProgress(); // 0%
+
     // Each character gets its own subfolder inside the script folder, named by
     // the speaker as it appears in the script (speaker_name — NOT the voice
     // name). Created lazily and cached so a folder is made at most once per
     // character per archive, and only when there's actually a file to put in it.
-    const speakerFolders = new Map<string, string>();
-    const ensureSpeakerFolder = async (speaker: string): Promise<string> => {
+    const speakerFolders = new Map<string, { id: string; files: Map<string, string> }>();
+    const ensureSpeakerFolder = async (speaker: string): Promise<{ id: string; files: Map<string, string> }> => {
       const key = speaker?.trim() || "ללא דמות";
       const cached = speakerFolders.get(key);
       if (cached) return cached;
@@ -1799,6 +1831,10 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         includeItemsFromAllDrives: true,
       });
       let id = existing.data.files?.[0]?.id ?? null;
+      // name → fileId of what's already in the folder, so a re-archive updates
+      // the existing file in place (same name = current content, no duplicate
+      // and no stale copy) instead of adding a second copy.
+      const files = new Map<string, string>();
       if (!id) {
         const created = await drive.files.create({
           requestBody: { name: safeName, mimeType: "application/vnd.google-apps.folder", parents: [scriptFolderId] },
@@ -1806,15 +1842,29 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
           supportsAllDrives: true,
         });
         id = created.data.id!;
+      } else {
+        const listed = await drive.files.list({
+          q: `'${id}' in parents and trashed = false`,
+          pageSize: 1000,
+          fields: "files(id, name)",
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        });
+        for (const ff of listed.data.files ?? []) if (ff.name && ff.id) files.set(ff.name, ff.id);
       }
-      speakerFolders.set(key, id);
-      return id;
+      const entry = { id, files };
+      speakerFolders.set(key, entry);
+      return entry;
     };
+
+    // Filenames are prefixed with the script NAME (not the code), matching the
+    // "Download all" ZIP so the two are consistent, e.g. "NM110 - 3_022.wav".
+    const namePrefix = folderSafe((script.name as string | null) || script.code);
 
     let uploaded = 0;
     let skipped = 0;
     for (const line of lines as Array<{ id: string; line_number: number; output_audio_path: string; speaker_name: string }>) {
-      const base = `${script.code}_${String(line.line_number).padStart(3, "0")}`;
+      const base = `${namePrefix}_${String(line.line_number).padStart(3, "0")}`;
       const good = goodByLine.get(line.id) ?? [];
       // Good takes if any (each named with its take number + note); else the
       // single current output.
@@ -1822,26 +1872,46 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
         ? good.map((g) => ({ path: g.path, name: `${base}_v${g.n}${noteSuffix(g.note)}.wav` }))
         : [{ path: line.output_audio_path, name: `${base}.wav` }];
       for (const f of files) {
+        const folder = await ensureSpeakerFolder(line.speaker_name);
         const { data: blob, error: dlErr } = await db.storage.from("smrtvoice-audio").download(f.path);
         if (dlErr || !blob) {
           skipped += 1;
+          processed += 1;
+          emitProgress();
           continue;
         }
         const buffer = Buffer.from(await blob.arrayBuffer());
-        const speakerFolderId = await ensureSpeakerFolder(line.speaker_name);
-        await drive.files.create({
-          requestBody: { name: f.name, parents: [speakerFolderId] },
-          media: { mimeType: "audio/wav", body: Readable.from(buffer) },
-          fields: "id",
-          supportsAllDrives: true,
-        });
+        const existingId = folder.files.get(f.name);
+        if (existingId) {
+          // Same-named file from a prior save → replace its content in place.
+          await drive.files.update({
+            fileId: existingId,
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+        } else {
+          const created = await drive.files.create({
+            requestBody: { name: f.name, parents: [folder.id] },
+            media: { mimeType: "audio/wav", body: Readable.from(buffer) },
+            fields: "id",
+            supportsAllDrives: true,
+          });
+          if (created.data.id) folder.files.set(f.name, created.data.id);
+        }
         uploaded += 1;
+        processed += 1;
+        emitProgress();
       }
     }
 
     if (uploaded === 0) {
       const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
       if (revertErr) console.error("[smrtvoice] script status revert after failed archive failed:", revertErr);
+      if (stream) {
+        res.write(`${JSON.stringify({ error: "Failed to upload any audio to Drive" })}\n`);
+        return res.end();
+      }
       return res.status(502).json({ error: "Failed to upload any audio to Drive", skipped });
     }
 
@@ -1857,13 +1927,33 @@ router.post("/voice/scripts/:id/archive", async (req: Request, res: Response) =>
       .eq("id", script.id)
       .select()
       .maybeSingle();
-    if (updErr) return res.status(500).json({ error: updErr.message });
+    if (updErr) {
+      if (stream) {
+        res.write(`${JSON.stringify({ error: updErr.message })}\n`);
+        return res.end();
+      }
+      return res.status(500).json({ error: updErr.message });
+    }
 
     await emitEvent(req.org!.id, "smrtvoice", "script.archived", "script", script.id, { folder_url: folderUrl, uploaded, skipped });
+    if (stream) {
+      res.write(`${JSON.stringify({ done: true, folder_url: folderUrl, uploaded, skipped })}\n`);
+      return res.end();
+    }
     res.json({ script: updated, folder_url: folderUrl, uploaded, skipped });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    // Don't leave the script stuck on the transient "archiving" status when the
+    // upload throws partway — put it back so the UI recovers.
+    const { error: revertErr } = await db.from("smrtvoice_scripts").update({ status: "audio_ready" }).eq("id", script.id);
+    if (revertErr) console.error("[smrtvoice] script status revert after archive error failed:", revertErr);
     await notifyError(req.org!.id, "smrtvoice", { title: "Failed to archive to Drive", body: message });
+    // If we already started streaming, headers/status are sent — surface the
+    // error as a final NDJSON line instead of a (failing) res.status().json().
+    if (stream && res.headersSent) {
+      try { res.write(`${JSON.stringify({ error: message })}\n`); } catch { /* socket gone */ }
+      return res.end();
+    }
     res.status(502).json({ error: message });
   }
 });
@@ -2050,6 +2140,27 @@ async function queueRegeneration(
     script.resemble_model,
   );
   if (castErr) return res.status(500).json({ error: castErr });
+
+  // A line whose speaker isn't cast to a voice is silently skipped by the engine
+  // ("speaker skipped — no voice cast"): the job completes but no audio is made,
+  // which looks like "nothing happened". Surface a clear error naming the uncast
+  // speaker(s) instead, so the user knows to cast a voice first.
+  const { data: reqLines } = await db
+    .from("smrtvoice_lines")
+    .select("speaker_name")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .in("line_number", lineNumbers);
+  const uncastSpeakers = [
+    ...new Set((reqLines ?? [])
+      .map((l: { speaker_name: string }) => l.speaker_name)
+      .filter((name: string) => !speakerMap[name])),
+  ];
+  if (uncastSpeakers.length > 0) {
+    return res.status(400).json({
+      error: `Can't regenerate: these speakers aren't cast to a voice — ${uncastSpeakers.join(", ")}. Assign a voice to them and try again.`,
+    });
+  }
 
   // Preserve the script's generation mode — regenerating a line in an STS
   // script must re-render via speech-to-speech (with the input recording),

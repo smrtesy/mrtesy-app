@@ -69,6 +69,10 @@ export function TaskRow({
   const constrained = !!(task.latest_finish && task.due_date && task.latest_finish < task.due_date);
   const sitting = zone === "waiting" ? sittingWorkdays(task, blocked) : 0;
   const woke = !!task.woke_from_snooze_at;
+  // A follow-up tracker that woke = the "I pinged X, no reply in 48h" reminder.
+  // Surface it with an explicit "מעקב 48 שעות" pill so it never reads as a task
+  // that appeared from nowhere (the recurring "why is this coming up now?" bug).
+  const followup48 = woke && task.task_type === "followup";
   // Plan/stage label (attached at runtime by /api/plan/my-tasks).
   const planLabel = isPlan
     ? [
@@ -136,9 +140,17 @@ export function TaskRow({
           {task.recurrence_rule && (
             <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={t("row.recurring")} />
           )}
-          {woke && !isDone && (
+          {followup48 && !isDone ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-status-warn/40 px-1.5 py-px text-[10px] font-medium leading-none text-status-warn"
+              title={t("row.followup48Hint")}
+            >
+              <AlarmClockCheck className="h-2.5 w-2.5" />
+              {t("row.followup48Chip")}
+            </span>
+          ) : woke && !isDone ? (
             <AlarmClockCheck className="h-3 w-3 shrink-0 text-status-warn" aria-label={t("row.wokeHint")} />
-          )}
+          ) : null}
           {task.claude_waiting_since && !isDone && (
             <Bot className="h-3 w-3 shrink-0 text-primary" aria-label={tClaude("chipLabel")} />
           )}

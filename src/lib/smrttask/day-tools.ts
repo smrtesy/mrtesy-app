@@ -8,7 +8,7 @@
  * + the component that hangs off one of the anchor points. No migration.
  */
 
-export type DayToolSlug = "method131" | "marathon" | "planfocus" | "workclock";
+export type DayToolSlug = "method131" | "marathon" | "planfocus" | "workclock" | "dailyreport";
 
 export interface DayToolConfig {
   enabled: boolean;
@@ -63,6 +63,21 @@ export const DAY_TOOLS: readonly DayToolDef[] = [
       close_remind_at: "18:55",
       close_prompt_at: "19:20",
       close_autostop_sec: 300,
+    },
+  },
+  {
+    // Daily report — user-defined daily self-report questions (each answer with
+    // an optional score). A weekly report (answer tallies + average score +
+    // completed-task metrics) is delivered to the inbox every Tuesday. Default
+    // OFF — an opt-in tool. Config keys are FLAT (server merges at tool-key
+    // level). See docs/daily-report-plan.md.
+    slug: "dailyreport",
+    defaultConfig: {
+      enabled: false,
+      period: "weekly",   // 'weekly' | 'monthly'
+      // Hour-of-day (0–23) the report is delivered, in the user's timezone
+      // (user_settings.timezone; defaults to America/New_York server-side).
+      report_hour: 8,
     },
   },
 ] as const;
