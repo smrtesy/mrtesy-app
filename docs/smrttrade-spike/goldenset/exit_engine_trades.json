@@ -2,8 +2,8 @@
  {
   "date": "2023-06-30",
   "ticker": "CRM",
-  "R": 1.9,
-  "exit": "momentum"
+  "R": 1.43,
+  "exit": "stop"
  },
  {
   "date": "2023-07-14",
@@ -50,20 +50,20 @@
  {
   "date": "2023-08-25",
   "ticker": "SHOP",
-  "R": 3.09,
-  "exit": "momentum"
+  "R": 1.36,
+  "exit": "gap"
  },
  {
   "date": "2023-08-25",
   "ticker": "U",
-  "R": 2.22,
-  "exit": "momentum"
+  "R": 1.4,
+  "exit": "stop"
  },
  {
   "date": "2023-08-25",
   "ticker": "DDOG",
-  "R": 1.73,
-  "exit": "momentum"
+  "R": 1.43,
+  "exit": "stop"
  },
  {
   "date": "2023-09-08",
@@ -98,8 +98,8 @@
  {
   "date": "2023-12-01",
   "ticker": "ABNB",
-  "R": 1.74,
-  "exit": "momentum"
+  "R": 1.36,
+  "exit": "gap"
  },
  {
   "date": "2023-12-15",
@@ -122,20 +122,20 @@
  {
   "date": "2024-01-26",
   "ticker": "COP",
-  "R": 2.37,
-  "exit": "momentum"
+  "R": 2.13,
+  "exit": "structural"
  },
  {
   "date": "2024-02-23",
   "ticker": "TGT",
-  "R": 2.47,
-  "exit": "momentum"
+  "R": 1.91,
+  "exit": "structural"
  },
  {
   "date": "2024-02-23",
   "ticker": "ABNB",
-  "R": 1.98,
-  "exit": "momentum"
+  "R": 1.82,
+  "exit": "structural"
  },
  {
   "date": "2024-03-22",
@@ -176,26 +176,26 @@
  {
   "date": "2024-06-14",
   "ticker": "MS",
-  "R": 1.83,
-  "exit": "momentum"
+  "R": 1.64,
+  "exit": "gap"
  },
  {
   "date": "2024-06-28",
   "ticker": "GE",
-  "R": 1.57,
-  "exit": "momentum"
+  "R": 1.41,
+  "exit": "stop"
  },
  {
   "date": "2024-06-28",
   "ticker": "MARA",
-  "R": 1.72,
-  "exit": "momentum"
+  "R": 1.39,
+  "exit": "gap"
  },
  {
   "date": "2024-07-12",
   "ticker": "CAT",
-  "R": 1.64,
-  "exit": "momentum"
+  "R": 1.43,
+  "exit": "stop"
  },
  {
   "date": "2024-07-12",
@@ -212,8 +212,8 @@
  {
   "date": "2024-07-26",
   "ticker": "META",
-  "R": 1.72,
-  "exit": "momentum"
+  "R": 1.24,
+  "exit": "gap"
  },
  {
   "date": "2024-07-26",
@@ -248,8 +248,8 @@
  {
   "date": "2024-09-06",
   "ticker": "UBER",
-  "R": 1.85,
-  "exit": "momentum"
+  "R": 1.5,
+  "exit": "stop"
  },
  {
   "date": "2024-10-04",
@@ -266,8 +266,8 @@
  {
   "date": "2024-11-01",
   "ticker": "DOCU",
-  "R": 2.61,
-  "exit": "momentum"
+  "R": 3.84,
+  "exit": "stop"
  },
  {
   "date": "2024-11-15",
@@ -302,8 +302,8 @@
  {
   "date": "2024-12-27",
   "ticker": "NET",
-  "R": 2.76,
-  "exit": "momentum"
+  "R": 1.41,
+  "exit": "gap"
  },
  {
   "date": "2024-12-27",
@@ -314,8 +314,8 @@
  {
   "date": "2025-01-10",
   "ticker": "WFC",
-  "R": 2.09,
-  "exit": "momentum"
+  "R": 2.04,
+  "exit": "structural"
  },
  {
   "date": "2025-01-10",
@@ -338,8 +338,8 @@
  {
   "date": "2025-06-27",
   "ticker": "CVNA",
-  "R": 1.94,
-  "exit": "momentum"
+  "R": 1.58,
+  "exit": "gap"
  },
  {
   "date": "2025-07-25",
@@ -356,8 +356,8 @@
  {
   "date": "2025-08-22",
   "ticker": "XOM",
-  "R": 1.62,
-  "exit": "momentum"
+  "R": 1.4,
+  "exit": "stop"
  },
  {
   "date": "2025-08-22",
@@ -380,8 +380,8 @@
  {
   "date": "2025-10-03",
   "ticker": "AMD",
-  "R": 3.28,
-  "exit": "momentum"
+  "R": 3.47,
+  "exit": "stop"
  },
  {
   "date": "2025-10-03",
@@ -422,14 +422,14 @@
  {
   "date": "2025-12-12",
   "ticker": "BA",
-  "R": 2.1,
-  "exit": "momentum"
+  "R": 2.09,
+  "exit": "structural"
  },
  {
   "date": "2025-12-12",
   "ticker": "AFRM",
-  "R": 2.2,
-  "exit": "momentum"
+  "R": 1.81,
+  "exit": "stop"
  },
  {
   "date": "2026-01-09",
@@ -440,8 +440,8 @@
  {
   "date": "2026-01-23",
   "ticker": "CVX",
-  "R": 2.3,
-  "exit": "momentum"
+  "R": 2.05,
+  "exit": "stop"
  },
  {
   "date": "2026-02-20",
@@ -452,8 +452,8 @@
  {
   "date": "2026-02-20",
   "ticker": "COP",
-  "R": 1.77,
-  "exit": "momentum"
+  "R": 1.45,
+  "exit": "gap"
  },
  {
   "date": "2026-02-20",
