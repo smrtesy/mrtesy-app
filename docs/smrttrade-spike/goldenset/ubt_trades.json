@@ -1,0 +1,397 @@
+[
+ {
+  "date": "2023-06-30",
+  "ticker": "CRM",
+  "ret": -0.08
+ },
+ {
+  "date": "2023-07-14",
+  "ticker": "F",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "TSLA",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "MU",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "ABNB",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "MSFT",
+  "ret": 2.44
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "META",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "WFC",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "SHOP",
+  "ret": 15.7
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "U",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "DDOG",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-09-08",
+  "ticker": "SNOW",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-09-08",
+  "ticker": "CRWD",
+  "ret": 11.69
+ },
+ {
+  "date": "2023-09-22",
+  "ticker": "AVGO",
+  "ret": 15.7
+ },
+ {
+  "date": "2023-09-22",
+  "ticker": "CRM",
+  "ret": 6.86
+ },
+ {
+  "date": "2023-12-01",
+  "ticker": "RIVN",
+  "ret": 15.7
+ },
+ {
+  "date": "2023-12-01",
+  "ticker": "ABNB",
+  "ret": 6.45
+ },
+ {
+  "date": "2023-12-15",
+  "ticker": "PLTR",
+  "ret": -8.3
+ },
+ {
+  "date": "2023-12-29",
+  "ticker": "DDOG",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-01-12",
+  "ticker": "SOFI",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-01-26",
+  "ticker": "COP",
+  "ret": 12.17
+ },
+ {
+  "date": "2024-02-23",
+  "ticker": "TGT",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-02-23",
+  "ticker": "ABNB",
+  "ret": 2.29
+ },
+ {
+  "date": "2024-03-22",
+  "ticker": "AFRM",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "T",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "PLTR",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "PINS",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-04-19",
+  "ticker": "MA",
+  "ret": -1.9
+ },
+ {
+  "date": "2024-04-19",
+  "ticker": "DKNG",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-06-14",
+  "ticker": "MS",
+  "ret": 0.97
+ },
+ {
+  "date": "2024-06-14",
+  "ticker": "PLTR",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-06-28",
+  "ticker": "GE",
+  "ret": 7.41
+ },
+ {
+  "date": "2024-06-28",
+  "ticker": "MARA",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "CAT",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "DOCU",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "NET",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-07-26",
+  "ticker": "META",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-07-26",
+  "ticker": "ORCL",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-08-09",
+  "ticker": "QCOM",
+  "ret": 1.2
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "GOOGL",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "AMZN",
+  "ret": 6.5
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "PYPL",
+  "ret": 12.06
+ },
+ {
+  "date": "2024-09-06",
+  "ticker": "UBER",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-10-04",
+  "ticker": "VZ",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-10-18",
+  "ticker": "TGT",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-11-01",
+  "ticker": "DOCU",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-11-15",
+  "ticker": "PTON",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-12-13",
+  "ticker": "NVDA",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-12-13",
+  "ticker": "ROKU",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "ORCL",
+  "ret": -8.3
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "T",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "NET",
+  "ret": 15.7
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "GM",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-01-10",
+  "ticker": "WFC",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-01-10",
+  "ticker": "HUT",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-02-07",
+  "ticker": "SNOW",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-02-21",
+  "ticker": "AMZN",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-06-27",
+  "ticker": "CVNA",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-07-25",
+  "ticker": "CRWD",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-08-08",
+  "ticker": "TSLA",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-08-22",
+  "ticker": "XOM",
+  "ret": 0.98
+ },
+ {
+  "date": "2025-08-22",
+  "ticker": "SOUN",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-09-05",
+  "ticker": "SHOP",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "AMZN",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "AMD",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "DIS",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-10-17",
+  "ticker": "NFLX",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-10-17",
+  "ticker": "ROKU",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-10-31",
+  "ticker": "PEP",
+  "ret": -1.62
+ },
+ {
+  "date": "2025-10-31",
+  "ticker": "PATH",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-11-14",
+  "ticker": "W",
+  "ret": -8.3
+ },
+ {
+  "date": "2025-12-12",
+  "ticker": "BA",
+  "ret": 15.7
+ },
+ {
+  "date": "2025-12-12",
+  "ticker": "AFRM",
+  "ret": 15.7
+ },
+ {
+  "date": "2026-01-09",
+  "ticker": "DIS",
+  "ret": -8.3
+ },
+ {
+  "date": "2026-01-23",
+  "ticker": "CVX",
+  "ret": 15.7
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "GS",
+  "ret": -8.3
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "COP",
+  "ret": 15.7
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "LLY",
+  "ret": -8.3
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "BA",
+  "ret": -8.3
+ }
+]

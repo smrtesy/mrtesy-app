@@ -1,0 +1,4531 @@
+{
+  "_meta": {
+    "title": "מרשם-כללים מכונתי — smrtTrade (מקור-אמת יחיד למנוע הסריקה/יציאה)",
+    "purpose": "גרסה מכונתית של docs/stock-course-rulebook.md. מנוע הסריקה (T3.2) ומנוע היציאה (T5.1) נטענים מכאן; מנגנון הבטחת-הכיסוי מוודא כלל==מעריך==משבצת-פנקס. כלל בלי evaluator (מסוג computable) שאין לו מעריך בקוד → הבנייה נכשלת.",
+    "source_of_truth": "docs/stock-course-rulebook.md (192 כללים) + docs/stock-course-rules.raw.json (644 מופעים מאומתים)",
+    "status": "COMPLETE — כל 192 הכללים ב-13 קטגוריות מקודדים ומאומתים (מבחן-פיוס עבר: 192==192, ids ייחודיים).",
+    "field_schema": {
+      "id": "מזהה ייחודי: אות-קטגוריה + מספר (למשל 'יא-3'). כלל-הנדסה שאינו בקורס: קידומת 'ENG-'.",
+      "category": "אות הקטגוריה בספר-הכללים (א..יג)",
+      "category_name": "שם הקטגוריה המלא",
+      "statement": "ניסוח הכלל (מתומצת מספר-הכללים)",
+      "type": "numeric | visual | procedural — תג-הסוג מספר-הכללים",
+      "applies_to": "מערך: filter | entry | exit | sizing | portfolio | timing — היכן הכלל פועל בצינור",
+      "gate": "boolean — האם הכלל חוסם החלטה (שער כניסה/יציאה) לעומת כלל-רקע/הנחיה",
+      "evaluable": "computable (מ-OHLCV/מצב) | vision (דורש תמונה) | manual (שיפוט אנושי/מודעות)",
+      "evaluator": "מפרט-בדיקה ל-computable: {inputs[], predicate}. null אם vision/manual. הקוד עצמו נבנה ב-T3.2/T5.1.",
+      "sources": "מערך מקורות (מספרי-שיעור / DOC-n) כפי שמופיעים בספר-הכללים",
+      "quote": "ציטוט מייצג מאומת מהמקור",
+      "source_status": "course (מצוטט-קורס) | engineering (תוספת הנדסית, לא בקורס) | half-course (עקרון בקורס, מכניזציה הנדסית) | designated-external (מקור חיצוני שהמשתמש הגדיר כמוסמך, למשל מסגרת שלמה)"
+    },
+    "notes": [
+      "applies_to יכול להכיל כמה ערכים (כלל שמשמש גם פילטר וגם יציאה).",
+      "evaluator.predicate כתוב כ-pseudo-DSL תיאורי; המימוש בפועל ב-T3.2/T5.1.",
+      "fail-closed: כלל gate מסוג computable שלא ניתן להערכה (חוסר דאטה) → UNKNOWN → המנוע לא מציע."
+    ],
+    "scope_convention": "core = כללי הסווינג/ניתוח-טכני הרגילים (smrtTrade). report-cycles = מסחר על-פי הדוח-החודשי/גאן/סייקלים — מחוץ-לתחום כרגע, נשמר ולא נמחק. investing = השקעת-מדד ארוכת-טווח.",
+    "counts": {
+      "total": 192,
+      "core": 176,
+      "report-cycles": 15,
+      "investing": 1
+    }
+  },
+  "rules": [
+    {
+      "id": "א-1",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "שווי שוק (market cap) מעל 300 מיליון דולר",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "market_cap"
+        ],
+        "predicate": "market_cap > 300000000"
+      },
+      "sources": [
+        37,
+        30,
+        36
+      ],
+      "quote": "שהשוו…שלהם יהיה מעל 300 מיליון… לא חברות קטנות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-2",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סוחרים רק במניות — מסירים תעודות סל (ETF) מהתוצאות",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "security_type"
+        ],
+        "predicate": "security_type == 'stock' AND security_type != 'ETF'"
+      },
+      "sources": [
+        37
+      ],
+      "quote": "אני רוצה מניות, ולהוציא תעודות סל החוצה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-3",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "בורסות NASDAQ ו-NYSE בלבד; מסירים מניות OTC",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "exchange"
+        ],
+        "predicate": "exchange IN ['NASDAQ','NYSE']"
+      },
+      "sources": [
+        36
+      ],
+      "quote": "נזדאק ו…ניו יורק סטוק אקסצ'יינג'… הוריד את כל המניות של האוטיסי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-4",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "מחזור מסחר יומי ממוצע מעל מיליון מניות ליום (ובשווי כספי — מעל ~1.5 מיליון $ ליום)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "avg_daily_volume_shares",
+          "avg_daily_dollar_volume"
+        ],
+        "predicate": "avg_daily_volume_shares > 1000000 AND avg_daily_dollar_volume > 1500000 (avg over 90 days)"
+      },
+      "sources": [
+        36,
+        30,
+        37,
+        18,
+        7
+      ],
+      "quote": "מעל מיליון מניות נסחרות ביום",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-5",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "מחיר מנייה מעל 5 דולר",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price"
+        ],
+        "predicate": "price > 5"
+      },
+      "sources": [
+        37
+      ],
+      "quote": "מעל חמישה דולרים… המסחר הממוצע היומי… מיליון וחצי דולר לכל הפחות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-6",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "פילטר RSI(14): מתחת/שווה ל-30 (מכירת-יתר, לאיתור תיקון בתוך מגמה)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "rsi_14"
+        ],
+        "predicate": "rsi_14 <= 30"
+      },
+      "sources": [
+        36,
+        30
+      ],
+      "quote": "ה-RSI שלהם נמצא מתחת או אפילו שווה ל-30… RSI של 14 יחידות זמן",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-7",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "פילטר CCI: מתחת ל-200 (או מתחת ל-100)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "cci"
+        ],
+        "predicate": "cci < 200"
+      },
+      "sources": [
+        36,
+        32
+      ],
+      "quote": "כל מה שה-CCI נמצא בלו… מתחת ל-200",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-8",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "פילטר מכפיל רווח P/E: מתחת/שווה ל-25 (השוואה רק מול אותו סקטור/ענף)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "pe_ratio",
+          "sector_pe"
+        ],
+        "predicate": "pe_ratio <= 25 (compared within same sector/industry)"
+      },
+      "sources": [
+        36,
+        30,
+        6
+      ],
+      "quote": "מתחת למכפיל… 25",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-9",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סטאפ 'תיקון במגמה עולה' בסורק: מחיר מעל SMA200 אך מתחת SMA50 (יומי)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "sma200_daily",
+          "sma50_daily"
+        ],
+        "predicate": "price > sma200_daily AND price < sma50_daily"
+      },
+      "sources": [
+        37
+      ],
+      "quote": "מעל ה-200, אבל מתחת ל-50",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-10",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "תוצאות הסורק תמיד מאומתות מול המגמה השולטת בגרף שבועי — פילטר RSI<30 רלוונטי רק כשהמגמה השבועית עולה",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "weekly_trend",
+          "rsi_14"
+        ],
+        "predicate": "weekly_trend == 'up' required before applying rsi_14 <= 30 filter"
+      },
+      "sources": [
+        36
+      ],
+      "quote": "המגמה השולטת היא מגמת ירידה ולכן לא מעניין אותי הרמה של השלושים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-11",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "מספר מניות במעקב: 40–50, לכל היותר 100 מניות מוכרות",
+      "type": "numeric",
+      "applies_to": [
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        30,
+        36
+      ],
+      "quote": "התמקדות ב-40-50, לכל היותר 100 מניות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-12",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סף סחירות ישראל: מחזור יומי ממוצע (3 ח') ≥ 500,000 ₪ לעסקאות עד 15,000 ₪; ≥ 1,000,000 ₪ לקנייה בודדת של 30,000 ₪ ומעלה",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "avg_daily_turnover_ils_3m",
+          "intended_trade_size_ils"
+        ],
+        "predicate": "(intended_trade_size_ils <= 15000 AND avg_daily_turnover_ils_3m >= 500000) OR (intended_trade_size_ils >= 30000 AND avg_daily_turnover_ils_3m >= 1000000)"
+      },
+      "sources": [
+        18
+      ],
+      "quote": "המחזור היומי המינימלי הממוצע… לפחות 500 אלף שקל",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-13",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "אין לקנות מניה שרק הונפקה — אין לה גרף מספק להבנת כוחות ביקוש/היצע",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ipo_date",
+          "chart_history_length"
+        ],
+        "predicate": "listing_age is sufficient (not a fresh IPO with no meaningful chart)"
+      },
+      "sources": [
+        10
+      ],
+      "quote": "אף פעם לא נקנה מנייה שרק הונפקה… אין לה גרף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-14",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "כלל PDT (חשבון אמריקאי מתחת ל-25,000 $): מקסימום 3 עסקאות תוך-יומיות בכל 5 ימי מסחר",
+      "type": "numeric",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "account_equity_usd",
+          "day_trades_last_5_sessions"
+        ],
+        "predicate": "account_equity_usd < 25000 => day_trades_last_5_sessions <= 3 (swing trades exempt)"
+      },
+      "sources": [
+        44
+      ],
+      "quote": "מקסימום 3 עסקאות תוך-יומיות בכל 5 ימי מסחר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-15",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סוחרים בגרף השבועי בלבד לבדיקה הראשונית (מסחר סווינג, לא תוך-יומי)",
+      "type": "procedural",
+      "applies_to": [
+        "timing",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-02"
+      ],
+      "quote": "הבדיקה נערכת אך ורק על הגרף השבועי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-16",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "שיעור 29 הוא שיעור פסיכולוגיה — אין בו קריטריוני סינון מספריים; הסקרינר וספיו נדחים במפורש לשיעור 30",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        29,
+        30
+      ],
+      "quote": "שיעור 29 הוא שיעור פסיכולוגיה — אין בו קריטריוני סינון מספריים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-17",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סינון דשדוש בסורק Finviz: השדה Pattern = Channel (ריק, ללא נטייה כלפי מעלה/מטה) מסמן מניה בדשדוש",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        13
+      ],
+      "quote": "השדה `Pattern = Channel` (ריק, ללא נטייה כלפי מעלה/מטה) מסמן מניה בדשדוש",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "א-18",
+      "category": "א",
+      "category_name": "סינון ראשוני / הסורק",
+      "statement": "סינון שווי-שוק לדשדוש בסורק: Mid = 2–10 מיליארד דולר (קטגוריית ה-Market Cap הבינונית של Finviz)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "market_cap"
+        ],
+        "predicate": "market_cap >= 2000000000 AND market_cap <= 10000000000"
+      },
+      "sources": [
+        13
+      ],
+      "quote": "`Mid = 2–10 מיליארד דולר` (מיליארד, לא מיליון — קטגוריית ה-Market Cap הבינונית של Finviz)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-1",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מתחילים כל ניתוח מטיים-פריים גבוה (שבועי), לא מהיומי; היומי/הנמוך משמש רק לתזמון או למסחר תוך-יומי",
+      "type": "procedural",
+      "applies_to": [
+        "timing",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        49,
+        47,
+        "DOC-02",
+        28
+      ],
+      "quote": "מתחילים תמיד תמיד מטווח זמן גבוה יותר, לא מהגרף היומי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-2",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מזהים תבנית/מגמה בשבועי ואז עוברים ליומי לאישור הפריצה ולתזמון הכניסה — לא מבצעים ישר מהשבועי (שבועי→יומי, יומי→4 שעות)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        49,
+        28,
+        26,
+        24
+      ],
+      "quote": "הבנו את התבנית אבל אנחנו מחכים לראות את הגרף היומי... בואו נעבור לגרף היומי ונראה האם מדובר פה אכן בפריצה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-3",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "סוחרים אך ורק עם המגמה השלטת — לונג במגמת עלייה, שורט במגמת ירידה; אין שורט במגמת עלייה גם באזור קניית-יתר (RSI 70)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "dominant_trend",
+          "position_direction",
+          "rsi"
+        ],
+        "predicate": "long only if dominant_trend=='up'; short only if dominant_trend=='down'; block short when dominant_trend=='up' even if rsi>=70"
+      },
+      "sources": [
+        49,
+        45,
+        7,
+        29,
+        30
+      ],
+      "quote": "הלכנו עם המגמה השלטת… לא לקחנו שורט בכלל",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-4",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "הגדרת מגמת עלייה: שיאים (נקודות C) עולים + שפלים עולים או שאינם יורדים",
+      "type": "visual",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10,
+        11
+      ],
+      "quote": "סדרה עולה של רמות C עולות ורמות שפל עולות… השפל יכול להיות גם זהה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-5",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "הגדרת מגמת ירידה: שיאים (C) יורדים + שפלים יורדים (שיאים רשאים להיות זהים); נדרשות לפחות שתי נקודות לסדרה",
+      "type": "visual",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10,
+        11
+      ],
+      "quote": "נדרשות לפחות שתי נקודות כדי לדבר על סדרה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-6",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "תבניות תחילת מגמת עלייה: (א) שני שפלים עולים + שני שיאים עולים, או (ב) שני שפלים שאינם יורדים + שני שיאים עולים; בשתיהן נקודות C חייבות לעלות",
+      "type": "visual",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "בשתיהן נקודות C חייבות לעלות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-7",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "תבניות תחילת מגמת ירידה: (א) שני שיאים יורדים + שני שפלים יורדים, או (ב) שני שיאים שאינם עולים + שני שפלים יורדים",
+      "type": "visual",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "תבניות תחילת מגמת ירידה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-8",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "תבנית 'מוטציה': עלייה = שני שפלים יורדים ואז פרץ שפורץ את ה-C האחרון; ירידה = שני שיאים עולים ואז פרץ ששובר את השפל האחרון",
+      "type": "visual",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "תבנית 'מוטציה'",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-9",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "טריגר היפוך מטה→מעלה: גל עליות שעולה מעל שיא (C) האחרון — המכנה המשותף לכל תבניות ההיפוך למעלה וגם נקודת ההצטרפות ללונג",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "last_swing_high_C"
+        ],
+        "predicate": "reversal_up_trigger := price > last_swing_high_C; on trigger allow long entry"
+      },
+      "sources": [
+        10
+      ],
+      "quote": "גל עליות שעולה מעל שיא (C) האחרון",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-10",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מגמת עלייה נמשכת כל עוד רמת השפל האחרונה לא נשברה כלפי מטה",
+      "type": "procedural",
+      "applies_to": [
+        "timing",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "last_swing_low"
+        ],
+        "predicate": "uptrend_intact := price > last_swing_low"
+      },
+      "sources": [
+        10,
+        8
+      ],
+      "quote": "מגמת עלייה נמשכת כל עוד רמת השפל האחרונה לא נשברה כלפי מטה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-11",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "היפוך מעלה→מטה מאושר בשבירת השפל האחרון: חסל לונג, אל תנסה לתפוס ירידות, אפשר לחפש שורט; זו גם נקודת היציאה",
+      "type": "procedural",
+      "applies_to": [
+        "exit",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "last_swing_low"
+        ],
+        "predicate": "reversal_down_confirmed := price < last_swing_low; on confirm exit long and block long"
+      },
+      "sources": [
+        10
+      ],
+      "quote": "היפוך מעלה→מטה מאושר בשבירת השפל האחרון",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-12",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "סימני ההיפוך המוחלטים: שפלים מתחילים לרדת (בעלייה) / שיאים מתחילים לעלות (בירידה)",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "שפלים מתחילים לרדת (בעלייה) / שיאים מתחילים לעלות (בירידה)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-13",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "הנחת דאו: מגמה נחשבת נמשכת עד למתן סימנים מוחלטים להתהפכותה; כל תנועה נגדית = תנועה זמנית בלבד",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "מגמה נחשבת נמשכת עד למתן סימנים מוחלטים להתהפכותה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-14",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "הגדרת נקודת שפל: המחיר טיפס, נעצר, ירד, ובנקודה שבה החל לטפס שוב נקבע השפל (בדיעבד)",
+      "type": "visual",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "בנקודה שבה החל לטפס שוב נקבע השפל (בדיעבד)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-15",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "סיווג מגמות לפי מימד זמן: הארוכה = ראשית, הביניים = משנית, הקצרה = מינורית (המינורית מרכיבה את המשנית, המשנית את הראשית)",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "הארוכה = ראשית, הביניים = משנית, הקצרה = מינורית",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-16",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מגמה ראשית נבחנת בגרף שבועי/חודשי; משכה חודשים ואף שנים",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "מגמה ראשית נבחנת בגרף שבועי/חודשי; משכה חודשים ואף שנים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-17",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מינימום למגמה ראשית: 2 שפלים עולים + 2 שיאים עולים במרחק ≥ 4 חודשים זה מזה (ולהפך בירידה); לבחירת נקודת מפנה — קיצון מרוחק ≥ 4 חודשים (3 בדוחק)",
+      "type": "numeric",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "rising_lows_count",
+          "rising_highs_count",
+          "months_between_points"
+        ],
+        "predicate": "primary_uptrend := rising_lows_count>=2 && rising_highs_count>=2 && months_between_points>=4"
+      },
+      "sources": [
+        10
+      ],
+      "quote": "2 שפלים עולים + 2 שיאים עולים במרחק ≥ 4 חודשים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-18",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "אסימטריית משך: מגמה ראשית עולה נמשכת שנים; מגמה ראשית יורדת — כשנה עד שנתיים בלבד",
+      "type": "numeric",
+      "applies_to": [
+        "timing",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "מגמה ראשית עולה נמשכת שנים; מגמה ראשית יורדת — כשנה עד שנתיים בלבד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-19",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "קשל שוק (סימן חולשה ראשוני): ניסיון פריצה לשיא חדש המרוחק ≥ 3 חודשים מהשיא הקודם, שנכשל ומתחיל לרדת",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "months_since_prev_high",
+          "new_high_attempt_failed"
+        ],
+        "predicate": "market_fatigue := months_since_prev_high>=3 && new_high_attempt_failed==true"
+      },
+      "sources": [
+        10,
+        15
+      ],
+      "quote": "ניסיון פריצה לשיא חדש המרוחק ≥ 3 חודשים מהשיא הקודם, שנכשל ומתחיל לרדת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-20",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "פרקטליות: קריטריוני זיהוי המגמה זהים בכל טיים-פריים (דקה עד חודשי); גרף גבוה יותר = תנועה גדולה יותר",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10
+      ],
+      "quote": "קריטריוני זיהוי המגמה זהים בכל טיים-פריים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-21",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "שינוי מגמה לעלייה מאושר רק בפריצה מעל נקודת C האחרונה (עד אז — לא מגמת עלייה)",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "last_swing_high_C"
+        ],
+        "predicate": "uptrend_change_confirmed := price > last_swing_high_C; else not an uptrend"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "שינוי מגמה לעלייה מאושר רק בפריצה מעל נקודת C האחרונה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-22",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "במגמת ירידה שולטת אין לתפוס 'סכין נופלת' (לקנות), גם אם המחיר אטרקטיבי — אלא אם יש הבנה בערך פונדמנטלי",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        10,
+        5
+      ],
+      "quote": "במגמת ירידה שולטת אין לתפוס 'סכין נופלת'",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-23",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מדדים משיקים אמורים לנוע בהרמוניה באותו כיוון; דיברגנס בין מדדים דומים (דאו מול S&P; ת\"א 35 מול ת\"א 90) = אזהרת שינוי מגמה",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "index_a_direction",
+          "index_b_direction"
+        ],
+        "predicate": "divergence_warning := index_a_direction != index_b_direction"
+      },
+      "sources": [
+        8
+      ],
+      "quote": "דיברגנס בין מדדים דומים… = אזהרת שינוי מגמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ב-24",
+      "category": "ב",
+      "category_name": "מגמה וריבוי טיים-פריימים",
+      "statement": "מזהים מי חזק — קונים או מוכרים — ומצטרפים לצד החזק",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        7
+      ],
+      "quote": "מזהים מי חזק — קונים או מוכרים — ומצטרפים לצד החזק",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-1",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "רמת תמיכה = אזור מתחת למחיר שבו ביקוש בלם ירידה; רמת התנגדות = אזור מעל המחיר שבו היצע בלם עלייה",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ohlc_series",
+          "pivots"
+        ],
+        "predicate": "support=cluster of pivot-lows below price where demand halted decline; resistance=cluster of pivot-highs above price where supply halted advance"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "רמת תמיכה = אזור מתחת למחיר שבו ביקוש בלם ירידה; רמת התנגדות = אזור מעל המחיר שבו היצע בלם עלייה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-2",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "במגמת עלייה כל שפל = תמיכה; כל שיא (C) = התנגדות",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        11,
+        10
+      ],
+      "quote": "במגמת עלייה כל שפל = תמיכה; כל שיא (C) = התנגדות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-3",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "במגמת עלייה התמיכות לא אמורות להישבר; במגמת ירידה הן נשברות בסוף",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "במגמת עלייה התמיכות לא אמורות להישבר; במגמת ירידה הן נשברות בסוף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-4",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "במגמת ירידה ההתנגדויות לא אמורות להיפרץ; במגמת עלייה הן נפרצות בסוף",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "במגמת ירידה ההתנגדויות לא אמורות להיפרץ; במגמת עלייה הן נפרצות בסוף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-5",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "עוצמת רמה עולה עם הטיים-פריים: חודשי > שבועי > יומי > דקה",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "level",
+          "timeframe"
+        ],
+        "predicate": "strength(level) ranks by timeframe: monthly>weekly>daily>minute"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "עוצמת רמה עולה עם הטיים-פריים: חודשי > שבועי > יומי > דקה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-6",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "עוצמת רמה עולה עם מספר הנגיעות: יותר נגיעות = רמה חזקה יותר (ללא סף מינימלי מפורש לרמה אופקית)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "level",
+          "pivots"
+        ],
+        "predicate": "strength(level) increases with touch_count; no explicit minimum threshold for horizontal level"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "עוצמת רמה עולה עם מספר הנגיעות: יותר נגיעות = רמה חזקה יותר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-7",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "החלפת תפקידים: התנגדות שנפרצה 'אמורה' (לא 'חייבת') להפוך לתמיכה, ותמיכה שנשברה — להתנגדות",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "level",
+          "price",
+          "break_event"
+        ],
+        "predicate": "after break, resistance role→support and support role→resistance (expected, not guaranteed)"
+      },
+      "sources": [
+        11,
+        56,
+        57,
+        43
+      ],
+      "quote": "החלפת תפקידים: התנגדות שנפרצה 'אמורה' (לא 'חייבת') להפוך לתמיכה, ותמיכה שנשברה — להתנגדות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-8",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "חזרת המחיר לרמה שהחליפה תפקיד וקפיצה ממנה — סבירה ב-> 50% מהמקרים",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "חזרת המחיר לרמה שהחליפה תפקיד וקפיצה ממנה — סבירה ב-> 50% מהמקרים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-9",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "רמה נחשבת שבורה רק בסגירת נר מעבר לה — מחכים לסוף הנר, לא יוצאים על נגיעה",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "candle_close",
+          "level"
+        ],
+        "predicate": "level_broken = candle closes beyond level; a touch alone does not confirm break"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "רמה נחשבת שבורה רק בסגירת נר מעבר לה — מחכים לסוף הנר, לא יוצאים על נגיעה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-10",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "אין לקנות לפני רמת התנגדות (סיכון מיותר)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "resistance"
+        ],
+        "predicate": "block buy if a resistance level sits just above current price"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "אין לקנות לפני רמת התנגדות (סיכון מיותר)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-11",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "רמה משמעותית = נקודה בולטת וברורה על הגרף (תנועה של מספר יחידות זמן לפניה ואחריה), לא נקודה זעירה",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "רמה משמעותית = נקודה בולטת וברורה על הגרף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-12",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "לרמות חזקות מסמנים את גוף הנרות (לא רק את הפתיל); האזור בין גוף לפתיל נחשב אזור הרמה",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "לרמות חזקות מסמנים את גוף הנרות (לא רק את הפתיל); האזור בין גוף לפתיל נחשב אזור הרמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-13",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "קו מגמה: במגמת עלייה מחבר שפלים עולים (תמיכה עולה); במגמת ירידה מחבר שיאים יורדים (התנגדות יורדת)",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "קו מגמה: במגמת עלייה מחבר שפלים עולים; במגמת ירידה מחבר שיאים יורדים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-14",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "תוקף קו מגמה: 2 נקודות למתיחה + נגיעה שלישית שבה הקו מחזיק לאימות (2 נגיעות אינן מספיקות)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "trendline_points",
+          "pivots"
+        ],
+        "predicate": "trendline_valid = 2 anchor points + a third touch that holds; touch_count>=3"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "תוקף קו מגמה: 2 נקודות למתיחה + נגיעה שלישית שבה הקו מחזיק לאימות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-15",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "שבירת קו מגמה אינה מעידה בהכרח על שינוי מגמה — ייתכן רק התמתנות שיפוע",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "שבירת קו מגמה אינה מעידה בהכרח על שינוי מגמה — ייתכן רק התמתנות שיפוע",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-16",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "קו מגמה שקיבל תוקף ונפרץ מחליף תפקיד (עולה נפרץ → תמיכה; יורד נשבר → התנגדות)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "trendline",
+          "break_event",
+          "price"
+        ],
+        "predicate": "after break of validated trendline, role flips: rising→support, falling→resistance"
+      },
+      "sources": [
+        11
+      ],
+      "quote": "קו מגמה שקיבל תוקף ונפרץ מחליף תפקיד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-17",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "שיפוע קו המגמה = תשואה ליחידת זמן; תלול יותר = מומנטום חזק יותר אך לא בר-קיימא",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        11
+      ],
+      "quote": "שיפוע קו המגמה = תשואה ליחידת זמן; תלול יותר = מומנטום חזק יותר אך לא בר-קיימא",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ג-18",
+      "category": "ג",
+      "category_name": "רמות תמיכה/התנגדות וקווי מגמה",
+      "statement": "מספרים עגולים (50/100/200) משמשים תמיכה/התנגדות; בקנייה על מספר עגול קונים מעט מעליו (101, לא 100)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price"
+        ],
+        "predicate": "round numbers (50/100/200) act as support/resistance; buy slightly above the round number (e.g. 101 not 100)"
+      },
+      "sources": [
+        38
+      ],
+      "quote": "מספרים עגולים (50/100/200) משמשים תמיכה/התנגדות; בקנייה על מספר עגול קונים מעט מעליו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-1",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "תבניות תחתית/תקרה כפולה ומשולשת: אחוזי הצלחה מעל 60% בגרף יומי ומעלה; נכנסים רק לתבניות מוכרות בהסתברות > 60%, אחרת נשארים בחוץ",
+      "type": "visual",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        7
+      ],
+      "quote": "נכנסים רק לתבניות מוכרות בהסתברות > 60%, אחרת נשארים בחוץ",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-2",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "דשדוש: איזון ביקוש/היצע; מזוהה ב-2 נגיעות ברמה העליונה + 2 בתחתונה. בדשדוש נכנסים בנגיעה ה-3 (בתמיכה=קנייה, בהתנגדות=שורט); במגמת עלייה נכנסים כבר בנגיעה 2 לרמת התמיכה. דשדוש = 3 נגיעות; מגמה = 2",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "touches_at_resistance",
+          "touches_at_support",
+          "trend"
+        ],
+        "predicate": "range_confirmed = touches_at_resistance >= 2 AND touches_at_support >= 2; entry: if range and 3rd touch at support => long, 3rd touch at resistance => short; if uptrend enter on 2nd touch at support"
+      },
+      "sources": [
+        10,
+        12,
+        13
+      ],
+      "quote": "בדשדוש נכנסים בנגיעה ה-3, אבל במגמת עלייה נכנסים כבר בחזרה לרמת התמיכה (נגיעה 2)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-3",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "תבנית N / מ = דשדוש; היא המינימום הנדרש לכניסת לונג (מגמת עלייה או לכל הפחות דשדוש)",
+      "type": "visual",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        12
+      ],
+      "quote": "תבנית N / מ = דשדוש; היא המינימום הנדרש לכניסת לונג",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-4",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "יעד פריצת דשדוש (מינימלי) = עומק הדשדוש באחוזים, מוקרן מנקודת הפריצה",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "range_depth_pct",
+          "breakout_price"
+        ],
+        "predicate": "target = breakout_price * (1 + range_depth_pct)"
+      },
+      "sources": [
+        16
+      ],
+      "quote": "יעד פריצת דשדוש (מינימלי) = עומק הדשדוש באחוזים, מוקרן מנקודת הפריצה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-5",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "יעד פריצת תבנית N (מינימלי) = לפחות גודל הרגל הקודמת, או עד ההתנגדות ההיסטורית הבאה",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "breakout_price",
+          "prev_leg_size",
+          "next_historical_resistance"
+        ],
+        "predicate": "target = min(breakout_price + prev_leg_size, next_historical_resistance); target >= breakout_price + prev_leg_size"
+      },
+      "sources": [
+        16
+      ],
+      "quote": "יעד פריצת תבנית N (מינימלי) = לפחות גודל הרגל הקודמת, או עד ההתנגדות ההיסטורית הבאה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-6",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "ראש וכתפיים: מאושרת רק בשבירת קו הצוואר כלפי מטה; יעד = מרחק ראש-צוואר מוקרן מטה; גל הירידה לצוואר במחזור מתרחב וגל העלייה לכתף ימין במחזור דועך; שבירה עדיף במחזור גבוה",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        19,
+        22
+      ],
+      "quote": "ראש וכתפיים: מאושרת רק בשבירת קו הצוואר כלפי מטה; יעד = מרחק ראש-צוואר מוקרן מטה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-7",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "משולש סימטרי: אין תמיכה ברורה; בפריצה חובה מחזור גבוה, סטופ מתחת לקו המגמה שנפרץ",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        24,
+        22
+      ],
+      "quote": "משולש סימטרי: אין תמיכה ברורה; בפריצה חובה מחזור גבוה, סטופ מתחת לקו המגמה שנפרץ",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-8",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "משולש עולה (שורי): יעד הרווח = גובה בסיס המשולש",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "triangle_base_height",
+          "breakout_price"
+        ],
+        "predicate": "target = breakout_price + triangle_base_height"
+      },
+      "sources": [
+        24
+      ],
+      "quote": "משולש עולה (שורי): יעד הרווח = גובה בסיס המשולש",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-9",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "ספל וידית: מתזמנים כניסה בתוך הידית ע\"י ירידה לטיים-פריים נמוך; הידית תואמת בד\"כ אזור פיבונאצ'י ~62% + רמת תמיכה",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        24
+      ],
+      "quote": "ספל וידית: מתזמנים כניסה בתוך הידית ע\"י ירידה לטיים-פריים נמוך",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-10",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "פערי מחירים (gaps): פתיחה מעל/מתחת לסגירה הקודמת ללא מסחר ביניהן; רוב הפערים נוטים להיסגר. חמישה סוגים — רגיל, פריצה, בריחה, מיצוי, ארביטראז'",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        23
+      ],
+      "quote": "חמישה סוגים — רגיל, פריצה, בריחה, מיצוי, ארביטראז'",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-11",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "יום/שבוע היפוך: שיא חדש ואז סגירה נמוכה יותר (או שפל חדש וסגירה גבוהה יותר); חשיבותו עולה עם התנגדות קודמת / מחזור נמוך בעליות / שבירת קו מגמה, וככל שטווח המסחר והמחזור גדולים יותר",
+      "type": "visual",
+      "applies_to": [
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        23
+      ],
+      "quote": "יום/שבוע היפוך: שיא חדש ואז סגירה נמוכה יותר (או שפל חדש וסגירה גבוהה יותר)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-12",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "תיקון טכני בריא = ביטול 38%–62% מהמהלך הקודם (נמדד מתוך המהלך האחרון, לא כאחוז מהשיא); אזור 62% מועדף לכניסת ריטסט",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "retracement_pct"
+        ],
+        "predicate": "healthy_correction = retracement_pct >= 0.38 AND retracement_pct <= 0.62; preferred_retest_zone ~ 0.62"
+      },
+      "sources": [
+        15,
+        49,
+        22
+      ],
+      "quote": "תיקון טכני בריא = ביטול 38%–62% מהמהלך הקודם",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-13",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "סוגי תיקון לפי עומק וזמן: פולבק ~1–3% / 2–5 ימים · קורקשן ~8–10% / ימים-חודש · רטרסמנט ~10–25% / שבועות-חודשים",
+      "type": "numeric",
+      "applies_to": [
+        "timing",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "depth_pct",
+          "duration_days"
+        ],
+        "predicate": "pullback if depth_pct in 0.01-0.03 and duration 2-5 days; correction if depth_pct in 0.08-0.10 and duration days-month; retracement if depth_pct in 0.10-0.25 and duration weeks-months"
+      },
+      "sources": [
+        15
+      ],
+      "quote": "פולבק ~1–3% / 2–5 ימים · קורקשן ~8–10% / ימים-חודש · רטרסמנט ~10–25% / שבועות-חודשים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-14",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "ניקוי 100% מהגל האחרון (בד\"כ במחזור גבוה) = איפוך מגמה / היווצרות ראש-וכתפיים",
+      "type": "numeric",
+      "applies_to": [
+        "exit",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "retracement_pct",
+          "volume"
+        ],
+        "predicate": "if retracement_pct >= 1.0 (100% of last wave) => trend_reversal / head_and_shoulders (usually confirmed by high volume)"
+      },
+      "sources": [
+        18,
+        22
+      ],
+      "quote": "ניקוי 100% מהגל האחרון (בד\"כ במחזור גבוה) = איפוך מגמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-15",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "סיום תיקון → תנועה שמחדשת את המגמה מעבר ל-C (בעלייה) / לשפל (בירידה)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        15
+      ],
+      "quote": "סיום תיקון → תנועה שמחדשת את המגמה מעבר ל-C (בעלייה) / לשפל (בירידה)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ד-16",
+      "category": "ד",
+      "category_name": "תבניות מחיר",
+      "statement": "פערים לסחר תוך-יומי מתאימים למתקדמים בלבד; לא מומלץ למתחילים",
+      "type": "procedural",
+      "applies_to": [
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        23
+      ],
+      "quote": "פערים לסחר תוך-יומי מתאימים למתקדמים בלבד; לא מומלץ למתחילים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-1",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "מנתחים אך ורק בגרף נרות יפניים; סקאלה לוגריתמית לטווחי זמן ארוכים",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "מנתחים אך ורק בגרף נרות יפניים; סקאלה לוגריתמית לטווחי זמן ארוכים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-2",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "משמעות נר בודד עולה כשהוא מגיע באזור משמעותי (תמיכה/התנגדות)",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "משמעות נר בודד עולה כשהוא מגיע באזור משמעותי (תמיכה/התנגדות)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-3",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "נר היפוך (פטיש/דוג'י) דורש נר אישור שסוגר מעל הגבוה שלו לפני כניסה; רצוי סביב אזור תמיכה",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9,
+        30,
+        52
+      ],
+      "quote": "רק לאחר נר ירוק אפשר לקנות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-4",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "תבניות נר מפתח: בליעה, מרובוזו, דוג'י/ספינינג, פטיש/Hanging Man, שוטינג סטאר",
+      "type": "visual",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "בליעה... מרובוזו... דוג'י/ספינינג... פטיש/Hanging Man, שוטינג סטאר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-5",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "פריצה איכותית = כללי נמ\"ס במצטבר: נר בריא + מחזור גבוה + סגירה; אם תנאי אחד חסר — פריצת שווא",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "candle_body_vs_level",
+          "volume_vs_avg",
+          "close_position"
+        ],
+        "predicate": "healthy_candle AND volume>avg AND close_near_high; if any missing → false/suspect breakout"
+      },
+      "sources": [
+        16,
+        24
+      ],
+      "quote": "כללי נמ\"ס במצטבר: נר בריא + מחזור גבוה + סגירה... אם תנאי אחד חסר — פריצת שווא/חשודה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-6",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "פריצה 'סבירה' = כ-1%–3% מעל הרמה; לא רודפים פריצה שקפצה חזק מדי (הסטופ נשאר למטה והסיכון גדל)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price_pct_above_level",
+          "stop_distance_pct"
+        ],
+        "predicate": "1 <= price_pct_above_level <= 3 AND stop_distance keeps 1:2 achievable; if price ran too far from level (stop too wide) → don't chase, wait for retest"
+      },
+      "sources": [
+        24,
+        22,
+        16
+      ],
+      "quote": "פריצה 'סבירה' = כ-1%–3% מעל הרמה; לא רודפים פריצה שקפצה חזק מדי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-7",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "כניסת ריטסט עדיפה על כניסה בפריצה — מחיר טוב יותר, סטופ קרוב יותר, יעד גדול יותר (החיסרון: המחיר עלול לא לחזור)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        24
+      ],
+      "quote": "כניסת ריטסט עדיפה על כניסה בפריצה — מחיר טוב יותר, סטופ קרוב יותר, יעד גדול יותר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-8",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "ריטסט תקף רק אם עברו לפחות 5 נרות מהפריצה ועד החזרה לרמה; 4 נרות מלאים מעל הרמה והכניסה על הנר החמישי",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "full_candles_above_level_since_breakout"
+        ],
+        "predicate": "full_candles_above_level_since_breakout >= 4 AND entry on 5th candle or later; if < 5 candles from breakout to return → disqualify"
+      },
+      "sources": [
+        14,
+        30
+      ],
+      "quote": "כל עוד לא עברו ארבעה נרות מלאים... ורק אם יחזור זה יהיה נר החמישי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-9",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "פיבונאצ'י לכניסת ריטסט: 38 / 50 / 62; 62% הוא האזור המועדף (הרף התחתון של יכולת התיקון)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "retracement_fib_level"
+        ],
+        "predicate": "retracement_fib_level in {38,50,62}; prefer 62 as lower bound of valid correction"
+      },
+      "sources": [
+        49
+      ],
+      "quote": "פיבונאצ'י לכניסת ריטסט: 38 / 50 / 62; 62% הוא האזור המועדף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-10",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "אזור קונפלואנס טכני לכניסה: ממוצע נע תומך, רצועת בולינגר תחתונה, RSI ו-CCI במכירת-יתר / קרובים, או סטיות חיוביות",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-06"
+      ],
+      "quote": "אזור קונפלואנס טכני לכניסה: ממוצע נע תומך, רצועת בולינגר תחתונה, RSI ו-CCI במכירת-יתר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-11",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "מחזור המסחר חייב תמיד לאשר את המגמה: כל C חדש בעלייה במחזור גבוה מקודמו; תיקונים במחזור מתכווץ; פריצה מעלה תמיד במחזור גבוה",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "new_high_volume_vs_prev_high",
+          "correction_volume_trend",
+          "breakup_volume"
+        ],
+        "predicate": "each new up-leg C volume > prior C; corrections on contracting volume; up-breakout on high volume; else trend unconfirmed"
+      },
+      "sources": [
+        18,
+        8
+      ],
+      "quote": "מחזור המסחר חייב תמיד לאשר את המגמה: כל C חדש בעלייה במחזור גבוה מקודמו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-12",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "מותר לקנות נר אדום על רמת תמיכה כשהמגמה עולה ומחזורי התיקון דועכים; אם הנר האדום במחזור גבוה מהממוצע — מחכים לנר ירוק",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "candle_color",
+          "at_support",
+          "trend_up",
+          "correction_volume_fading",
+          "red_candle_volume_vs_avg"
+        ],
+        "predicate": "buy red candle allowed if at_support AND trend_up AND correction_volume_fading; if red_candle_volume > avg → wait for green candle"
+      },
+      "sources": [
+        28,
+        30
+      ],
+      "quote": "מותר לקנות נר אדום על רמת תמיכה... אם הנר האדום במחזור גבוה מהממוצע — מחכים לנר ירוק",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-13",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "דיברגנס מחיר/מחזור (מחיר לשיא חדש אך מחזור מתכווץ) = דגל אדום / איתות חולשה ראשון לפני היפוך",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        8,
+        18
+      ],
+      "quote": "דיברגנס מחיר/מחזור (מחיר לשיא חדש אך מחזור מתכווץ) = דגל אדום",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-14",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "אין להמתין אינסוף לריטסט — לא תמיד המחיר חוזר לרמה, וההמתנה עלולה לגרום לפספוס העסקה",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        22
+      ],
+      "quote": "אין להמתין אינסוף לריטסט — לא תמיד המחיר חוזר לרמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-15",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "Dark Cloud (ענן שחור): נר עלייה בריא ואחריו נר שנפתח גבוה, סוגר נמוך ואוכל ≥ 50% מגוף הנר הקודם — אות לחולשה / להידוק הסטופ",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "Dark Cloud... נר שנפתח גבוה, סוגר נמוך ואוכל ≥ 50% מגוף הנר הקודם — אות לחולשה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-16",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "Bearish Harami (הריון דובי): נר קטן שגופו בלוע בתוך גוף הנר (העולה) הקודם — הססנות ואיתות אפשרי לשינוי מגמה",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "Bearish Harami... נר קטן שגופו בלוע בתוך גוף הנר (העולה) הקודם",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-17",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "Bearish Kicker: נר שנפתח משמעותית מתחת לסגירה הקודמת ויורד חד — היפוך אגרסיבי כלפי מטה",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "Bearish Kicker: נר שנפתח משמעותית מתחת לסגירה הקודמת ויורד חד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-18",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "Tweezer Top (פינצטה עליונה): נר ירידה שמתחיל בראש (הגבוה) של הנר הקודם ויורד מתחתיו — דחייה מרמה",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "Tweezer Top... נר ירידה שמתחיל בראש (הגבוה) של הנר הקודם ויורד מתחתיו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ה-19",
+      "category": "ה",
+      "category_name": "אישורי כניסה",
+      "statement": "Dragonfly Doji (דוג'י שפירית): דוג'י עם פתיל תחתון ארוך וגוף זעיר בראשו — הססנות / איתות היפוך אפשרי",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        9
+      ],
+      "quote": "Dragonfly Doji... דוג'י עם פתיל תחתון ארוך וגוף זעיר בראשו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-1",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "RSI: סקלה 0–100; קו אמצע 50, עליון 70 (קניית-יתר), תחתון 30 (מכירת-יתר); ברירת מחדל 14 (ל-RSI2 קווים 90/10)",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "rsi_14"
+        ],
+        "predicate": "overbought if rsi_14 > 70; oversold if rsi_14 < 30"
+      },
+      "sources": [
+        26,
+        30
+      ],
+      "quote": "RSI: סקלה 0–100; קו אמצע 50, עליון 70 (קניית-יתר), תחתון 30 (מכירת-יתר); ברירת מחדל 14 יחידות זמן",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-2",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "RSI לפי מגמה: בעלייה ראשית לרוב מעל 50 ומתקשה לרדת ל-30; בירידה — הפוך",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "rsi_14",
+          "trend"
+        ],
+        "predicate": "if trend up expect rsi_14 mostly > 50 and rarely < 30; if trend down inverse"
+      },
+      "sources": [
+        26
+      ],
+      "quote": "RSI לפי מגמה: בעלייה ראשית לרוב מעל 50 ומתקשה לרדת ל-30 (ובחלק מהזמן מעל 70); בירידה — הפוך",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-3",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "סטיות RSI: שלילית (מחיר שיא עולה, RSI שיא יורד) = אות היפוך מטה; חיובית = אות היפוך מעלה",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        26
+      ],
+      "quote": "סטיות RSI: שלילית (מחיר שיא עולה, RSI שיא יורד) = אות היפוך מטה; חיובית (מחיר שפל יורד, RSI שפל עולה) = אות היפוך מעלה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-4",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "כניסה על RSI רק עם המגמה: מכירת-יתר במגמה עולה / קניית-יתר במגמה יורדת",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "rsi_14",
+          "trend"
+        ],
+        "predicate": "allow entry only if (rsi_14 < 30 and trend up) or (rsi_14 > 70 and trend down)"
+      },
+      "sources": [
+        26,
+        30
+      ],
+      "quote": "כניסה על RSI רק עם המגמה: מכירת-יתר במגמה עולה / קניית-יתר במגמה יורדת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-5",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "MACD = הפרש EMA מהיר (12) ואיטי (26) + קו איתות; מתנד עוקב-מגמה מתחת לגרף",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ema_12",
+          "ema_26",
+          "signal_line"
+        ],
+        "predicate": "macd = ema_12 - ema_26; compare to signal_line"
+      },
+      "sources": [
+        25
+      ],
+      "quote": "MACD = הפרש EMA מהיר (12) ואיטי (26) + קו איתות; מתחת לגרף המחירים; שייך למתנדים עוקבי-מגמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-6",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "שלושה סוגי איתות MACD: (1) חציית קו הפעולה (2) חציית קו האפס (3) סטיות (דיברגנס)",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        25
+      ],
+      "quote": "שלושה סוגי איתות MACD: (1) חציית קו הפעולה (2) חציית קו האפס (3) סטיות (דיברגנס)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-7",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "MACD מאשר עוצמת מגמה כל עוד נע בכיוונה; מרחק גדל = התחזקות; סטיות בשבועי/חודשי משמעותיות יותר",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        25
+      ],
+      "quote": "MACD מאשר עוצמת מגמה כל עוד נע בכיוונה; מרחק גדל בין MACD לקו הפעולה = התחזקות; סטיות בגרף שבועי/חודשי משמעותיות יותר ועשויות לרמז על מפולת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-8",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "רצועות בולינגר: קו אמצע SMA(20), רצועות ±2 סטיות תקן; מודדות תנודתיות בלבד — לא מנבאות כיוון",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "sma_20",
+          "stddev_20"
+        ],
+        "predicate": "upper = sma_20 + 2*stddev_20; lower = sma_20 - 2*stddev_20"
+      },
+      "sources": [
+        28,
+        33
+      ],
+      "quote": "רצועות בולינגר: קו אמצע = SMA(20), רצועות ±2 סטיות תקן; מודדות תנודתיות בלבד — לא מנבאות כיוון/מועד פריצה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-9",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "בולינגר לפי מגמה: מגמה בשבועי → כניסה ביומי בנגיעה ברצועה התחתונה (לונג) / העליונה (שורט); סטופ ויעד לפי הרצועות ורמות T/R",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "lower_band",
+          "upper_band",
+          "trend"
+        ],
+        "predicate": "long entry if trend up and price touches lower_band; short entry if trend down and price touches upper_band"
+      },
+      "sources": [
+        28
+      ],
+      "quote": "בולינגר לפי מגמה + אסטרטגיה: מגמה בשבועי → כניסה ביומי כשהמחיר נוגע ברצועה התחתונה (לונג) / העליונה (שורט)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-10",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "קנייה בנגיעה ברצועה התחתונה במגמת עלייה: אחוזי הצלחה ~67–70%",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "lower_band",
+          "trend"
+        ],
+        "predicate": "buy signal if trend up and price touches lower_band (~67-70% success)"
+      },
+      "sources": [
+        33
+      ],
+      "quote": "קנייה בנגיעה ברצועה התחתונה במגמת עלייה: אחוזי הצלחה ~67–70%",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-11",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "CCI: ברירת מחדל 20; אינו מוגבל; רמות קיצון ±100 ו-±200 (למניות תנודתיות ±200)",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "cci_20"
+        ],
+        "predicate": "extreme if cci_20 > 100/200 or < -100/-200"
+      },
+      "sources": [
+        32
+      ],
+      "quote": "CCI: ברירת מחדל 20; אינו מוגבל; רמות קיצון ±100 ו-±200 (למניות תנודתיות ±200)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-12",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "ממוצעים נעים: ממוצע עולה = מגמת עלייה; חיתוך קצר מעל ארוך = כניסה, מתחת = יציאה; יעילים בשוק מגמתי בלבד",
+      "type": "visual",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ma_short",
+          "ma_long"
+        ],
+        "predicate": "entry if ma_short crosses above ma_long; exit if ma_short crosses below ma_long"
+      },
+      "sources": [
+        24
+      ],
+      "quote": "ממוצעים נעים: ממוצע עולה = מגמת עלייה; חיתוך קצר מעל ארוך = כניסה, מתחת = יציאה; יעילים בשוק מגמתי, לא בשוק משדשד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-13",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "אסטרטגיית EMA 5/13 (חודשי, מדד): כניסה בסוף חודש כשהקצר חוצה מלמטה מעלה; יציאה בחיתוך מטה; ללא שורט; פספוס — קנייה בפולבק לנגיעה ב-EMA(13)",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ema_5",
+          "ema_13"
+        ],
+        "predicate": "entry at month close if ema_5 crosses above ema_13; exit if ema_5 crosses below ema_13"
+      },
+      "sources": [
+        24,
+        27,
+        "DOC-31",
+        "DOC-32",
+        "DOC-33"
+      ],
+      "quote": "אסטרטגיית EMA 5/13 (גרף חודשי, מדד): כניסה בסוף חודש כשהקצר חוצה את הארוך מלמטה מעלה; יציאה בחיתוך מטה; הימנעות מוחלטת משורט",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-14",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "VWAP: מתאפס יומית; מחיר מתחת = 'זול', מעל = 'יקר'; שימושי בעיקר תוך-יומי (15 דקות ומטה)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "vwap"
+        ],
+        "predicate": "cheap if price < vwap; expensive if price > vwap (intraday)"
+      },
+      "sources": [
+        24
+      ],
+      "quote": "VWAP: מתאפס יומית; מחיר מתחת = 'זול', מעל = 'יקר'; שימושי בעיקר תוך-יומי (15 דקות ומטה)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-15",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "ATR(14) לכיול גודל הסטופ; סטופ בגודל ATR שלם מהרמה נחשב רחב מדי",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "atr_14",
+          "stop_distance"
+        ],
+        "predicate": "stop too wide if stop_distance >= atr_14"
+      },
+      "sources": [
+        12,
+        31
+      ],
+      "quote": "ATR(14) (ממוצע טווח גבוה-נמוך) לכיול גודל הסטופ; סטופ בגודל ATR שלם מהרמה נחשב רחב מדי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-16",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "אינדיקטור D9 (DeMark): נר נספר כשסגירתו גבוהה מסגירת הנר 4 יחידות לפניו; בהגעה ל-9 השוק מתוח וצפוי היפוך",
+      "type": "numeric",
+      "applies_to": [
+        "timing",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "close_series"
+        ],
+        "predicate": "count candle when close > close[n-4]; reversal expected when count reaches 9"
+      },
+      "sources": [
+        31
+      ],
+      "quote": "אינדיקטור D9 (DeMark): נר נספר כשסגירתו גבוהה מסגירת הנר 4 יחידות לפניו; בהגעה ל-9 השוק מתוח וצפוי היפוך",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-17",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "סדר עבודה: קוראים תנועת מחיר על גרף ריק לפני הוספת אינדיקטורים; משלבים כמה כלים (בולינגר + RSI + CCI + פיבונאצ'י)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        28
+      ],
+      "quote": "סדר עבודה: קוראים תנועת מחיר על גרף ריק לפני הוספת אינדיקטורים; משלבים כמה כלים (בולינגר + RSI + CCI + פיבונאצ'י)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ו-18",
+      "category": "ו",
+      "category_name": "אינדיקטורים",
+      "statement": "שום אינדיקטור אינו כלי בלעדי — כולם תומכי-החלטה ומשולבים עם ניתוח רמות וניהול סיכונים",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        25,
+        26,
+        28
+      ],
+      "quote": "שום אינדיקטור אינו כלי בלעדי — כולם תומכי-החלטה ומשולבים עם ניתוח רמות וניהול סיכונים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-1",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "פקודת כניסה = Buy Limit עם סכום העסקה המחושב מראש, מוזנת למערכת",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        12,
+        13,
+        "DOC-08"
+      ],
+      "quote": "פקודת כניסה = Buy Limit עם סכום העסקה המחושב מראש, מוזנת למערכת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-2",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "לא נכנסים בדיוק על הרמה — בלונג מעט מתחת לרמה, בשורט מעט לפניה; נכנסים/יוצאים תמיד קצת לפני הקו",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "level",
+          "position_direction",
+          "entry_price"
+        ],
+        "predicate": "long entry slightly below level; short slightly above; never exactly on the line"
+      },
+      "sources": [
+        12,
+        49
+      ],
+      "quote": "לא נכנסים בדיוק על הרמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-3",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "הזנת התראה ~2%–5% מעל/לפני הרמה במקום מעקב ידני יומי; כניסה בהגעה",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "alert_price",
+          "level"
+        ],
+        "predicate": "alert set 2%-5% above/before the level; enter on arrival"
+      },
+      "sources": [
+        12,
+        "DOC-03",
+        "DOC-08",
+        16
+      ],
+      "quote": "הזנת התראה ~2%–5% מעל/לפני הרמה במקום מעקב ידני יומי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-4",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "עדיף התראה על הוראה עתידית קבועה — הוראה עתידית 'משעבדת' את הסכום ומונעת פתיחת עסקאות נוספות",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-09"
+      ],
+      "quote": "עדיף התראה על הוראה עתידית קבועה — הוראה עתידית 'משעבדת' את הסכום",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-5",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "כניסה בפריצה: התראה/הוראה 2% מעל נקודת C",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "alert_price",
+          "point_C"
+        ],
+        "predicate": "breakout entry: alert/order set 2% above point C"
+      },
+      "sources": [
+        16
+      ],
+      "quote": "כניסה בפריצה: התראה/הוראה 2% מעל נקודת C",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-6",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "אל תרדוף אחרי המחיר — תן למחיר לחזור אליך ותקוף שם עם סטופ קצר",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        24,
+        52
+      ],
+      "quote": "אל תרדוף אחרי המחיר — תן למחיר לחזור אליך",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-7",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "כניסה אגרסיבית על קו מגמה: ממתינים תחילה לנר ירוק כאישור, ואז קונים עם סטופ מתחת לרמה ו-1:2 לפחות",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        24
+      ],
+      "quote": "כניסה אגרסיבית על קו מגמה: ממתינים תחילה לנר ירוק כאישור",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ז-8",
+      "category": "ז",
+      "category_name": "כניסה מדויקת",
+      "statement": "ארבעת סוגי הפקודות: Buy Stop = קנייה כשהמחיר עולה מעל מחיר נתון · Sell Stop = מכירה כשהמחיר יורד מתחת · Buy Limit = קנייה כשהמחיר יורד מתחת · Sell Limit = מכירה כשהמחיר עולה מעל",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "שיעור-קורס 4"
+      ],
+      "quote": "ארבעת סוגי הפקודות: Buy Stop = קנייה כשהמחיר עולה מעל מחיר נתון",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-1",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "תמיד לקבוע סטופלוס מוגדר מראש במערכת בכל עסקה — לעולם לא להיכנס בלי; פקודת הסטופ אוטומטית, לא החלטה שיקולית בזמן אמת",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "exit"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "stop_loss_defined"
+        ],
+        "predicate": "block_entry unless stop_loss_defined == true"
+      },
+      "sources": [
+        12,
+        35,
+        5,
+        4,
+        39,
+        "DOC-23"
+      ],
+      "quote": "תמיד לקבוע סטופלוס מוגדר מראש במערכת בכל עסקה — לעולם לא להיכנס בלי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-2",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "מיקום: מתחת לרמת התמיכה (לונג) / מעל ההתנגדות (שורט), עם מרווח 'אוויר' שיאפשר זליגה זמנית בלי להתאפס",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "support_level",
+          "resistance_level",
+          "position_direction",
+          "buffer"
+        ],
+        "predicate": "long: stop = support - buffer ; short: stop = resistance + buffer"
+      },
+      "sources": [
+        11,
+        12,
+        13
+      ],
+      "quote": "מתחת לרמת התמיכה (לונג) / מעל ההתנגדות (שורט), עם מרווח 'אוויר'",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-3",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "לא קרוב מדי (נתפס ופולט) ולא רחוק מדי (הורס את יחס הסיכוי/סיכון)",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        47,
+        49
+      ],
+      "quote": "לא קרוב מדי (נתפס ופולט) ולא רחוק מדי (הורס את יחס הסיכוי/סיכון)",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-4",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "גדלים אופייניים לפי טיים-פריים: שבועי ~10%–25% (לעיתים 6% מספיק), יומי 5%–10%, 4 שעות 0.5%–5%, שעתי 0.5%–2%",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "timeframe",
+          "stop_size_pct"
+        ],
+        "predicate": "weekly: 10-25% (6% ok) ; daily: 5-10% ; 4h: 0.5-5% ; 1h: 0.5-2%"
+      },
+      "sources": [
+        12
+      ],
+      "quote": "שבועי ~10%–25% (לעיתים 6% מספיק) · יומי 5%–10% · 4 שעות 0.5%–5% · שעתי 0.5%–2%",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-5",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "בגרף שבועי: מיקום ~0.5%–1% מעבר לרמה (או ATR / ממוצע נע / פיבונאצ'י כאזורי הגנה)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "level",
+          "stop_offset_pct",
+          "position_direction"
+        ],
+        "predicate": "weekly: stop = level ± (0.5%..1%) beyond level"
+      },
+      "sources": [
+        "DOC-10"
+      ],
+      "quote": "בגרף שבועי: מיקום ~0.5%–1% מעבר לרמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-6",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "כיול לפי ATR(14); סטופ בגודל ATR שלם מהרמה = רחב מדי",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "atr_14",
+          "stop_distance"
+        ],
+        "predicate": "stop_distance < 1 * ATR(14) (full ATR from level = too wide)"
+      },
+      "sources": [
+        12
+      ],
+      "quote": "כיול לפי ATR(14); סטופ בגודל ATR שלם מהרמה = רחב מדי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-7",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "מרווח מומלץ לסטופ עוקב מתחת לשפל: יומי 2%–3%, שבועי 5%, 4 שעות 1%–2%, שעתי 0.5%",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "timeframe",
+          "swing_low",
+          "trailing_buffer_pct"
+        ],
+        "predicate": "trailing stop below low: daily 2-3% ; weekly 5% ; 4h 1-2% ; 1h 0.5%"
+      },
+      "sources": [
+        14
+      ],
+      "quote": "מרווח מומלץ לסטופ עוקב מתחת לשפל: יומי 2%–3% · שבועי 5% · 4 שעות 1%–2% · שעתי 0.5%",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ח-8",
+      "category": "ח",
+      "category_name": "סטופלוס",
+      "statement": "בכניסת מומנטום: סטופ קצר מתחת לנמוך של נר-הכניסה עצמו (לא מתחת לרמה הרחוקה) — נותן יחס סיכוי/סיכון גבוה יותר",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "entry_candle_low",
+          "position_direction",
+          "buffer"
+        ],
+        "predicate": "momentum entry: stop = entry_candle_low - buffer (not at far level)"
+      },
+      "sources": [
+        40
+      ],
+      "quote": "בכניסת מומנטום: סטופ קצר מתחת לנמוך של נר-הכניסה עצמו",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "ט-1",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "יחידת סיכון = 1% משווי התיק לעסקה בודדת (מומלץ פחות, לא יותר)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "portfolio_value",
+          "dollar_risk_on_trade"
+        ],
+        "predicate": "dollar_risk_on_trade <= portfolio_value * 0.01"
+      },
+      "sources": [
+        8,
+        12,
+        13,
+        29,
+        32,
+        34,
+        41,
+        45,
+        49,
+        "DOC-13",
+        "שיעור-קורס-5"
+      ],
+      "quote": "יחידת סיכון = 1% משווי התיק לעסקה בודדת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-2",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "נוסחת גודל פוזיציה = סכום הסיכון בדולרים ÷ אחוז הסטופלוס (סטופ קרוב יותר → פוזיציה גדולה יותר באותו סיכון כספי)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "dollar_risk_on_trade",
+          "stop_loss_percent"
+        ],
+        "predicate": "position_size == dollar_risk_on_trade / stop_loss_percent"
+      },
+      "sources": [
+        8,
+        12,
+        32,
+        43
+      ],
+      "quote": "נוסחת גודל פוזיציה = סכום הסיכון בדולרים ÷ אחוז הסטופלוס",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-3",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "מחשבים מחדש את ה-1% על שווי התיק העדכני (תיק שירד ל-90,000 → סיכון 900, לא 1,000)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "current_portfolio_value"
+        ],
+        "predicate": "dollar_risk_on_trade == current_portfolio_value * 0.01"
+      },
+      "sources": [
+        8
+      ],
+      "quote": "מחשבים מחדש את ה-1% על שווי התיק העדכני",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-4",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "מקסימום 2 יחידות סיכון לעסקה בודדת — אין לחרוג",
+      "type": "numeric",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "risk_units_on_trade"
+        ],
+        "predicate": "GATE: risk_units_on_trade <= 2"
+      },
+      "sources": [
+        34
+      ],
+      "quote": "מקסימום 2 יחידות סיכון לעסקה בודדת — אין לחרוג",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-5",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "סטופ גדול מותר רק אם פוטנציאל הרווח ≥ פי 2 מהסטופ (סטופ 20% דורש 40% פוטנציאל)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "stop_loss_percent",
+          "profit_potential_percent"
+        ],
+        "predicate": "GATE: profit_potential_percent >= 2 * stop_loss_percent"
+      },
+      "sources": [
+        8
+      ],
+      "quote": "סטופ גדול מותר רק אם פוטנציאל הרווח ≥ פי 2 מהסטופ",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-6",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "פיצול כניסה לשתי רמות קרובות = חצי יחידת סיכון כל אחת (סך הכול יחידה אחת)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "risk_units_per_level",
+          "entry_level_count"
+        ],
+        "predicate": "sum(risk_units_per_level) == 1"
+      },
+      "sources": [
+        49,
+        33
+      ],
+      "quote": "פיצול כניסה לשתי רמות קרובות = חצי יחידת סיכון כל אחת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-7",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "אין מינוף עד רווחיות עקבית לאורך זמן (סדר גודל 200 עסקאות); בשנה הראשונה סוחרים ללא מינוף",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "portfolio"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        12,
+        "שיעור-קורס-3"
+      ],
+      "quote": "אין מינוף עד רווחיות עקבית לאורך זמן ... בשנה הראשונה סוחרים ללא מינוף",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-8",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "מגבלת מינוף ברוקר אמריקאי: עד פי 2 מהחשבון; תוך-יומי עד פי 4 (חובה לסגור/להקטין לפי 2 עד סוף יום המסחר)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "leverage_multiple",
+          "is_intraday"
+        ],
+        "predicate": "GATE: is_intraday ? leverage_multiple <= 4 : leverage_multiple <= 2"
+      },
+      "sources": [
+        12,
+        "שיעור-קורס-3"
+      ],
+      "quote": "מגבלת מינוף ברוקר אמריקאי: עד פי 2 מהחשבון; תוך-יומי עד פי 4",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-9",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "הגבל מינוף מאוד — מינוף מוגזם הוא 'פצצה מתקתקת' שיכולה למחוק חשבון בטעות אחת",
+      "type": "procedural",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        35,
+        "DOC-25"
+      ],
+      "quote": "מינוף מוגזם הוא 'פצצה מתקתקת' שיכולה למחוק חשבון בטעות אחת",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-10",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "הזליגה המקסימלית מעבר לסטופ = עוד יחידת סיכון בלבד (למעט גאפ דוחות)",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "slippage_risk_units",
+          "is_earnings_gap"
+        ],
+        "predicate": "is_earnings_gap OR slippage_risk_units <= 1"
+      },
+      "sources": [
+        34
+      ],
+      "quote": "הזליגה המקסימלית מעבר לסטופ = עוד יחידת סיכון בלבד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-11",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "היערכות מראש ל-10 (עד 20) עסקאות מופסדות ברצף מבלי להימחק — התוצאה של סיכון 1%",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        35,
+        34,
+        29,
+        "DOC-28"
+      ],
+      "quote": "היערכות מראש ל-10 (עד 20) עסקאות מופסדות ברצף מבלי להימחק",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-12",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "אסימטריית רווח/הפסד: הפסד 50% מחייב עלייה 100% לחזרה — לכן שמירת ההון קודמת",
+      "type": "numeric",
+      "applies_to": [
+        "sizing",
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        34
+      ],
+      "quote": "אסימטריית רווח/הפסד: הפסד 50% מחייב עלייה 100% לחזרה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "ט-13",
+      "category": "ט",
+      "category_name": "גודל פוזיציה וסיכון",
+      "statement": "סיכון פר-עסקה מוגדר בכלי הפוזיציה (TradingView) — כמות המניות נגזרת אוטומטית מיחידת הסיכון ומרחק הסטופ",
+      "type": "procedural",
+      "applies_to": [
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        41,
+        43
+      ],
+      "quote": "סיכון פר-עסקה מוגדר בכלי הפוזיציה (TradingView) — כמות המניות נגזרת אוטומטית",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-1",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "יחס סיכון:סיכוי מינימלי 1:2 — יעד הרווח לפחות פי 2 מגודל הסטופ (סטופ 5% → יעד ≥ 10%)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "target_distance",
+          "stop_distance"
+        ],
+        "predicate": "GATE: target_distance >= 2 * stop_distance"
+      },
+      "sources": [
+        12,
+        13,
+        8,
+        11,
+        22,
+        24,
+        6,
+        14,
+        40,
+        43,
+        32,
+        "DOC-11",
+        "DOC-12"
+      ],
+      "quote": "יחס סיכון:סיכוי מינימלי 1:2 — יעד הרווח לפחות פי 2 מגודל הסטופ",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-2",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "רצוי לשאוף ליחס סיכון:סיכוי של 1:3 עד 1:5",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "target_distance",
+          "stop_distance"
+        ],
+        "predicate": "PREFER: 3 * stop_distance <= target_distance <= 5 * stop_distance"
+      },
+      "sources": [
+        40,
+        32
+      ],
+      "quote": "רצוי לשאוף ל-1:3 עד 1:5",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-3",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "אם השוק לא יכול להגיע ליחס 1:2 (למשל התנגדות קרובה) — מוותרים על העסקה מלכתחילה",
+      "type": "procedural",
+      "applies_to": [
+        "filter",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "target_distance_to_resistance",
+          "stop_distance"
+        ],
+        "predicate": "GATE: skip trade if target_distance_to_resistance < 2 * stop_distance"
+      },
+      "sources": [
+        13,
+        49,
+        "DOC-11"
+      ],
+      "quote": "אם השוק לא יכול להגיע ל-1:2 (למשל התנגדות קרובה) — מוותרים על העסקה מלכתחילה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-4",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "סטטיסטיקה: עם יחס 1:2, גם 50% הצלחה מניב רווח (200 מול 100 = +100 לכל שתי עסקאות)",
+      "type": "numeric",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        13
+      ],
+      "quote": "עם יחס 1:2, גם 50% הצלחה מניב רווח",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-5",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "לא משנים את כלל היעד (1:2) בגלל מקרה חריג — 'לא משנים את הכלל בגלל היוצא מן הכלל'",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        22
+      ],
+      "quote": "לא משנים את הכלל בגלל היוצא מן הכלל",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-6",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "לא מזינים טייק-פרופיט אוטומטי — נותנים למניה לרוץ (או מזינים במחיר מרוחק מאוד)",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-14",
+        52
+      ],
+      "quote": "לא מזינים טייק-פרופיט אוטומטי — נותנים למניה לרוץ",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "י-7",
+      "category": "י",
+      "category_name": "יעד ויחס סיכוי/סיכון",
+      "statement": "מטרת תשואה: ~20%–24% שנתי בממוצע (≈ 2 יחידות סיכון בחודש; 2–3 עסקאות מוצלחות בחודש מספיקות)",
+      "type": "numeric",
+      "applies_to": [
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        49,
+        32,
+        40
+      ],
+      "quote": "מטרת תשואה: ~20%–24% שנתי בממוצע",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-1",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופ עוקב: מעלים את הסטופ אל מתחת לכל שפל חדש — אך רק אחרי שנר סוגר/קופץ מעל הרמה",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ohlc_series",
+          "current_stop",
+          "last_confirmed_swing_low",
+          "position_direction"
+        ],
+        "predicate": "position_direction=='long' AND exists new_swing_low > prev_swing_low AND candle_closed_above(level) → raise stop to just-below(new_swing_low)"
+      },
+      "sources": [
+        13,
+        34,
+        49,
+        "DOC-15"
+      ],
+      "quote": "מעלים את הסטופ אל מתחת לכל שפל חדש, רק אחרי שנר סוגר מעל הרמה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-2",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "הזזת הסטופ תמיד בכיוון העסקה בלבד ולעולם לא נגדה (בלונג רק מעלים)",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "proposed_stop",
+          "current_stop",
+          "position_direction"
+        ],
+        "predicate": "long: proposed_stop >= current_stop ; short: proposed_stop <= current_stop (אחרת נדחה)"
+      },
+      "sources": [
+        14
+      ],
+      "quote": "הזזת הסטופ תמיד בכיוון העסקה בלבד ולעולם לא נגדה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-3",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בהגעה ל-2 יחידות רווח העסקה 'כבר לא יכולה להפסיד': מזיזים סטופ ל-break-even או סוגרים חצי",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "profit_in_risk_units"
+        ],
+        "predicate": "profit_in_risk_units >= 2 → alert('סטופ ל-break-even או סגירת חצי')"
+      },
+      "sources": [
+        34,
+        13
+      ],
+      "quote": "בהגעה ל-2 יחידות רווח... מזיזים סטופ לנקודת הכניסה או סוגרים חצי",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-4",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין להזיז ל-break-even / לצמצם סטופ מוקדם מדי — פולט מעסקאות טובות",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "profit_in_risk_units"
+        ],
+        "predicate": "guard: אין להמליץ break-even כל עוד profit_in_risk_units < 2 (מונע יא-3 מוקדם)"
+      },
+      "sources": [
+        33,
+        28
+      ],
+      "quote": "אין להזיז ל-break-even או לצמצם סטופ מוקדם מדי — פולט מעסקאות טובות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-5",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "מימוש חלקי ביעד/התנגדות: לפחות 50% (ולעיתים 75%), במיוחד אם המחזורים לא גדלו בעליות; משאירים שארית 10%–20% לרוץ (חוק פרטו)",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price_at_resistance",
+          "volume_trend_on_up_moves",
+          "profit_in_risk_units"
+        ],
+        "predicate": "profit_in_risk_units>=2 AND at_resistance: אם volume_trend דועך → המלץ ~50%; אם סיגנל-סגירה ממשי → ~75%; תמיד השאר 10-20% אלא אם שינוי-מגמה"
+      },
+      "sources": [
+        "DOC-17",
+        45,
+        22,
+        49,
+        13
+      ],
+      "quote": "מחזורים יורדים בהגעה ל-C... לממש אולי 50% מהעסקה ולא להשאיר את הכל בפנים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-6",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין לממש לפני הגעה ל-1:2; רק מ-1:2 מתחילים לממש חלקים (לפי הגרף, לא אוטומטית)",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "profit_in_risk_units"
+        ],
+        "predicate": "GATE: כל המלצת-מימוש חסומה כל עוד profit_in_risk_units < 2. מ-1:2 והלאה = שיפוט מונחה-סיגנל (לא אוטומטי)"
+      },
+      "sources": [
+        49,
+        "DOC-16"
+      ],
+      "quote": "לא לממש עסקה לפני שמגיעים ל-1 ל-2, רק ב-1 ל-2 אתם רשאים להתחיל לממש",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-7",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "יציאה מבנית: שבירת רמת השפל האחרונה כלפי מטה = שינוי מגמה, וסטופ אחד סוגר את כל העסקאות הפתוחות",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "ohlc_series",
+          "last_swing_low",
+          "position_direction"
+        ],
+        "predicate": "GATE(long): close < last_swing_low → יציאה מלאה (100%) של כל העסקאות בנכס"
+      },
+      "sources": [
+        13,
+        45,
+        49
+      ],
+      "quote": "שבירת רמת השפל האחרונה כלפי מטה = שינוי מגמה, וסטופ אחד סוגר את כל העסקאות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-8",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "יציאת מומנטום: בלונג — נר סוגר מתחת לנמוך הנר הקודם; בשורט — נר סוגר מעל הגבוה הקודם (ביקור בלבד אינו מספיק)",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "current_candle",
+          "prev_candle",
+          "position_direction"
+        ],
+        "predicate": "long: current.close < prev.low → יציאת-מומנטום ; short: current.close > prev.high. (נגיעה בלבד לא מספיקה — צריך סגירה)"
+      },
+      "sources": [
+        40
+      ],
+      "quote": "בלונג — נר סוגר מתחת לנמוך הנר הקודם; ביקור בלבד אינו מספיק",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יא-9",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אף פעם לא סוגרים עסקה 'סתם' — יוצאים רק בסטופ או ביעד; המתנה בסבלנות, לא לצאת בהפסד נייר",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-18",
+        12,
+        29
+      ],
+      "quote": "אף פעם לא סוגרים עסקה סתם — יוצאים רק בסטופ או ביעד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-10",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אינוולידציה: אם המחיר הגיע לסטופ — הרמה 'לא עבדה', יוצאים; אין הצדקה להישאר מעבר לכך",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "stop_level",
+          "position_direction"
+        ],
+        "predicate": "GATE(long): price <= stop_level → יציאה מלאה (אינוולידציה)"
+      },
+      "sources": [
+        12
+      ],
+      "quote": "אם המחיר הגיע לסטופ — הרמה לא עבדה, יוצאים",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-11",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בספק ליד התנגדות משמעותית — סוגרים/מצמצמים; עדיף לקבע רווח מלהחזירו",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "nearest_resistance",
+          "profit_in_risk_units"
+        ],
+        "predicate": "profit_in_risk_units>=2 AND near(price, resistance) → המלץ מימוש חלקי/הידוק (עדיף לקבע רווח)"
+      },
+      "sources": [
+        32
+      ],
+      "quote": "בספק ליד התנגדות משמעותית — סוגרים או מצמצמים; עדיף לקבע רווח מלהחזירו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-12",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "תיק ההשקעות יכיל לכל היותר 15 מניות פעילות (שליטה ומניעת טעויות)",
+      "type": "numeric",
+      "applies_to": [
+        "portfolio"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "open_positions_count"
+        ],
+        "predicate": "GATE: אם open_positions_count >= 15 → חסום כניסה חדשה"
+      },
+      "sources": [
+        "DOC-20"
+      ],
+      "quote": "תיק ההשקעות יכיל לכל היותר 15 מניות פעילות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-13",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "בדיקת סטופ שבועית: אחת לשבוע בודקים אם נוצר שפל חדש בשבועי ומעלים את הסטופ ל-~2% מתחתיו",
+      "type": "numeric",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "weekly_ohlc",
+          "current_stop"
+        ],
+        "predicate": "weekly: exists new_weekly_swing_low > previous → alert('העלה סטופ ל-~2% מתחת לשפל השבועי')"
+      },
+      "sources": [
+        "DOC-15"
+      ],
+      "quote": "אחת לשבוע בודקים אם נוצר שפל חדש בשבועי ומעלים את הסטופ ל-2% מתחתיו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-14",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופ אחד משרת את כל העסקאות המצטברות באותו נכס",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "positions_in_asset"
+        ],
+        "predicate": "כל העסקאות באותו נכס מנוהלות תחת סטופ אחד משותף"
+      },
+      "sources": [
+        49
+      ],
+      "quote": "סטופ אחד משרת את כל העסקאות המצטברות באותו נכס",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-15",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "אין לסגור לפני 2 יחידות רווח — אלא בסיבה יוצאת דופן (דוחות בימים הקרובים)",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "profit_in_risk_units",
+          "earnings_within_days"
+        ],
+        "predicate": "אין המלצת-סגירה מלאה אם profit_in_risk_units < 2, אלא אם earnings_within_days <= 7 (חריג)"
+      },
+      "sources": [
+        "DOC-16"
+      ],
+      "quote": "אין לסגור לפני 2 יחידות רווח, אלא בסיבה יוצאת דופן כמו דוחות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יא-16",
+      "category": "יא",
+      "category_name": "ניהול פוזיציה ויציאה",
+      "statement": "סטופלוס אינו מגן מפני פער-פתיחה (גאפ): אם נפתח למחרת ב-30%–50% מתחת לסטופ בזמן שהמסחר סגור — הסטופ לא מתבצע במחירו",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        15
+      ],
+      "quote": "סטופלוס אינו מגן מפני פער-פתיחה — הסטופ לא מתבצע במחירו",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יב-1",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "לא נכנסים לפוזיציה בזמן הודעות כלכליות משמעותיות (ריבית/אינפלציה/תעסוקה) או דוחות כספיים של המניה — בודקים ביומן האירועים והדוחות מראש",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "earnings_within_days",
+          "macro_event_today"
+        ],
+        "predicate": "GATE: block entry if earnings_within_days<=7 OR macro_event_today"
+      },
+      "sources": [
+        41,
+        51,
+        "DOC-16"
+      ],
+      "quote": "לא נכנסים לפוזיציה בזמן הודעות כלכליות משמעותיות (ריבית, אינפלציה, תעסוקה) או דוחות כספיים של המניה — בודקים ביומן האירועים והדוחות מראש",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יב-2",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "כללי גאן לימות שבוע: שיא שבועי ביום שישי → צפה לשבוע גבוה יותר; במגמת עלייה חזקה השפל השבועי בד\"כ ביום שלישי; במגמת ירידה חזקה השיא השבועי בד\"כ ביום רביעי",
+      "type": "procedural",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        38,
+        31
+      ],
+      "quote": "שיא שבועי ביום שישי → צפה לשבוע גבוה יותר",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-3",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "חציית שיא ארבעת השבועות האחרונים = אינדיקציה מוקדמת למחירים גבוהים יותר (וההפך לשבירת שפל 4 שבועות)",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "high_4w_max",
+          "low_4w_min"
+        ],
+        "predicate": "SIGNAL: bullish if price>high_4w_max; bearish if price<low_4w_min"
+      },
+      "sources": [
+        38,
+        31
+      ],
+      "quote": "חציית שיא ארבעת השבועות האחרונים = אינדיקציה מוקדמת למחירים גבוהים יותר",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-4",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "עלייה של 100 נקודות או 100% מרמת ההתחלה (המוקדם מביניהם) עלולה לשמש התנגדות, גם ללא סיבה טכנית",
+      "type": "numeric",
+      "applies_to": [
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "start_price",
+          "current_price"
+        ],
+        "predicate": "resistance if current_price>=start_price*2 OR (current_price-start_price)>=100"
+      },
+      "sources": [
+        38,
+        31
+      ],
+      "quote": "עלייה של 100 נקודות או 100% מרמת התחלה (המוקדם) עלולה לשמש התנגדות, גם ללא סיבה טכנית",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-5",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "ירידה של 50% מהשיא = תמיכה חזקה; מניה מתחת ל-50% מהשיא אינה איכותית ויעדה הבא -75%",
+      "type": "numeric",
+      "applies_to": [
+        "filter",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "price",
+          "all_time_high"
+        ],
+        "predicate": "strong_support if price<=all_time_high*0.5; low_quality if price<all_time_high*0.5; next_target=all_time_high*0.25"
+      },
+      "sources": [
+        38,
+        31
+      ],
+      "quote": "ירידה של 50% מהשיא = תמיכה חזקה; מנייה מתחת ל-50% מהשיא אינה איכותית, ויעדה הבא -75%",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-6",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "מדד אמריקאי שיורד ~50% = הזדמנות קנייה — היסטורית אף מדד אמריקאי לא ירד מעבר ל-56%; שוק דובי = ירידת 20% במדדים מובילים, וירידה 20%–30% נחשבת הזדמנות",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "index_drawdown_pct"
+        ],
+        "predicate": "buy_opportunity if index_drawdown_pct>=50; bear_market if index_drawdown_pct>=20; opportunity_zone if 20<=index_drawdown_pct<=30"
+      },
+      "sources": [
+        38,
+        3
+      ],
+      "quote": "מדד אמריקאי שיורד ~50% = הזדמנות קנייה — היסטורית שום מדד אמריקאי לא ירד מעבר ל-56%",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-7",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "מחזוריות מאקרו: מחזור 154 חודשים בין נקודות קיצון; מחזור 7 שנים (84 ח') ושבריו (21/28/42/56/63); שנת שמיטה — ב-83% מהמקרים השוק ירד (סטייה מותרת ~חודש)",
+      "type": "numeric",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        38
+      ],
+      "quote": "מחזור 154 חודשים בין נקודות קיצון; מחזור 7 שנים (84 ח') ושבריו; שנת שמיטה — ב-83% מהמקרים השוק ירד",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-8",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "כלי תזמון גאן (מרווחי זמן): מודדים מרווח בין שתי נקודות קיצון ומקרינים קדימה מכל קיצון חדש; סטייה מותרת יחידת זמן אחת; חפיפת כמה מרווחים על אותו תאריך = ודאות גבוהה יותר; לאמת פר-נכס",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        58,
+        39
+      ],
+      "quote": "מודדים מרווח בין שתי נקודות קיצון ומקרינים קדימה מכל קיצון חדש; סטייה מותרת של יחידת זמן אחת",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-9",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "מניפת גאן: זווית 1:1 = 45°; מחיר מעל 45° = עלייה, מתחת = ירידה; קווי הזוויות = תמיכה/התנגדות דינמיות ומחליפות תפקיד בפריצה/שבירה; אין לסחור על סמך המניפה בלבד",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "exit",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        57
+      ],
+      "quote": "מחיר מעל 45° = עלייה, מתחת = ירידה; אין לסחור על סמך המניפה בלבד",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-10",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "קופסת גאן: מנעילים Price Ratio לפני הסרטוט; מותחים בתחילת תיקון; זווית ראשונית + חצי-זווית + שליש-זווית כרמות; רמות פנימיות (0.25/0.38/0.5/0.618); קווים אנכיים = תאריכי מפנה; שילוב עם ניתוח מחיר קלאסי מחזק",
+      "type": "procedural",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "vision",
+      "evaluator": null,
+      "sources": [
+        56
+      ],
+      "quote": "מנעילים Price Ratio לפני הסרטוט; מותחים בתחילת תיקון; קווים אנכיים = תאריכי מפנה",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-11",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "סייקלים (לוח שנה): קידוד צבע לפי טיים-פריים (צהוב=תוך-יומי, ירוק=יומי, אדום=שבועי); חפיפת שני סייקלים על אותו שבוע = שבוע סופר-משמעותי; סטייה יום אחד; אחוז הצלחה ~70% נחשב מצוין",
+      "type": "procedural",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        59
+      ],
+      "quote": "חפיפת שני סייקלים על אותו שבוע = שבוע סופר-משמעותי לפעולה; אחוז הצלחה ~70% נחשב מצוין",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-12",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "תאריך מפנה דורש אישור מהגרף: אין לפתוח פוזיציה רק כי הגיע תאריך הפיווט — 'סוחרים את השוק, לא את התחזית'; אם המחיר לא הגיב הופכים את התחזית לתאריך הבא; תמיד עם סטופ",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        39
+      ],
+      "quote": "אין לפתוח פוזיציה רק כי הגיע תאריך הפיווט — 'סוחרים את השוק, לא את התחזית'",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-13",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "קביעת כיוון בנקודת מפנה לפי מגמת ההגעה: מגיע בעלייה → צפה לירידה (שורט); מגיע בירידה → צפה לעלייה (לונג)",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        58,
+        59
+      ],
+      "quote": "מגיע בעלייה → צפה לירידה (שורט); מגיע בירידה → צפה לעלייה (לונג)",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-14",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "במניות (שבועי, זמן החלטה ארוך) אין חובה בשילוב כל כלי הגאן והלוח — מספיק כלי אחד או שניים; לא להעמיס",
+      "type": "procedural",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        59
+      ],
+      "quote": "אין חובה בשילוב כל כלי הגאן והלוח — מספיק כלי אחד או שניים; לא להעמיס",
+      "source_status": "course",
+      "scope": "report-cycles"
+    },
+    {
+      "id": "יב-15",
+      "category": "יב",
+      "category_name": "עיתוי ומאקרו (כולל כלי גאן)",
+      "statement": "תזמון כניסה פסיבי למדד (השקעה, לא מסחר): כניסה למדד לאחר ירידת ~40%–50% מהשיא, החזקה לטווח ארוך",
+      "type": "numeric",
+      "applies_to": [
+        "entry",
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "index_drawdown_pct"
+        ],
+        "predicate": "passive_entry if index_drawdown_pct>=40"
+      },
+      "sources": [
+        1
+      ],
+      "quote": "כניסה למדד לאחר ירידת ~40%–50% מהשיא, החזקה לטווח ארוך",
+      "source_status": "course",
+      "scope": "investing"
+    },
+    {
+      "id": "יג-1",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "תמיד סטופלוס — אין עסקה בלי הגנה מוגדרת מראש",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "stop_defined"
+        ],
+        "predicate": "GATE: block order if stop_defined==false"
+      },
+      "sources": [
+        35,
+        51,
+        "DOC-23",
+        5,
+        4
+      ],
+      "quote": "תמיד סטופלוס — אין עסקה בלי הגנה מוגדרת מראש",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-2",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "לא ממצעים הפסד — לא מוסיפים כסף/מגדילים עסקה מפסידה מתוך תקווה לתיקון",
+      "type": "procedural",
+      "applies_to": [
+        "sizing",
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "computable",
+      "evaluator": {
+        "inputs": [
+          "position_unrealized_pnl",
+          "order_increases_exposure"
+        ],
+        "predicate": "GATE: block order if order_increases_exposure==true AND position_unrealized_pnl<0"
+      },
+      "sources": [
+        "DOC-24",
+        35
+      ],
+      "quote": "לא ממצעים הפסד — לא מוסיפים כסף/מגדילים עסקה מפסידה מתוך תקווה לתיקון",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-3",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "לא מסחר נקמה — לא פותחים עוד ועוד עסקאות כדי 'להחזיר' הפסד",
+      "type": "procedural",
+      "applies_to": [
+        "timing",
+        "entry"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-26",
+        35
+      ],
+      "quote": "לא מסחר נקמה — לא פותחים עוד ועוד עסקאות כדי 'להחזיר' הפסד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-4",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "בדיקה 10 פעמים לפני לחיצה: סימבול, מחיר, כמות, סטופלוס — לא ממהרים ללחוץ אנטר",
+      "type": "procedural",
+      "applies_to": [
+        "entry"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-22",
+        35
+      ],
+      "quote": "בדיקה 10 פעמים לפני לחיצה: סימבול, מחיר, כמות, סטופלוס — לא ממהרים ללחוץ אנטר",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-5",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "יומן מסחר לכל עסקה בנפרד (כניסה, כמות, סיבות, קישור לגרף, כל מימוש חלקי) — כל פוזיציה מנוהלת ומתועדת לחוד גם אם הברוקר ממזג לשער ממוצע",
+      "type": "procedural",
+      "applies_to": [
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        45,
+        46,
+        49,
+        34,
+        31,
+        "DOC-21"
+      ],
+      "quote": "יומן מסחר לכל עסקה בנפרד",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-6",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "דמו לפני לייב — לא עוברים לכסף אמיתי בלי אישור הצוות; מנהלים את הדמו באותו סכום ואותה רמת סיכון (עד 1%) כמו החשבון האמיתי",
+      "type": "procedural",
+      "applies_to": [
+        "portfolio",
+        "sizing"
+      ],
+      "gate": true,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        50,
+        "DOC-34"
+      ],
+      "quote": "דמו לפני לייב — לא עוברים לכסף אמיתי בלי אישור הצוות",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-7",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "אחרי סטופ — עוצרים ונחים שבוע-שבועיים, וחוזרים 'עם נפש נקייה'",
+      "type": "procedural",
+      "applies_to": [
+        "timing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        35
+      ],
+      "quote": "אחרי סטופ — עוצרים ונחים שבוע-שבועיים, וחוזרים 'עם נפש נקייה'",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-8",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "בהתחלה 'משחקים הגנה' — שמירת ההון קודמת לרדיפה אחרי רווח",
+      "type": "procedural",
+      "applies_to": [
+        "portfolio",
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        50
+      ],
+      "quote": "בהתחלה 'משחקים הגנה' — שמירת ההון קודמת לרדיפה אחרי רווח",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-9",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "השלמה עם הפסד יחידת סיכון: רצפי הפסדים הם חלק מהשיטה — נשארים בשיטה, לא בורחים ממנה ולא 'מחזירים' במינוף",
+      "type": "procedural",
+      "applies_to": [
+        "portfolio",
+        "sizing"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        5
+      ],
+      "quote": "רצפי הפסדים הם חלק מהשיטה — נשארים בשיטה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-10",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "אחרי הפסד — ממשיכים לקרוא את הגרף ללא רגשות ולפי שיטה מסודרת; מוכרים ללא היסוס אם המניה לא מתנהגת כמצופה",
+      "type": "procedural",
+      "applies_to": [
+        "exit"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        "DOC-27",
+        29
+      ],
+      "quote": "מוכרים ללא היסוס אם המניה לא מתנהגת כמצופה",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-11",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "סוחרים את השוק, לא את התחזית",
+      "type": "procedural",
+      "applies_to": [
+        "entry",
+        "filter"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        39
+      ],
+      "quote": "סוחרים את השוק, לא את התחזית",
+      "source_status": "course",
+      "scope": "core"
+    },
+    {
+      "id": "יג-12",
+      "category": "יג",
+      "category_name": "כללי-ברזל ומשמעת",
+      "statement": "אי-משיכת רווחים/קרן בהשקעה ארוכת-טווח — משיכה שוברת את מודל הריבית-דריבית",
+      "type": "numeric",
+      "applies_to": [
+        "portfolio"
+      ],
+      "gate": false,
+      "evaluable": "manual",
+      "evaluator": null,
+      "sources": [
+        1
+      ],
+      "quote": "אי-משיכת רווחים/קרן בהשקעה ארוכת-טווח — משיכה שוברת את מודל הריבית-דריבית",
+      "source_status": "course",
+      "scope": "core"
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+[
+  {
+    "company_hebrew": "אמזון",
+    "ticker_guess": "AMZN",
+    "confidence": "high",
+    "price_or_levels": [136.34, 126, 143.5, 145],
+    "decision": "watch",
+    "quote": "כרגע למניה זה קצת בעייתי... אני לא רואה פה אזור שהוא כל כך אטרקטיבי להיכנס"
+  },
+  {
+    "company_hebrew": "גוגל",
+    "ticker_guess": "GOOGL",
+    "confidence": "high",
+    "price_or_levels": [143, 133.75],
+    "decision": "bullish",
+    "quote": "המניה עדיין חיובית... כתבתי שכדאי מאוד לבוא ולממש את העסקה"
+  },
+  {
+    "company_hebrew": "מטה",
+    "ticker_guess": "META",
+    "confidence": "high",
+    "price_or_levels": [277.5, 246, 274.5, 269],
+    "decision": "bearish",
+    "quote": "אם אנחנו שוברים את האזור הזה אנחנו נעשה את דרכנו לרמות נמוכות יותר לאזור 246 דולר ומטה"
+  },
+  {
+    "company_hebrew": "אנוידיה / אוידה",
+    "ticker_guess": "NVDA",
+    "confidence": "high",
+    "price_or_levels": [402, 350],
+    "decision": "bullish",
+    "quote": "אין מה לדבר הכיוון הוא מאוד חזק כלפי מעלה... אבל עדיין נמצאים עם סתיה שלילית"
+  },
+  {
+    "company_hebrew": "טסלה",
+    "ticker_guess": "TSLA",
+    "confidence": "high",
+    "price_or_levels": [275, 295],
+    "decision": "entry",
+    "quote": "הכיוון של טסלה מבחינתי עדיין כלפי מעלה... מבחינתי זה איתות קנייה"
+  },
+  {
+    "company_hebrew": "apple / אפל",
+    "ticker_guess": "AAPL",
+    "confidence": "high",
+    "price_or_levels": [],
+    "decision": "bullish",
+    "quote": "הכיוון נותר כלפי מעלה באפל, להצטרף עכשיו בוודאי שלא... כדאי לבוא ולממש פה רווחים"
+  },
+  {
+    "company_hebrew": "שופיפיי",
+    "ticker_guess": "SHOP",
+    "confidence": "high",
+    "price_or_levels": [],
+    "decision": "watch",
+    "quote": "מבחינתי הפוזיציה לקנות באזור כזה בוודאי בוודאי שלא... עדיף לקחת את הכסף ולחכות"
+  },
+  {
+    "company_hebrew": "נטפליקס",
+    "ticker_guess": "NFLX",
+    "confidence": "high",
+    "price_or_levels": [413.3],
+    "decision": "watch",
+    "quote": "מבחינתי זה עדיין אזור עצה שהיא מטפסת לכאן יכולה לקבל בראש"
+  },
+  {
+    "company_hebrew": "מייקרוסופט",
+    "ticker_guess": "MSFT",
+    "confidence": "high",
+    "price_or_levels": [341, 306, 311, 300, 301],
+    "decision": "watch",
+    "quote": "אם היא חוזרת לפה אז מבחינתי עדיין מהווה עיתות קנייה כל עוד אנחנו נמצאים באזור שבין 306 ל-311"
+  },
+  {
+    "company_hebrew": "ניו",
+    "ticker_guess": "NIO",
+    "confidence": "medium",
+    "price_or_levels": [12.5, 9.9],
+    "decision": "watch",
+    "quote": "מנת ניו נראית חיובית... מבחינתי ירידה מתחת ל-125 נגיד לאזור 990 יכול לווסר... ולכן אני לא אהיה בעסקה"
+  },
+  {
+    "company_hebrew": "amd",
+    "ticker_guess": "AMD",
+    "confidence": "high",
+    "price_or_levels": [],
+    "decision": "entry",
+    "quote": "מבחינתי המניעה עדיין חיובית... מבחינתי עדיין מדובר באפשרות לכניסה"
+  },
+  {
+    "company_hebrew": "nn",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [],
+    "decision": "avoid",
+    "quote": "עלייה של 150% בשבוע... הכיוון של המנה הזאת נוטה כלפי מטה... אני לא רואה סיבה להחזיק מניה כזאת"
+  },
+  {
+    "company_hebrew": "l",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [534],
+    "decision": "avoid",
+    "quote": "אזור התמיכה נמצא לנו סביב רמת 534, זהו, לא רואה פה יותר מדי עניין"
+  },
+  {
+    "company_hebrew": "מניה טכנית יפה (השם לא נלכד בתמלול)",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [468],
+    "decision": "watch",
+    "quote": "אחת מהמניות היותר יפות היותר טכניות שאני מכיר... אזור התמיכה כרגע הוא 468... שם לי פה גם התראה"
+  },
+  {
+    "company_hebrew": "ריבן",
+    "ticker_guess": "RIVN",
+    "confidence": "high",
+    "price_or_levels": [21.9, 26.5],
+    "decision": "bullish",
+    "quote": "הכיוון פה כלפי מעלה, הסטופ עדיין נשאר... אזור ה-26 וחצי הוא אזור שבו יכולים להתחיל להגיע מוכרים כדאי לקחת פה רווחים"
+  },
+  {
+    "company_hebrew": "u",
+    "ticker_guess": "U",
+    "confidence": "medium",
+    "price_or_levels": [41, 32.8],
+    "decision": "avoid",
+    "quote": "הכיוון הוא לא למעלה... אפילו עסקת שורט עד כדי כך... אזור של 3280 מתחת לאזור הזה אין טעם להישאר"
+  },
+  {
+    "company_hebrew": "afm",
+    "ticker_guess": "AFRM",
+    "confidence": "medium",
+    "price_or_levels": [21, 22, 19.5, 18],
+    "decision": "watch",
+    "quote": "אני עכשיו לא הייתי מתלהב לבוא ולקנות פה לפני שאנחנו רואים את עצמנו מטפסים מעל האזור של ה-21 22 דולר"
+  },
+  {
+    "company_hebrew": "soxx",
+    "ticker_guess": "SOXX",
+    "confidence": "high",
+    "price_or_levels": [],
+    "decision": "watch",
+    "quote": "כדי היא תהפוך להיות מעניינת לקנייה... מעל הרמה הזאת רטס והמשכיות כלפי מעלה"
+  },
+  {
+    "company_hebrew": "rcl",
+    "ticker_guess": "RCL",
+    "confidence": "high",
+    "price_or_levels": [94.9],
+    "decision": "watch",
+    "quote": "מבחינת היחס סיכוי סיכון אין פה יותר מדי, יש פה אחד לשתיים... אני לא לא מתלהב כל כך"
+  },
+  {
+    "company_hebrew": "ריטס",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [90],
+    "decision": "unclear",
+    "quote": "המגמה לא ברורה באופן כללי... גל אימפולס מאוד מאוד חזק... אזור דולר 90 הוא אזור הביקוש"
+  },
+  {
+    "company_hebrew": "אל אזזו",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [679, 700],
+    "decision": "bearish",
+    "quote": "כרגע אנחנו נמצאים מתחת לאזור הביקוש מה שאומר שהוא הפך להיות אזור עצה"
+  },
+  {
+    "company_hebrew": "fs li",
+    "ticker_guess": "FSLY",
+    "confidence": "medium",
+    "price_or_levels": [24.8, 18, 17],
+    "decision": "bullish",
+    "quote": "הכיוון הוא נשאר פה כלפי מעלה... קרובים מאוד לאזור 2480, בהחלט רצוי להביא את הכסף הביתה"
+  },
+  {
+    "company_hebrew": "r o",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [],
+    "decision": "watch",
+    "quote": "הכיוון פה הוא חיובי אם כי התנועה פה היא לא איזה וואו... עלייה חזקה של 31% ביום"
+  },
+  {
+    "company_hebrew": "am",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [1080],
+    "decision": "watch",
+    "quote": "אני לא נשאר לפני אזור c כזה, אני מחכה לפריצה ברורה כלפי מעלה... אזור של 1080 שיוכל לשמש פה אזור תמיכה"
+  },
+  {
+    "company_hebrew": "i",
+    "ticker_guess": null,
+    "confidence": "low",
+    "price_or_levels": [81.5, 81.4, 82.7],
+    "decision": "watch",
+    "quote": "גם מתחילה להראות מעניין אם כי המגמה פה היא עדיין לא מגמת עלייה, זה עדיין נחשב תיקון טכני"
+  }
+]
