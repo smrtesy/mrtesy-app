@@ -1,0 +1,464 @@
+[
+ {
+  "date": "2023-06-30",
+  "ticker": "CRM",
+  "R": 1.9,
+  "exit": "momentum"
+ },
+ {
+  "date": "2023-07-14",
+  "ticker": "F",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "TSLA",
+  "R": -1.35,
+  "exit": "gap"
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "MU",
+  "R": -1.12,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-07-28",
+  "ticker": "ABNB",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "MSFT",
+  "R": 0.21,
+  "exit": "structural"
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "META",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-08-11",
+  "ticker": "WFC",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "SHOP",
+  "R": 3.09,
+  "exit": "momentum"
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "U",
+  "R": 2.22,
+  "exit": "momentum"
+ },
+ {
+  "date": "2023-08-25",
+  "ticker": "DDOG",
+  "R": 1.73,
+  "exit": "momentum"
+ },
+ {
+  "date": "2023-09-08",
+  "ticker": "SNOW",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-09-08",
+  "ticker": "CRWD",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-09-22",
+  "ticker": "AVGO",
+  "R": 0.06,
+  "exit": "structural"
+ },
+ {
+  "date": "2023-09-22",
+  "ticker": "CRM",
+  "R": -1.11,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-12-01",
+  "ticker": "RIVN",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-12-01",
+  "ticker": "ABNB",
+  "R": 1.74,
+  "exit": "momentum"
+ },
+ {
+  "date": "2023-12-15",
+  "ticker": "PLTR",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2023-12-29",
+  "ticker": "DDOG",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-01-12",
+  "ticker": "SOFI",
+  "R": -1.3,
+  "exit": "gap"
+ },
+ {
+  "date": "2024-01-26",
+  "ticker": "COP",
+  "R": 2.37,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-02-23",
+  "ticker": "TGT",
+  "R": 2.47,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-02-23",
+  "ticker": "ABNB",
+  "R": 1.98,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-03-22",
+  "ticker": "AFRM",
+  "R": -0.77,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "T",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "PLTR",
+  "R": -0.96,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-04-05",
+  "ticker": "PINS",
+  "R": -0.78,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-04-19",
+  "ticker": "MA",
+  "R": -0.0,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-04-19",
+  "ticker": "DKNG",
+  "R": -0.18,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-06-14",
+  "ticker": "MS",
+  "R": 1.83,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-06-28",
+  "ticker": "GE",
+  "R": 1.57,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-06-28",
+  "ticker": "MARA",
+  "R": 1.72,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "CAT",
+  "R": 1.64,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "DOCU",
+  "R": -1.1,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-07-12",
+  "ticker": "NET",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-07-26",
+  "ticker": "META",
+  "R": 1.72,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-07-26",
+  "ticker": "ORCL",
+  "R": -0.77,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-08-09",
+  "ticker": "QCOM",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "GOOGL",
+  "R": -1.09,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "AMZN",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-08-23",
+  "ticker": "PYPL",
+  "R": -1.1,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-09-06",
+  "ticker": "UBER",
+  "R": 1.85,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-10-04",
+  "ticker": "VZ",
+  "R": -0.9,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-10-18",
+  "ticker": "TGT",
+  "R": -1.11,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-11-01",
+  "ticker": "DOCU",
+  "R": 2.61,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-11-15",
+  "ticker": "PTON",
+  "R": -1.06,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-12-13",
+  "ticker": "NVDA",
+  "R": -0.99,
+  "exit": "gap"
+ },
+ {
+  "date": "2024-12-13",
+  "ticker": "ROKU",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "ORCL",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "T",
+  "R": -0.8,
+  "exit": "structural"
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "NET",
+  "R": 2.76,
+  "exit": "momentum"
+ },
+ {
+  "date": "2024-12-27",
+  "ticker": "GM",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-01-10",
+  "ticker": "WFC",
+  "R": 2.09,
+  "exit": "momentum"
+ },
+ {
+  "date": "2025-01-10",
+  "ticker": "HUT",
+  "R": -1.04,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-02-07",
+  "ticker": "SNOW",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-02-21",
+  "ticker": "AMZN",
+  "R": -0.78,
+  "exit": "structural"
+ },
+ {
+  "date": "2025-06-27",
+  "ticker": "CVNA",
+  "R": 1.94,
+  "exit": "momentum"
+ },
+ {
+  "date": "2025-07-25",
+  "ticker": "CRWD",
+  "R": -0.88,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-08-08",
+  "ticker": "TSLA",
+  "R": -1.08,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-08-22",
+  "ticker": "XOM",
+  "R": 1.62,
+  "exit": "momentum"
+ },
+ {
+  "date": "2025-08-22",
+  "ticker": "SOUN",
+  "R": -1.06,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-09-05",
+  "ticker": "SHOP",
+  "R": -1.07,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "AMZN",
+  "R": -0.44,
+  "exit": "structural"
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "AMD",
+  "R": 3.28,
+  "exit": "momentum"
+ },
+ {
+  "date": "2025-10-03",
+  "ticker": "DIS",
+  "R": -0.94,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-10-17",
+  "ticker": "NFLX",
+  "R": -1.24,
+  "exit": "gap"
+ },
+ {
+  "date": "2025-10-17",
+  "ticker": "ROKU",
+  "R": -0.27,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-10-31",
+  "ticker": "PEP",
+  "R": -1.11,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-10-31",
+  "ticker": "PATH",
+  "R": -1.24,
+  "exit": "gap"
+ },
+ {
+  "date": "2025-11-14",
+  "ticker": "W",
+  "R": -1.1,
+  "exit": "stop"
+ },
+ {
+  "date": "2025-12-12",
+  "ticker": "BA",
+  "R": 2.1,
+  "exit": "momentum"
+ },
+ {
+  "date": "2025-12-12",
+  "ticker": "AFRM",
+  "R": 2.2,
+  "exit": "momentum"
+ },
+ {
+  "date": "2026-01-09",
+  "ticker": "DIS",
+  "R": -1.1,
+  "exit": "stop"
+ },
+ {
+  "date": "2026-01-23",
+  "ticker": "CVX",
+  "R": 2.3,
+  "exit": "momentum"
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "GS",
+  "R": -1.1,
+  "exit": "stop"
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "COP",
+  "R": 1.77,
+  "exit": "momentum"
+ },
+ {
+  "date": "2026-02-20",
+  "ticker": "LLY",
+  "R": -0.76,
+  "exit": "stop"
+ }
+]
