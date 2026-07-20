@@ -16,7 +16,7 @@ import numpy as np
 import indicators as I
 import levels as L
 
-CUTOFF = "2026-07-14"                       # חומת אי-דליפה: נקודת-בזמן, בלי הצצה קדימה
+CUTOFF = os.environ.get("SMRTTRADE_CUTOFF", "2026-07-14")   # נקודת-בזמן; ניתן לקבוע לסרטון היסטורי
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.path.join(HERE, "..", "stock-course-rules.registry.json")
 
@@ -27,7 +27,7 @@ LOCKED = {
 }
 
 
-def fetch(ticker, rng="2y", interval="1d"):
+def fetch(ticker, rng="5y", interval="1d"):
     url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
            f"?range={rng}&interval={interval}")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
