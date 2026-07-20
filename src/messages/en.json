@@ -605,6 +605,8 @@
       "critical": "Critical",
       "wokeChip": "Back from snooze",
       "wokeHint": "Woke from snooze — first interaction clears this",
+      "followup48Chip": "48h follow-up",
+      "followup48Hint": "You reached out and got no reply — follow-up reminder after 48 hours",
       "sitting": "Sitting {days} days",
       "sittingHint": "Working days without interaction",
       "sizeQuick": "Quick",
