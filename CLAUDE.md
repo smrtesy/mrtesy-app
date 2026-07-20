@@ -68,6 +68,21 @@ there." Instead:
    (e.g. "as of today's UI"), so the user knows they're current, and flag if
    any step is your best guess because you couldn't verify the live state.
 
+**Keys, secrets, and credentials — always say exactly where to find them.**
+Whenever an instruction tells the user to use a specific key, token, secret,
+password, env var, connection string, ID, or any credential, you MUST also
+give **verified** instructions on **where to find that exact value** — do
+not just name it and leave the user hunting. Before answering, check the
+real source (the Railway/Vercel/Supabase dashboard, the repo's `.env` /
+config, the settings screen, the provider's console — whatever actually
+holds it) and tell the user the precise location: which service, which
+page/section, which variable name, plus a direct deep link to that screen.
+Name the exact key label so it's unambiguous (e.g. `SMRTBOT_INTERNAL_SECRET`
+in Railway → project → the backend service → Variables tab). If several
+keys look similar, say which one and how to tell them apart. If you can't
+verify the live location, say so and give your best-known path flagged as
+unverified — never invent a location.
+
 This is a standing preference and applies to **all** sessions, including
 Claude Code on the web. The point: the whole system exists to make the user
 as efficient as possible — every extra hop, every "look for it yourself,"
