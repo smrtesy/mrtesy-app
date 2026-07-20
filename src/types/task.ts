@@ -84,6 +84,9 @@ export interface Task {
   size?: "quick" | "medium" | "big";
   /** The day this task is committed to; planned_for === today → shown in "Today". */
   planned_for?: string | null;
+  /** How many times the nightly rollover has un-planned this task (committed to a
+   *  day, day passed, not completed). Drives the inbox "×N returned" badge. */
+  return_count?: number | null;
   /** Execution context — where this can be done.
    *  'home' = בית, 'outside' = בחוץ, null (or legacy 'work') = משרד/office (default). */
   context?: "home" | "work" | "outside" | null;
