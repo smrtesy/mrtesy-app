@@ -77,11 +77,24 @@ def weekly(daily):
         x = b.setdefault(k, [dt, o, h, l, c, v]); x[2] = max(x[2], h); x[3] = min(x[3], l); x[4] = c; x[5] += v; x[0] = dt
     return [tuple(b[k]) for k in sorted(b)]
 
+SEEDS = "SIVB FRC SBNY BBBY WE SI MULN NKLA BBIG".split()   # כשלונות/מחיקות שזרענו
 print(f"fetching {len(UNIV)} tickers...", flush=True)
-DATA = {}
+DATA = {}; dropped = []
 with ThreadPoolExecutor(max_workers=10) as ex:
     for tk, rows in ex.map(fetch, UNIV + ["SPY"]):
         if rows: DATA[tk] = rows
+        else: dropped.append(tk)
+# retry שני לנשמטים (כשל-endpoint חולף, לא רק מחיקות)
+if dropped:
+    retry = list(dropped); dropped = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for tk, rows in ex.map(fetch, retry):
+            if rows: DATA[tk] = rows
+            else: dropped.append(tk)
+# שקיפות על היקום האפקטיבי (תיקון ממצא-ביקורת F/#2/#5)
+seeds_in = [s for s in SEEDS if s in DATA]
+print(f"dropped/no-data ({len(dropped)}): {sorted(dropped)}", flush=True)
+print(f"seeded-failures that actually loaded ({len(seeds_in)}/{len(SEEDS)}): {seeds_in}", flush=True)
 spy = DATA.pop("SPY"); spy_c = [r[4] for r in spy]; spy_d = [r[0] for r in spy]
 def spy_above(cut):
     idx = [i for i, d in enumerate(spy_d) if d <= cut]
@@ -121,20 +134,32 @@ def pc(daily, i0, k=5):
     return fwd, out
 PC = [pc(DATA[s[1]], s[2]) for s in signals]
 
+# ENTRY_NEXT_OPEN: ברירת-המחדל הריאליסטית (תיקון ממצא-ביקורת #3). ההחלטה מתקבלת
+# בסגירת יום-האיתות; הכניסה בפועל בפתיחת-היום-הבא (fwd[1] open). כניסה-בסגירה
+# (ההנחה האופטימית הישנה) זמינה ל-A/B ע"י ENTRY_NEXT_OPEN=False.
+ENTRY_NEXT_OPEN = True
+
 def sim(k, p):
     s = signals[k]; daily = DATA[s[1]]; i0 = s[2]; sup = s[3]; atr = s[4]; vw = s[5]
-    fwd, ll = PC[k]; entry = daily[i0][4]
+    fwd, ll = PC[k]
+    if ENTRY_NEXT_OPEN:
+        if len(fwd) < 2: return None
+        entry = fwd[1][1]; m_start = 2          # נכנסים בפתיחת-הבא; יציאות מהיום שאחריו
+    else:
+        entry = daily[i0][4]; m_start = 1       # כניסה-בסגירה (הנחה אופטימית ישנה)
     sp, sa, rr, sc, tr = p
     istop = (sup - max(sp*entry, sa*atr)) if (sup and sup < entry) else entry*(1-sp) - sa*atr
     risk = entry - istop
     if risk <= 0: return None
     tgt = entry + rr*risk; stop = istop; rem = 1.0; R = 0.0; scaled = False
-    for m in range(1, len(fwd)):                       # מ-1: בר-הכניסה עצמו לא משמש ליציאה
+    for m in range(m_start, len(fwd)):
         o, h, l, c = fwd[m][1], fwd[m][2], fwd[m][3], fwd[m][4]; lo = ll[m]
         if o <= stop: R += rem*(o-entry)/risk; rem = 0; break               # גאפ (יא-16)
         if l <= stop: R += rem*(stop-entry)/risk; rem = 0; break            # סטופ (יא-10)
         if not scaled and h >= tgt:                                          # מימוש 2R (יא-5)
-            f = (0.75 if vw else sc); R += f*(tgt-entry)/risk; rem -= f; stop = max(stop, entry); scaled = True
+            # יא-5: 75% אם המחזור לא-אישר (vw=False), 50%/פרמטר אם המחזור בריא-דועך
+            # (vw=True). תיקון ממצא-ביקורת #1 — הדגל היה הפוך.
+            f = (sc if vw else 0.75); R += f*(tgt-entry)/risk; rem -= f; stop = max(stop, entry); scaled = True
             if rem <= 0.001: break
             continue
         if lo and c < lo and stop < lo: R += rem*(c-entry)/risk; rem = 0; break   # מבני (יא-7)
@@ -149,9 +174,17 @@ def winrate(idxs, p):
     rs = [sim(k, p) for k in idxs]; rs = [r for r in rs if r is not None]
     return (sum(1 for r in rs if r > 0)/len(rs)) if rs else 0
 
+def tstat(idxs, p):
+    """תוחלת, סטיית-תקן, וסטטיסטיקת-t מול אפס (מדד-מובהקות גס; iid — ראה הערת-אשכול)."""
+    rs = [sim(k, p) for k in idxs]; rs = [r for r in rs if r is not None]
+    n = len(rs)
+    if n < 2: return (0, 0, 0, n)
+    m = sum(rs)/n; sd = (sum((r-m)**2 for r in rs)/(n-1))**0.5
+    return (m, sd, m/(sd/n**0.5) if sd else 0, n)
+
 tr = [k for k, s in enumerate(signals) if s[0] < "2025-01-01"]
 te = [k for k, s in enumerate(signals) if s[0] >= "2025-01-01"]
-print(f"train {len(tr)} · test {len(te)}", flush=True)
+print(f"train {len(tr)} · test {len(te)}  ·  ENTRY_NEXT_OPEN={ENTRY_NEXT_OPEN}", flush=True)
 grid = list(itertools.product([0.02, 0.03], [0.0, 0.5], [2, 3], [0.5, 1.0], [0.02, 0.03]))
 best = None
 for p in grid:
@@ -162,7 +195,8 @@ print(f"BEST-TRAIN: stop%={p[0]} atr={p[1]} rr={p[2]} scale={p[3]} trail={p[4]} 
 tee, tet, ten = exp(te, p)
 print(f">>> TEST(held-out): {tee:+.3f}R/trade · total {tet:+.1f}R · n={ten} · win={winrate(te, p):.0%} <<<")
 de = (0.025, 0.5, 2, 0.5, 0.02); dee, det, den = exp(te, de)
-print(f"default-params on TEST: {dee:+.3f}R · total {det:+.1f}R · win={winrate(te, de):.0%}")
+m, sd, t, n = tstat(te, de)
+print(f"default-params on TEST: {dee:+.3f}R · total {det:+.1f}R · win={winrate(te, de):.0%} · std={sd:.2f} · t={t:.2f} (מול אפס)")
 
 # ── פירוק-אבחון על ה-test (ברירות-מחדל) ──
 rs = [sim(k, de) for k in te]; rs = [r for r in rs if r is not None]
@@ -188,3 +222,17 @@ for name, fn in [
         e, t, n = exp(ks, de); print(f"  {name:16s}: {e:+.3f}R · n={n} · win={winrate(ks, de):.0%}")
     else:
         print(f"  {name:16s}: (אין עסקאות בתת-הקבוצה)")
+
+# ── A/B הנחת-הכניסה (תיקון ממצא-ביקורת #3): כניסה-בסגירה מול פתיחה-הבאה ──
+print("\nENTRY A/B (test, default-params):")
+for mode in (False, True):
+    ENTRY_NEXT_OPEN = mode
+    m, sd, t, n = tstat(te, de)
+    print(f"  {'next-open' if mode else 'close-of-decision-day'}: {m:+.3f}R · n={n} · t={t:.2f}")
+ENTRY_NEXT_OPEN = True
+
+# ── הערת-תלות: אשכולות-תאריך (n אפקטיבי < n) ──
+from collections import Counter
+byday = Counter(signals[k][0] for k in te)
+top = byday.most_common(3)
+print(f"\nCLUSTER: {len(byday)} תאריכי-כניסה ל-{len(te)} עסקאות; הגדולים: {top}")
