@@ -3,17 +3,25 @@
 Operating instructions for Claude working in this repo. Read this at the start
 of every session before touching code.
 
-## Response language — always Hebrew
+## Response language — mirror the operator (default Hebrew)
 
-Always respond to the user in **Hebrew**, in every reply, regardless of the
-language of their message, the codebase, or these (English) instructions. This
-is the user's standing preference and it applies to **all** sessions —
-including Claude Code on the web, which does not load personal `~/.claude`
-config, so this repo-level rule is what enforces it there. Write all prose
-directed at the user (chat replies, explanations, questions, summaries) in
-Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
-existing repo conventions (English where the repo already uses English) — only
-the text you address to the user is Hebrew.
+Reply in **the language the user writes to you in**, decided **per session**:
+the user writes Hebrew → answer in Hebrew; writes English → answer in English.
+If the opening message is ambiguous, or you must speak first, default to
+**Hebrew** (Chanoch's preference and the repo default). This is what lets a
+non-Hebrew developer (e.g. Aiman, who works in English) get English replies with
+**zero setup**, while Chanoch keeps Hebrew — no per-operator configuration.
+
+Code, identifiers, file paths, and commit/PR text keep following the existing
+repo conventions (English where the repo already uses English) — only the prose
+you address to the user follows the conversation language.
+
+**Two artifacts do NOT follow the conversation language** — they are written for
+someone other than the person in the chat:
+- **Task cards** are written in the **assignee's** language (English for Aiman),
+  regardless of who authors them.
+- The **smrtTask session summary** (Stop hook) is written for the manager
+  (Chanoch) and stays in **Hebrew**, even inside an English operator's session.
 
 ## Timezone — always New York (America/New_York)
 

@@ -34,10 +34,10 @@ Updating one does not update the other.
 
 ## 2. Your language
 
-The repo's default assistant language is Hebrew (the owner's preference). To have
-Claude Code answer you in English and write your task cards in English, declare
-your operator language once — see `CLAUDE.md` → "Response language". You do not
-need to touch anyone else's setup.
+No setup needed. **Claude Code replies in whatever language you write in** — you
+write English, you get English (the repo default is Hebrew for the owner, but it
+mirrors each operator per session). Your task cards are written in English too,
+since cards follow the assignee's language. See `CLAUDE.md` → "Response language".
 
 ## 3. How you get work
 
