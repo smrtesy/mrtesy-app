@@ -1072,7 +1072,41 @@
       "title": "שעון עבודה",
       "desc": "יום עבודה מודרך: שעון שרץ כל היום, טקס בוקר, מצב ריצה עם הגבלות זמן, וסגירת יום.",
       "offerDaily": "הצע לפתוח שעון בכניסה הראשונה של היום"
+    },
+    "dailyreport": {
+      "title": "דוח יומי",
+      "desc": "שאלות דיווח יומיות עם ניקוד, ודוח שבועי שמגיע לנכנס כל יום שלישי."
     }
+  },
+  "dailyReport": {
+    "loading": "טוען...",
+    "loadError": "טעינת ההגדרות נכשלה",
+    "saveError": "השמירה נכשלה, נסה שוב",
+    "saved": "השאלות נשמרו",
+    "saveQuestions": "שמור שאלות",
+    "questionPlaceholder": "טקסט השאלה (למשל: התפללת במנין?)",
+    "answerPlaceholder": "תשובה",
+    "scorePlaceholder": "ניקוד",
+    "scoreLabel": "ניקוד (אופציונלי)",
+    "addQuestion": "הוסף שאלה",
+    "addAnswer": "הוסף תשובה",
+    "removeQuestion": "מחק שאלה",
+    "removeAnswer": "מחק תשובה",
+    "periodLabel": "תקופת הדוח",
+    "periodWeekly": "שבועי",
+    "periodMonthly": "חודשי",
+    "hourLabel": "שעת שליחה",
+    "deliveryNoteWeekly": "הדוח מגיע לנכנס כל יום שלישי, בשעה שנבחרה (שעון ניו יורק).",
+    "deliveryNoteMonthly": "הדוח מגיע לנכנס ביום שלישי הראשון של כל חודש, בשעה שנבחרה (שעון ניו יורק).",
+    "generateNow": "צור דוח עכשיו",
+    "generatedToInbox": "הדוח נוצר ונשלח לנכנס",
+    "generateError": "יצירת הדוח נכשלה",
+    "pinnedRow": "מלא את הדוח היומי",
+    "checkinTitle": "דיווח יומי",
+    "checkinSave": "שמור דיווח",
+    "checkinSaved": "הדיווח נשמר",
+    "cancel": "ביטול",
+    "noQuestions": "לא הוגדרו שאלות. הוסף שאלות בהגדרות הכלי."
   },
   "workclock": {
     "offerTitle": "להתחיל שעון עבודה?",
