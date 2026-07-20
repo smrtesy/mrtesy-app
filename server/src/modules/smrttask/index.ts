@@ -19,6 +19,7 @@ import whatsappViewRouter from "./routes/whatsapp-view";
 import smsRouter from "./routes/sms";
 import routerRouter from "./routes/router";
 import transcriptionExperimentRouter from "./routes/transcription-experiment";
+import dailyReportRouter from "./daily-report/routes";
 
 const router = Router();
 
@@ -38,6 +39,8 @@ router.use("/actions", actionsRouter);
 router.use(eventsRouter);
 router.use("/knowledge", knowledgeRouter);
 router.use("/sync", syncRouter);
+// Daily-report day-tool: config + daily answers + manual generate + history.
+router.use(dailyReportRouter);
 // Authenticated read API powering /[locale]/whatsapp.
 router.use(whatsappViewRouter);
 // Authenticated SMS device-connection API (webhook lives on the Next.js side).
@@ -56,3 +59,7 @@ export { runPart1 } from "./parts/part1-collector";
 // smrtbot/smrtplan job routers): it is x-cron-secret gated, not JWT gated, so
 // it must NOT sit behind platformRouter's requireAuth.
 export { default as claudeSessionRouter } from "./routes/claude-session";
+
+// x-cron-secret gated weekly report job (no JWT) — mounted before the auth
+// guards in server/index.ts, like the smrtbot/smrtplan job routers.
+export { default as dailyReportJobsRouter } from "./daily-report/jobs";

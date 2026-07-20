@@ -42,6 +42,7 @@ import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { useDayTool } from "@/hooks/useDayTools";
 import { useWorkClock } from "@/hooks/useWorkClock";
+import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -54,7 +55,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -148,6 +149,7 @@ function DroppableList({ id, items, children }: { id: string; items: string[]; c
 export function TaskList({ locale, title }: { locale: string; title?: string }) {
   const t = useTranslations("tasks");
   const tNav = useTranslations("nav");
+  const tDaily = useTranslations("dailyReport");
   const supabase = createClient();
   // Pane-aware: inside a tabs-workspace pane these read/write the pane's own
   // location; as a routed page they are exactly next/navigation.
@@ -179,6 +181,25 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const [focusRun, setFocusRun] = useState<FocusTodayPlan | null>(null);
   // Day-tool: the marathon run is a toggleable add-on (default on).
   const marathonEnabled = useDayTool("marathon").enabled;
+  // Day-tool: daily report — when on, a "fill daily report" row is pinned to the
+  // top of the quick list until today's check-in is done (docs/daily-report-plan.md).
+  const dailyReportEnabled = useDayTool("dailyreport").enabled;
+  const [reportCheckinOpen, setReportCheckinOpen] = useState(false);
+  const [reportDoneToday, setReportDoneToday] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!dailyReportEnabled) { setReportDoneToday(null); return; }
+    let alive = true;
+    const refresh = () => {
+      api<{ done: boolean }>("/api/daily-report/today")
+        .then((r) => { if (alive) setReportDoneToday(r.done); })
+        .catch(() => { if (alive) setReportDoneToday(false); });
+    };
+    refresh();
+    // Re-check on focus so the row reappears the next day when the app was left
+    // open past midnight (the server decides "today" in the user's timezone).
+    window.addEventListener("focus", refresh);
+    return () => { alive = false; window.removeEventListener("focus", refresh); };
+  }, [dailyReportEnabled]);
   // Day-tool: מהיר·3·1 gates the whole desk shape. ON → the 4-list day method
   // (quick / medium / big / rest) with soft quotas + the build-day banner.
   // OFF → the original spec: quick + a deadline-driven regular desk + waiting.
@@ -977,6 +998,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   </Button>
                 )}
               </div>
+              {/* Daily-report day-tool: a pinned "fill daily report" row at the
+                  top of the quick list, shown until today's check-in is done.
+                  Not a real task row — it never enters rollover or the counts. */}
+              {dailyReportEnabled && reportDoneToday === false && (
+                <button
+                  type="button"
+                  onClick={() => setReportCheckinOpen(true)}
+                  className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <ClipboardList className="h-4 w-4 shrink-0" />
+                  {tDaily("pinnedRow")}
+                </button>
+              )}
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>
 
@@ -1121,6 +1155,14 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             fetchTasks();
           }}
           onExit={() => { setMarathonMode(null); fetchTasks(); }}
+        />
+      )}
+
+      {dailyReportEnabled && (
+        <DailyReportCheckin
+          open={reportCheckinOpen}
+          onClose={() => setReportCheckinOpen(false)}
+          onSaved={() => setReportDoneToday(true)}
         />
       )}
 
