@@ -641,6 +641,124 @@ router.get("/plans/:id/journal", async (req: Request, res: Response) => {
   res.json({ decisions, entries });
 });
 
+// ── plan review pass: full task text + shared per-task review notes ──────────
+// Read-only assembly: every task with its FULL body (description, checklist, DoD)
+// plus any review note written on it. The client shows a grid; opening a task
+// reveals the full text and a note editor; a top button exports all notes to CSV.
+// Notes are shared at the plan level (see plan_review_notes migration).
+router.get("/plans/:id/review", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const planId = req.params.id;
+
+  const { data: taskRows, error } = await db
+    .from("tasks")
+    .select(
+      "id, title, title_he, assigned_to_user_id, due_date, is_decision, description, checklist, definition_of_done, created_at",
+    )
+    .eq("organization_id", orgId)
+    .eq("plan_id", planId)
+    .order("due_date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  const tasks = asRows(taskRows);
+
+  // Resolve assignee display names (per-org display_name, email fallback).
+  const uids = [...new Set(tasks.map((t) => t.assigned_to_user_id).filter(Boolean) as string[])];
+  const nameByUser = new Map<string, string>();
+  if (uids.length) {
+    const { data: members, error: mErr } = await db
+      .from("org_members")
+      .select("user_id, display_name")
+      .eq("org_id", orgId)
+      .in("user_id", uids);
+    // Non-fatal: names are best-effort — a failure just degrades to null / email.
+    if (mErr) console.warn("[plan review] org_members name lookup failed:", mErr.message);
+    for (const m of asRows(members)) {
+      const dn = (m.display_name as string | null) || "";
+      if (dn) nameByUser.set(m.user_id as string, dn);
+    }
+    for (const uid of uids) {
+      if (nameByUser.has(uid)) continue;
+      const { data: u } = await db.auth.admin.getUserById(uid);
+      const email = u?.user?.email ?? null;
+      if (email) nameByUser.set(uid, email);
+    }
+  }
+
+  const ids = tasks.map((t) => t.id as string);
+  const { data: noteRows, error: nErr } = await db
+    .from("plan_review_notes")
+    .select("task_id, note, updated_at, updated_by")
+    .eq("org_id", orgId)
+    .eq("plan_id", planId)
+    .in("task_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]);
+  if (nErr) return res.status(500).json({ error: nErr.message });
+  const noteByTask = new Map<string, string>();
+  for (const n of asRows(noteRows)) noteByTask.set(n.task_id as string, (n.note as string) ?? "");
+
+  res.json({
+    tasks: tasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      title_he: t.title_he,
+      assignee_name: t.assigned_to_user_id ? nameByUser.get(t.assigned_to_user_id as string) ?? null : null,
+      due_date: t.due_date,
+      is_decision: t.is_decision,
+      description: t.description,
+      checklist: t.checklist,
+      definition_of_done: t.definition_of_done,
+      note: noteByTask.get(t.id as string) ?? "",
+    })),
+  });
+});
+
+// Upsert / clear a task's review note (shared at the plan level). Empty note → delete.
+router.put("/plans/:id/review-notes/:taskId", requireFull, async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const planId = req.params.id;
+  const taskId = req.params.taskId;
+  const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+
+  // The task must belong to this plan + org before we attach a note to it.
+  const { data: task } = await db
+    .from("tasks")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("plan_id", planId)
+    .eq("id", taskId)
+    .maybeSingle();
+  if (!task) return res.status(404).json({ error: "task not found in plan" });
+
+  if (!note) {
+    const { error } = await db
+      .from("plan_review_notes")
+      .delete()
+      .eq("org_id", orgId)
+      .eq("plan_id", planId)
+      .eq("task_id", taskId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ ok: true, note: "" });
+  }
+
+  // updated_by tracks the last editor — the meaningful field for a shared note.
+  // created_by is intentionally left out of the upsert: carrying it would rewrite
+  // the original author on every edit by a different reviewer. It stays null for
+  // now (unused in the UI); a dedicated author capture can be added later if needed.
+  const { error } = await db.from("plan_review_notes").upsert(
+    {
+      org_id: orgId,
+      plan_id: planId,
+      task_id: taskId,
+      note,
+      updated_by: req.user!.id,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "plan_id,task_id", ignoreDuplicates: false },
+  );
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, note });
+});
+
 // ── dependency candidates: any org task (cross-plan) + capabilities ──────────
 // Powers the dependency picker so a task can depend on a task in ANOTHER plan,
 // or on a whole capability (a reusable tool plan). The caller filters out the

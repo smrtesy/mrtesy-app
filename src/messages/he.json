@@ -3151,7 +3151,8 @@
       "reopenReleased": "שים לב — {n, plural, one {משימה אחת שממשיכה ממנה כבר שוחררה} other {# משימות שממשיכות ממנה כבר שוחררו}}",
       "reblockAction": "חסום מחדש את שטרם התחילו",
       "reblocked": "{n, plural, =0 {אין משימות לחסימה מחדש — כולן כבר בעבודה או הושלמו} one {משימה אחת נחסמה מחדש} other {# משימות נחסמו מחדש}}",
-      "viewJournal": "יומן"
+      "viewJournal": "יומן",
+      "viewReview": "סקירה"
     },
     "repository": {
       "title": "מאגר הרעיונות",
@@ -3453,6 +3454,30 @@
       "ranExternal": "כלי חיצוני",
       "ranBoth": "קלוד + חיצוני",
       "ranNone": "לא נערך ניסוי"
+    },
+    "review": {
+      "title": "סקירת תוכנית",
+      "noteCount": "{done}/{total} הערות",
+      "download": "הורדה",
+      "downloadHint": "הורד את כל ההערות כקובץ CSV (נפתח באקסל)",
+      "fileName": "סקירה",
+      "noTasks": "אין משימות בתוכנית",
+      "hasNote": "הערה",
+      "decision": "החלטה",
+      "doneWhen": "גמור כאשר",
+      "noteLabel": "הערת סקירה — מה לשנות",
+      "notePlaceholder": "כתוב מה לשנות במשימה הזו…",
+      "addNote": "הוסף הערה",
+      "editNote": "ערוך הערה",
+      "noNote": "אין הערה על משימה זו",
+      "save": "שמור",
+      "cancel": "ביטול",
+      "saved": "ההערה נשמרה",
+      "csvNum": "מס'",
+      "csvTask": "משימה",
+      "csvAssignee": "אחראי",
+      "csvDue": "תאריך יעד",
+      "csvNote": "הערה"
     }
   },
   "smrtInfo": {

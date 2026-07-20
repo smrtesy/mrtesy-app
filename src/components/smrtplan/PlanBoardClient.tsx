@@ -15,6 +15,7 @@ import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
 import { PlanMatrix } from "./PlanMatrix";
 import { PlanEffortDetail } from "./PlanEffortDetail";
 import { PlanJournal } from "./PlanJournal";
+import { PlanReview } from "./PlanReview";
 import { PlanTaskGantt } from "./PlanTaskGantt";
 import { PlanTableView } from "./PlanTableView";
 import { PlanEditDialog } from "./PlanEditDialog";
@@ -102,7 +103,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
   const [editMode, setEditMode] = useState(false);
   const [addRowOpen, setAddRowOpen] = useState(false);
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
-  const [detailView, setDetailView] = useState<"list" | "gantt" | "journal">("list");
+  const [detailView, setDetailView] = useState<"list" | "gantt" | "journal" | "review">("list");
   const [pageView, setPageView] = useState<"board" | "table">("board");
   const [zoom, setZoom] = useState(1); // board timeline column-width multiplier
   const canEdit = access === "full";
@@ -1392,7 +1393,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             <>
               {/* list (rows + needs) vs gantt (bars + dependency arrows) */}
               <div className="mb-3 flex w-fit gap-1 rounded-lg border bg-card p-1">
-                {([["list", "effort.viewList"], ["gantt", "effort.viewGantt"], ["journal", "effort.viewJournal"]] as const).map(([key, label]) => (
+                {([["list", "effort.viewList"], ["gantt", "effort.viewGantt"], ["journal", "effort.viewJournal"], ["review", "effort.viewReview"]] as const).map(([key, label]) => (
                   <button
                     key={key}
                     onClick={() => setDetailView(key)}
@@ -1409,6 +1410,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                 <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={reloadBoard} />
               ) : detailView === "journal" ? (
                 <PlanJournal key={selected.id} plan={selected} locale={locale} />
+              ) : detailView === "review" ? (
+                <PlanReview key={selected.id} plan={selected} locale={locale} canEdit={canEdit} />
               ) : (
                 <PlanEffortDetail plan={selected} locale={locale} today={today} canEdit={canEdit} stages={stagesByPlan.get(selected.id) ?? []} holidays={holidays} onChanged={reloadBoard} />
               )}
