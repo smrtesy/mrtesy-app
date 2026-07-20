@@ -98,7 +98,7 @@ def build_context(ticker, daily, weekly, spy_ctx):
     target_ideal = None
     if entry_ideal:
         for z in lv["resistance"]:
-            if z["center"] > entry_ideal * 1.01 and z["weight"] >= 2:
+            if z["center"] > entry_ideal * 1.01 and z["strength"] >= L.MIN_STRENGTH:
                 target_ideal = z["center"]; break
     rr_setup = None
     if entry_ideal and stop_ideal and target_ideal and (entry_ideal - stop_ideal) > 0:
