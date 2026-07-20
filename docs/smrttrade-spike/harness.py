@@ -64,10 +64,20 @@ def build_context(ticker, daily, weekly, spy_ctx):
     wc = [r[4] for r in weekly]; wh = [r[2] for r in weekly]; wl = [r[3] for r in weekly]
     price = dc[-1]
     d_trend, d_highs, d_lows = I.trend_structure(dh, dl, k=5)
-    w_trend, w_highs, w_lows = I.trend_structure(wh, wl, k=3)
+    w_struct, w_highs, w_lows = I.trend_structure(wh, wl, k=3)
     macd_d, sig_d = I.macd(dc)
     atr = I.atr(dh, dl, dc, 14)
-    ath = max(dh)
+    sma50 = I.sma(dc, 50); sma200 = I.sma(dc, 200)
+    # מגמה היברידית: יישור-ממוצעים גובר על גלאי-הסווינג (שסובל edge-effect
+    # בקצה הנתונים). price>SMA50>SMA200=עולה · price<SMA50<SMA200=יורד · אחרת מבנה.
+    if sma50 and sma200 and price > sma50 > sma200:
+        w_trend = "up"
+    elif sma50 and sma200 and price < sma50 < sma200:
+        w_trend = "down"
+    else:
+        w_trend = w_struct
+    # שיא-52-שבועות (~252 ימי-מסחר) — לא שיא-רב-שנתי מיושן (תיקון ממצא #2)
+    ath = max(dh[-252:]) if len(dh) >= 252 else max(dh)
     # ── נפח: ממוצע-20, מגמת-מחזור אחרונה, אישור-פריצה (הבסיס לכללי נמ"ס) ──
     vol_avg20 = float(np.mean(dv[-20:])) if len(dv) >= 20 else float(np.mean(dv))
     vol_recent5 = float(np.mean(dv[-5:]))
@@ -98,7 +108,7 @@ def build_context(ticker, daily, weekly, spy_ctx):
     breakout_ctx = len(dh) > 11 and price > max(dh[-11:-1])
     ctx = dict(
         ticker=ticker, price=price, date=daily[-1][0],
-        sma20=I.sma(dc, 20), sma50=I.sma(dc, 50), sma200=I.sma(dc, 200),
+        sma20=I.sma(dc, 20), sma50=sma50, sma200=sma200,
         rsi_d=I.rsi(dc, 14), rsi_w=I.rsi(wc, 14),
         macd_d=macd_d, macd_sig_d=sig_d, atr_d=atr,
         vol_avg20=vol_avg20, vol_ratio5=vol_ratio5, vol_last_ratio=vol_last_ratio,
@@ -197,6 +207,9 @@ def decide(c, ledger):
     # 5) טריגר-כניסה: המחיר כבר באזור-הכניסה (פולבק לתמיכה) במגמה עולה
     if spy_block:
         return "מעקב", "השוק הכללי (SPY) לא תומך — כניסה מוקפאת"
+    # קניית-יתר בקיצון (ו-1: RSI≥70) — לא כניסה טרייה, מעקב-זהירות
+    if c["rsi_w"] is not None and c["rsi_w"] >= 70:
+        return "מעקב", f"RSI שבועי {c['rsi_w']:.0f} בקניית-יתר (ו-1) — אין כניסה בקיצון, מעקב-זהירות"
     if c["at_support"] and c["w_trend"] == "up":
         if not c["pullback_vol_declining"]:
             return "מעקב", f"בתמיכה אך מחזור-הפולבק לא דועך ({c['vol_ratio5']:.2f}×) — אין אישור-ווליום (ה-11)"
