@@ -3192,7 +3192,8 @@
       "reopenReleased": "Note — {n, plural, one {1 dependent task was already released} other {# dependent tasks were already released}}",
       "reblockAction": "Re-block not-yet-started",
       "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}",
-      "viewJournal": "Journal"
+      "viewJournal": "Journal",
+      "viewReview": "Review"
     },
     "repository": {
       "title": "Idea repository",
@@ -3494,6 +3495,30 @@
       "ranExternal": "External tool",
       "ranBoth": "Claude + external",
       "ranNone": "No experiment"
+    },
+    "review": {
+      "title": "Plan review",
+      "noteCount": "{done}/{total} notes",
+      "download": "Download",
+      "downloadHint": "Download all notes as a CSV file (opens in Excel)",
+      "fileName": "review",
+      "noTasks": "No tasks in this plan",
+      "hasNote": "Note",
+      "decision": "Decision",
+      "doneWhen": "Done when",
+      "noteLabel": "Review note — what to change",
+      "notePlaceholder": "Write what to change in this task…",
+      "addNote": "Add note",
+      "editNote": "Edit note",
+      "noNote": "No note on this task",
+      "save": "Save",
+      "cancel": "Cancel",
+      "saved": "Note saved",
+      "csvNum": "#",
+      "csvTask": "Task",
+      "csvAssignee": "Owner",
+      "csvDue": "Due",
+      "csvNote": "Note"
     }
   },
   "smrtInfo": {
