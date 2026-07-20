@@ -50,6 +50,7 @@ import { RecurrenceEditor, type RecurrenceModel } from "@/components/smrttask/ta
 import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { MergeModal } from "@/components/smrttask/merge/MergeModal";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
+import { usePaneContainer } from "@/lib/panes/container";
 import { effectiveDeadline } from "@/lib/workdays";
 import type { Task } from "@/types/task";
 
@@ -86,6 +87,13 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const tEvents = useTranslations("events");
   const tManual = useTranslations("manualTask");
   const blocked = useWorkCalendar();
+  // When smrtTask is open as a workspace tab, the task window renders inside
+  // that pane (portalled into the pane box, non-modal, `absolute` within it)
+  // instead of as a `fixed` full-viewport modal that would blanket and freeze
+  // the sidebar and every other tab. Null outside a pane (mobile / routed
+  // page) → unchanged full-screen modal.
+  const paneEl = usePaneContainer();
+  const inPane = !!paneEl;
 
   // Description edit
   const [editingDesc, setEditingDesc] = useState(false);
@@ -388,21 +396,48 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const dir = locale === "he" ? "rtl" : "ltr";
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && handleDialogClose()}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="app-dialog-overlay fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+    // modal={false} in a pane: Radix otherwise locks <body> scroll and
+    // pointer-events, which would freeze the sidebar and sibling tabs even
+    // with the overlay confined. Non-modal keeps the rest of the workspace
+    // live; the pane-local scrim below still dims + closes this pane's window.
+    <Dialog open={open} modal={!inPane} onOpenChange={(o) => !o && handleDialogClose()}>
+      <DialogPrimitive.Portal container={inPane ? paneEl : undefined}>
+        {inPane ? (
+          // Pane-local scrim: covers only this pane (its positioned ancestor
+          // is the pane box). Click to close, like the modal overlay.
+          <div
+            aria-hidden
+            onClick={handleDialogClose}
+            className="absolute inset-0 z-40 bg-black/40 animate-in fade-in-0"
+          />
+        ) : (
+          <DialogPrimitive.Overlay className="app-dialog-overlay fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        )}
         <DialogPrimitive.Content
           dir={dir}
+          // In a pane, don't let a click elsewhere in the workspace (another
+          // tab, the sidebar) dismiss the window — only the pane scrim, the X,
+          // or Escape close it. The window stays put in its tab.
+          onInteractOutside={inPane ? (e) => e.preventDefault() : undefined}
           className={cn(
-            // Centered modal, desktop. `app-dialog-content` lets globals.css
-            // re-center it into the main-content half when the WhatsApp panel
-            // is docked, so the panel never covers it.
-            "app-dialog-content fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
-            "w-full sm:max-w-2xl max-h-[92vh]",
-            "flex flex-col bg-background border shadow-xl rounded-lg overflow-hidden",
-            // Full screen on small screens
-            "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
-            "max-sm:!w-full max-sm:!max-w-full max-sm:!max-h-full max-sm:!h-screen max-sm:!rounded-none",
+            inPane
+              ? [
+                  // Centered within the pane box, not the viewport.
+                  "absolute left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
+                  "w-[calc(100%-1.5rem)] sm:max-w-2xl max-h-[calc(100%-1.5rem)]",
+                  "flex flex-col bg-background border shadow-xl rounded-lg overflow-hidden",
+                ].join(" ")
+              : [
+                  // Centered modal, desktop. `app-dialog-content` lets globals.css
+                  // re-center it into the main-content half when the WhatsApp panel
+                  // is docked, so the panel never covers it.
+                  "app-dialog-content fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
+                  "w-full sm:max-w-2xl max-h-[92vh]",
+                  "flex flex-col bg-background border shadow-xl rounded-lg overflow-hidden",
+                  // Full screen on small screens
+                  "max-sm:!left-0 max-sm:!top-0 max-sm:!translate-x-0 max-sm:!translate-y-0",
+                  "max-sm:!w-full max-sm:!max-w-full max-sm:!max-h-full max-sm:!h-screen max-sm:!rounded-none",
+                ].join(" "),
             // Animations
             "duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",

@@ -23,6 +23,7 @@ import {
   type PaneLocation,
   type PaneNavValue,
 } from "@/lib/panes/nav";
+import { PaneContainerProvider } from "@/lib/panes/container";
 import { resolvePaneScreen } from "@/lib/panes/registry";
 
 /** Panes get ?embed=1 so the framed document strips its chrome on first
@@ -66,6 +67,11 @@ function PaneError({ reset }: { reset: () => void }) {
 export function PaneHost({ tab }: { tab: WorkspaceTab }) {
   const locale = useLocale();
   const [location, setLocation] = useState<PaneLocation>(() => parsePaneHref(tab.href));
+  // The pane box — a positioned, clipping ancestor that a screen's dialogs
+  // portal into so they stay inside this pane instead of covering the app
+  // (see src/lib/panes/container.tsx). Kept in state so the context updates
+  // once the ref attaches.
+  const [boxEl, setBoxEl] = useState<HTMLElement | null>(null);
 
   // openTab on an already-open page updates the tab's href to carry a deep
   // link (e.g. whatsapp?chat_id=X) — sync it into the pane location. Internal
@@ -88,26 +94,41 @@ export function PaneHost({ tab }: { tab: WorkspaceTab }) {
   }
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-background">
-      <PaneNavProvider value={nav}>
-        {/* Keyed by pathname ONLY: search-param changes (?focus strip, ?draft
-            strip) must update in place — remounting would drop screen state.
-            A different screen in the same pane still gets a fresh boundary. */}
-        <PaneErrorBoundary
-          key={location.pathname}
-          fallback={(reset) => <PaneError reset={reset} />}
-        >
-          {screen.fullHeight ? (
-            // Chat-style screens: definite height so their h-full resolves,
-            // internal scroll is theirs.
-            <div className="h-full w-full">{screen.render(locale)}</div>
-          ) : (
-            // Mirrors the embedded-page container: TabsArea's p-4/md:p-6 with
-            // the max-width lifted by the data-embed CSS.
-            <div className="w-full p-4 md:p-6">{screen.render(locale)}</div>
-          )}
-        </PaneErrorBoundary>
-      </PaneNavProvider>
+    // Outer box: positioned + clipping, sized to the visible pane (never
+    // scrolls). It's the portal target for in-pane dialogs, so their
+    // `absolute inset-0` overlay covers exactly this pane. The inner div keeps
+    // the screen's own vertical scroll.
+    <div ref={setBoxEl} className="relative h-full w-full overflow-hidden bg-background">
+      {/* Mount the screen only once the box element exists, so a dialog never
+          renders with a null container first (which would take the full-screen
+          modal branch, lock <body>, then flip to in-pane on the next commit —
+          a flash at best, a frozen app at worst). The ref callback's setState
+          flushes before paint, so the one-commit-late mount isn't visible. */}
+      {boxEl && (
+        <PaneContainerProvider container={boxEl}>
+          <div className="h-full w-full overflow-y-auto">
+            <PaneNavProvider value={nav}>
+              {/* Keyed by pathname ONLY: search-param changes (?focus strip, ?draft
+                  strip) must update in place — remounting would drop screen state.
+                  A different screen in the same pane still gets a fresh boundary. */}
+              <PaneErrorBoundary
+                key={location.pathname}
+                fallback={(reset) => <PaneError reset={reset} />}
+              >
+                {screen.fullHeight ? (
+                  // Chat-style screens: definite height so their h-full resolves,
+                  // internal scroll is theirs.
+                  <div className="h-full w-full">{screen.render(locale)}</div>
+                ) : (
+                  // Mirrors the embedded-page container: TabsArea's p-4/md:p-6 with
+                  // the max-width lifted by the data-embed CSS.
+                  <div className="w-full p-4 md:p-6">{screen.render(locale)}</div>
+                )}
+              </PaneErrorBoundary>
+            </PaneNavProvider>
+          </div>
+        </PaneContainerProvider>
+      )}
     </div>
   );
 }
