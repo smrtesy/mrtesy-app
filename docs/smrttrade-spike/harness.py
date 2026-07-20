@@ -68,28 +68,44 @@ def build_context(ticker, daily, weekly, spy_ctx):
     macd_d, sig_d = I.macd(dc)
     atr = I.atr(dh, dl, dc, 14)
     ath = max(dh)
+    # ── נפח: ממוצע-20, מגמת-מחזור אחרונה, אישור-פריצה (הבסיס לכללי נמ"ס) ──
+    vol_avg20 = float(np.mean(dv[-20:])) if len(dv) >= 20 else float(np.mean(dv))
+    vol_recent5 = float(np.mean(dv[-5:]))
+    vol_ratio5 = vol_recent5 / vol_avg20 if vol_avg20 else None
+    vol_last_ratio = dv[-1] / vol_avg20 if vol_avg20 else None
+    pullback_vol_declining = vol_ratio5 is not None and vol_ratio5 < 1.0   # מחזור דועך = תיקון בריא
+
     # ── רמות משמעותיות (גלאי-אשכול) + סטאפ-כניסה אידיאלי ──
     lv = L.levels(daily, weekly)
-    tgt = L.significant_target(lv)                 # התנגדות משמעותית מעל
+    tgt = L.significant_target(lv)                 # התנגדות משמעותית מעל המחיר (לשער ג-10)
     sup_zone = L.significant_stop_support(lv)      # תמיכה משמעותית מתחת (יעד-פולבק)
     res_c = tgt["center"] if tgt else None
     sup_c = sup_zone["center"] if sup_zone else None
-    # סטאפ אידיאלי: כניסה בפולבק לתמיכה (ז-2: מעט מעל), סטופ מתחת עם אוויר-ATR
+    # סטאפ אידיאלי: כניסה בפולבק לתמיכה (ז-2: מעט מעל), סטופ 2% מתחת לשפל (ח-7 יומי)
     entry_ideal = sup_c * 1.005 if sup_c else None
-    stop_ideal = (sup_c - 0.25 * atr) if sup_c else None
+    stop_ideal = sup_c * 0.98 if sup_c else None
+    # יעד = ההתנגדות המשמעותית (w≥2) הקרובה מעל *הכניסה* (לא מעל המחיר, לא מדלג)
+    target_ideal = None
+    if entry_ideal:
+        for z in lv["resistance"]:
+            if z["center"] > entry_ideal * 1.01 and z["weight"] >= 2:
+                target_ideal = z["center"]; break
     rr_setup = None
-    if entry_ideal and stop_ideal and res_c and (entry_ideal - stop_ideal) > 0:
-        rr_setup = (res_c - entry_ideal) / (entry_ideal - stop_ideal)
+    if entry_ideal and stop_ideal and target_ideal and (entry_ideal - stop_ideal) > 0:
+        rr_setup = (target_ideal - entry_ideal) / (entry_ideal - stop_ideal)
     at_support = sup_c is not None and price <= sup_c * 1.02   # המחיר כבר באזור-הכניסה
+    # הקשר-פריצה (פרוקסי נקי): סגירת שיא-10-ימים חדשה
+    breakout_ctx = len(dh) > 11 and price > max(dh[-11:-1])
     ctx = dict(
         ticker=ticker, price=price, date=daily[-1][0],
         sma20=I.sma(dc, 20), sma50=I.sma(dc, 50), sma200=I.sma(dc, 200),
         rsi_d=I.rsi(dc, 14), rsi_w=I.rsi(wc, 14),
         macd_d=macd_d, macd_sig_d=sig_d, atr_d=atr,
-        vol_avg20=float(np.mean(dv[-20:])) if len(dv) >= 20 else float(np.mean(dv)),
+        vol_avg20=vol_avg20, vol_ratio5=vol_ratio5, vol_last_ratio=vol_last_ratio,
+        pullback_vol_declining=pullback_vol_declining, breakout_ctx=breakout_ctx,
         d_trend=d_trend, w_trend=w_trend,
         resistance=res_c, support=sup_c,
-        entry_ideal=entry_ideal, stop_ideal=stop_ideal, target_ideal=res_c,
+        entry_ideal=entry_ideal, stop_ideal=stop_ideal, target_ideal=target_ideal,
         rr_setup=rr_setup, at_support=at_support,
         ath=ath, pct_from_high=(price / ath - 1) * 100,
         dist_to_res_pct=(res_c / price - 1) * 100 if res_c else None,
@@ -121,6 +137,17 @@ EVAL = {
     "ג-10": lambda c: E(c["dist_to_res_pct"] is None or c["dist_to_res_pct"] > 3,
                        f"מרחק להתנגדות {c['dist_to_res_pct']:.1f}% > 3% — לא צמוד" if c["dist_to_res_pct"] is not None else "אין התנגדות קרובה",
                        f"צמוד להתנגדות ({c['dist_to_res_pct']:.1f}%) — אין לקנות לפני התנגדות"),
+    # ה — אישורי כניסה (ווליום)
+    "ה-5":  lambda c: (E(c["vol_last_ratio"] > 1.0,
+                        f"פריצה במחזור {c['vol_last_ratio']:.2f}× ממוצע — מאושרת (נמ״ס)",
+                        f"פריצה במחזור {c['vol_last_ratio']:.2f}× — חלש, פריצת-שווא חשודה")
+                       if c["breakout_ctx"] else (NA, "אין הקשר-פריצה (לא שיא-10-ימים) — נמ״ס לא רלוונטי")),
+    "ה-11": lambda c: E(c["w_trend"] != "up" or c["pullback_vol_declining"],
+                       f"מחזור-פולבק דועך ({c['vol_ratio5']:.2f}× ממוצע) — מאשר מגמה",
+                       f"מחזור-פולבק לא דועך ({c['vol_ratio5']:.2f}×) — לא מאשר תיקון בריא"),
+    "ה-12": lambda c: ((P, f"נר על תמיכה במגמה עולה + מחזור-תיקון דועך ({c['vol_ratio5']:.2f}×) — כניסה תקפה")
+                       if (c["at_support"] and c["w_trend"] == "up" and c["pullback_vol_declining"])
+                       else (NA, "לא מצב 'קניית נר-אדום על תמיכה' (לא בתמיכה/לא עלייה/מחזור לא דועך)")),
     # ו — אינדיקטורים
     "ו-2":  lambda c: E(c["w_trend"] != "up" or c["rsi_w"] > 45,
                        f"RSI שבועי {c['rsi_w']:.0f} מתאים למגמה", f"RSI שבועי {c['rsi_w']:.0f} חלש למגמה עולה"),
@@ -171,7 +198,9 @@ def decide(c, ledger):
     if spy_block:
         return "מעקב", "השוק הכללי (SPY) לא תומך — כניסה מוקפאת"
     if c["at_support"] and c["w_trend"] == "up":
-        return "כניסה", f"פולבק לתמיכה במגמה עולה, {ledger['י-1'][1]}"
+        if not c["pullback_vol_declining"]:
+            return "מעקב", f"בתמיכה אך מחזור-הפולבק לא דועך ({c['vol_ratio5']:.2f}×) — אין אישור-ווליום (ה-11)"
+        return "כניסה", f"פולבק לתמיכה במגמה עולה + מחזור-תיקון דועך ({c['vol_ratio5']:.2f}×), {ledger['י-1'][1]}"
     return "מעקב", f"מגמה תומכת ויחס טוב, אך אין טריגר עדיין — ממתין לפולבק לכניסה {c['entry_ideal']:.1f}"
 
 
