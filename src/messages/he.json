@@ -3168,6 +3168,7 @@
       "empty": "אין עדיין משימות בתוכנית הזו",
       "allDone": "כל המשימות בשלב הזה הושלמו",
       "needs": "כדי להתחיל צריך",
+      "blocking": "{n, plural, one {חוסם משימה אחת} other {חוסם # משימות}}",
       "handoff": "כשיסתיים, עובר ל",
       "blocked": "חסום",
       "ready": "מוכן",
@@ -3493,7 +3494,11 @@
       "ranClaude": "בקלוד",
       "ranExternal": "כלי חיצוני",
       "ranBoth": "קלוד + חיצוני",
-      "ranNone": "לא נערך ניסוי"
+      "ranNone": "לא נערך ניסוי",
+      "sessionUpdate": "עדכון מ-Claude Code",
+      "statusInProgress": "בעבודה",
+      "statusBlocked": "חסום",
+      "statusDone": "הושלם"
     },
     "review": {
       "title": "סקירת תוכנית",

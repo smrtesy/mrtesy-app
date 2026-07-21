@@ -20,6 +20,12 @@ interface Decision {
   decided_at: string | null;
   outcome: Answers;
 }
+interface SessionReport {
+  session_url: string | null;
+  summary: string;
+  status: string; // "in_progress" | "blocked" | "done"
+  updated_at: string;
+}
 interface Entry {
   task_id: string;
   title: string | null;
@@ -28,6 +34,7 @@ interface Entry {
   conducted_in: string | null;
   answers: Answers;
   decision_id: string | null;
+  session_report?: SessionReport | null;
 }
 
 function decTitle(d: { title: string; title_he: string | null }, locale: string) {
@@ -169,9 +176,49 @@ export function PlanJournal({ plan, locale }: { plan: Plan; locale: string; canE
   );
 }
 
+const sessionStatusCls: Record<string, string> = {
+  in_progress: "bg-status-warn-bg text-status-warn",
+  blocked: "bg-status-late-bg text-status-late",
+  done: "bg-status-ok-bg text-status-ok",
+};
+
 function EntryCard({ e, locale, t }: { e: Entry; locale: string; t: ReturnType<typeof useTranslations> }) {
-  const a = e.answers ?? {};
   const title = locale === "en" ? e.title : e.title_he || e.title;
+
+  if (e.session_report) {
+    const sr = e.session_report;
+    const statusLabel: Record<string, string> =
+      { in_progress: t("statusInProgress"), blocked: t("statusBlocked"), done: t("statusDone") };
+    return (
+      <div className="rounded-md border bg-card px-2.5 py-2">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="flex-1 text-[12.5px] font-medium">{title}</span>
+          <span className="whitespace-nowrap rounded bg-accent px-1.5 py-px text-[10px] font-medium text-accent-foreground">
+            {t("sessionUpdate")}
+          </span>
+          <span className={`whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold ${sessionStatusCls[sr.status] ?? "bg-secondary text-muted-foreground"}`}>
+            {statusLabel[sr.status] ?? sr.status}
+          </span>
+          <span className="whitespace-nowrap text-[10.5px] text-muted-foreground">{gregShort(parseISO(e.date))}</span>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-[11.5px] leading-relaxed">{sr.summary}</p>
+          {sr.session_url && (
+            <a
+              href={sr.session_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block text-[11.5px] font-medium text-primary hover:underline"
+            >
+              {t("sessionLink")} ↗
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const a = e.answers ?? {};
   const conductedLabel: Record<string, string> = {
     claude: t("ranClaude"),
     external: t("ranExternal"),

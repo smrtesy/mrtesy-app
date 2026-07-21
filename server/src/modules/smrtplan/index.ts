@@ -17,3 +17,4 @@ router.use(smrtplanRoutes);
 
 export default router;
 export { default as jobsRouter } from "./jobs";
+export { default as sessionReportRouter } from "./session-report";
