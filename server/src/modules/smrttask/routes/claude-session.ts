@@ -64,6 +64,17 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   const gitBranch = clean(body.git_branch) || null;
   const repo = clean(body.repo) || "mrtesy-app";
 
+  // Claude ACCOUNT identity that ran the chat — shown on the proposal so we know
+  // who filed it. Distinct from the resolved platform user (user_id/user_email),
+  // which may be an override used only for account lookup.
+  const claudeUserEmail = clean(body.claude_user_email) || null;
+  const claudeUserName = clean(body.claude_user_name) || null;
+  const claudeAccountLabel = claudeUserEmail
+    ? claudeUserName && claudeUserName !== claudeUserEmail
+      ? `${claudeUserName} (${claudeUserEmail})`
+      : claudeUserEmail
+    : null;
+
   // Agent-provided summary (made on the Claude subscription). No LLM here.
   const topic = clean(body.topic);
   const summary = clean(body.summary);
@@ -103,6 +114,7 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
     summary || (hasSummary ? "" : "התנהלה שיחת עבודה ב-Claude Code."),
     nextStep ? `המשך מוצע: ${nextStep}` : "",
     `היכן: ${whereLine}`,
+    claudeAccountLabel ? `חשבון Claude: ${claudeAccountLabel}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");

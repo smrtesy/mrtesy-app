@@ -11,6 +11,10 @@
  *   session_id / session_url  <- CLAUDE_CODE_REMOTE_SESSION_ID (`cse_<slug>` ->
  *                                https://claude.ai/code/session_<slug>)
  *   user_email                <- CLAUDE_CODE_USER_EMAIL
+ *   claude_user_email/_name   <- CLAUDE_CODE_USER_EMAIL (the Claude login identity
+ *                                that ran the chat; name = local-part before @).
+ *                                Kept SEPARATE from user_email, which the backend
+ *                                may resolve against an overridden platform account.
  *   git_branch                <- <cwd>/.git/HEAD
  */
 import { readFileSync } from "node:fs";
@@ -98,12 +102,22 @@ const transcript = buildTranscript(hook.transcript_path);
 // differ from the smrtesy platform account email (e.g. a maor.org login vs a
 // gmail.com platform account), so honor explicit overrides first; the backend
 // prefers user_id, then user_email.
+//
+// The Claude ACCOUNT that ran the chat is tracked separately (claude_user_*) so
+// it's shown on the proposal regardless of any SMRTTASK_USER_EMAIL override used
+// only for platform-account resolution. No dedicated display-name env exists, so
+// the username is the local-part of the login email.
+const claudeEmail = process.env.CLAUDE_CODE_USER_EMAIL || null;
+const claudeName = claudeEmail ? claudeEmail.split("@")[0] || null : null;
+
 const body = {
   session_id: sessionId,
   session_url: sessionUrl,
   user_id: process.env.SMRTTASK_USER_ID || null,
   user_email:
     process.env.SMRTTASK_USER_EMAIL || process.env.CLAUDE_CODE_USER_EMAIL || null,
+  claude_user_email: claudeEmail,
+  claude_user_name: claudeName,
   repo: "mrtesy-app",
   git_branch: gitBranch(hook.cwd),
   transcript,
