@@ -3451,7 +3451,8 @@
         "source": "Source message",
         "edit": "Edit",
         "save": "Save",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "sessionReport": "Claude Code session status"
       }
     },
     "cell": {
