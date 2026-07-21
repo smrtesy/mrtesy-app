@@ -16,7 +16,7 @@ import {
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus, ClipboardList } from "lucide-react";
+import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus, ClipboardList, AlarmClockCheck } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
@@ -555,6 +555,23 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             // rollover has un-planned it (return_count) — hidden at 0.
             const returnCount = task.return_count ?? 0;
             const isBacklog = task.manually_verified === true;
+            // Woke from snooze — this suggestion/task was deferred to a date that
+            // has now arrived, so it resurfaced here. Show a "חזר מנדנוד" badge
+            // with the date it returned (New York time) so it never reads as a
+            // brand-new suggestion. Cleared implicitly once acted on (the card
+            // leaves the list). See reminders-check → woke_from_snooze_at.
+            const woke = !!task.woke_from_snooze_at;
+            // A woke follow-up tracker is the "I pinged X, no reply in 48h"
+            // reminder — mirror the desk (TaskRow) and frame it as "מעקב 48 שעות"
+            // instead of the generic snooze badge, so it reads the same in both places.
+            const isFollowup48 = woke && task.task_type === "followup";
+            const wokeAt = woke && !isFollowup48
+              ? new Date(task.woke_from_snooze_at!).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", {
+                  day: "numeric",
+                  month: "short",
+                  timeZone: "America/New_York",
+                })
+              : null;
 
             return (
               <Card
@@ -587,6 +604,25 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       {displayTitle}
                     </h4>
                     <div dir="ltr" className="flex shrink-0 items-center gap-1">
+                      {isFollowup48 && (
+                        <span
+                          title={tTasks("row.followup48Hint")}
+                          className="inline-flex items-center gap-0.5 rounded-full border border-status-warn/40 bg-status-warn-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-status-warn"
+                        >
+                          <AlarmClockCheck className="h-3 w-3" />
+                          <span dir="auto">{tTasks("row.followup48Chip")}</span>
+                        </span>
+                      )}
+                      {wokeAt && (
+                        <span
+                          title={tTasks("row.wokeHint")}
+                          className="inline-flex items-center gap-0.5 rounded-full border border-status-warn/40 bg-status-warn-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-status-warn"
+                        >
+                          <AlarmClockCheck className="h-3 w-3" />
+                          <span dir="auto">{tTasks("row.wokeChip")}</span>
+                          <span>· {wokeAt}</span>
+                        </span>
+                      )}
                       {returnCount >= 1 && (
                         <span
                           title={t("returnedBadgeTooltip", { count: returnCount })}
