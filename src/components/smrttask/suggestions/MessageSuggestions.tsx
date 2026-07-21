@@ -16,7 +16,7 @@ import {
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, RotateCcw, CalendarPlus, ClipboardList, AlarmClockCheck } from "lucide-react";
+import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, CheckCircle2, RotateCcw, CalendarPlus, ClipboardList, AlarmClockCheck } from "lucide-react";
 import { toast } from "sonner";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
@@ -31,11 +31,10 @@ import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { SnoozeDialog } from "@/components/smrttask/tasks/SnoozeDialog";
 import { AddEventModal } from "@/components/smrttask/tasks/AddEventModal";
 import { DismissDialog } from "./DismissDialog";
-import { PlanProposals } from "./PlanProposals";
 import { MergeModal, type MergeMinimizeJob } from "@/components/smrttask/merge/MergeModal";
 import { useMergeJob, useMergeCompletedListener } from "@/contexts/MergeJobContext";
 import { useWorkCalendar } from "@/hooks/useWorkCalendar";
-import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment, todayISO } from "@/lib/workdays";
+import { effectiveDeadline, autoSnoozeMoment, eventReminderMoment, todayISO, type BlockedDays } from "@/lib/workdays";
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "@/components/smrttask/tasks/DueDateChip";
 import { cn } from "@/lib/utils";
@@ -51,6 +50,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const t = useTranslations("suggestions");
   const tTasks = useTranslations("tasks");
   const tMerge = useTranslations("merge");
+  const tPlan = useTranslations("planProposals");
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -66,8 +66,11 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   const [resolved, setResolved] = useState<Task[]>([]);
   // Plan tasks whose deadline is near — surfaced in the inbox to pick for today.
   // Plan tasks flow through the inbox (never auto-onto the desk); this is where
-  // you commit one to "היום".
+  // you commit one to "היום". Merged into the one inbox list (no separate banner).
   const [planTasks, setPlanTasks] = useState<Task[]>([]);
+  // Plan assignment proposals awaiting my accept/decline — also merged inline
+  // into the inbox list (no separate banner), each as a regular-looking card.
+  const [planProposals, setPlanProposals] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string; sourceType: string | null } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -189,6 +192,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             .sort((a, b) => (effectiveDeadline(a) ?? "").localeCompare(effectiveDeadline(b) ?? "")),
         );
       } catch { /* smrtPlan not enabled → no plan section */ }
+      // Plan assignment proposals awaiting accept/decline — merged into the same
+      // inbox list below (no separate banner). smrtPlan off → empty (caught).
+      try {
+        const { tasks: pp } = await api<{ tasks: Task[] }>("/api/plan/proposals");
+        setPlanProposals(pp ?? []);
+      } catch { setPlanProposals([]); }
       setSelected(new Set());
       // Re-bind editTask to the freshly fetched row so an open TaskDetail
       // sheet renders the saved values instead of the pre-save snapshot.
@@ -249,6 +258,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     setSuggestions((prev) => prev.filter((s) => !set.has(s.id)));
     setResolved((prev) => prev.filter((s) => !set.has(s.id)));
     setPlanTasks((prev) => prev.filter((s) => !set.has(s.id)));
+    setPlanProposals((prev) => prev.filter((s) => !set.has(s.id)));
     setSelected((prev) => {
       const next = new Set(prev);
       ids.forEach((id) => next.delete(id));
@@ -435,12 +445,45 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
 
   // Plan-task triage: pull a plan task onto today's desk (planned_for = today).
   // It keeps living on the plan board; this is the daily-method "pick for today".
+  // Confirm with a toast so an approved plan task never feels like it just
+  // "bounced back to the list" with nothing added.
   function handlePlanPickToday(taskId: string) {
     setPlanTasks((prev) => prev.filter((task) => task.id !== taskId));
+    toast.success(t("approvedToToday"));
     api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
+
+  // Plan assignment proposal: accept → routes the task into my regular flow
+  // (waiting/desk by date); decline → notifies the plan's manager. Either way
+  // the card leaves the inbox.
+  function handleProposalRespond(taskId: string, accept: boolean) {
+    removeLocal([taskId]);
+    toast.success(accept ? tPlan("accepted") : tPlan("declined"));
+    api(`/api/plan-tasks/${taskId}/assignment-response`, { method: "POST", body: { accept } })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
+  }
+
+  // Both smrtPlan surfaces (near-deadline plan tasks + assignment proposals)
+  // are merged into the single inbox list — no separate banners. Deduped
+  // against the regular suggestions (a plan task could also surface as an
+  // undated verified row) and sorted by urgency (earliest deadline first)
+  // alongside them; each plan card carries a short plan-name tag.
+  const planIds = new Set([...planProposals, ...planTasks].map((p) => p.id));
+  const orderedCards: { kind: "suggestion" | "planNear" | "planProposal"; task: Task }[] = [
+    ...planProposals.map((task) => ({ kind: "planProposal" as const, task })),
+    ...planTasks.map((task) => ({ kind: "planNear" as const, task })),
+    ...suggestions.filter((s) => !planIds.has(s.id)).map((task) => ({ kind: "suggestion" as const, task })),
+  ].sort((a, b) => {
+    const da = effectiveDeadline(a.task);
+    const db = effectiveDeadline(b.task);
+    if (da && db && da !== db) return da.localeCompare(db);
+    if (da && !db) return -1;
+    if (!da && db) return 1;
+    return 0;
+  });
 
   const body = loading ? (
     <div className="space-y-3">
@@ -448,9 +491,6 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     </div>
   ) : (
     <div className="space-y-4">
-      {/* Plan assignments awaiting my accept/decline */}
-      <PlanProposals locale={locale} onChanged={() => { onUpdate?.(); }} />
-
       {/* Suggestions that closed themselves before you approved them (T740):
           surfaced here so they don't vanish silently. Confirm → archived;
           reopen → back into the suggestion inbox. */}
@@ -480,58 +520,48 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         </div>
       )}
 
-      {/* Plan tasks with a near deadline — pick one for today. Plan tasks flow
-          through the inbox and live on their own board; the desk never
-          auto-fills them, so this is where you commit one to "היום". */}
-      {planTasks.length > 0 && (
-        <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <ClipboardList className="h-3.5 w-3.5 shrink-0" />
-            <span dir="auto">{t("planTodayTitle", { count: planTasks.length })}</span>
-          </p>
-          <p className="text-[11px] text-muted-foreground" dir="auto">{t("planTodayHint")}</p>
-          {planTasks.map((task) => {
-            const pTitle = locale === "he" && task.title_he ? task.title_he : task.title;
-            const dl = effectiveDeadline(task);
-            return (
-              <div key={task.id} className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
-                <button type="button" className="min-w-0 flex-1 truncate text-start text-sm" dir="auto" onClick={() => setEditTask(task)}>{pTitle}</button>
-                {dl && (
-                  <span className="shrink-0 text-[10px] text-muted-foreground" dir="ltr">
-                    {new Date(`${dl}T00:00:00`).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", { day: "numeric", month: "short" })}
-                  </span>
-                )}
-                <IconButton label={tTasks("row.addToToday")} color="primary" className="h-7 w-7" onClick={() => handlePlanPickToday(task.id)}>
-                  <ListPlus />
-                </IconButton>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {suggestions.length === 0 && resolved.length === 0 && planTasks.length === 0 ? (
+      {orderedCards.length === 0 && resolved.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Bell className="mx-auto h-8 w-8 mb-2 opacity-50" />
           <p>{t("noSuggestions")}</p>
         </div>
-      ) : suggestions.length === 0 ? null : (
+      ) : orderedCards.length === 0 ? null : (
         <div className="space-y-3">
-          <SuggestionToolbar
-            total={suggestions.length}
-            filtered={suggestions.length}
-            selectedCount={selected.size}
-            searchQuery=""
-            onSearchChange={() => {}}
-            onSelectAll={selectAllFiltered}
-            onClearSelection={clearSelection}
-            onBulkApprove={handleBulkApprove}
-            onBulkDismissFast={handleBulkDismissFast}
-            onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
-            hideSearch
-          />
+          {suggestions.length > 0 && (
+            <SuggestionToolbar
+              total={suggestions.length}
+              filtered={suggestions.length}
+              selectedCount={selected.size}
+              searchQuery=""
+              onSearchChange={() => {}}
+              onSelectAll={selectAllFiltered}
+              onClearSelection={clearSelection}
+              onBulkApprove={handleBulkApprove}
+              onBulkDismissFast={handleBulkDismissFast}
+              onBulkMerge={selected.size >= 1 ? () => setMergeOpen(true) : undefined}
+              hideSearch
+            />
+          )}
 
-          {suggestions.map((task) => {
+          {orderedCards.map((card) => {
+            // smrtPlan cards (near-deadline task or assignment proposal) render
+            // as regular-looking inbox cards with a plan-name tag + due date,
+            // but keep their own actions (pick-for-today / accept+decline).
+            if (card.kind !== "suggestion") {
+              return (
+                <PlanInboxCard
+                  key={card.task.id}
+                  task={card.task}
+                  kind={card.kind}
+                  locale={locale}
+                  blocked={blocked}
+                  onOpen={() => setEditTask(card.task)}
+                  onPickToday={() => handlePlanPickToday(card.task.id)}
+                  onRespond={(accept) => handleProposalRespond(card.task.id, accept)}
+                />
+              );
+            }
+            const task = card.task;
             const source = task.source_messages ?? null;
             const title = locale === "he" && task.title_he ? task.title_he : task.title;
             // An event surfaces as a reminder — frame the shown title as such
@@ -916,5 +946,112 @@ function SuggestionActions({
         {isEvent ? <Check /> : <ListPlus />}
       </IconButton>
     </div>
+  );
+}
+
+/** The plan's name, shortened to the first 2-3 words for a compact inbox tag
+ *  ("הקמת אתר תדמית" → "הקמת אתר תדמית", longer names truncated with "…"). */
+function shortPlanName(task: Task, locale: string): string | null {
+  const full = locale === "en"
+    ? task.plan_title_en || task.plan_title_he
+    : task.plan_title_he || task.plan_title_en;
+  if (!full) return null;
+  const words = full.trim().split(/\s+/);
+  const short = words.slice(0, 3).join(" ");
+  return words.length > 3 ? `${short}…` : short;
+}
+
+/**
+ * A smrtPlan item rendered inline in the inbox list — visually a regular
+ * suggestion card (title · description · plan-name tag · due-date chip), but
+ * with plan-specific actions instead of the AI-suggestion action row:
+ *   - kind "planNear":     a near-deadline plan task → "הוסף להיום".
+ *   - kind "planProposal": an assignment offer → "קבל" / "דחה שיבוץ" (decline
+ *     notifies the plan's manager). The due-date chip is display-only (locked):
+ *     plan dates are the engine's / manager's to move.
+ */
+function PlanInboxCard({
+  task,
+  kind,
+  locale,
+  blocked,
+  onOpen,
+  onPickToday,
+  onRespond,
+}: {
+  task: Task;
+  kind: "planNear" | "planProposal";
+  locale: string;
+  blocked: BlockedDays;
+  onOpen: () => void;
+  onPickToday: () => void;
+  onRespond: (accept: boolean) => void;
+}) {
+  const tTasks = useTranslations("tasks");
+  const tPlan = useTranslations("planProposals");
+  const title = locale === "he" && task.title_he ? task.title_he : task.title;
+  const planName = shortPlanName(task, locale);
+
+  return (
+    <Card className="border-primary/30">
+      <CardContent className="p-4">
+        <div className="flex items-start gap-2">
+          <div className="mt-0.5 shrink-0 rounded-full bg-primary/10 p-1.5">
+            <ClipboardList className="h-3.5 w-3.5 text-primary" />
+          </div>
+          <button
+            type="button"
+            className="flex-1 min-w-0 text-start text-sm font-medium cursor-pointer"
+            dir="auto"
+            onClick={onOpen}
+          >
+            {title}
+          </button>
+          <div dir="ltr" className="flex shrink-0 items-center gap-1">
+            <DueDateChip deadline={effectiveDeadline(task)} locale={locale} blocked={blocked} locked />
+          </div>
+        </div>
+
+        {task.description ? (
+          <p
+            className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words cursor-pointer"
+            dir="auto"
+            onClick={onOpen}
+          >
+            {task.description}
+          </p>
+        ) : null}
+
+        {planName && (
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <Badge variant="outline" className="text-[10px]">{planName}</Badge>
+          </div>
+        )}
+
+        {kind === "planProposal" ? (
+          <div className="mt-3 flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-9 gap-1 text-status-late hover:bg-status-late-bg"
+              onClick={() => onRespond(false)}
+            >
+              <X className="h-4 w-4" />
+              {tPlan("decline")}
+            </Button>
+            <Button size="sm" className="h-9 gap-1" onClick={() => onRespond(true)}>
+              <CheckCircle2 className="h-4 w-4" />
+              {tPlan("accept")}
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-3 flex justify-end">
+            <IconButton label={tTasks("row.addToToday")} color="primary" className="h-9 w-9" onClick={onPickToday}>
+              <ListPlus />
+            </IconButton>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
