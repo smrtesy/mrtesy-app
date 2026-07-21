@@ -60,7 +60,7 @@ def to_weekly(daily):
 
 
 def build_context(ticker, daily, weekly, spy_ctx):
-    dc = [r[4] for r in daily]; dh = [r[2] for r in daily]; dl = [r[3] for r in daily]; dv = [r[5] for r in daily]
+    do = [r[1] for r in daily]; dc = [r[4] for r in daily]; dh = [r[2] for r in daily]; dl = [r[3] for r in daily]; dv = [r[5] for r in daily]
     wc = [r[4] for r in weekly]; wh = [r[2] for r in weekly]; wl = [r[3] for r in weekly]
     price = dc[-1]
     d_trend, d_highs, d_lows = I.trend_structure(dh, dl, k=5)
@@ -104,6 +104,8 @@ def build_context(ticker, daily, weekly, spy_ctx):
     if entry_ideal and stop_ideal and target_ideal and (entry_ideal - stop_ideal) > 0:
         rr_setup = (target_ideal - entry_ideal) / (entry_ideal - stop_ideal)
     at_support = sup_c is not None and price <= sup_c * 1.02   # המחיר כבר באזור-הכניסה
+    # נר-אישור (ה-3/ז-7): נר ירוק שסוגר מעל הגבוה של נר-היפוך (פטיש/דוג'י) לאחרונה
+    confirm = I.bullish_confirmation(do, dh, dl, dc, lookback=3)
     # הקשר-פריצה (פרוקסי נקי): סגירת שיא-10-ימים חדשה
     breakout_ctx = len(dh) > 11 and price > max(dh[-11:-1])
     ctx = dict(
@@ -117,6 +119,7 @@ def build_context(ticker, daily, weekly, spy_ctx):
         resistance=res_c, support=sup_c,
         entry_ideal=entry_ideal, stop_ideal=stop_ideal, target_ideal=target_ideal,
         rr_setup=rr_setup, at_support=at_support,
+        confirm_candle=confirm is not None, confirm_kind=(confirm or {}).get("kind"),
         ath=ath, pct_from_high=(price / ath - 1) * 100,
         dist_to_res_pct=(res_c / price - 1) * 100 if res_c else None,
         n_candles=len(daily),
@@ -147,6 +150,12 @@ EVAL = {
     "ג-10": lambda c: E(c["dist_to_res_pct"] is None or c["dist_to_res_pct"] > 3,
                        f"מרחק להתנגדות {c['dist_to_res_pct']:.1f}% > 3% — לא צמוד" if c["dist_to_res_pct"] is not None else "אין התנגדות קרובה",
                        f"צמוד להתנגדות ({c['dist_to_res_pct']:.1f}%) — אין לקנות לפני התנגדות"),
+    # ה/ז — נר-אישור (ה-3 gate, ז-7 gate): נר ירוק מעל גבוה נר-היפוך (פטיש/דוג'י)
+    "ה-3":  lambda c: E(c["confirm_candle"],
+                       f"נר-אישור ירוק מעל נר-היפוך ({c['confirm_kind']}) — כניסה מאושרת",
+                       "אין נר-אישור ירוק מעל נר-היפוך — 'רק לאחר נר ירוק אפשר לקנות'"),
+    "ז-7":  lambda c: E(c["confirm_candle"],
+                       "נר-אישור ירוק לפני כניסה (ז-7)", "אין נר-אישור ירוק (ז-7)"),
     # ה — אישורי כניסה (ווליום)
     "ה-5":  lambda c: (E(c["vol_last_ratio"] > 1.0,
                         f"פריצה במחזור {c['vol_last_ratio']:.2f}× ממוצע — מאושרת (נמ״ס)",
@@ -213,7 +222,9 @@ def decide(c, ledger):
     if c["at_support"] and c["w_trend"] == "up":
         if not c["pullback_vol_declining"]:
             return "מעקב", f"בתמיכה אך מחזור-הפולבק לא דועך ({c['vol_ratio5']:.2f}×) — אין אישור-ווליום (ה-11)"
-        return "כניסה", f"פולבק לתמיכה במגמה עולה + מחזור-תיקון דועך ({c['vol_ratio5']:.2f}×), {ledger['י-1'][1]}"
+        if not c.get("confirm_candle"):
+            return "מעקב", "בתמיכה אך אין נר-אישור ירוק מעל נר-היפוך (ה-3/ז-7) — 'רק לאחר נר ירוק אפשר לקנות'"
+        return "כניסה", f"פולבק לתמיכה + מחזור-דועך + נר-אישור ({c['confirm_kind']}) (ה-3), {ledger['י-1'][1]}"
     return "מעקב", f"מגמה תומכת ויחס טוב, אך אין טריגר עדיין — ממתין לפולבק לכניסה {c['entry_ideal']:.1f}"
 
 

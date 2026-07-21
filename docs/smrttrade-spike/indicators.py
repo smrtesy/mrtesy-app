@@ -119,3 +119,40 @@ def nearest_support(price, lows):
     if below:
         return below[0]
     return None
+
+
+# ─────────────────────────── גיאומטריית-נרות (ה-3/ז-7) ───────────────────────────
+# נר-היפוך = פטיש/דוג'י; נר-אישור = נר ירוק שסוגר מעל הגבוה של נר-ההיפוך.
+# מחושב מ-OHLC (פרוקסי נומרי לקריאת-הנר החזותית של הקורס).
+
+def candle_kind(o, h, l, c):
+    """סיווג נר-בודד: 'hammer' (פטיש) / 'doji' (דוג'י) / None."""
+    rng = h - l
+    if rng <= 0:
+        return None
+    body = abs(c - o)
+    upper = h - max(o, c)
+    lower = min(o, c) - l
+    if lower >= 2 * max(body, 1e-9) and upper <= max(body, 0.15 * rng) and min(o, c) >= l + 0.5 * rng:
+        return "hammer"                                     # צל-תחתון ארוך, גוף בחצי-עליון
+    if body <= 0.10 * rng:                                  # גוף זעיר, ללא צל-בודד ארוך = דוג'י
+        return "doji"
+    return None
+
+
+def bullish_confirmation(opens, highs, lows, closes, lookback=3):
+    """ה-3/ז-7: על הבר האחרון — נר-אישור **ירוק** שסוגר **מעל הגבוה** של נר-היפוך
+    (פטיש/דוג'י) שהופיע באחד מ-lookback הברים שלפניו. מחזיר dict או None.
+    'רק לאחר נר ירוק אפשר לקנות' + 'נר אישור שסוגר מעל הגבוה שלו'."""
+    n = len(closes)
+    if n < 2:
+        return None
+    i = n - 1
+    o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+    if not (c > o):                                         # נר-האישור חייב להיות ירוק
+        return None
+    for r in range(max(0, i - lookback), i):               # נר-היפוך בברים הקודמים
+        k = candle_kind(opens[r], highs[r], lows[r], closes[r])
+        if k in ("hammer", "doji") and c > highs[r]:        # סגירה מעל גבוה נר-ההיפוך
+            return {"reversal_idx": r, "kind": k, "rev_high": float(highs[r])}
+    return None
