@@ -1397,11 +1397,23 @@ router.get("/plan-tasks/:id/detail", async (req: Request, res: Response) => {
     .eq("parent_task_id", req.params.id)
     .order("created_at", { ascending: true });
 
+  // Claude Code session reports (task_session_reports) — the worker's own
+  // in-progress task shows where the session they opened for it stands, not
+  // just the plan-wide journal. Newest first; a task usually has 0-1 rows but
+  // can carry a short history if work resumed under a new session_id.
+  const { data: sessionReportRows, error: srErr } = await db
+    .from("task_session_reports")
+    .select("session_id, session_url, summary, status, updated_at")
+    .eq("org_id", req.org!.id)
+    .eq("task_id", req.params.id)
+    .order("updated_at", { ascending: false });
+  if (srErr) return res.status(500).json({ error: srErr.message });
+
   const [enriched] = await attachStageTitles(
     req.org!.id,
     await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, [task as unknown as Row])),
   );
-  res.json({ task: enriched, subtasks: subs ?? [] });
+  res.json({ task: enriched, subtasks: subs ?? [], session_reports: sessionReportRows ?? [] });
 });
 
 /**

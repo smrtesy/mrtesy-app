@@ -3450,7 +3450,8 @@
         "source": "הודעת המקור",
         "edit": "עריכה",
         "save": "שמירה",
-        "cancel": "ביטול"
+        "cancel": "ביטול",
+        "sessionReport": "סטטוס סשן Claude Code"
       }
     },
     "cell": {

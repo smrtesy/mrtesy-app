@@ -52,6 +52,20 @@ interface DetailSubtask {
   latest_finish: string | null;
 }
 
+interface SessionReport {
+  session_id: string;
+  session_url: string | null;
+  summary: string;
+  status: string; // "in_progress" | "blocked" | "done"
+  updated_at: string;
+}
+
+const sessionStatusCls: Record<string, string> = {
+  in_progress: "bg-status-warn-bg text-status-warn",
+  blocked: "bg-status-late-bg text-status-late",
+  done: "bg-status-ok-bg text-status-ok",
+};
+
 const materialIcon: Record<string, typeof LinkIcon> = {
   link: LinkIcon,
   file: FileText,
@@ -79,6 +93,7 @@ export function TaskDetailDialog({
   const t = useTranslations("smrtPlan");
   const [task, setTask] = useState<DetailTask | null>(null);
   const [subtasks, setSubtasks] = useState<DetailSubtask[]>([]);
+  const [sessionReports, setSessionReports] = useState<SessionReport[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -97,12 +112,15 @@ export function TaskDetailDialog({
     const requestedId = taskId;
     setLoading(true);
     try {
-      const { task, subtasks } = await api<{ task: DetailTask; subtasks: DetailSubtask[] }>(
-        `/api/plan-tasks/${requestedId}/detail`,
-      );
+      const { task, subtasks, session_reports } = await api<{
+        task: DetailTask;
+        subtasks: DetailSubtask[];
+        session_reports: SessionReport[];
+      }>(`/api/plan-tasks/${requestedId}/detail`);
       if (requestedId !== currentIdRef.current) return;
       setTask(task);
       setSubtasks(subtasks ?? []);
+      setSessionReports(session_reports ?? []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     } finally {
@@ -114,6 +132,7 @@ export function TaskDetailDialog({
     if (open && taskId) {
       setEditing(false);
       setTask(null);
+      setSessionReports([]);
       void load();
     }
   }, [open, taskId, load]);
@@ -236,6 +255,51 @@ export function TaskDetailDialog({
                 <p className="text-[12.5px] italic text-muted-foreground">{t("my.detail.noDescription")}</p>
               )}
             </section>
+
+            {/* Claude Code session report(s) — where the session opened for this
+                task stands (summary + status + link), newest first. */}
+            {sessionReports.length > 0 && (
+              <section>
+                <h3 className="mb-1 text-[12px] font-bold text-muted-foreground">{t("my.detail.sessionReport")}</h3>
+                <div className="space-y-1.5">
+                  {sessionReports.map((sr) => {
+                    const statusLabel: Record<string, string> = {
+                      in_progress: t("journal.statusInProgress"),
+                      blocked: t("journal.statusBlocked"),
+                      done: t("journal.statusDone"),
+                    };
+                    return (
+                      <div key={sr.session_id} className="rounded-md border bg-card px-2.5 py-2">
+                        <div className="mb-1 flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "whitespace-nowrap rounded px-1.5 py-px text-[10px] font-bold",
+                              sessionStatusCls[sr.status] ?? "bg-secondary text-muted-foreground",
+                            )}
+                          >
+                            {statusLabel[sr.status] ?? sr.status}
+                          </span>
+                          <span className="ms-auto whitespace-nowrap text-[10.5px] text-muted-foreground">
+                            {gregShort(parseISO(sr.updated_at))}
+                          </span>
+                        </div>
+                        {sr.summary && <p className="text-[12.5px] leading-relaxed">{sr.summary}</p>}
+                        {sr.session_url && (
+                          <a
+                            href={sr.session_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-block text-[11.5px] font-medium text-primary hover:underline"
+                          >
+                            {t("journal.sessionLink")} ↗
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
             {/* materials + drive docs + source link */}
             {(materials.length > 0 || driveDocs.length > 0 || sourceUrl) && (
