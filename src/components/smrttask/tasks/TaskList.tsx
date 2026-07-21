@@ -666,6 +666,14 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     } else {
       patchTask(taskId, { size }, (task) => ({ ...task, size }));
     }
+    // Keep the workclock's active task in sync: changing the size of the task
+    // whose clock is running must re-attribute it (and stop the wrong-size
+    // escalation, e.g. the "over quick" red once it's moved to medium).
+    if (workClock.state.activeTaskId === taskId) {
+      const row = tasks.find((task) => task.id === taskId);
+      const title = row ? (locale === "he" && row.title_he ? row.title_he : row.title) : (workClock.state.activeTaskTitle ?? "");
+      workClock.setActiveTask(taskId, size, title);
+    }
   }
 
   /** Pull a task back out of an (auto-)snooze: status→inbox, clear snoozed_until. */
@@ -1181,7 +1189,13 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         task={selectedTask}
         locale={locale}
         open={detailOpen}
-        onClose={() => setDetailOpen(false)}
+        onClose={() => {
+          setDetailOpen(false);
+          // Closing the task window stops its clock (workclock-plan §6.4/§9.5):
+          // clear the active task so the bar doesn't hold a stale one and keep
+          // firing its "open too long" alert after we've moved on.
+          if (selectedTask && workClock.state.activeTaskId === selectedTask.id) workClock.clearActiveTask();
+        }}
         onUpdate={fetchTasks}
         onDelete={handleDelete}
         onQuickAction={handleQuickAction}

@@ -133,28 +133,26 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         all.filter((t) => t.status === "pending_completion")
           .sort((a, b) => (b.status_changed_at ?? b.created_at ?? "").localeCompare(a.status_changed_at ?? a.created_at ?? "")),
       );
-      // "Returned" tasks — verified, active, undated, non-quick tasks that the
-      // nightly rollover un-planned at least once (return_count >= 1). These, and
-      // ONLY these, come back into the inbox for a fresh decision — an approved or
-      // undated task that has never been committed to a day (return_count 0) just
-      // lives on the desk and never nags here. Merged into the normal inbox list
-      // (no separate "לתכנן להיום" section) and marked with a "×N" badge.
-      let returnedTasks: Task[] = [];
+      // Undated verified tasks — verified, active, non-quick tasks with no date and
+      // not already committed to today. These are what used to fill the separate
+      // "לתכנן להיום" section; they now merge into the normal inbox list (one list,
+      // no separate box) so they stay visible for a decision. A "×N" badge on each
+      // shows how many times the nightly rollover has un-planned it (return_count).
+      let undatedTasks: Task[] = [];
       try {
         const { tasks: verified } = await api<{ tasks: Task[] }>(
           "/api/tasks?status=inbox,in_progress&verified=true&mine=true&limit=1000",
         );
         const today = todayISO();
-        returnedTasks = (verified ?? []).filter(
-          (t) => (t.return_count ?? 0) >= 1
-            && t.size !== "quick" && !t.due_date && t.planned_for !== today,
+        undatedTasks = (verified ?? []).filter(
+          (t) => t.size !== "quick" && !t.due_date && t.planned_for !== today,
         );
-      } catch { /* endpoint unavailable → no returned tasks this pass */ }
-      // Inbox = unverified suggestions + genuinely-returned tasks, one list.
+      } catch { /* endpoint unavailable → no undated tasks this pass */ }
+      // Inbox = unverified suggestions + undated verified tasks, one list.
       // Urgency order: earliest effective deadline first, undated last; within the
       // undated group the most-returned float up, then newest-first.
       const inboxById = new Map<string, Task>();
-      for (const t of [...all.filter((t) => t.status === "inbox"), ...returnedTasks]) inboxById.set(t.id, t);
+      for (const t of [...all.filter((t) => t.status === "inbox"), ...undatedTasks]) inboxById.set(t.id, t);
       const sorted = [...inboxById.values()].sort((a, b) => {
         const da = effectiveDeadline(a);
         const db = effectiveDeadline(b);
@@ -281,11 +279,11 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     // rather than promoting it to a verified task.
     const task = suggestions.find((s) => s.id === taskId);
     const isEvent = task?.task_type === "meeting";
-    // A returned task (already verified) is committed to today, not "approved"
+    // An already-verified undated task is committed to today, not "approved"
     // again — otherwise the manually_verified no-op leaves planned_for null and
     // the card just comes back. Covers the TaskDetail approve path (the card CTA
     // already calls handlePlanToday directly).
-    if (!isEvent && (task?.return_count ?? 0) >= 1) {
+    if (!isEvent && task?.manually_verified === true) {
       handlePlanToday(taskId);
       return;
     }
@@ -551,12 +549,12 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             const visibleTags = (task.tags ?? []).filter(
               (tag) => tag.toLowerCase() !== "via-claude-session" && !/^claude-session:/i.test(tag),
             );
-            // A "returned" task — the nightly rollover un-planned it at least once
-            // (committed to a day, day passed, not done). Show a "↻N" badge and
-            // turn its primary CTA into "plan for today" instead of "approve"
-            // (it's already verified — approve would be a no-op).
+            // An already-verified undated task resurfaced in the inbox (the old
+            // "לתכנן להיום" set). Its primary CTA is "commit to today", not another
+            // "approve" no-op. The "↻N" badge shows how many times the nightly
+            // rollover has un-planned it (return_count) — hidden at 0.
             const returnCount = task.return_count ?? 0;
-            const isReturned = returnCount >= 1;
+            const isBacklog = task.manually_verified === true;
 
             return (
               <Card
@@ -589,7 +587,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       {displayTitle}
                     </h4>
                     <div dir="ltr" className="flex shrink-0 items-center gap-1">
-                      {isReturned && (
+                      {returnCount >= 1 && (
                         <span
                           title={t("returnedBadgeTooltip", { count: returnCount })}
                           className="inline-flex items-center gap-0.5 rounded-full border border-status-warn/40 bg-status-warn-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-status-warn"
@@ -644,7 +642,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoProjectId={task.project_id}
                     infoTitle={title}
                     infoBody={task.description}
-                    isReturned={isReturned}
+                    isBacklog={isBacklog}
                     onSizeChange={(size) => handleSizeSet(task.id, size)}
                     onContextToggle={(ctx) => handleContextToggle(task, ctx)}
                     onAssign={(uid) => handleAssign(task.id, uid)}
@@ -762,7 +760,7 @@ function SuggestionActions({
   infoProjectId,
   infoTitle,
   infoBody,
-  isReturned,
+  isBacklog,
   onSizeChange,
   onContextToggle,
   onAssign,
@@ -778,7 +776,7 @@ function SuggestionActions({
   infoProjectId: string | null;
   infoTitle: string;
   infoBody: string | null;
-  isReturned: boolean;
+  isBacklog: boolean;
   onSizeChange: (size: "quick" | "medium" | "big") => void;
   onContextToggle: (ctx: "home" | "outside") => void;
   onAssign: (userId: string | null) => void;
@@ -871,12 +869,13 @@ function SuggestionActions({
           and read as approve, silently archiving suggestions one tap at a
           time (the June-2026 "suggestions vanished" incident). Completing
           belongs to the task list, after approval.
-          A returned task is already verified — its primary CTA is "commit to
-          today" (planned_for=today), not another "approve" no-op. */}
+          An already-verified undated task (the backlog resurfaced in the inbox)
+          is committed to today via its CTA, not "approved" again — an approve
+          no-op would leave planned_for null and the card just comes back. */}
       <IconButton
-        label={isEvent ? t("closeReminder") : isReturned ? tTasks("row.addToToday") : t("approve")}
+        label={isEvent ? t("closeReminder") : isBacklog ? tTasks("row.addToToday") : t("approve")}
         color="blue"
-        onClick={isEvent ? onApprove : isReturned ? onPlanToday : onApprove}
+        onClick={isEvent ? onApprove : isBacklog ? onPlanToday : onApprove}
       >
         {isEvent ? <Check /> : <ListPlus />}
       </IconButton>
