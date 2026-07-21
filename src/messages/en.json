@@ -857,8 +857,6 @@
     "resolvedTitle": "Resolved themselves ({count})",
     "resolvedHint": "Suggestions that closed after you already handled them in the conversation. Confirm done, or reopen.",
     "returnedBadgeTooltip": "Returned {count} time(s) — you planned it for a day and it didn't close. Plan it for today or give it a date.",
-    "planTodayTitle": "Plan tasks due soon ({count})",
-    "planTodayHint": "Plan tasks with an approaching deadline — pick which to add to today.",
     "confirmDone": "Done",
     "reopen": "Reopen"
   },
