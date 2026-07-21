@@ -156,7 +156,10 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
       : { data: null };
 
     const targetUserId = (plan?.manager_user_id as string | null) ?? (plan?.owner_user_id as string | null);
-    if (targetUserId) {
+    // Never notify someone about their own session — e.g. the plan owner
+    // running Claude Code on their own task (they were there; a notification
+    // adds noise, not information).
+    if (targetUserId && targetUserId !== userId) {
       const taskTitle = (task.title_he as string) || (task.title as string) || "";
       const bodyLine = summary || "התקבל עדכון התקדמות מסשן Claude Code.";
       await notify(orgId, targetUserId, {
