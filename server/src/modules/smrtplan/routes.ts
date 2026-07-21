@@ -555,6 +555,13 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 //  · entries     — every recorded debrief (the results Claude logged + the doer's
 //                  report), each tagged with the date and the decision it feeds
 // The client shows the decision board on top and toggles entries by day / by decision.
+interface SessionReportEntry {
+  session_url: string | null;
+  summary: string;
+  status: string;
+  updated_at: string;
+}
+
 router.get("/plans/:id/journal", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const planId = req.params.id;
@@ -605,6 +612,14 @@ router.get("/plans/:id/journal", async (req: Request, res: Response) => {
     return null;
   };
 
+  const { data: sessionReportRows, error: srErr } = await db
+    .from("task_session_reports")
+    .select("task_id, user_id, session_id, session_url, summary, status, created_at, updated_at")
+    .eq("org_id", orgId)
+    .in("task_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]);
+  if (srErr) return res.status(500).json({ error: srErr.message });
+  const sessionReports = sessionReportRows ?? [];
+
   const debriefByTask = new Map<string, (typeof debriefs)[number]>(debriefs.map((d) => [d.task_id as string, d]));
   const decisions = tasks
     .filter((t) => t.is_decision)
@@ -622,21 +637,51 @@ router.get("/plans/:id/journal", async (req: Request, res: Response) => {
       outcome: debriefByTask.get(t.id as string)?.answers ?? null,
     }));
 
-  const entries = debriefs
-    .map((d) => {
-      const t = byId.get(d.task_id as string);
-      return {
-        task_id: d.task_id,
-        title: t?.title ?? null,
-        title_he: t?.title_he ?? null,
-        date: d.created_at,
-        user_id: d.user_id,
-        conducted_in: d.conducted_in,
-        answers: d.answers,
-        decision_id: decisionOf(d.task_id as string),
-      };
-    })
-    .sort((a, b) => (String(a.date) < String(b.date) ? 1 : -1));
+  const debriefEntries = debriefs.map((d) => {
+    const t = byId.get(d.task_id as string);
+    return {
+      task_id: d.task_id,
+      title: t?.title ?? null,
+      title_he: t?.title_he ?? null,
+      date: d.created_at,
+      user_id: d.user_id,
+      conducted_in: d.conducted_in,
+      answers: d.answers,
+      decision_id: decisionOf(d.task_id as string),
+      session_report: null as SessionReportEntry | null,
+    };
+  });
+
+  // Lightweight auto-reports from a Claude Code Stop hook (task_session_reports)
+  // — conducted_in is left null on purpose: that's what distinguishes an
+  // auto-report row from a real task_debriefs row (which always sets it).
+  // date = updated_at, not created_at: the row is refreshed in place as the
+  // same session progresses (unique on task_id+session_id), so created_at
+  // would freeze a report under its FIRST day even after a later status change
+  // (e.g. "done") — burying the actual latest update below newer entries.
+  const sessionReportEntries = sessionReports.map((sr) => {
+    const t = byId.get(sr.task_id as string);
+    return {
+      task_id: sr.task_id,
+      title: t?.title ?? null,
+      title_he: t?.title_he ?? null,
+      date: sr.updated_at,
+      user_id: sr.user_id,
+      conducted_in: null,
+      answers: null,
+      decision_id: decisionOf(sr.task_id as string),
+      session_report: {
+        session_url: sr.session_url,
+        summary: sr.summary,
+        status: sr.status,
+        updated_at: sr.updated_at,
+      } as SessionReportEntry,
+    };
+  });
+
+  const entries = [...debriefEntries, ...sessionReportEntries].sort((a, b) =>
+    String(a.date) < String(b.date) ? 1 : -1,
+  );
 
   res.json({ decisions, entries });
 });
