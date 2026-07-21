@@ -3168,6 +3168,7 @@
       "empty": "No tasks in this plan yet",
       "allDone": "All tasks in this stage are done",
       "needs": "To start I need",
+      "blocking": "{n, plural, one {Blocking 1 task} other {Blocking # tasks}}",
       "handoff": "When done, hands off to",
       "blocked": "Blocked",
       "ready": "Ready",
@@ -3493,7 +3494,11 @@
       "ranClaude": "In Claude",
       "ranExternal": "External tool",
       "ranBoth": "Claude + external",
-      "ranNone": "No experiment"
+      "ranNone": "No experiment",
+      "sessionUpdate": "Claude Code update",
+      "statusInProgress": "In progress",
+      "statusBlocked": "Blocked",
+      "statusDone": "Done"
     },
     "review": {
       "title": "Plan review",

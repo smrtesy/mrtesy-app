@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Zap, Hourglass, CheckCircle2, Clock, ArrowRight, Check } from "lucide-react";
+import { Zap, Hourglass, CheckCircle2, Clock, AlertTriangle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseISO, gregShort, hebDate, countdownText, urgencyFor } from "@/lib/smrtplan/dates";
 // Zone logic lives in a shared util so the focus block + server focus-stage
@@ -169,10 +169,14 @@ export function TaskZones({
                       )}
 
                       {(tk.handoff ?? []).length > 0 && z.key !== "done" && (
-                        <div className="ms-8 mt-1 flex items-center gap-1.5 text-[12px] text-foreground/70">
-                          <ArrowRight className="h-3.5 w-3.5 text-status-ok" />
-                          <span className="text-[11px] font-bold text-muted-foreground">{t("effort.handoff")}:</span>
-                          {(tk.handoff ?? []).map((h) => h.title).join(" · ")}
+                        <div className="ms-8 mt-1 flex flex-wrap items-center gap-1.5 text-[12px]">
+                          <span className="inline-flex items-center gap-1 whitespace-nowrap rounded bg-status-warn-bg px-1.5 py-px text-[10px] font-bold text-status-warn">
+                            <AlertTriangle className="h-3 w-3" />
+                            {t("effort.blocking", { n: (tk.handoff ?? []).length })}
+                          </span>
+                          <span className="text-foreground/70">
+                            {t("effort.handoff")}: {(tk.handoff ?? []).map((h) => h.title).join(" · ")}
+                          </span>
                         </div>
                       )}
                     </div>
