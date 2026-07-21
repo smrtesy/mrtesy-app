@@ -1,0 +1,138 @@
+[
+  {
+    "ticker": null,
+    "name": "OPC Enרג",
+    "label": "מעקב·אזור-כניסה",
+    "price_or_levels": [12170],
+    "quote": "לפחות ברמת הגרף היומי היא ממשיכה להיות מאוד מאוד אטרקטיבית",
+    "confidence": "high"
+  },
+  {
+    "ticker": null,
+    "name": "דורל",
+    "label": "מעקב",
+    "price_or_levels": [6554, 636],
+    "quote": "אז גם כאן 6554 זה אזור התמיכה",
+    "confidence": "high"
+  },
+  {
+    "ticker": null,
+    "name": "לבט מערכות",
+    "label": "מעקב·אזור-כניסה",
+    "price_or_levels": [740],
+    "quote": "מתקרבת ברמת הגרף השבועי לאזור התמיכה. אזור 740 אפשר לבוא ולהגיד",
+    "confidence": "medium"
+  },
+  {
+    "ticker": "LRCX",
+    "name": "LRCX",
+    "label": "מעקב",
+    "price_or_levels": [273],
+    "quote": "יש פה רמה נוספת באזור 273 דולר",
+    "confidence": "high"
+  },
+  {
+    "ticker": null,
+    "name": "קלוזו",
+    "label": "כניסה",
+    "price_or_levels": [],
+    "quote": "סך הכל כרגע מנקודת הכניסה סר גול של שתי יחידות רווח",
+    "confidence": "low"
+  },
+  {
+    "ticker": null,
+    "name": "NX SN",
+    "label": "מעקב·אזור-כניסה",
+    "price_or_levels": [27100],
+    "quote": "אני כן הייתי מסמן פה התראה וכן אפשרות שמפה היא יורדת",
+    "confidence": "low"
+  },
+  {
+    "ticker": null,
+    "name": "bsky",
+    "label": "מעקב",
+    "price_or_levels": [],
+    "quote": "היא כבר פורצת נוגעת ברמה ומתחילה לטפס יכול להיות שפספסנו כאן את ההזדמנות",
+    "confidence": "low"
+  },
+  {
+    "ticker": null,
+    "name": "S",
+    "label": "מעקב·אזור-כניסה",
+    "price_or_levels": [51, 60],
+    "quote": "אזור התמיכה בין 51 ל-60 הוא האזור הרלוונטי. אם שוברים את ה-51 אז ההידרדרות יכולה להיות משמעותית",
+    "confidence": "low"
+  },
+  {
+    "ticker": "AMD",
+    "name": "AMD",
+    "label": "מעקב",
+    "price_or_levels": [],
+    "quote": "היא במגמת עלייה נקודות סביב שפלולות אין פה נקודות הצטרפות",
+    "confidence": "high"
+  },
+  {
+    "ticker": "NVDA",
+    "name": "אנדיה",
+    "label": "מעקב",
+    "price_or_levels": [208],
+    "quote": "תתקן לי כאן לאזור של ה-208 שם היא תהיה רלוונטית",
+    "confidence": "medium"
+  },
+  {
+    "ticker": "MCK",
+    "name": "MCK",
+    "label": "מעקב",
+    "price_or_levels": [],
+    "quote": "ברגע שהיא שוברת את האזור הזה אני יצאתי החוצה",
+    "confidence": "high"
+  },
+  {
+    "ticker": "AMN",
+    "name": "Amn",
+    "label": "מעקב",
+    "price_or_levels": [37, 43],
+    "quote": "עדיין אין פה מספיק כסף",
+    "confidence": "low"
+  },
+  {
+    "ticker": null,
+    "name": "ערית",
+    "label": "מעקב",
+    "price_or_levels": [2840],
+    "quote": "שימו לב לאזור 2840 זה האזור הרלוונטי",
+    "confidence": "low"
+  },
+  {
+    "ticker": "LTRX",
+    "name": "LTRX",
+    "label": "מעקב",
+    "price_or_levels": [],
+    "quote": "LTRX גם כאן אין כל כך מגמה",
+    "confidence": "medium"
+  },
+  {
+    "ticker": null,
+    "name": "סטוק",
+    "label": "מעקב",
+    "price_or_levels": [],
+    "quote": "אם היא תפרוץ יכולה להיות עוד הפעם מעניינת",
+    "confidence": "low"
+  },
+  {
+    "ticker": null,
+    "name": "מניה במגמת ירידה (156 דולר)",
+    "label": "הימנעות",
+    "price_or_levels": [156],
+    "quote": "ושימו לב לאזור התמיכה הזה כאן ב-156 דולר אזור שנשבר כלפי מטה",
+    "confidence": "low"
+  },
+  {
+    "ticker": "T",
+    "name": "T",
+    "label": "הימנעות",
+    "price_or_levels": [],
+    "quote": "אתם רואים פה מגמה? אני לא רואה פה שום דבר",
+    "confidence": "low"
+  }
+]

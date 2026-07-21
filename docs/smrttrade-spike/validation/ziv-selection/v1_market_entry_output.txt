@@ -1,0 +1,30 @@
+Ziv actionable-long verdicts (resolved ≤2026-05-27): 62 · unique tickers 54
+fetching 312 tickers (+SPY)...
+got 308 stocks · Ziv tickers missing data: []
+  pool 2023-09-04: 80 candidate-R
+  pool 2025-06-17: 80 candidate-R
+  pool 2026-01-15: 80 candidate-R
+  pool 2026-01-20: 80 candidate-R
+  pool 2026-01-28: 80 candidate-R
+  pool 2026-02-10: 80 candidate-R
+  pool 2026-02-17: 80 candidate-R
+  pool 2026-04-28: 80 candidate-R
+  pool 2026-05-05: 80 candidate-R
+  pool 2026-05-19: 80 candidate-R
+  pool 2026-05-24: 80 candidate-R
+  pool 2026-05-26: 80 candidate-R
+  pool 2026-05-27: 80 candidate-R
+
+==================================================================
+בדיקה #1 — סלקטיביות: ZIV מול ENGINE מול RANDOM (מנוע-יציאה זהה)
+==================================================================
+ZIV    picks : -0.339R · total -21.0R · n=62 · win=18% · t=-3.39
+ENGINE picks : -0.134R · total -7.9R · n=59 · win=31% · t=-0.78  (אותם תאריכים)
+RANDOM mean  : +0.098R · 95%CI [-0.194, +0.483] (2000 הגרלות)
+→ ZIV באחוזון 0% של האקראי
+
+HEAD-TO-HEAD (מה המנוע החליט על 62 טיקרים שזיו סימן פעיל-ללונג):
+   מעקב: 43
+   הימנעות: 14
+   נפסל: 3
+   כניסה: 2
