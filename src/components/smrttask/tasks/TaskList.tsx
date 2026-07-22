@@ -1258,10 +1258,15 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         onUpdateDeadline={
           snoozeTaskId
             ? async (newDue) => {
+                // Only move the deadline here — the dialog calls onConfirm
+                // (handleSnoozeConfirm) right after, which snoozes the task,
+                // toasts, and refetches. Toasting/refetching here too would
+                // double both. patchTask toasts its own error and returns
+                // false; throw on failure so the dialog skips the snooze
+                // rather than reporting success on a half-applied change.
                 const id = snoozeTaskId;
-                await patchTask(id, { due_date: newDue }, (task) => ({ ...task, due_date: newDue }));
-                toast.success(t("actions.snooze"));
-                fetchTasks();
+                const ok = await patchTask(id, { due_date: newDue }, (task) => ({ ...task, due_date: newDue }));
+                if (!ok) throw new Error("deadline update failed");
               }
             : undefined
         }
