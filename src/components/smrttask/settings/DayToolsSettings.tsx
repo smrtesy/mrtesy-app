@@ -1,13 +1,14 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
+import { ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { DAY_TOOLS, resolveTool } from "@/lib/smrttask/day-tools";
 import { useDayTools } from "@/hooks/useDayTools";
 import { WorkClockInsights } from "@/components/smrttask/workclock/WorkClockInsights";
-import { DailyReportSettings } from "@/components/smrttask/dailyreport/DailyReportSettings";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 
 /**
  * "כלי היום" settings section — one quiet toggle row per day-tool. Per-tool
@@ -16,6 +17,8 @@ import { DailyReportSettings } from "@/components/smrttask/dailyreport/DailyRepo
  */
 export function DayToolsSettings() {
   const t = useTranslations("dayTools");
+  const tReport = useTranslations("dailyReport");
+  const locale = useLocale();
   const { state, loading, setToolConfig } = useDayTools();
 
   async function toggle(slug: (typeof DAY_TOOLS)[number]["slug"], enabled: boolean) {
@@ -75,9 +78,20 @@ export function DayToolsSettings() {
                 </div>
               )}
 
-              {/* Daily-report config: the question editor + period/hour + a
-                  manual "generate now", revealed only when the tool is on. */}
-              {tool.slug === "dailyreport" && enabled && <DailyReportSettings />}
+              {/* Daily-report: keep the settings section compact — the full
+                  question editor + report view live on their own screen. */}
+              {tool.slug === "dailyreport" && enabled && (
+                <div className="ms-1 border-s ps-3">
+                  <OpenTabLink
+                    href={`/${locale}/daily-report`}
+                    label={tReport("screenTitle")}
+                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {tReport("openScreen")}
+                  </OpenTabLink>
+                </div>
+              )}
             </div>
           );
         })}
