@@ -1964,11 +1964,17 @@ router.post("/tasks/:id/dismiss-fast", requireFullTask, async (req: Request, res
 router.post("/tasks/bulk-approve", requireFullTask, async (req: Request, res: Response) => {
   const ids = Array.isArray(req.body?.task_ids) ? (req.body.task_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "task_ids required" });
+  // Optional plan_date → commit the approved tasks to that day (planned_for), so
+  // a bulk approve lands them on the day's desk rather than a standing pool
+  // (docs/pool-cleanup-fix-plan.md §4.2). Absent/invalid → verify only.
+  const planDate = typeof req.body?.plan_date === "string" && ISO_DATE.test(req.body.plan_date) ? req.body.plan_date : null;
 
   const now = new Date().toISOString();
+  const update: Record<string, unknown> = { manually_verified: true, seen_at: now };
+  if (planDate) update.planned_for = planDate;
   const { data: touched, error } = await db
     .from("tasks")
-    .update({ manually_verified: true, seen_at: now })
+    .update(update)
     .eq("organization_id", req.org!.id)
     .in("id", ids)
     .select("id");

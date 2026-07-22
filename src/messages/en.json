@@ -790,6 +790,7 @@
       "dismissed": "Dismissed"
     },
     "approve": "Approve",
+    "fileByLevel": "File by level (adds to today)",
     "reminderPrefix": "Reminder: {title}",
     "reminderClosed": "Reminder closed",
     "approvedToToday": "Added to today",
