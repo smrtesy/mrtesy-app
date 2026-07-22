@@ -191,4 +191,80 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   res.status(201).json({ ok: true, task_id: created.id, action: "created" });
 });
 
+/** Resolve the primary org for a user (earliest membership). */
+async function primaryOrgId(userId: string): Promise<string | null> {
+  const { data } = await db
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data?.org_id as string | undefined) ?? null;
+}
+
+/**
+ * GET /claude-session/known-workers — the "what is your smrtTask email?" list a
+ * shared Claude Code account shows at session start. Anchored to the MANAGER's
+ * org (the list is shared across that org's workers), so the caller passes the
+ * manager identity (manager_id / manager_email). Returns [] on any miss — the
+ * hook must never fail because the list is empty or the manager is unresolved.
+ */
+router.get("/claude-session/known-workers", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const managerId = await resolveUserId(
+    typeof req.query.manager_id === "string" ? req.query.manager_id : undefined,
+    typeof req.query.manager_email === "string" ? req.query.manager_email : undefined,
+  );
+  if (!managerId) return res.json({ ok: true, workers: [] });
+  const orgId = await primaryOrgId(managerId);
+  if (!orgId) return res.json({ ok: true, workers: [] });
+
+  const { data, error } = await db
+    .from("claude_known_workers")
+    .select("email, label")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, workers: data ?? [] });
+});
+
+/**
+ * POST /claude-session/known-workers — save a newly-entered worker email to the
+ * manager's org list so it appears next time. Idempotent: the (org_id, email)
+ * unique constraint means re-adding the same email is a no-op.
+ * Body: { manager_id?, manager_email?, email, label? }.
+ */
+router.post("/claude-session/known-workers", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const body = req.body ?? {};
+  const email = clean(body.email).toLowerCase();
+  if (!email) return res.status(400).json({ error: "email is required" });
+  const label = clean(body.label) || null;
+
+  const managerId = await resolveUserId(
+    typeof body.manager_id === "string" ? body.manager_id : undefined,
+    typeof body.manager_email === "string" ? body.manager_email : undefined,
+  );
+  if (!managerId) return res.status(404).json({ error: "manager not found" });
+  const orgId = await primaryOrgId(managerId);
+  if (!orgId) return res.status(403).json({ error: "manager has no org" });
+
+  const { error } = await db
+    .from("claude_known_workers")
+    .upsert({ org_id: orgId, email, label }, { onConflict: "org_id,email" });
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true });
+});
+
 export default router;

@@ -87,6 +87,25 @@ function gitBranch(cwd) {
   }
 }
 
+/** Repo name derived from the git remote (portable across repos — NOT hardcoded,
+ *  so the same hook reports the correct repo wherever it's installed). Falls back
+ *  to the cwd basename, then "repo". */
+function gitRepoName(cwd) {
+  const base = cwd || process.cwd();
+  try {
+    const cfg = readFileSync(join(base, ".git", "config"), "utf8");
+    const m = cfg.match(/url\s*=\s*(\S+)/);
+    if (m) {
+      const name = m[1].replace(/\.git$/, "").split(/[/:]/).pop();
+      if (name) return name;
+    }
+  } catch {
+    /* fall through */
+  }
+  const parts = base.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "repo";
+}
+
 const hook = safeParse(readStdin()) ?? {};
 
 // Stable web-session id/url from the environment; fall back to the hook's id.
@@ -118,7 +137,7 @@ const body = {
     process.env.SMRTTASK_USER_EMAIL || process.env.CLAUDE_CODE_USER_EMAIL || null,
   claude_user_email: claudeEmail,
   claude_user_name: claudeName,
-  repo: "mrtesy-app",
+  repo: gitRepoName(hook.cwd),
   git_branch: gitBranch(hook.cwd),
   transcript,
 };
