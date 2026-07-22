@@ -12,8 +12,7 @@ import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { X, Bell, Clock, Zap, Circle, Layers, Home, MapPin, ThumbsDown, ListPlus, Check, CheckCircle2, RotateCcw, CalendarPlus, ClipboardList, AlarmClockCheck } from "lucide-react";
@@ -136,26 +135,29 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
         all.filter((t) => t.status === "pending_completion")
           .sort((a, b) => (b.status_changed_at ?? b.created_at ?? "").localeCompare(a.status_changed_at ?? a.created_at ?? "")),
       );
-      // Undated verified tasks — verified, active, non-quick tasks with no date and
-      // not already committed to today. These are what used to fill the separate
-      // "לתכנן להיום" section; they now merge into the normal inbox list (one list,
-      // no separate box) so they stay visible for a decision. A "×N" badge on each
-      // shows how many times the nightly rollover has un-planned it (return_count).
-      let undatedTasks: Task[] = [];
+      // Backlog tasks — verified, active, non-quick tasks that are NOT committed
+      // to today and NOT deferred to a future date: undated ones AND ones whose
+      // due date has already PASSED (overdue). Future-dated tasks stay out — they
+      // are on the auto-snooze track and resurface near their date. This is what
+      // makes the pool empty back into the inbox each day: once the nightly
+      // rollover un-plans a slipped pick (or a dated task goes overdue), it shows
+      // up here for a fresh decision (docs/pool-cleanup-fix-plan.md §4.1). A "×N"
+      // badge shows how many times it has been un-planned (return_count).
+      let backlogTasks: Task[] = [];
       try {
         const { tasks: verified } = await api<{ tasks: Task[] }>(
           "/api/tasks?status=inbox,in_progress&verified=true&mine=true&limit=1000",
         );
         const today = todayISO();
-        undatedTasks = (verified ?? []).filter(
-          (t) => t.size !== "quick" && !t.due_date && t.planned_for !== today,
+        backlogTasks = (verified ?? []).filter(
+          (t) => t.size !== "quick" && (!t.due_date || t.due_date <= today) && t.planned_for !== today,
         );
-      } catch { /* endpoint unavailable → no undated tasks this pass */ }
-      // Inbox = unverified suggestions + undated verified tasks, one list.
+      } catch { /* endpoint unavailable → no backlog this pass */ }
+      // Inbox = unverified suggestions + backlog verified tasks, one list.
       // Urgency order: earliest effective deadline first, undated last; within the
       // undated group the most-returned float up, then newest-first.
       const inboxById = new Map<string, Task>();
-      for (const t of [...all.filter((t) => t.status === "inbox"), ...undatedTasks]) inboxById.set(t.id, t);
+      for (const t of [...all.filter((t) => t.status === "inbox"), ...backlogTasks]) inboxById.set(t.id, t);
       const sorted = [...inboxById.values()].sort((a, b) => {
         const da = effectiveDeadline(a);
         const db = effectiveDeadline(b);
@@ -298,33 +300,57 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
       return;
     }
     removeLocal([taskId]);
-    // Daily method: quick → today, dated → its date, undated regular/big → pool.
-    // Say WHERE it landed so an approved task never feels lost in the collapsed pool.
+    // Approving a suggestion never drops it into a standing pool (docs/pool-cleanup-fix-plan.md §4.2):
+    //   • quick        → verified only (quick always shows on the desk).
+    //   • future-dated → verified + auto-snoozed to ~2 working days before its
+    //     deadline, i.e. the real scheduled track — NOT verified-with-no-snooze,
+    //     which would be invisible (hidden on the desk, excluded from the inbox).
+    //     If the deadline is too close for a lead time, it commits to today so it
+    //     stays visible.
+    //   • everything else → committed to today (planned_for) so it lands on the desk.
     const today = todayISO();
+    const isQuick = task?.size === "quick";
+    const isFuture = !!task?.due_date && task.due_date > today;
+    const futureMoment = isFuture ? autoSnoozeMoment(task!.due_date!, blocked) : null;
     const dest = isEvent
       ? t("reminderClosed")
-      : task?.size === "quick" || (task?.due_date && task.due_date <= today) || task?.planned_for === today
-        ? t("approvedToToday")
-        : task?.due_date
-          ? t("approvedScheduled")
-          : t("approvedToPool");
+      : isFuture && futureMoment
+        ? t("approvedScheduled")
+        : t("approvedToToday");
     toast.success(dest);
-    const request = isEvent
-      ? api(`/api/tasks/${taskId}/complete`, { method: "POST" })
-      : api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } });
+    let request: Promise<unknown>;
+    if (isEvent) {
+      request = api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+    } else if (isFuture && futureMoment) {
+      // Verify, then put it on the scheduled track so it resurfaces near its date.
+      request = api(`/api/tasks/${taskId}`, { method: "PATCH", body: { manually_verified: true } })
+        .then(() => api(`/api/tasks/${taskId}/snooze`, { method: "POST", body: { until: futureMoment.iso } }));
+    } else {
+      request = api(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        body: isQuick ? { manually_verified: true } : { manually_verified: true, planned_for: today },
+      });
+    }
     request
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
-  async function handleSizeSet(taskId: string, size: "quick" | "medium" | "big") {
-    setSuggestions((prev) => prev.map((s) => (s.id === taskId ? { ...s, size } : s)));
-    try {
-      await api(`/api/tasks/${taskId}`, { method: "PATCH", body: { size } });
-    } catch (e) {
-      toast.error((e as Error).message);
-      fetchSuggestions();
-    }
+  // File-by-level — the ONE way a suggestion leaves the inbox for the desk
+  // (docs/pool-cleanup-fix-plan.md §4.2). Choosing a level sets the size, marks
+  // it verified, and COMMITS it to today (planned_for) so it lands on the desk
+  // (quick) or the day's medium/big lists — never straight into a standing pool.
+  // Quick is never "committed" (it always shows on the desk), so it gets size +
+  // verified only. If not done today, the nightly rollover returns it here.
+  function handleFileByLevel(taskId: string, size: "quick" | "medium" | "big") {
+    removeLocal([taskId]);
+    toast.success(t("approvedToToday"));
+    const body = size === "quick"
+      ? { size, manually_verified: true }
+      : { size, manually_verified: true, planned_for: todayISO() };
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body })
+      .then(() => onUpdate?.())
+      .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
 
   function unsnooze(taskId: string) {
@@ -414,8 +440,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     removeLocal(ids);
-    toast.success(t("approve"));
-    api(`/api/tasks/bulk-approve`, { method: "POST", body: { task_ids: ids } })
+    toast.success(t("approvedToToday"));
+    // Commit the batch to today (planned_for) so they land on the desk, not a
+    // standing pool (docs/pool-cleanup-fix-plan.md §4.2).
+    api(`/api/tasks/bulk-approve`, { method: "POST", body: { task_ids: ids, plan_date: todayISO() } })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -709,7 +737,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     infoTitle={title}
                     infoBody={task.description}
                     isBacklog={isBacklog}
-                    onSizeChange={(size) => handleSizeSet(task.id, size)}
+                    onFileByLevel={(size) => handleFileByLevel(task.id, size)}
                     onContextToggle={(ctx) => handleContextToggle(task, ctx)}
                     onAssign={(uid) => handleAssign(task.id, uid)}
                     onFastDismiss={() => handleFastDismiss(task.id)}
@@ -827,7 +855,7 @@ function SuggestionActions({
   infoTitle,
   infoBody,
   isBacklog,
-  onSizeChange,
+  onFileByLevel,
   onContextToggle,
   onAssign,
   onFastDismiss,
@@ -843,7 +871,7 @@ function SuggestionActions({
   infoTitle: string;
   infoBody: string | null;
   isBacklog: boolean;
-  onSizeChange: (size: "quick" | "medium" | "big") => void;
+  onFileByLevel: (size: "quick" | "medium" | "big") => void;
   onContextToggle: (ctx: "home" | "outside") => void;
   onAssign: (userId: string | null) => void;
   onFastDismiss: () => void;
@@ -873,19 +901,21 @@ function SuggestionActions({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              title={tTasks("sizeChange")}
-              aria-label={tTasks("sizeChange")}
+              title={t("fileByLevel")}
+              aria-label={t("fileByLevel")}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {isQuick ? <Zap className="h-4 w-4 fill-current text-status-warn" /> : task.size === "big" ? <Layers className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="center" className="min-w-[7rem]">
-            <DropdownMenuRadioGroup value={task.size ?? "medium"} onValueChange={(v) => onSizeChange(v as "quick" | "medium" | "big")}>
-              <DropdownMenuRadioItem value="big">{tTasks("sizeBig")}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="medium">{tTasks("sizeMedium")}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="quick">{tTasks("sizeQuick")}</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
+          {/* File-by-level IS the commit action — picking a level verifies the
+              suggestion and puts it on today's desk (never a standing pool).
+              Plain items (not a radio) so re-picking the current level still
+              commits. */}
+          <DropdownMenuContent align="center" className="min-w-[8rem]">
+            <DropdownMenuItem onSelect={() => onFileByLevel("quick")}>{tTasks("sizeQuick")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onFileByLevel("medium")}>{tTasks("sizeMedium")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onFileByLevel("big")}>{tTasks("sizeBig")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -930,21 +960,22 @@ function SuggestionActions({
       <IconButton label={t("dismissWithReason")} color="violet" onClick={onDismissWithReason}>
         <ThumbsDown />
       </IconButton>
-      {/* NO "complete" button on suggestions. A suggestion was never approved,
-          so "בוצע" makes no sense here — and the green ✓ sat next to "אשר"
-          and read as approve, silently archiving suggestions one tap at a
-          time (the June-2026 "suggestions vanished" incident). Completing
-          belongs to the task list, after approval.
-          An already-verified undated task (the backlog resurfaced in the inbox)
-          is committed to today via its CTA, not "approved" again — an approve
-          no-op would leave planned_for null and the card just comes back. */}
-      <IconButton
-        label={isEvent ? t("closeReminder") : isBacklog ? tTasks("row.addToToday") : t("approve")}
-        color="blue"
-        onClick={isEvent ? onApprove : isBacklog ? onPlanToday : onApprove}
-      >
-        {isEvent ? <Check /> : <ListPlus />}
-      </IconButton>
+      {/* NO generic "approve" on an unverified suggestion — the ONLY way it
+          leaves the inbox for the desk is file-by-level (the level dropdown
+          above), which verifies + commits it to today. This kills the old
+          one-tap approve that dropped a suggestion straight into the pool
+          (docs/pool-cleanup-fix-plan.md §4.2). Two exceptions keep a button:
+          an event ✓ closes its reminder; a backlog task (already verified,
+          resurfaced here) commits to today via "הוסף להיום". */}
+      {(isEvent || isBacklog) && (
+        <IconButton
+          label={isEvent ? t("closeReminder") : tTasks("row.addToToday")}
+          color="blue"
+          onClick={isEvent ? onApprove : onPlanToday}
+        >
+          {isEvent ? <Check /> : <ListPlus />}
+        </IconButton>
+      )}
     </div>
   );
 }
