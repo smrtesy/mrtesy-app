@@ -33,6 +33,7 @@ import { WhatsAppPageClient } from "@/components/smrttask/whatsapp/WhatsAppPageC
 import { SmsPageClient } from "@/components/smrttask/sms/SmsPageClient";
 import { KnowledgeCenter } from "@/components/smrttask/knowledge/KnowledgeCenter";
 import { DailyReportClient } from "@/components/smrttask/dailyreport/DailyReportClient";
+import { DayToolsClient } from "@/components/smrttask/settings/DayToolsClient";
 import { AutoReplyManager } from "@/components/smrttask/whatsapp/AutoReplyManager";
 import { ContactsClient } from "@/components/smrtcrm/ContactsClient";
 import { CrmManagePanel } from "@/components/smrtcrm/CrmManagePanel";
@@ -251,6 +252,7 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/sms", render: () => <SmsPane />, fullHeight: true },
   { match: (p) => p === "/knowledge", render: () => <KnowledgeCenter /> },
   { match: (p) => p === "/daily-report", render: () => <DailyReportClient /> },
+  { match: (p) => p === "/day-tools", render: () => <DayToolsClient /> },
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },
   { match: (p) => p === "/vault", render: () => <VaultPane /> },
