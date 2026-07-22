@@ -71,6 +71,16 @@ if [ -f .git/HEAD ]; then
   esac
 fi
 
+# Repo name from the git remote (portable — NOT hardcoded, so the same hook
+# reports the correct repo wherever it's installed). Fall back to cwd basename.
+REPO=""
+ORIGIN_URL="$(git config --get remote.origin.url 2>/dev/null || true)"
+if [ -n "$ORIGIN_URL" ]; then
+  REPO="${ORIGIN_URL##*/}"; REPO="${REPO%.git}"
+fi
+[ -z "$REPO" ] && REPO="${PWD##*/}"
+[ -z "$REPO" ] && REPO="repo"
+
 USER_ID="${SMRTTASK_USER_ID:-}"
 USER_EMAIL="${SMRTTASK_USER_EMAIL:-${CLAUDE_CODE_USER_EMAIL:-}}"
 
@@ -89,7 +99,7 @@ BODY="$(jq -n \
   --arg user_email "$USER_EMAIL" \
   --arg claude_user_email "$CLAUDE_EMAIL" \
   --arg claude_user_name "$CLAUDE_NAME" \
-  --arg repo "mrtesy-app" \
+  --arg repo "$REPO" \
   --arg git_branch "$BRANCH" \
   --arg topic "$TOPIC" \
   --arg summary "$SUMMARY" \
