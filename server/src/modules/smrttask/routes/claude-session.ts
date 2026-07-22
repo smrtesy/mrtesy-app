@@ -267,4 +267,70 @@ router.post("/claude-session/known-workers", async (req: Request, res: Response)
   res.json({ ok: true });
 });
 
+/** Today's date in America/New_York (YYYY-MM-DD) — the user is NY-based, so the
+ *  once-a-day identity window follows NY days, not UTC (CLAUDE.md timezone rule). */
+function nyToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/**
+ * GET /claude-session/identity?claude_account=... — the cached "what is your
+ * smrtTask email?" answer for a shared Claude account for TODAY (New-York day).
+ * Returns { worker_email: null } when not yet set today, so the hook knows to ask.
+ */
+router.get("/claude-session/identity", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const claudeAccount = clean(req.query.claude_account).toLowerCase();
+  if (!claudeAccount) return res.json({ ok: true, worker_email: null });
+
+  const { data, error } = await db
+    .from("claude_daily_identity")
+    .select("worker_email")
+    .eq("claude_account", claudeAccount)
+    .eq("ny_date", nyToday())
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, worker_email: (data?.worker_email as string | undefined) ?? null });
+});
+
+/**
+ * POST /claude-session/identity — cache the human's chosen smrtTask email for a
+ * shared Claude account for TODAY (New-York day). Body: { claude_account, worker_email }.
+ * Upsert on (claude_account, ny_date): re-answering the same day updates it.
+ */
+router.post("/claude-session/identity", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const body = req.body ?? {};
+  const claudeAccount = clean(body.claude_account).toLowerCase();
+  const workerEmail = clean(body.worker_email).toLowerCase();
+  if (!claudeAccount || !workerEmail) {
+    return res.status(400).json({ error: "claude_account and worker_email are required" });
+  }
+
+  const { error } = await db.from("claude_daily_identity").upsert(
+    {
+      claude_account: claudeAccount,
+      ny_date: nyToday(),
+      worker_email: workerEmail,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "claude_account,ny_date" },
+  );
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true });
+});
+
 export default router;
