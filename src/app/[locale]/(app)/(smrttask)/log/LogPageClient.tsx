@@ -8,6 +8,7 @@ import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpR
 import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
+import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
 
 const sourceIcons: Record<string, string> = {
   gmail: "📧",
@@ -119,6 +120,7 @@ export function LogPageClient({ locale }: { locale: string }) {
   const t = useTranslations("log");
   const tLog = useTranslations("logPage");
   const openWhatsApp = useOpenWhatsAppChat();
+  const openSms = useOpenSmsChat();
   const supabase = createClient();
   const [logs, setLogs] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -720,6 +722,23 @@ export function LogPageClient({ locale }: { locale: string }) {
                             // CSS-hidden — the full /whatsapp reader (the hook
                             // picks the right one).
                             openWhatsApp(phone || null);
+                          }}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </button>
+                      );
+                    }
+                    // SMS sources open the in-app reader, not the OS `sms:`
+                    // composer (mirrors the WhatsApp branch above).
+                    const smsPeer = smsPeerFromSourceUrl(log.source_url);
+                    if (smsPeer) {
+                      return (
+                        <button
+                          type="button"
+                          className="shrink-0 text-muted-foreground hover:text-primary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSms(smsPeer);
                           }}
                         >
                           <ExternalLink className="h-3.5 w-3.5" />

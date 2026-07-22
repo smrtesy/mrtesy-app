@@ -43,6 +43,8 @@ import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { useDayTool } from "@/hooks/useDayTools";
 import { useWorkClock } from "@/hooks/useWorkClock";
 import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
+import { dayLabel as reportDayLabel } from "@/lib/smrttask/dailyreport-dates";
+import type { DailyReportPending, PendingDay } from "@/types/daily-report";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -184,22 +186,22 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // Day-tool: daily report — when on, a "fill daily report" row is pinned to the
   // top of the quick list until today's check-in is done (docs/daily-report-plan.md).
   const dailyReportEnabled = useDayTool("dailyreport").enabled;
-  const [reportCheckinOpen, setReportCheckinOpen] = useState(false);
-  const [reportDoneToday, setReportDoneToday] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!dailyReportEnabled) { setReportDoneToday(null); return; }
-    let alive = true;
-    const refresh = () => {
-      api<{ done: boolean }>("/api/daily-report/today")
-        .then((r) => { if (alive) setReportDoneToday(r.done); })
-        .catch(() => { if (alive) setReportDoneToday(false); });
-    };
-    refresh();
-    // Re-check on focus so the row reappears the next day when the app was left
-    // open past midnight (the server decides "today" in the user's timezone).
-    window.addEventListener("focus", refresh);
-    return () => { alive = false; window.removeEventListener("focus", refresh); };
+  const [reportFillDate, setReportFillDate] = useState<string | null>(null);
+  const [reportPendingDays, setReportPendingDays] = useState<PendingDay[]>([]);
+  const refreshReportPending = useCallback(() => {
+    if (!dailyReportEnabled) { setReportPendingDays([]); return; }
+    api<DailyReportPending>("/api/daily-report/pending")
+      .then((r) => setReportPendingDays(r.days ?? []))
+      .catch(() => setReportPendingDays([]));
   }, [dailyReportEnabled]);
+  useEffect(() => {
+    if (!dailyReportEnabled) { setReportPendingDays([]); return; }
+    refreshReportPending();
+    // Re-check on focus so a new day's row appears when the app was left open
+    // past midnight (the server decides "today" in the user's timezone).
+    window.addEventListener("focus", refreshReportPending);
+    return () => { window.removeEventListener("focus", refreshReportPending); };
+  }, [dailyReportEnabled, refreshReportPending]);
   // Day-tool: מהיר·3·1 gates the whole desk shape. ON → the 4-list day method
   // (quick / medium / big / rest) with soft quotas + the build-day banner.
   // OFF → the original spec: quick + a deadline-driven regular desk + waiting.
@@ -427,6 +429,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   const {
     deskQuick, deskMedium, deskBig, rest, deskRegular, waiting, reviewCandidates,
+    pickedMedium, pickedBig,
   } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
@@ -438,9 +441,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
 
     const quickList: Task[] = [];
-    const mediumPicked: Task[] = [];  // method131 ON
-    const bigPicked: Task[] = [];     // method131 ON
-    const restList: Task[] = [];      // method131 ON — the catch-all
+    const mediumPicked: Task[] = [];  // method131 ON — surfaced (picked/woke)
+    const bigPicked: Task[] = [];     // method131 ON — surfaced (picked/woke)
     const regularDesk: Task[] = [];   // method131 OFF — deadline-surfaced
     const waitingList: Task[] = [];   // method131 OFF — the rest
 
@@ -450,13 +452,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       const pickedToday = task.planned_for === todayStr;
 
       if (m131Enabled) {
-        // 4-list method: medium/big picked for today — OR freshly woken from
-        // snooze (the deadline reminder must stay visible, not sink into the
-        // collapsed rest) — go to their list; everything else (undated,
-        // overdue-not-picked) lands in the collapsed rest.
-        const surfaced = pickedToday || !!task.woke_from_snooze_at;
-        if (surfaced) (task.size === "big" ? bigPicked : mediumPicked).push(task);
-        else restList.push(task);
+        // 4-list method: only TODAY's items reach the desk — medium/big picked
+        // for today, OR freshly woken from snooze (a deadline reminder that must
+        // stay visible). Backlog (not picked, not woke) is NOT shown on the desk
+        // anymore; it lives in the inbox, and the pool below holds only today's
+        // overflow beyond the soft quota (docs/pool-cleanup-fix-plan.md §4.1).
+        // "surfaced" = belongs on the desk today. pending_completion (an auto-
+        // detected "looks done" awaiting the user's confirm/reopen) is kept on the
+        // desk too — otherwise a verified pending_completion medium/big, which the
+        // inbox backlog query (status inbox,in_progress) does NOT show, would be
+        // invisible once its planned_for clears (docs/pool-cleanup-fix-plan.md §4.1).
+        const surfaced = pickedToday || !!task.woke_from_snooze_at || task.status === "pending_completion";
+        if (!surfaced) continue;
+        (task.size === "big" ? bigPicked : mediumPicked).push(task);
       } else {
         // Off mode (original spec §1): a regular task rises to the desk when its
         // effective deadline is within DESK_HORIZON_WORKDAYS working days AND it
@@ -505,31 +513,55 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return byPriority(a, b);
     };
 
-    // Review banner drains the collapsed catch-all (rest / waiting) of stale rows.
-    const catchAll = m131Enabled ? restList : waitingList;
+    // method131 ON: split surfaced medium/big by the soft quota. Woke tasks
+    // (deadline reminders) always stay on the desk, uncapped; deliberate picks
+    // fill the remaining quota in position order, and picks beyond it overflow
+    // to the pool ("השאר"). So the pool holds ONLY today's overflow and empties
+    // back to the inbox each night with the rollover (docs/pool-cleanup-fix-plan.md §4.1).
+    const splitByQuota = (surfaced: Task[], quota: number) => {
+      const onDesk: Task[] = [];
+      const overflow: Task[] = [];
+      let budget = Math.max(0, quota);
+      for (const task of surfaced) {
+        // Woke reminders and pending_completion (awaiting confirm) always stay on
+        // the desk, uncapped — never demoted into the collapsed pool.
+        if (task.woke_from_snooze_at || task.status === "pending_completion") { onDesk.push(task); continue; }
+        if (budget > 0) { onDesk.push(task); budget -= 1; }
+        else overflow.push(task);
+      }
+      return { onDesk, overflow };
+    };
+    const medSplit = splitByQuota([...mediumPicked].sort(byPosition), mediumQuota);
+    const bigSplit = splitByQuota([...bigPicked].sort(byPosition), bigQuota);
+    const poolList = [...medSplit.overflow, ...bigSplit.overflow];
+
+    // Review banner drains the collapsed catch-all (pool / waiting) of stale rows.
+    const catchAll = m131Enabled ? poolList : waitingList;
     const review = catchAll.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
+
+    // Soft-quota chip counts: only DELIBERATE picks (planned_for today, not a
+    // woke deadline reminder) count toward "n/3" and "n/1".
+    const countPicks = (list: Task[]) =>
+      list.filter((tk) => tk.planned_for === todayStr && !tk.woke_from_snooze_at).length;
 
     return {
       deskQuick: [...quickList].sort(byPosition),
-      deskMedium: [...mediumPicked].sort(byPosition),
-      deskBig: [...bigPicked].sort(byPosition),
-      rest: [...restList].sort(byRest),
+      deskMedium: medSplit.onDesk,
+      deskBig: bigSplit.onDesk,
+      rest: [...poolList].sort(byRest),
       deskRegular: [...regularDesk].sort(byDeadline),
       waiting: [...waitingList].sort(byDeadline),
       reviewCandidates: review,
+      pickedMedium: countPicks(mediumPicked),
+      pickedBig: countPicks(bigPicked),
     };
-  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr]);
+  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr, mediumQuota, bigQuota]);
 
-  // Soft daily quota (method131 ON): only DELIBERATE picks (planned_for today)
-  // count — a task auto-surfaced by waking from snooze shows in the list but
-  // must not inflate the quota or read as "picked" in the build-day picker.
-  const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
-  const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
-  // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
-  // regular desk (OFF). Quick keeps its own run.
+  // Marathon "regular" run set: the day's medium+big work — desk picks plus the
+  // pool overflow (ON), or the surfaced regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
-    () => (m131Enabled ? [...deskMedium, ...deskBig] : deskRegular),
-    [m131Enabled, deskMedium, deskBig, deskRegular],
+    () => (m131Enabled ? [...deskMedium, ...deskBig, ...rest] : deskRegular),
+    [m131Enabled, deskMedium, deskBig, rest, deskRegular],
   );
 
   // Open focused task detail after load (deep links: ?focus=<id>)
@@ -1009,16 +1041,20 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {/* Daily-report day-tool: a pinned "fill daily report" row at the
                   top of the quick list, shown until today's check-in is done.
                   Not a real task row — it never enters rollover or the counts. */}
-              {dailyReportEnabled && reportDoneToday === false && (
-                <button
-                  type="button"
-                  onClick={() => setReportCheckinOpen(true)}
-                  className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-                >
-                  <ClipboardList className="h-4 w-4 shrink-0" />
-                  {tDaily("pinnedRow")}
-                </button>
-              )}
+              {dailyReportEnabled &&
+                reportPendingDays.map((d) => (
+                  <button
+                    key={d.fill_date}
+                    type="button"
+                    onClick={() => setReportFillDate(d.fill_date)}
+                    className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                  >
+                    <ClipboardList className="h-4 w-4 shrink-0" />
+                    <span className="truncate">
+                      {d.is_today ? tDaily("pinnedRow") : tDaily("pinnedRowDated", { date: reportDayLabel(d.fill_date) })}
+                    </span>
+                  </button>
+                ))}
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>
 
@@ -1168,9 +1204,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
       {dailyReportEnabled && (
         <DailyReportCheckin
-          open={reportCheckinOpen}
-          onClose={() => setReportCheckinOpen(false)}
-          onSaved={() => setReportDoneToday(true)}
+          open={reportFillDate !== null}
+          fillDate={reportFillDate}
+          onClose={() => setReportFillDate(null)}
+          onSaved={refreshReportPending}
         />
       )}
 

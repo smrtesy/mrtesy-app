@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
-import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone } from "lucide-react";
+import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone, CalendarClock } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -26,8 +26,10 @@ export function AppsTabPanel({ enabledApps, appSlug }: Props) {
   const { locale } = useParams() as { locale: string };
   const pathname = usePathname();
 
-  // Active app: prop > first enabled app in registry order
-  const orderedEnabled = Object.keys(APPS).filter((slug) => enabledApps.includes(slug));
+  // Active app: prop > first enabled app in registry order. Guard against a
+  // transiently-undefined enabledApps (e.g. mid-load right after a deploy) so
+  // the whole settings page never crashes on `.includes`.
+  const orderedEnabled = Object.keys(APPS).filter((slug) => (enabledApps ?? []).includes(slug));
   const initialSlug = appSlug && orderedEnabled.includes(appSlug)
     ? appSlug
     : orderedEnabled[0];
@@ -219,6 +221,12 @@ function SmrtTaskSettings({ locale, pathname }: {
               {t("classifierParameters")}
             </Button>
           </Link>
+          <OpenTabLink href={`/${locale}/day-tools`} label={t("dayTools")}>
+            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
+              <CalendarClock className="h-4 w-4" />
+              {t("dayTools")}
+            </Button>
+          </OpenTabLink>
           <Link href={`${base}/drive-folders`}>
             <Button
               variant={isLink("drive-folders") ? "default" : "outline"}

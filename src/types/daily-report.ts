@@ -3,6 +3,8 @@
  * server/src/modules/smrttask/daily-report/*. See docs/daily-report-plan.md.
  */
 
+export type ReportSegment = "start" | "end";
+
 /** One answer option of a report question. `score` is optional. */
 export interface DailyReportOption {
   id?: string;
@@ -16,21 +18,44 @@ export interface DailyReportItem {
   id?: string;
   label: string;
   position?: number;
+  /** 'end' closes yesterday, 'start' opens today. */
+  segment: ReportSegment;
+  /** Weekday numbers (0=Sun..6=Sat) it applies to; null = every day. */
+  weekdays: number[] | null;
   options: DailyReportOption[];
 }
 
-/** Today's saved answer for one item (from GET /daily-report/today). */
-export interface DailyReportTodayEntry {
-  option_id: string | null;
-  option_label: string;
-  score: number | null;
+// ── check-in ─────────────────────────────────────────────────────────────────
+
+export interface CheckinItem {
+  id: string;
+  label: string;
+  options: { id: string; label: string; score: number | null }[];
+  selected_option_id: string | null;
+}
+export interface CheckinSection {
+  segment: ReportSegment;
+  entry_date: string; // YYYY-MM-DD the section's answers belong to
+  items: CheckinItem[];
+}
+export interface DailyReportCheckin {
+  fill_date: string;
+  sections: CheckinSection[];
+  done: boolean;
+  total_due: number;
+  answered: number;
 }
 
-export interface DailyReportToday {
-  date: string;
-  entries: Record<string, DailyReportTodayEntry>;
-  done: boolean;
-  active_count: number;
+/** One incomplete fill-day (a pinned "fill your report" row). */
+export interface PendingDay {
+  fill_date: string;
+  total_due: number;
+  answered: number;
+  is_today: boolean;
+}
+export interface DailyReportPending {
+  today: string;
+  days: PendingDay[];
 }
 
 // ── computed report ──────────────────────────────────────────────────────────
@@ -43,6 +68,7 @@ export interface ReportOptionTally {
 export interface ReportItemResult {
   item_id: string;
   label: string;
+  segment: ReportSegment;
   avg_score: number | null;
   answered: number;
   options: ReportOptionTally[];

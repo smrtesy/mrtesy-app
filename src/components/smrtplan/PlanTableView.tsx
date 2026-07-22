@@ -16,6 +16,7 @@ import type { TaskNeed } from "@/types/task";
 import { parseISO, gregShort, hebDate } from "@/lib/smrtplan/dates";
 import { useHistory, type HistoryCmd } from "@/lib/smrtplan/useHistory";
 import { useOrgMembers, type OrgMember } from "@/hooks/useOrgMembers";
+import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
 
 interface TableTask {
   id: string;
@@ -783,6 +784,7 @@ function PlanGroup(props: {
   onAddTask: (planId: string, stageId?: string | null) => void;
 }) {
   const { plan, rows, locale, canEdit, memberMap, members, statusLabel, te, t, stages } = props;
+  const openSms = useOpenSmsChat();
   const [editTitle, setEditTitle] = useState(false);
   const planTitle = locale === "en" ? plan.title_en || plan.title_he : plan.title_he;
   // The plan's color (same as its board bar) runs down the group's start edge,
@@ -1026,12 +1028,27 @@ function PlanGroup(props: {
             <td className="border-b px-2 py-1">
               <span className="flex flex-wrap items-center gap-1">
                 {/* read-only: the origin deep-link + synced Drive docs */}
-                {task.source_messages?.source_url && (
-                  <a href={task.source_messages.source_url} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border bg-secondary/60 px-1.5 py-px text-[10.5px] hover:bg-accent">
-                    <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{task.source_messages.serial_display || t("table.source")}</span>
-                  </a>
-                )}
+                {task.source_messages?.source_url && (() => {
+                  // SMS sources route to the in-app reader — an `sms:` href would
+                  // otherwise fire the OS SMS composer.
+                  const smsPeer = smsPeerFromSourceUrl(task.source_messages.source_url);
+                  const chipInner = (
+                    <>
+                      <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" /> <span className="truncate">{task.source_messages!.serial_display || t("table.source")}</span>
+                    </>
+                  );
+                  const chipCls =
+                    "inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border bg-secondary/60 px-1.5 py-px text-[10.5px] hover:bg-accent";
+                  return smsPeer ? (
+                    <button type="button" onClick={() => openSms(smsPeer)} className={chipCls}>
+                      {chipInner}
+                    </button>
+                  ) : (
+                    <a href={task.source_messages.source_url} target="_blank" rel="noopener noreferrer" className={chipCls}>
+                      {chipInner}
+                    </a>
+                  );
+                })()}
                 {(task.linked_drive_docs ?? []).filter((d) => d.url).map((d, i) => (
                   <a key={`d${i}`} href={d.url} target="_blank" rel="noopener noreferrer"
                     className="inline-flex max-w-[120px] items-center gap-0.5 truncate rounded-full border bg-secondary/60 px-1.5 py-px text-[10.5px] hover:bg-accent">

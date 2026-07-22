@@ -6,25 +6,132 @@
  * Code Stop hook running against a task-tracking repo: it posts a lightweight
  * progress report (summary + status + session link) which we auto-attach to
  * whichever smrtPlan task the calling user currently has marked "in_progress"
- * — the caller never sends a task id, we find it — then notify the plan's
- * manager (falling back to the owner) so they see progress without polling.
+ * — the caller never sends a task id, we find it — then file a smrtTask
+ * PROPOSAL in the plan's manager's inbox (falling back to the owner) so they
+ * see progress without polling. The proposal is deduped to ONE per (worker,
+ * New-York day) via claude_manager_proposals, so a busy day is one refreshing
+ * item, not a flood.
  *
  * This is best-effort throughout: no task in progress → 200 with
  * attached: false (never an error — a hook's turn must never fail because
- * there happened to be nothing to attach to). notify() is itself best-effort
- * (it swallows its own insert error and just logs).
+ * there happened to be nothing to attach to). The manager-proposal step
+ * (fileManagerProposal) is likewise best-effort — it swallows its own errors
+ * and never fails the turn.
  */
 
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { notify } from "../../lib/platform";
 
 const router = Router();
 
 const MAX_FIELD = 2000;
 function clean(v: unknown): string {
   return typeof v === "string" ? v.trim().slice(0, MAX_FIELD) : "";
+}
+
+/** Today's date in America/New_York (YYYY-MM-DD) — the user is NY-based, so the
+ *  per-day dedup window follows NY days, not UTC (see CLAUDE.md timezone rule). */
+function nyDate(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/**
+ * File (or refresh) a smrtTask proposal in the MANAGER's inbox summarizing a
+ * worker's progress report. Deduped to ONE proposal per (worker, NY-day) via the
+ * claude_manager_proposals unique constraint — refreshes the same task all day,
+ * and the constraint makes concurrent sessions race-proof. Best-effort: a hook's
+ * turn must never fail because of this, so every step swallows its own error.
+ */
+async function fileManagerProposal(params: {
+  orgId: string;
+  managerUserId: string;
+  workerEmail: string;
+  day: string;
+  title: string;
+  description: string;
+  sessionUrl: string | null;
+}): Promise<void> {
+  const { orgId, managerUserId, workerEmail, day, title, description, sessionUrl } = params;
+  const actionLinks = sessionUrl
+    ? [{ label: "פתח את הצ'אט ב-Claude Code", url: sessionUrl }]
+    : [];
+  const dedupTag = `claude-worker-day:${workerEmail}:${day}`;
+
+  const taskPatch = {
+    title,
+    title_he: title,
+    description,
+    action_links: actionLinks,
+    updated_at: new Date().toISOString(),
+  };
+
+  // 1. Existing manager proposal for this (worker, day)? → refresh it.
+  const { data: map } = await db
+    .from("claude_manager_proposals")
+    .select("task_id")
+    .eq("org_id", orgId)
+    .eq("manager_user_id", managerUserId)
+    .eq("worker_email", workerEmail)
+    .eq("ny_date", day)
+    .maybeSingle();
+  if (map?.task_id) {
+    await db.from("tasks").update(taskPatch).eq("id", map.task_id as string);
+    return;
+  }
+
+  // 2. Create the proposal task for the manager.
+  const { data: created, error: insErr } = await db
+    .from("tasks")
+    .insert({
+      user_id: managerUserId,
+      organization_id: orgId,
+      task_type: "followup",
+      status: "inbox",
+      priority: "low",
+      manually_verified: false,
+      title,
+      title_he: title,
+      description,
+      action_links: actionLinks,
+      tags: ["via-claude-session", "worker-report", dedupTag],
+      ai_model_used: null,
+    })
+    .select("id")
+    .single();
+  if (insErr || !created) return; // best-effort
+
+  // 3. Claim the dedup slot. A unique-violation (23505) means a concurrent
+  //    session beat us to it — reuse the winner's task and drop our duplicate.
+  //    For ANY OTHER error (e.g. the dedup table not migrated yet, or a transient
+  //    failure) we KEEP the proposal we just created — deleting it would file
+  //    nothing at all. So only reconcile on a genuine, resolvable duplicate.
+  const { error: mapErr } = await db.from("claude_manager_proposals").insert({
+    org_id: orgId,
+    manager_user_id: managerUserId,
+    worker_email: workerEmail,
+    ny_date: day,
+    task_id: created.id,
+  });
+  if (mapErr && (mapErr as { code?: string }).code === "23505") {
+    const { data: winner } = await db
+      .from("claude_manager_proposals")
+      .select("task_id")
+      .eq("org_id", orgId)
+      .eq("manager_user_id", managerUserId)
+      .eq("worker_email", workerEmail)
+      .eq("ny_date", day)
+      .maybeSingle();
+    if (winner?.task_id && winner.task_id !== created.id) {
+      await db.from("tasks").delete().eq("id", created.id);
+      await db.from("tasks").update(taskPatch).eq("id", winner.task_id as string);
+    }
+  }
 }
 
 const VALID_STATUSES = new Set(["in_progress", "blocked", "done"]);
@@ -65,6 +172,17 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
   const sessionUrl = clean(body.session_url) || null;
   const summary = clean(body.summary);
   const status = VALID_STATUSES.has(body.status) ? (body.status as string) : "in_progress";
+
+  // Worker identity (for the manager proposal + its per-day dedup) and the Claude
+  // account that ran the chat (shown on the proposal, like smrtTask's claude-session).
+  const workerEmail = clean(body.user_email).toLowerCase();
+  const claudeUserEmail = clean(body.claude_user_email) || null;
+  const claudeUserName = clean(body.claude_user_name) || null;
+  const claudeAccountLabel = claudeUserEmail
+    ? claudeUserName && claudeUserName !== claudeUserEmail
+      ? `${claudeUserName} (${claudeUserEmail})`
+      : claudeUserEmail
+    : null;
 
   // 1. Resolve the target user + their primary org + smrtplan entitlement.
   const userId = await resolveUserId(
@@ -143,9 +261,10 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
   );
   if (upsertErr) return res.status(500).json({ error: upsertErr.message });
 
-  // 5. Notify the plan's manager (falling back to the owner) — only when the
-  // status or summary actually changed, and best-effort otherwise (matches
-  // notify()'s own risk tolerance — it swallows its own insert error).
+  // 5. File a smrtTask PROPOSAL in the plan manager's inbox (falling back to the
+  // owner) — only when the status or summary actually changed. Deduped to one
+  // proposal per (worker, NY-day). Best-effort: never fails the hook's turn.
+  let managerProposalFiled = false;
   if (isMeaningfulChange) {
     const { data: plan } = task.plan_id
       ? await db
@@ -156,25 +275,35 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
       : { data: null };
 
     const targetUserId = (plan?.manager_user_id as string | null) ?? (plan?.owner_user_id as string | null);
-    // Never notify someone about their own session — e.g. the plan owner
-    // running Claude Code on their own task (they were there; a notification
-    // adds noise, not information).
+    // Never file a proposal to someone about their OWN session — e.g. the plan
+    // owner running Claude Code on their own task (they were there). This is also
+    // what keeps the manager's combination flow from proposing to itself.
     if (targetUserId && targetUserId !== userId) {
       const taskTitle = (task.title_he as string) || (task.title as string) || "";
-      const bodyLine = summary || "התקבל עדכון התקדמות מסשן Claude Code.";
-      await notify(orgId, targetUserId, {
-        app_slug: "smrtplan",
-        type: "info",
-        title: `עדכון התקדמות: ${taskTitle}`,
-        body: `${bodyLine}\n\nסטטוס: ${STATUS_HE[status] ?? status}`,
-        link: sessionUrl ?? undefined,
-        entity_type: "task",
-        entity_id: task.id as string,
+      const workerKey = workerEmail || userId;
+      const title = `עדכון התקדמות מ${workerEmail || "עובד"}: ${taskTitle}`;
+      const description = [
+        summary || "התקבל עדכון התקדמות מסשן Claude Code.",
+        `סטטוס: ${STATUS_HE[status] ?? status}`,
+        workerEmail ? `עובד: ${workerEmail}` : "",
+        claudeAccountLabel ? `חשבון Claude: ${claudeAccountLabel}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      await fileManagerProposal({
+        orgId,
+        managerUserId: targetUserId,
+        workerEmail: workerKey,
+        day: nyDate(),
+        title,
+        description,
+        sessionUrl,
       });
+      managerProposalFiled = true;
     }
   }
 
-  res.json({ ok: true, attached: true, task_id: task.id });
+  res.json({ ok: true, attached: true, task_id: task.id, manager_proposal: managerProposalFiled });
 });
 
 export default router;

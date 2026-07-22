@@ -64,6 +64,17 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   const gitBranch = clean(body.git_branch) || null;
   const repo = clean(body.repo) || "mrtesy-app";
 
+  // Claude ACCOUNT identity that ran the chat — shown on the proposal so we know
+  // who filed it. Distinct from the resolved platform user (user_id/user_email),
+  // which may be an override used only for account lookup.
+  const claudeUserEmail = clean(body.claude_user_email) || null;
+  const claudeUserName = clean(body.claude_user_name) || null;
+  const claudeAccountLabel = claudeUserEmail
+    ? claudeUserName && claudeUserName !== claudeUserEmail
+      ? `${claudeUserName} (${claudeUserEmail})`
+      : claudeUserEmail
+    : null;
+
   // Agent-provided summary (made on the Claude subscription). No LLM here.
   const topic = clean(body.topic);
   const summary = clean(body.summary);
@@ -103,6 +114,7 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
     summary || (hasSummary ? "" : "התנהלה שיחת עבודה ב-Claude Code."),
     nextStep ? `המשך מוצע: ${nextStep}` : "",
     `היכן: ${whereLine}`,
+    claudeAccountLabel ? `חשבון Claude: ${claudeAccountLabel}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -177,6 +189,148 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   });
 
   res.status(201).json({ ok: true, task_id: created.id, action: "created" });
+});
+
+/** Resolve the primary org for a user (earliest membership). */
+async function primaryOrgId(userId: string): Promise<string | null> {
+  const { data } = await db
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data?.org_id as string | undefined) ?? null;
+}
+
+/**
+ * GET /claude-session/known-workers — the "what is your smrtTask email?" list a
+ * shared Claude Code account shows at session start. Anchored to the MANAGER's
+ * org (the list is shared across that org's workers), so the caller passes the
+ * manager identity (manager_id / manager_email). Returns [] on any miss — the
+ * hook must never fail because the list is empty or the manager is unresolved.
+ */
+router.get("/claude-session/known-workers", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const managerId = await resolveUserId(
+    typeof req.query.manager_id === "string" ? req.query.manager_id : undefined,
+    typeof req.query.manager_email === "string" ? req.query.manager_email : undefined,
+  );
+  if (!managerId) return res.json({ ok: true, workers: [] });
+  const orgId = await primaryOrgId(managerId);
+  if (!orgId) return res.json({ ok: true, workers: [] });
+
+  const { data, error } = await db
+    .from("claude_known_workers")
+    .select("email, label")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, workers: data ?? [] });
+});
+
+/**
+ * POST /claude-session/known-workers — save a newly-entered worker email to the
+ * manager's org list so it appears next time. Idempotent: the (org_id, email)
+ * unique constraint means re-adding the same email is a no-op.
+ * Body: { manager_id?, manager_email?, email, label? }.
+ */
+router.post("/claude-session/known-workers", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const body = req.body ?? {};
+  const email = clean(body.email).toLowerCase();
+  if (!email) return res.status(400).json({ error: "email is required" });
+  const label = clean(body.label) || null;
+
+  const managerId = await resolveUserId(
+    typeof body.manager_id === "string" ? body.manager_id : undefined,
+    typeof body.manager_email === "string" ? body.manager_email : undefined,
+  );
+  if (!managerId) return res.status(404).json({ error: "manager not found" });
+  const orgId = await primaryOrgId(managerId);
+  if (!orgId) return res.status(403).json({ error: "manager has no org" });
+
+  const { error } = await db
+    .from("claude_known_workers")
+    .upsert({ org_id: orgId, email, label }, { onConflict: "org_id,email" });
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true });
+});
+
+/** Today's date in America/New_York (YYYY-MM-DD) — the user is NY-based, so the
+ *  once-a-day identity window follows NY days, not UTC (CLAUDE.md timezone rule). */
+function nyToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/**
+ * GET /claude-session/identity?claude_account=... — the cached "what is your
+ * smrtTask email?" answer for a shared Claude account for TODAY (New-York day).
+ * Returns { worker_email: null } when not yet set today, so the hook knows to ask.
+ */
+router.get("/claude-session/identity", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const claudeAccount = clean(req.query.claude_account).toLowerCase();
+  if (!claudeAccount) return res.json({ ok: true, worker_email: null });
+
+  const { data, error } = await db
+    .from("claude_daily_identity")
+    .select("worker_email")
+    .eq("claude_account", claudeAccount)
+    .eq("ny_date", nyToday())
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true, worker_email: (data?.worker_email as string | undefined) ?? null });
+});
+
+/**
+ * POST /claude-session/identity — cache the human's chosen smrtTask email for a
+ * shared Claude account for TODAY (New-York day). Body: { claude_account, worker_email }.
+ * Upsert on (claude_account, ny_date): re-answering the same day updates it.
+ */
+router.post("/claude-session/identity", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const body = req.body ?? {};
+  const claudeAccount = clean(body.claude_account).toLowerCase();
+  const workerEmail = clean(body.worker_email).toLowerCase();
+  if (!claudeAccount || !workerEmail) {
+    return res.status(400).json({ error: "claude_account and worker_email are required" });
+  }
+
+  const { error } = await db.from("claude_daily_identity").upsert(
+    {
+      claude_account: claudeAccount,
+      ny_date: nyToday(),
+      worker_email: workerEmail,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "claude_account,ny_date" },
+  );
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ ok: true });
 });
 
 export default router;
