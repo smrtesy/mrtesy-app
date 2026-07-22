@@ -159,6 +159,7 @@ best-effort; the hook is the real mechanism. Moving parts:
   blocked. Takes `"<topic>" "<summary>" "<next_step>"` (or `--json <file>`),
   resolves session/secret/URL/identity exactly like the Stop hook, builds the
   body with `jq --arg` (safe escaping), and POSTs `{ topic, summary, next_step }`
+  (plus the Claude-account identity `{ claude_user_email, claude_user_name }`)
   so the backend enriches the SAME task. Prints the endpoint response so the
   agent can confirm `"ok":true`. The summary is written by the agent on the
   user's Claude subscription — ZERO paid API tokens.
@@ -166,8 +167,12 @@ best-effort; the hook is the real mechanism. Moving parts:
   body. Derives everything from the environment: `session_id`/`session_url` from
   `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_<slug>` →
   `https://claude.ai/code/session_<slug>`), `user_email` from
-  `CLAUDE_CODE_USER_EMAIL`, `git_branch` from `.git/HEAD`, and a compact
-  transcript from `transcript_path` (metadata only — NO topic/summary).
+  `CLAUDE_CODE_USER_EMAIL`, the Claude-account identity
+  `claude_user_email`/`claude_user_name` (also from `CLAUDE_CODE_USER_EMAIL`;
+  name = local-part before `@`, kept separate from the resolution `user_email`
+  which a `SMRTTASK_USER_EMAIL` override may replace), `git_branch` from
+  `.git/HEAD`, and a compact transcript from `transcript_path` (metadata only
+  — NO topic/summary).
 - **`POST /api/claude-session/proposal`** (server
   `modules/smrttask/routes/claude-session.ts`) — machine-to-machine, gated by
   the shared `x-cron-secret` header (same pattern as `/sync/run-scheduled`, no
@@ -175,8 +180,11 @@ best-effort; the hook is the real mechanism. Moving parts:
   task per session** keyed by the tag
   `claude-session:<session_id>` (`task_type: "followup"`, `status: "inbox"`,
   `priority: "low"`, `manually_verified: false`, the deep link in
-  `action_links`). Repeated Stop calls refresh the same task's content; a
-  status the user changed (archived/dismissed) is never overwritten.
+  `action_links`). The proposal `description` also carries a `חשבון Claude:`
+  line — the Claude-account identity (`claude_user_name` + `claude_user_email`)
+  of whoever ran the chat — alongside the deep link. Repeated Stop calls refresh
+  the same task's content; a status the user changed (archived/dismissed) is
+  never overwritten.
 
   **Cost model (changed 2026-07): the backend NEVER calls an LLM here.** The
   chat summary is produced by the Claude Code **agent** (on the user's Claude

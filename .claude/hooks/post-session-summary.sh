@@ -74,18 +74,27 @@ fi
 USER_ID="${SMRTTASK_USER_ID:-}"
 USER_EMAIL="${SMRTTASK_USER_EMAIL:-${CLAUDE_CODE_USER_EMAIL:-}}"
 
+# Claude ACCOUNT identity that ran the chat — tracked separately from USER_EMAIL
+# (which may be an overridden platform account used only for resolution). No
+# dedicated display-name env exists, so the username is the login local-part.
+CLAUDE_EMAIL="${CLAUDE_CODE_USER_EMAIL:-}"
+CLAUDE_NAME=""
+[ -n "$CLAUDE_EMAIL" ] && CLAUDE_NAME="${CLAUDE_EMAIL%%@*}"
+
 # ---- build the body (jq --arg escapes everything safely) ----
 BODY="$(jq -n \
   --arg session_id "$SESSION_ID" \
   --arg session_url "$SESSION_URL" \
   --arg user_id "$USER_ID" \
   --arg user_email "$USER_EMAIL" \
+  --arg claude_user_email "$CLAUDE_EMAIL" \
+  --arg claude_user_name "$CLAUDE_NAME" \
   --arg repo "mrtesy-app" \
   --arg git_branch "$BRANCH" \
   --arg topic "$TOPIC" \
   --arg summary "$SUMMARY" \
   --arg next_step "$NEXT_STEP" \
-  '{session_id:$session_id, session_url:$session_url, user_id:$user_id, user_email:$user_email, repo:$repo, git_branch:$git_branch, topic:$topic, summary:$summary, next_step:$next_step}')"
+  '{session_id:$session_id, session_url:$session_url, user_id:$user_id, user_email:$user_email, claude_user_email:$claude_user_email, claude_user_name:$claude_user_name, repo:$repo, git_branch:$git_branch, topic:$topic, summary:$summary, next_step:$next_step}')"
 
 RESP="$(curl -sS -m 20 -L --post301 --post302 -X POST "$URL" \
   -H "Content-Type: application/json" \
