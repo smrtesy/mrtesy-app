@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
 import type { TaskMaterial, ChecklistItem, TaskNeed, TaskHandoff } from "@/types/task";
 import { parseISO, gregShort, hebDate, countdownText } from "@/lib/smrtplan/dates";
 
@@ -91,6 +92,7 @@ export function TaskDetailDialog({
   onChanged: () => void;
 }) {
   const t = useTranslations("smrtPlan");
+  const openSms = useOpenSmsChat();
   const [task, setTask] = useState<DetailTask | null>(null);
   const [subtasks, setSubtasks] = useState<DetailSubtask[]>([]);
   const [sessionReports, setSessionReports] = useState<SessionReport[]>([]);
@@ -345,18 +347,28 @@ export function TaskDetailDialog({
                       <ExternalLink className="ms-auto h-3 w-3 flex-shrink-0 text-muted-foreground" />
                     </a>
                   ))}
-                  {sourceUrl && (
-                    <a
-                      href={sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-[12.5px] text-primary hover:bg-accent"
-                    >
-                      <LinkIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                      <span className="truncate">{t("my.detail.source")}</span>
-                      <ExternalLink className="ms-auto h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                    </a>
-                  )}
+                  {sourceUrl && (() => {
+                    const srcCls =
+                      "flex items-center gap-2 rounded-md border px-2 py-1.5 text-[12.5px] text-primary hover:bg-accent";
+                    const srcInner = (
+                      <>
+                        <LinkIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                        <span className="truncate">{t("my.detail.source")}</span>
+                        <ExternalLink className="ms-auto h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                      </>
+                    );
+                    // SMS sources open the in-app reader, not an `sms:` href.
+                    const smsPeer = smsPeerFromSourceUrl(sourceUrl);
+                    return smsPeer ? (
+                      <button type="button" onClick={() => openSms(smsPeer)} className={cn(srcCls, "w-full text-start")}>
+                        {srcInner}
+                      </button>
+                    ) : (
+                      <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={srcCls}>
+                        {srcInner}
+                      </a>
+                    );
+                  })()}
                 </div>
               </section>
             )}
