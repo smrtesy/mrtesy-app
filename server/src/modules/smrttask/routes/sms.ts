@@ -30,6 +30,61 @@ function appBaseUrl(): string {
   return (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim().replace(/\/+$/, "");
 }
 
+/**
+ * Canonical key for grouping/matching phone numbers the SMS gateway stores in
+ * inconsistent formats — "+14083757770", "14083757770" and "4083757770" are one
+ * line, and left un-normalized they split into separate threads so a
+ * conversation shows only half its messages. Digits only; for a real phone
+ * number (≥10 digits) we key on the last 10 so a leading country code never
+ * splits a thread. Short codes (<10 digits) key on their full digits. Mirrors
+ * the webhook's numbersMatch heuristic.
+ */
+function normPhone(raw: string | null | undefined): string {
+  const d = String(raw ?? "").replace(/\D/g, "");
+  if (!d) return "";
+  return d.length >= 10 ? d.slice(-10) : d;
+}
+
+/**
+ * The set of literal formats a peer might be stored under, so a conversation
+ * query catches every variant. Used as an indexed IN-list — a strict superset
+ * of the old exact match, so it can only ADD a conversation's messages, never
+ * drop one. Covers the observed formats: the raw string, digits only,
+ * "+digits", and the US country-code pair (the 10-digit national number and its
+ * "1"/"+1"-prefixed forms).
+ */
+function phoneVariants(peer: string): string[] {
+  const raw = peer.trim();
+  const d = raw.replace(/\D/g, "");
+  const out = new Set<string>();
+  if (raw) out.add(raw);
+  if (d) {
+    out.add(d);
+    out.add(`+${d}`);
+  }
+  const national = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  if (national.length === 10) {
+    out.add(national);
+    out.add(`+${national}`);
+    out.add(`1${national}`);
+    out.add(`+1${national}`);
+  }
+  // Guard against PostgREST in()-list breakers. Phone variants are digits/"+"
+  // only, but strip anything exotic defensively before it reaches the filter.
+  return [...out].map((v) => v.replace(/[,()*\\ ]/g, "")).filter(Boolean);
+}
+
+/**
+ * Which of two format variants of the same line to show as the thread's peer.
+ * Prefer an E.164-looking "+" form, then the more complete (longer) string.
+ */
+function preferPeerDisplay(candidate: string, current: string): boolean {
+  const cPlus = candidate.startsWith("+");
+  const curPlus = current.startsWith("+");
+  if (cPlus !== curPlus) return cPlus;
+  return candidate.length > current.length;
+}
+
 // ── List registered devices ────────────────────────────────────────────────
 router.get("/sms/connections", ...gate, async (req: Request, res: Response) => {
   const { data, error } = await db
@@ -129,39 +184,55 @@ router.get("/sms/threads", ...gate, async (req: Request, res: Response) => {
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });
 
-  // Tasks created from SMS, grouped by the peer stored in metadata.
-  const { data: taskRows } = await db
+  // Tasks created from SMS, grouped by the NORMALIZED peer stored in metadata
+  // (so format variants of the same line share one count, matching the thread
+  // grouping below).
+  const { data: taskRows, error: taskErr } = await db
     .from("tasks")
     .select("id, source_messages!inner(source_type, user_id, metadata)")
     .eq("source_messages.source_type", "sms")
     .eq("source_messages.user_id", req.user!.id)
     .neq("status", "archived")
     .limit(2000);
-  const tasksByPeer = new Map<string, number>();
+  if (taskErr) console.warn("[sms] threads task-count query:", taskErr.message);
+  const tasksByKey = new Map<string, number>();
   for (const t of taskRows ?? []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sm = (t as any).source_messages;
     const row = Array.isArray(sm) ? sm[0] : sm;
-    const peer = (row?.metadata?.peerPhone as string | undefined) ?? undefined;
-    if (!peer) continue;
-    tasksByPeer.set(peer, (tasksByPeer.get(peer) ?? 0) + 1);
+    const key = normPhone(row?.metadata?.peerPhone as string | undefined);
+    if (!key) continue;
+    tasksByKey.set(key, (tasksByKey.get(key) ?? 0) + 1);
   }
 
   type Row = NonNullable<typeof data>[number];
   const peerOf = (m: Row) => (m.direction === "incoming" ? m.from_phone : m.to_phone);
-  const latest = new Map<string, Row>();
+  // Group by the normalized number so the same line stored under two formats
+  // ("+1408…" and "1408…") is ONE conversation, not two half-empty ones. Rows
+  // arrive newest-first, so the first row seen per key is the latest message;
+  // we still surface a friendly display peer, preferring the E.164 "+" form.
+  const groups = new Map<string, { latest: Row; display: string }>();
   for (const row of data ?? []) {
     const peer = peerOf(row);
     if (!peer || peer === "me") continue;
-    if (!latest.has(peer)) latest.set(peer, row);
+    const key = normPhone(peer);
+    if (!key) continue;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { latest: row, display: peer });
+    } else if (preferPeerDisplay(peer, existing.display)) {
+      existing.display = peer;
+    }
   }
-  const threads = [...latest.entries()].map(([peer, m]) => ({
-    peer,
-    last_message_at: m.received_at,
-    last_direction: m.direction,
-    last_body_text: m.body_text,
-    task_count: tasksByPeer.get(peer) ?? 0,
-  }));
+  const threads = [...groups.entries()]
+    .map(([key, g]) => ({
+      peer: g.display,
+      last_message_at: g.latest.received_at,
+      last_direction: g.latest.direction,
+      last_body_text: g.latest.body_text,
+      task_count: tasksByKey.get(key) ?? 0,
+    }))
+    .sort((a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime());
   return res.json({ threads });
 });
 
@@ -170,40 +241,97 @@ router.get("/sms/threads", ...gate, async (req: Request, res: Response) => {
 router.get("/sms/messages", ...gate, async (req: Request, res: Response) => {
   const peer = String(req.query.peer ?? "").trim();
   if (!peer) return res.status(400).json({ error: "peer is required" });
-  // Strip PostgREST or()-delimiter characters so the filter can't be broken.
-  const safePeer = peer.replace(/[,()*\\]/g, "");
   const limit = Math.min(parseInt(String(req.query.limit ?? "300"), 10) || 300, 1000);
+
+  // Match EVERY format the peer might be stored under, not just the one the
+  // caller passed — otherwise a line saved as both "+1408…" and "1408…" shows
+  // only the half that matches verbatim (the reported "I don't see all the
+  // messages from him"). The variant IN-list is a superset of the old exact
+  // match, so it can only add this conversation's messages.
+  const variants = phoneVariants(peer);
+  if (variants.length === 0) return res.json({ messages: [], tasks: [] });
+  const inList = variants.join(",");
 
   const { data, error } = await db
     .from("sms_messages")
     .select("id, message_id, direction, from_phone, to_phone, body_text, is_otp, received_at")
     .eq("user_id", req.user!.id)
-    .or(`from_phone.eq.${safePeer},to_phone.eq.${safePeer}`)
+    .or(`from_phone.in.(${inList}),to_phone.in.(${inList})`)
     .order("received_at", { ascending: false })
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });
 
-  // Tasks created from this peer's messages (badge in the UI).
-  const { data: taskRows } = await db
+  // Tasks created from this peer's messages (badge in the UI). Matched on the
+  // normalized number in JS so format variants aren't under-counted. Fetched
+  // newest-first so the 2000-row cap keeps a peer's most RECENT tasks (a user
+  // with more than that many SMS tasks would otherwise lose the newest ones);
+  // the filtered result is re-sorted back to ascending for the caller.
+  const key = normPhone(peer);
+  const { data: taskRows, error: taskErr } = await db
     .from("tasks")
     .select("id, title, title_he, status, created_at, source_messages!inner(source_type, user_id, metadata)")
     .eq("source_messages.source_type", "sms")
     .eq("source_messages.user_id", req.user!.id)
-    // Parameterized eq (not an or() filter), so match the RAW peer — peerPhone
-    // is stored verbatim in metadata; using the sanitized form could under-count.
-    .eq("source_messages.metadata->>peerPhone", peer)
-    .order("created_at", { ascending: true })
-    .limit(500);
+    .order("created_at", { ascending: false })
+    .limit(2000);
+  if (taskErr) console.warn("[sms] messages task-count query:", taskErr.message);
 
-  const tasks = (taskRows ?? []).map((t) => ({
-    id: t.id,
-    title: t.title,
-    title_he: t.title_he,
-    status: t.status,
-    created_at: t.created_at,
-  }));
+  const tasks = (taskRows ?? [])
+    .filter((t) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sm = (t as any).source_messages;
+      const row = Array.isArray(sm) ? sm[0] : sm;
+      return normPhone(row?.metadata?.peerPhone as string | undefined) === key;
+    })
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      title_he: t.title_he,
+      status: t.status,
+      created_at: t.created_at,
+    }))
+    .reverse();
 
   return res.json({ messages: [...(data ?? [])].reverse(), tasks });
+});
+
+// ── Search inside message content ────────────────────────────────────────────
+// GET /sms/search?q=<term>&limit=  → the set of conversation peers whose message
+// body matches the term, each with the newest matching snippet. Numbers are
+// matched client-side over the already-loaded thread list; this endpoint covers
+// the "search inside messages" half. Scoped to the caller via user_id. Mirrors
+// the WhatsApp search endpoint.
+router.get("/sms/search", ...gate, async (req: Request, res: Response) => {
+  const raw = String(req.query.q ?? "").trim();
+  if (raw.length < 2) return res.json({ results: [] });
+  const limit = Math.min(parseInt(String(req.query.limit ?? "300"), 10) || 300, 1000);
+
+  // Strip PostgREST or()/ilike metacharacters so user input can't break the
+  // filter or smuggle in wildcards; '%' then wraps the term as a substring.
+  const term = raw.replace(/[%_*(),\\]/g, " ").trim();
+  if (!term) return res.json({ results: [] });
+  const pattern = `%${term}%`;
+
+  const { data, error } = await db
+    .from("sms_messages")
+    .select("direction, from_phone, to_phone, body_text, received_at")
+    .eq("user_id", req.user!.id)
+    .ilike("body_text", pattern)
+    .order("received_at", { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Newest matching snippet per NORMALIZED peer (same grouping as /sms/threads),
+  // so a match lines up with exactly one conversation row in the UI.
+  const byKey = new Map<string, { peer: string; snippet: string }>();
+  for (const row of data ?? []) {
+    const peer = row.direction === "incoming" ? row.from_phone : row.to_phone;
+    if (!peer || peer === "me") continue;
+    const key = normPhone(peer);
+    if (!key || byKey.has(key)) continue;
+    byKey.set(key, { peer, snippet: (row.body_text ?? "").slice(0, 160) });
+  }
+  return res.json({ results: [...byKey.values()] });
 });
 
 // ── Webhook diagnostic log ────────────────────────────────────────────────

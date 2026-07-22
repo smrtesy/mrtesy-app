@@ -281,7 +281,11 @@
     "empty": "אין עדיין הודעות SMS. ברגע שיגיעו, הן יופיעו כאן.",
     "selectConversation": "בחר שיחה כדי לצפות בהודעות",
     "noMessages": "אין הודעות בשיחה הזו",
-    "back": "חזרה"
+    "back": "חזרה",
+    "searchPlaceholder": "חיפוש לפי מספר או טקסט…",
+    "searchOpen": "חיפוש",
+    "searchClose": "סגור חיפוש",
+    "searchNoResults": "לא נמצאו שיחות תואמות"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",

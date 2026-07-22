@@ -281,7 +281,11 @@
     "empty": "No SMS yet. They'll show up here once they arrive.",
     "selectConversation": "Select a conversation to view its messages",
     "noMessages": "No messages in this conversation",
-    "back": "Back"
+    "back": "Back",
+    "searchPlaceholder": "Search by number or text…",
+    "searchOpen": "Search",
+    "searchClose": "Close search",
+    "searchNoResults": "No matching conversations"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",
