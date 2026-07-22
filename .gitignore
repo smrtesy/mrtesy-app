@@ -46,3 +46,6 @@ supabase/.temp/
 # android — google-services.json contains API keys, keep out of git
 # add the real file manually or via CI secret
 android-app/app/google-services.json
+
+# Claude Code session-scoped identity cache (per-day routing hook)
+.claude/tmp/

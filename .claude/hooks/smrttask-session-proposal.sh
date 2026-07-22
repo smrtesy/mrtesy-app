@@ -55,13 +55,28 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 STOP_ACTIVE="$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || echo false)"
 
+# Soft identity reminder — for a SHARED (non-manager) account that hasn't been
+# identified this session yet. The primary ask is the SessionStart injection;
+# this is a best-effort backstop, never a hard loop (the summary block still
+# fires exactly once per turn-cycle regardless).
+IDENTITY_HINT=""
+MGR_LOGIN="$(printf '%s' "${SMRTTASK_MANAGER_CLAUDE_EMAIL:-}" | tr '[:upper:]' '[:lower:]')"
+CUR_LOGIN="$(printf '%s' "${CLAUDE_CODE_USER_EMAIL:-}" | tr '[:upper:]' '[:lower:]')"
+case "${CLAUDE_CODE_REMOTE_SESSION_ID:-}" in cse_*) ID_SLUG="${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}";; *) ID_SLUG="${CLAUDE_CODE_REMOTE_SESSION_ID:-}";; esac
+# Only when per-user routing is ON (a manager is configured) AND this is a
+# non-manager account not yet identified this session. When routing is off
+# (no manager env), no hint — behavior is unchanged.
+if [ -n "$MGR_LOGIN" ] && [ "$CUR_LOGIN" != "$MGR_LOGIN" ] && [ -n "$ID_SLUG" ] && [ ! -f ".claude/tmp/claude-identity-${ID_SLUG}.txt" ]; then
+  IDENTITY_HINT=$'\n0) אם עדיין לא זיהית מי המשתמש — שאל "מה האימייל שלך ב-smrtTask?" והרץ ‎.claude/hooks/set-identity.sh <email>‎ לפני שתסכם.'
+fi
+
 if [ "$STOP_ACTIVE" != "true" ]; then
   # FIRST stop: force the agent to summarize before it may stop. The reason text
   # is fed back to the agent as its next instruction; it runs the helper, then
   # tries to stop again (this time with stop_hook_active=true).
-  jq -cn '{
+  jq -cn --arg hint "$IDENTITY_HINT" '{
     decision: "block",
-    reason: ("לפני שאתה עוצר — סכם את הסשן ל-smrtTask (זה רץ על המנוי, ללא עלות API):\n1) כתוב סיכום קצר בעברית: נושא, 2-3 משפטים מה נדון/נעשה, וצעד המשך מוצע. שמור קישורים עמוקים מלאים אם רלוונטי.\n2) הרץ בדיוק פקודה אחת:\n   .claude/hooks/post-session-summary.sh \"<נושא קצר>\" \"<סיכום 2-3 משפטים>\" \"<צעד המשך>\"\n   (הימנע מתו גרש-כפול \" בתוך הטקסט; השתמש ״ אם צריך.)\n3) אם הפלט כולל \"ok\":true — עצור. אל תריץ שוב ואל תבצע פעולות נוספות.")
+    reason: ("לפני שאתה עוצר — סכם את הסשן ל-smrtTask (זה רץ על המנוי, ללא עלות API):" + $hint + "\n1) כתוב סיכום קצר בעברית: נושא, 2-3 משפטים מה נדון/נעשה, וצעד המשך מוצע. שמור קישורים עמוקים מלאים אם רלוונטי.\n2) הרץ בדיוק פקודה אחת (הארגומנט הרביעי הוא סטטוס אופציונלי: in_progress|blocked|done):\n   .claude/hooks/post-session-summary.sh \"<נושא קצר>\" \"<סיכום 2-3 משפטים>\" \"<צעד המשך>\" \"<סטטוס>\"\n   (הימנע מתו גרש-כפול \" בתוך הטקסט; השתמש ״ אם צריך.)\n3) אם הפלט כולל \"ok\":true — עצור. אל תריץ שוב ואל תבצע פעולות נוספות.")
   }'
   exit 0
 fi
@@ -69,6 +84,15 @@ fi
 # SECOND stop (agent already ran): fire-and-forget the minimal safety-net trace,
 # then allow the stop. build-session-proposal.mjs emits metadata only (no
 # topic/summary), so the backend's partial update leaves any agent summary intact.
+#
+# The safety net posts an UN-routed proposal (to SMRTTASK_USER_EMAIL). For a
+# WORKER session (identity file present) that would file a proposal in the wrong
+# place, so skip it — the agent's routed post-session-summary.sh already handled
+# that session (worst case on agent-failure: no safety-net trace for that one
+# worker session, which beats a misplaced proposal).
+if [ -n "$ID_SLUG" ] && [ -f ".claude/tmp/claude-identity-${ID_SLUG}.txt" ]; then
+  exit 0
+fi
 PAYLOAD="$(printf '%s' "$INPUT" | node "$HOOK_DIR/build-session-proposal.mjs" 2>/dev/null || true)"
 if [ -n "$PAYLOAD" ]; then
   ( curl -sS -m 20 -L --post301 --post302 -X POST "$URL" \
