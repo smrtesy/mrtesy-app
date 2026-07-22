@@ -1,89 +1,80 @@
-# video-lab Stop hook — דיווח סטטוס אוטומטי ל-smrtPlan
+# ה-hook המאוחד לניתוב-לפי-משתמש — התקנה ב-video-lab
 
-## מה זה
+חבילת ההתקנה של ה-Stop hook **המאוחד** (smrtTask + smrtPlan, ניתוב לפי משתמש)
+לרפו **`video-lab`**. הקבצים נשמרים כאן, ב-`mrtesy-app` תחת
+`docs/video-lab-stop-hook/hooks/`, רק כדי שיהיה להם קישור יציב ב-GitHub לפי
+הקונבנציה של הרפו הזה — הם **לא רצים** מכאן. יש להעתיק אותם לרפו `video-lab`.
 
-שני קבצי hook שנועדו לרפוזיטורי **אחר** (`video-lab`), לא לרפוזיטורי הזה
-(`mrtesy-app`). הם נשמרים כאן, תחת `docs/video-lab-stop-hook/`, רק כדי שיהיה
-להם קישור יציב ב-GitHub לפי הקונבנציה של הרפו הזה (מסמכי תכנון/עיצוב
-נשמרים ב-`docs/` ומקבלים לינק). הם **לא רצים** מכאן — יש להעתיק אותם
-לרפו `video-lab` בפועל.
+> **זה מחליף** את ה-hook הישן של video-lab (`video-lab-session-report.sh` +
+> `post-session-report.sh`, שהוסרו מכאן). ה-hook המאוחד הוא על-קבוצה שלו: הוא
+> עושה כל מה שהישן עשה (דיווח smrtPlan למשימת ה-`in_progress`) **ועוד** — ניתוב
+> מנהל/עובד, שאלת זהות פעם ביום, והצעה למנהל. להשאיר את שניהם = דיווח כפול, לכן
+> **הסר את הישן** בהתקנה.
+>
+> התכנון המלא: [`docs/user-routing-stop-hook-plan.md`](../user-routing-stop-hook-plan.md).
 
-הרעיון: בכל סשן Claude Code ב-video-lab, בעצירה (Stop) הסוכן מדווח סטטוס
-קצר על העבודה שנעשתה, והדיווח מתחבר אוטומטית בצד השרת למשימה שה-worker
-המדווח מסומן אצלו כרגע כ-`in_progress` ב-smrtPlan — בלי לשלוח task id
-מה-hook; השרת מוצא את המשימה לפי המשתמש + הארגון.
+## מה זה עושה (תמצית)
 
-- **`video-lab-session-report.sh`** — ה-Stop hook עצמו. בעצירה הראשונה
-  בכל turn-cycle הוא חוסם ומנחה את הסוכן לכתוב סיכום + סטטוס ולהריץ את
-  הסקריפט הנלווה. בעצירה השנייה (`stop_hook_active=true`) הוא שולח ברקע
-  (fire-and-forget) דיווח מינימלי בטוח (`status: "in_progress"`, סיכום
-  גנרי) — כך שגם סשן שבו הסוכן לא הספיק לדווח משאיר עדיין עקבה.
-- **`post-session-report.sh`** — הסקריפט שהסוכן מריץ כשהוא נחסם. מקבל
-  שני ארגומנטים פשוטים: `"<סיכום>" "<סטטוס>"` כאשר סטטוס הוא אחד מתוך
-  `in_progress` / `blocked` / `done`. בונה את גוף הבקשה עם `jq --arg`
-  (escaping בטוח) ושולח POST.
+בכל סוף-סשן ב-video-lab, ה-hook מנתב לפי מי פתח את הצ'אט:
 
-שני הקבצים no-op לגמרי (יוצאים עם `exit 0` בלי לחסום כלום) אם חסר משתנה
-סביבה, חסר `node`/`curl`/`jq`, או שזה לא סשן web (`CLAUDE_CODE_REMOTE_SESSION_ID`
-לא מוגדר) — בדיוק כמו הדוגמה המקורית ב-`mrtesy-app`
-(`.claude/hooks/smrttask-session-proposal.sh` +
-`.claude/hooks/post-session-summary.sh`).
+- **מנהל** (`CLAUDE_CODE_USER_EMAIL == $SMRTTASK_MANAGER_CLAUDE_EMAIL`) → *שילוב*:
+  אם יש משימת `in_progress` → עדכון המשימה (smrtPlan); אחרת → הצעה (smrtTask).
+- **עובד** (חשבון משותף; נשאל **פעם ביום** "מה האימייל שלך ב-smrtTask?") →
+  דיווח למשימת העובד **+ הצעה בתיבת המנהל** (dedup אחת לעובד/יום).
+- **enable-gate:** הכל **כבוי** עד שמוגדר `SMRTTASK_MANAGER_CLAUDE_EMAIL`. בלי
+  המשתנה — התנהגות זהה להיום (הצעה רגילה), אף אחד לא נשאל.
 
-## איך מתקינים ב-video-lab (רפו אחר!)
+הבקאנד משותף (Railway) — אין צורך בשינוי צד-שרת ל-video-lab; ה-endpoints כבר חיים.
 
-1. להעתיק את שני קבצי ה-`.sh` מכאן:
-   - `docs/video-lab-stop-hook/video-lab-session-report.sh` →
-     `.claude/hooks/video-lab-session-report.sh` ברפו `video-lab`
-   - `docs/video-lab-stop-hook/post-session-report.sh` →
-     `.claude/hooks/post-session-report.sh` ברפו `video-lab`
-   - לוודא הרשאות הרצה: `chmod +x .claude/hooks/*.sh`
+## התקנה
 
-2. להוסיף את החיווט הבא לקובץ `.claude/settings.json` של רפו `video-lab`
-   (תחת `hooks.Stop` — אותו pattern בדיוק כמו ב-`mrtesy-app/.claude/settings.json`):
+1. **העתק את 5 הקבצים** מ-`docs/video-lab-stop-hook/hooks/` כאן →
+   `.claude/hooks/` ברפו `video-lab` (שמות זהים):
+   - `session-start.sh`
+   - `smrttask-session-proposal.sh`  ← ה-Stop hook
+   - `post-session-summary.sh`       ← העוזר שהסוכן מריץ (הנתב)
+   - `set-identity.sh`               ← רישום זהות העובד
+   - `build-session-proposal.mjs`    ← בונה רשת-הביטחון
+   - הרשאות הרצה: `chmod +x .claude/hooks/*.sh`
+
+2. **הסר** את ה-hook הישן של video-lab אם קיים שם
+   (`.claude/hooks/video-lab-session-report.sh`, `post-session-report.sh`).
+
+3. **חווט ב-`.claude/settings.json` של `video-lab`** — `SessionStart` + `Stop`
+   (אם כבר יש `Stop` שמצביע על הסקריפט הישן, החלף אותו):
 
    ```json
    {
      "hooks": {
+       "SessionStart": [
+         { "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh" } ] }
+       ],
        "Stop": [
-         {
-           "matcher": "",
-           "hooks": [
-             {
-               "type": "command",
-               "command": ".claude/hooks/video-lab-session-report.sh"
-             }
-           ]
-         }
+         { "matcher": "", "hooks": [ { "type": "command", "command": ".claude/hooks/smrttask-session-proposal.sh" } ] }
        ]
      }
    }
    ```
+   (אם ל-video-lab יש כבר `session-start.sh` משלו לצרכים אחרים — מזג את הלוגיקה
+   במקום להחליף. הקובץ כאן מריץ `npm install` רק אם קיים `package.json`, אז הוא
+   בטוח גם ברפו שאינו Node.)
 
-   אם כבר קיים מפתח `hooks.Stop` אחר בקובץ, להוסיף אובייקט נוסף למערך
-   ולא לדרוס את הקיים.
+4. **הוסף ל-`.gitignore` של `video-lab`**: `​.claude/tmp/` (קובץ-זהות זמני לסשן).
 
-## משתני סביבה נדרשים (בסביבת ה-Claude Code של video-lab)
+5. **משתני סביבה** בסביבת ה-Claude Code של `video-lab` (אותו מקום שבו מוגדרים
+   כבר `SMRTESY_BACKEND_URL`, `SMRTBOT_INTERNAL_SECRET`):
+   - `SMRTESY_BACKEND_URL` = `https://mrtesy-app-production.up.railway.app`
+   - `SMRTBOT_INTERNAL_SECRET` = הערך מ-Railway → השירות `mrtesy-app` → Variables
+   - **להפעלה** (מפעיל את הניתוב): `SMRTTASK_MANAGER_CLAUDE_EMAIL` = אימייל
+     הכניסה של המנהל ל-Claude Code.
+   - אופציונלי: `SMRTTASK_MANAGER_EMAIL` = אימייל ה-smrtTask של המנהל (אחרת
+     נופל ל-`SMRTTASK_USER_EMAIL`).
 
-יש להגדיר את ארבעת אלה בסביבת ה-Claude Code (Environment) של video-lab —
-לא ב-`.env` של הריפו:
+6. **בדיקה:** הרץ צ'אט web ב-video-lab מחשבון שאינו המנהל → הוא ישאל "מה האימייל
+   שלך ב-smrtTask?" → ענה → סוף הסשן ינתב את הדיווח. חשבון המנהל לא יישאל.
 
-| משתנה | למה |
-|---|---|
-| `FAL_KEY` | מפתח ה-API של fal.ai בו video-lab עצמו משתמש (לא קשור ל-hook, אבל נדרש שהסביבה תפעל). |
-| `SMRTBOT_INTERNAL_SECRET` | הסוד המשותף שנשלח בכותרת `X-Cron-Secret` לאימות מול ה-backend. אפשר גם `CRON_SECRET` — ה-hook תומך בשניהם (`CRON_SECRET` קודם אם שניהם מוגדרים). |
-| `SMRTESY_BACKEND_URL` | כתובת הבסיס של ה-Express backend (Railway) — ה-hook בונה ממנה `<SMRTESY_BACKEND_URL>/api/claude-session/task-report`. אפשר לחלופין להגדיר `SMRTPLAN_REPORT_URL` עם הכתובת המלאה של ה-endpoint ישירות. חובה לכלול `https://` בתחילת הכתובת. |
-| `SMRTTASK_USER_ID` (או `SMRTTASK_USER_EMAIL`) | זיהוי המשתמש שהדיווח מוגש בשמו ב-smrtPlan, כשהוא שונה מהאימייל של ה-login ל-Claude Code. `SMRTTASK_USER_ID` עדיף (עוקף חיפוש לפי אימייל); `SMRTTASK_USER_EMAIL` הוא חלופה. בלי אחד מהם, ה-hook נופל בחזרה ל-`CLAUDE_CODE_USER_EMAIL`. |
+## הכל guarded
 
-הערכים המדויקים של `SMRTBOT_INTERNAL_SECRET` ו-`SMRTESY_BACKEND_URL`
-נמצאים באותו מקום שבו הם מוגדרים עבור `mrtesy-app` — Railway → הפרויקט
-→ שירות ה-backend → טאב **Variables**. יש להעתיק את אותם ערכים בדיוק
-(אותו backend משותף, אותו endpoint `/api/claude-session/...`).
-
-## חשוב: לסמן את המשימה "in_progress" ב-smrtPlan *לפני* פתיחת הסשן
-
-מכיוון שה-backend מוצא את המשימה **לפי המשתמש + הארגון** ולא לפי task id
-שנשלח מה-hook, על ה-worker לסמן ידנית ב-smrtPlan את המשימה שהוא עומד
-לעבוד עליה כ-`in_progress` **לפני** שהוא פותח סשן Claude Code חדש
-ב-video-lab. אם אין למשתמש אף משימה מסומנת `in_progress` בזמן הדיווח,
-ה-endpoint מחזיר `attached:false` — זו לא שגיאה, אבל המשמעות היא שהדיווח
-לא התחבר לאף משימה ספציפית.
+לא סשן web / חסר secret או URL / חסר `node`/`curl`/`jq` / אין מנהל מוגדר →
+no-op שקט שלא חוסם ולא מפיל תור. הסיכומים נכתבים ע"י הסוכן על מנוי ה-Claude —
+אפס טוקני API בתשלום.
