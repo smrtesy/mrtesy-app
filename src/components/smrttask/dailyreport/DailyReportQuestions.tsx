@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Plus, Trash2, Loader2, Play, GripVertical } from "lucide-react";
+import { Plus, Trash2, Loader2, GripVertical } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -26,21 +26,23 @@ import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { api, ApiError } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
+import { api } from "@/lib/api/client";
 import { useDayTool, useDayTools } from "@/hooks/useDayTools";
-import type { DailyReportItem } from "@/types/daily-report";
+import { WEEKDAY_SHORT, WEEKDAY_NUMS } from "@/lib/smrttask/dailyreport-dates";
+import type { DailyReportItem, ReportSegment } from "@/types/daily-report";
 
 /** Local editor item — carries a stable client-only key for drag-and-drop
  *  (new items have no server id yet, so we can't sort on that). */
 type EditorItem = DailyReportItem & { _key: string };
 
 /**
- * The daily-report tool's config editor (revealed under its toggle in
- * DayToolsSettings). Lets the user define report questions + per-answer scores,
- * reorder them by dragging, pick the period + delivery hour, and generate a
- * report on demand. Compact by default (docs/day-tools-plan.md UI principle).
+ * The daily-report question editor (the "הגדרות" tab of the dedicated screen).
+ * Lets the user define report questions + per-answer scores, assign each to a
+ * section (סיום יום / תחילת יום), pick the weekdays it applies to, reorder by
+ * dragging, and set the report period + delivery hour.
  */
-export function DailyReportSettings() {
+export function DailyReportQuestions() {
   const t = useTranslations("dailyReport");
   const { config } = useDayTool("dailyreport");
   const { setToolConfig } = useDayTools();
@@ -48,9 +50,7 @@ export function DailyReportSettings() {
   const [items, setItems] = useState<EditorItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
 
-  // Stable keys for the sortable list (independent of server ids).
   const keySeq = useRef(0);
   const nextKey = () => `k${keySeq.current++}`;
 
@@ -92,10 +92,26 @@ export function DailyReportSettings() {
 
   // ── item/option editing (local state until Save) ──────────────────────────
   const addItem = () =>
-    setItems((prev) => [...prev, { _key: nextKey(), label: "", options: [{ label: "", score: null }] }]);
+    setItems((prev) => [
+      ...prev,
+      { _key: nextKey(), label: "", segment: "start", weekdays: null, options: [{ label: "", score: null }] },
+    ]);
   const removeItem = (i: number) => setItems((prev) => prev.filter((_, idx) => idx !== i));
   const setItemLabel = (i: number, label: string) =>
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, label } : it)));
+  const setItemSegment = (i: number, segment: ReportSegment) =>
+    setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, segment } : it)));
+  const toggleWeekday = (i: number, day: number) =>
+    setItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx !== i) return it;
+        // null = every day → materialise all 7, then toggle off the clicked one.
+        const cur = it.weekdays ?? [...WEEKDAY_NUMS];
+        const next = cur.includes(day) ? cur.filter((d) => d !== day) : [...cur, day].sort((a, b) => a - b);
+        // All or none → back to "every day" (null).
+        return { ...it, weekdays: next.length === 0 || next.length === 7 ? null : next };
+      }),
+    );
 
   const addOption = (i: number) =>
     setItems((prev) =>
@@ -132,12 +148,13 @@ export function DailyReportSettings() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      // Array order = display order → the server derives `position` from it.
       const payload = {
         items: items
           .map((it) => ({
             id: it.id,
             label: it.label.trim(),
+            segment: it.segment,
+            weekdays: it.weekdays,
             options: it.options
               .map((o) => ({ id: o.id, label: o.label.trim(), score: o.score }))
               .filter((o) => o.label),
@@ -153,31 +170,19 @@ export function DailyReportSettings() {
     }
   }, [items, t]);
 
-  const generateNow = useCallback(async () => {
-    setGenerating(true);
-    try {
-      await api("/api/daily-report/generate", { method: "POST", body: { period } });
-      toast.success(t("generatedToInbox"));
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : t("generateError"));
-    } finally {
-      setGenerating(false);
-    }
-  }, [period, t]);
-
   const saveToolConfig = (patch: Record<string, unknown>) =>
     setToolConfig("dailyreport", patch).catch(() => toast.error(t("saveError")));
 
   if (loading) {
     return (
-      <div className="ms-1 flex items-center gap-2 border-s ps-3 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("loading")}
       </div>
     );
   }
 
   return (
-    <div className="ms-1 space-y-4 border-s ps-3">
+    <div className="space-y-5">
       {/* Questions — draggable to reorder */}
       <div className="space-y-3">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
@@ -203,6 +208,40 @@ export function DailyReportSettings() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
+                  </div>
+
+                  {/* Segment + weekdays */}
+                  <div className="flex flex-wrap items-center gap-3 ps-2">
+                    <Select value={item.segment} onValueChange={(v) => setItemSegment(i, v as ReportSegment)}>
+                      <SelectTrigger className="h-7 w-32 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="end">{t("segmentEnd")}</SelectItem>
+                        <SelectItem value="start">{t("segmentStart")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="flex items-center gap-1" role="group" aria-label={t("weekdaysLabel")}>
+                      {WEEKDAY_NUMS.map((d) => {
+                        const active = item.weekdays === null || item.weekdays.includes(d);
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => toggleWeekday(i, d)}
+                            className={cn(
+                              "h-6 w-6 rounded-full border text-[11px] transition-colors",
+                              active
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-input bg-background text-muted-foreground hover:bg-accent",
+                            )}
+                          >
+                            {WEEKDAY_SHORT[d]}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div className="space-y-1.5 ps-2">
@@ -292,22 +331,10 @@ export function DailyReportSettings() {
         {period === "monthly" ? t("deliveryNoteMonthly") : t("deliveryNoteWeekly")}
       </p>
 
-      {/* Actions */}
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" onClick={save} disabled={saving} className="gap-1 text-xs">
           {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {t("saveQuestions")}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={generateNow}
-          disabled={generating}
-          className="gap-1 text-xs"
-        >
-          {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-          {t("generateNow")}
         </Button>
       </div>
     </div>

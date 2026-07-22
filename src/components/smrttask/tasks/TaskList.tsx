@@ -43,6 +43,8 @@ import { useWorkCalendar } from "@/hooks/useWorkCalendar";
 import { useDayTool } from "@/hooks/useDayTools";
 import { useWorkClock } from "@/hooks/useWorkClock";
 import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
+import { dayLabel as reportDayLabel } from "@/lib/smrttask/dailyreport-dates";
+import type { DailyReportPending, PendingDay } from "@/types/daily-report";
 import {
   sittingWorkdays,
   autoSnoozeMoment,
@@ -184,22 +186,22 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   // Day-tool: daily report — when on, a "fill daily report" row is pinned to the
   // top of the quick list until today's check-in is done (docs/daily-report-plan.md).
   const dailyReportEnabled = useDayTool("dailyreport").enabled;
-  const [reportCheckinOpen, setReportCheckinOpen] = useState(false);
-  const [reportDoneToday, setReportDoneToday] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!dailyReportEnabled) { setReportDoneToday(null); return; }
-    let alive = true;
-    const refresh = () => {
-      api<{ done: boolean }>("/api/daily-report/today")
-        .then((r) => { if (alive) setReportDoneToday(r.done); })
-        .catch(() => { if (alive) setReportDoneToday(false); });
-    };
-    refresh();
-    // Re-check on focus so the row reappears the next day when the app was left
-    // open past midnight (the server decides "today" in the user's timezone).
-    window.addEventListener("focus", refresh);
-    return () => { alive = false; window.removeEventListener("focus", refresh); };
+  const [reportFillDate, setReportFillDate] = useState<string | null>(null);
+  const [reportPendingDays, setReportPendingDays] = useState<PendingDay[]>([]);
+  const refreshReportPending = useCallback(() => {
+    if (!dailyReportEnabled) { setReportPendingDays([]); return; }
+    api<DailyReportPending>("/api/daily-report/pending")
+      .then((r) => setReportPendingDays(r.days ?? []))
+      .catch(() => setReportPendingDays([]));
   }, [dailyReportEnabled]);
+  useEffect(() => {
+    if (!dailyReportEnabled) { setReportPendingDays([]); return; }
+    refreshReportPending();
+    // Re-check on focus so a new day's row appears when the app was left open
+    // past midnight (the server decides "today" in the user's timezone).
+    window.addEventListener("focus", refreshReportPending);
+    return () => { window.removeEventListener("focus", refreshReportPending); };
+  }, [dailyReportEnabled, refreshReportPending]);
   // Day-tool: מהיר·3·1 gates the whole desk shape. ON → the 4-list day method
   // (quick / medium / big / rest) with soft quotas + the build-day banner.
   // OFF → the original spec: quick + a deadline-driven regular desk + waiting.
@@ -1009,16 +1011,20 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
               {/* Daily-report day-tool: a pinned "fill daily report" row at the
                   top of the quick list, shown until today's check-in is done.
                   Not a real task row — it never enters rollover or the counts. */}
-              {dailyReportEnabled && reportDoneToday === false && (
-                <button
-                  type="button"
-                  onClick={() => setReportCheckinOpen(true)}
-                  className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-                >
-                  <ClipboardList className="h-4 w-4 shrink-0" />
-                  {tDaily("pinnedRow")}
-                </button>
-              )}
+              {dailyReportEnabled &&
+                reportPendingDays.map((d) => (
+                  <button
+                    key={d.fill_date}
+                    type="button"
+                    onClick={() => setReportFillDate(d.fill_date)}
+                    className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                  >
+                    <ClipboardList className="h-4 w-4 shrink-0" />
+                    <span className="truncate">
+                      {d.is_today ? tDaily("pinnedRow") : tDaily("pinnedRowDated", { date: reportDayLabel(d.fill_date) })}
+                    </span>
+                  </button>
+                ))}
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>
 
@@ -1168,9 +1174,10 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
       {dailyReportEnabled && (
         <DailyReportCheckin
-          open={reportCheckinOpen}
-          onClose={() => setReportCheckinOpen(false)}
-          onSaved={() => setReportDoneToday(true)}
+          open={reportFillDate !== null}
+          fillDate={reportFillDate}
+          onClose={() => setReportFillDate(null)}
+          onSaved={refreshReportPending}
         />
       )}
 

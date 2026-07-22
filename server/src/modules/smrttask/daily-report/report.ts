@@ -11,6 +11,7 @@
 
 import { db } from "../../../db";
 import { emitEvent } from "../../../lib/platform";
+import { rangeLabel } from "./hebdate";
 
 const DEFAULT_TZ = "America/New_York";
 
@@ -25,6 +26,8 @@ export interface ReportOptionTally {
 export interface ReportItem {
   item_id: string;
   label: string;
+  /** Which logical day the question belongs to (drives the report grouping). */
+  segment: "start" | "end";
   /** Average of answered scores for this question in range (null if unscored). */
   avg_score: number | null;
   /** How many days this question was answered in range. */
@@ -92,7 +95,7 @@ export function periodRange(period: PeriodType, todayYmd: string): { start: stri
 
 // ── computation ────────────────────────────────────────────────────────────
 
-interface ItemRow { id: string; label: string; active: boolean; position: number }
+interface ItemRow { id: string; label: string; active: boolean; position: number; segment: string | null }
 interface OptionRow { item_id: string; label: string; score: number | null; position: number }
 interface EntryRow { entry_date: string; item_id: string; option_label: string; score_snapshot: number | null }
 
@@ -111,7 +114,7 @@ export async function computeReport(
   // options that were never picked this period).
   const { data: itemRows, error: itemsErr } = await db
     .from("daily_report_items")
-    .select("id, label, active, position")
+    .select("id, label, active, position, segment")
     .eq("user_id", userId)
     .order("position", { ascending: true });
   if (itemsErr) throw new Error(`items: ${itemsErr.message}`);
@@ -174,6 +177,7 @@ export async function computeReport(
     reportItems.push({
       item_id: item.id,
       label: item.label,
+      segment: item.segment === "end" ? "end" : "start",
       avg_score: avg == null ? null : round1(avg),
       answered: itemEntries.length,
       options: Array.from(tally.values()),
@@ -268,10 +272,13 @@ function fmtDuration(seconds: number): string {
   return `${m} דק׳`;
 }
 
-/** Render the report as a Hebrew inbox item title + description. */
+/** Render the report as a Hebrew inbox item title + description. Dual-calendar
+ *  (Hebrew + Gregorian) date range, with the questions split by segment. */
 export function renderInbox(report: Report): { title: string; description: string } {
   const periodLabel = report.period_type === "monthly" ? "חודשי" : "שבועי";
-  const title = `📊 דוח ${periodLabel} · ${fmtDateHe(report.range_start)}–${fmtDateHe(report.range_end)}`;
+  const dates = rangeLabel(report.range_start, report.range_end) ||
+    `${fmtDateHe(report.range_start)}–${fmtDateHe(report.range_end)}`;
+  const title = `📊 דוח ${periodLabel} · ${dates}`;
 
   const lines: string[] = [];
   if (report.overall_score != null) {
@@ -279,13 +286,22 @@ export function renderInbox(report: Report): { title: string; description: strin
     lines.push("");
   }
 
-  for (const item of report.items) {
+  const renderItem = (item: ReportItem) => {
     lines.push(item.label);
-    for (const o of item.options) {
-      lines.push(`  ${o.label} – ${o.count}`);
-    }
+    for (const o of item.options) lines.push(`  ${o.label} – ${o.count}`);
     if (item.avg_score != null) lines.push(`  ממוצע: ${item.avg_score}`);
     lines.push("");
+  };
+
+  const endItems = report.items.filter((i) => i.segment === "end");
+  const startItems = report.items.filter((i) => i.segment === "start");
+  if (endItems.length) {
+    lines.push("— סיום יום —");
+    endItems.forEach(renderItem);
+  }
+  if (startItems.length) {
+    lines.push("— תחילת יום —");
+    startItems.forEach(renderItem);
   }
 
   const tk = report.tasks;
