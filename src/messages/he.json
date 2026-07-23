@@ -790,6 +790,7 @@
       "dismissed": "נדחה"
     },
     "approve": "אשר",
+    "fileByLevel": "תייק לפי רמה (מוסיף להיום)",
     "reminderPrefix": "תזכורת: {title}",
     "reminderClosed": "התזכורת נסגרה",
     "approvedToToday": "נוסף להיום",
