@@ -206,17 +206,28 @@ export function FocusSession({
   const createRef = useRef<Promise<string | null> | null>(null);
   const closedRef = useRef(false);
   const firedRef = useRef(false); // the 0:00 chime/overlay fires exactly once
+  const startRef = useRef<number>(0); // wall-clock start, so the timer keeps
 
-  // Open the session record + start the clock.
+  // Open the session record + start the clock. Elapsed is derived from the wall
+  // clock (not a per-second counter) so backgrounded-tab timer throttling can't
+  // make it drift — when the tab returns, the next tick shows the true elapsed.
   useEffect(() => {
+    if (!startRef.current) startRef.current = Date.now();
     createRef.current = api<{ session: { id: string } }>("/api/focus-sessions", {
       method: "POST",
       body: { plan_id: planId, planned_minutes: dailyMinutes },
     })
       .then((res) => { sessionIdRef.current = res.session.id; return res.session.id; })
       .catch(() => null); // the session still runs locally; only the log is lost
-    const iv = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => clearInterval(iv);
+    const tick = () => setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    tick();
+    const iv = setInterval(tick, 1000);
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [planId, dailyMinutes]);
 
   /** Load every task (plan order). On the FIRST load, land on the current
@@ -308,6 +319,7 @@ export function FocusSession({
     setBlocking(false);
   };
 
+  const doneCount = tasks.filter((tk) => tk.status === "completed" || tk.status === "archived").length;
   const selTitle = selected ? (locale === "he" && selected.title_he ? selected.title_he : selected.title) : null;
   const isDone = selected?.status === "completed" || selected?.status === "archived";
   const actionable = !!selected && !isDone && !selected.blocked;
@@ -341,7 +353,9 @@ export function FocusSession({
         <span className="truncate rounded-full bg-secondary px-2.5 py-0.5 text-sm font-medium text-muted-foreground" dir="auto">
           {planTitle}
         </span>
-        <span className="text-xs text-muted-foreground">{t("stagesDone", { count: tasksCompleted })}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {t("progressDone", { done: doneCount, total: tasks.length })}
+        </span>
         <Button variant="ghost" size="icon" className="ms-auto" onClick={() => void finish(false)} aria-label={t("exit")}>
           <X className="h-5 w-5" />
         </Button>

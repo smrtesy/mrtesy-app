@@ -2190,7 +2190,6 @@ router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
     .eq("plan_id", req.params.id);
   const seq = new Map<string, number>();
   for (const s of asRows(stageRows)) seq.set(s.id as string, (s.sequence as number) ?? 999);
-  const current = serverCurrentStage(tasks);
   const ordered = [...tasks].sort((a, b) => {
     const sa = seq.get(a.stage_id as string) ?? 999;
     const sb = seq.get(b.stage_id as string) ?? 999;
@@ -2199,23 +2198,29 @@ router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
     const cb = (b.created_at as string) ?? "";
     return ca < cb ? -1 : ca > cb ? 1 : 0;
   });
+  const isDone = (s: unknown) => s === "completed" || s === "archived";
   const out = ordered.map((t) => {
     const needs = (t.needs as { satisfied?: boolean; title?: string }[] | undefined) ?? [];
     const blockers = needs.filter((n) => !n.satisfied).map((n) => n.title).filter(Boolean);
     return {
-      id: t.id,
+      id: t.id as string,
       title: t.title,
       title_he: t.title_he,
       description: (t.description as string | null) ?? null,
       status: t.status,
       blocked: blockers.length > 0,
       blockers,
-      is_current: !!current && t.id === current.id,
+      is_current: false,
       is_decision: t.is_decision ?? null,
       requires_debrief: t.requires_debrief ?? null,
     };
   });
-  res.json({ tasks: out, currentId: current?.id ?? null });
+  // The current task = the FIRST in plan order that is open (not done) and not
+  // blocked — intuitive "what's next", instead of a deadline/critical sort that
+  // is arbitrary when the plan has no dates.
+  const currentItem = out.find((t) => !isDone(t.status) && !t.blocked) ?? null;
+  if (currentItem) currentItem.is_current = true;
+  res.json({ tasks: out, currentId: currentItem?.id ?? null });
 });
 
 /** GET /plan/focus-today — my active focus plans, each with its current stage

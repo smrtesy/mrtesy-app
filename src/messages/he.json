@@ -3760,6 +3760,7 @@
     "appHintSuffix": "ושלח (בדפדפן זה נכתב מעצמו)",
     "stageDone": "סיימתי את השלב",
     "stagesDone": "{count} שלבים הושלמו",
+    "progressDone": "{done}/{total} הושלמו",
     "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",
     "timeUpTitle": "נגמרו {minutes} הדקות של היום",
     "doneToday": "סיימתי להיום",
