@@ -3768,7 +3768,10 @@
     "fiveMore": "5 more minutes",
     "completed": "Completed",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "waitForClaude": "Waiting for Claude",
+    "statusWaitingClaude": "Waiting for Claude",
+    "statusAwaitingConfirm": "Awaiting your confirmation"
   },
   "marathon": {
     "progress": "{done} of {total}",

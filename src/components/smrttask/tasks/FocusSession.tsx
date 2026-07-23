@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock, Copy } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock, Copy, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -23,6 +23,7 @@ interface FocusTask {
   is_current: boolean;
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
+  claude_waiting_since?: string | null;
 }
 
 /** Render one line of task-body markdown: **bold**, `code`, [text](url), and
@@ -349,6 +350,29 @@ export function FocusSession({
     }
   }
 
+  /** Hand the task to Claude and step away: mark it in_progress + "waiting on
+   *  Claude" (the same flag the task-list launcher uses), then close the focus
+   *  window so you can move on. The "waiting on Claude" label stays — here and
+   *  in the task list — until Claude's session reports the task done, at which
+   *  point the backend flips it to pending_completion for you to confirm. */
+  async function waitForClaude() {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      // smrtplan-gated endpoint (not the smrttask PATCH /tasks/:id) so this works
+      // for a worker entitled to smrtplan but not smrttask. Sets in_progress +
+      // claude_waiting_since server-side.
+      await api(`/api/plan-tasks/${selected.id}/claude-waiting`, {
+        method: "PATCH",
+        body: { waiting: true },
+      });
+      await finish(false); // close the focus window; the task stays "waiting on Claude"
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+      setBusy(false);
+    }
+  }
+
   const extend = () => {
     // "+5 minutes": push the target out and let the clock keep running. The
     // extension re-arms the 0:00 trigger so the chime fires again at the new end.
@@ -371,6 +395,10 @@ export function FocusSession({
       return { label: t("statusDone"), cls: "bg-status-ok-bg text-status-ok" };
     if (tk.blocked)
       return { label: t("statusBlocked"), cls: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" };
+    if (tk.status === "pending_completion")
+      return { label: t("statusAwaitingConfirm"), cls: "bg-status-ok-bg text-status-ok" };
+    if (tk.claude_waiting_since)
+      return { label: t("statusWaitingClaude"), cls: "bg-primary/10 text-primary" };
     if (tk.is_current)
       return { label: t("statusCurrent"), cls: "bg-primary text-primary-foreground" };
     if (tk.status === "in_progress")
@@ -465,6 +493,17 @@ export function FocusSession({
                     >
                       <ExternalLink className="h-5 w-5" /> {t("openInClaude")}
                     </a>
+                  ) : null}
+                  {claudeLink ? (
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      className="h-14 min-w-40 gap-2 text-lg"
+                      onClick={waitForClaude}
+                      disabled={busy}
+                    >
+                      <Bot className="h-5 w-5" /> {t("waitForClaude")}
+                    </Button>
                   ) : null}
                   <Button
                     size="lg"
