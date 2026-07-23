@@ -29,7 +29,7 @@ import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modu
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
-import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter } from "./modules/smrtplan";
+import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 
@@ -166,6 +166,10 @@ app.use("/api", claudeSessionRouter);
 // smrtPlan Claude Code auto session report — x-cron-secret guarded (a Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", smrtplanSessionReportRouter);
+
+// smrtPlan video-lab experiment writes — x-cron-secret guarded (the video-lab
+// harness calls it), so it comes BEFORE the auth-guarded routers too.
+app.use("/api", smrtplanExperimentsMachineRouter);
 
 // דוח יומי weekly report job — x-cron-secret guarded (pg_cron calls it), so it
 // comes BEFORE the auth-guarded routers (route path already includes /api).

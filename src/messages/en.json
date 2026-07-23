@@ -3858,5 +3858,25 @@
     "off": "off",
     "altsTitle": "cheaper alternatives · other brands",
     "altTag": "alternative"
+  },
+  "experiments": {
+    "title": "Experiment scoring",
+    "lead": "Rate each output 1–5. Models are revealed only after you lock your scores.",
+    "loading": "Loading...",
+    "empty": "No outputs for this test yet.",
+    "reveal": "Reveal models / lock scores",
+    "revealed": "Models revealed",
+    "model": "Model",
+    "hidden": "hidden",
+    "scoreLabel": "Score",
+    "saveError": "Failed to save score",
+    "loadError": "Failed to load outputs",
+    "dim": {
+      "overall": "Overall",
+      "consistency": "Consistency",
+      "motion": "Motion",
+      "quality": "Quality",
+      "lipsync": "Lip-sync"
+    }
   }
 }
