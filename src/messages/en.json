@@ -281,7 +281,11 @@
     "empty": "No SMS yet. They'll show up here once they arrive.",
     "selectConversation": "Select a conversation to view its messages",
     "noMessages": "No messages in this conversation",
-    "back": "Back"
+    "back": "Back",
+    "searchPlaceholder": "Search by number or text…",
+    "searchOpen": "Search",
+    "searchClose": "Close search",
+    "searchNoResults": "No matching conversations"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",
@@ -786,6 +790,7 @@
       "dismissed": "Dismissed"
     },
     "approve": "Approve",
+    "fileByLevel": "File by level (adds to today)",
     "reminderPrefix": "Reminder: {title}",
     "reminderClosed": "Reminder closed",
     "approvedToToday": "Added to today",
@@ -3743,6 +3748,9 @@
   "focusSession": {
     "exit": "End",
     "currentStage": "Current stage",
+    "openInClaude": "Open in Claude",
+    "appHintPrefix": "In the mobile app, type",
+    "appHintSuffix": "and send (in a browser it prefills automatically)",
     "stageDone": "Stage done",
     "stagesDone": "{count} stages done",
     "noStage": "No stage ready right now — every stage is blocked or complete.",
@@ -3853,5 +3861,45 @@
     "off": "off",
     "altsTitle": "cheaper alternatives · other brands",
     "altTag": "alternative"
+  },
+  "experiments": {
+    "title": "Experiment scoring",
+    "lead": "Rate each output 1–5. Models are revealed only after you lock your scores.",
+    "loading": "Loading...",
+    "empty": "No outputs for this test yet.",
+    "reveal": "Reveal models / lock scores",
+    "revealed": "Models revealed",
+    "model": "Model",
+    "hidden": "hidden",
+    "scoreLabel": "Score",
+    "saveError": "Failed to save score",
+    "loadError": "Failed to load outputs",
+    "filter": {
+      "all": "All",
+      "pass": "Passed",
+      "rejected": "Rejected",
+      "pending": "Pending"
+    },
+    "qc": {
+      "pass": "Pass",
+      "rejected": "Rejected",
+      "pending": "Pending"
+    },
+    "qcScore": "QC score",
+    "qcReason": "Rejection reason",
+    "metrics": "Metrics",
+    "prompt": "Prompt",
+    "promptMore": "more",
+    "promptLess": "less",
+    "override": "Restore manually",
+    "overridden": "Restored",
+    "overriddenBadge": "Manually restored",
+    "dim": {
+      "overall": "Overall",
+      "consistency": "Consistency",
+      "motion": "Motion",
+      "quality": "Quality",
+      "lipsync": "Lip-sync"
+    }
   }
 }

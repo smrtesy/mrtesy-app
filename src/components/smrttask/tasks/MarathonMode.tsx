@@ -20,6 +20,7 @@ import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
+import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { taskActionNuggets } from "@/lib/smrttask/links";
 import type { Task } from "@/types/task";
@@ -71,7 +72,9 @@ export function MarathonMode({
   const tTasks = useTranslations("tasks");
   const tDetail = useTranslations("taskDetailExt");
   const tWa = useTranslations("whatsappPage");
+  const tSms = useTranslations("smsPage");
   const openWhatsApp = useOpenWhatsAppChat();
+  const openSms = useOpenSmsChat();
   const blocked = useWorkCalendar();
   const workClock = useWorkClock();
   // Snapshot the queue at start: list refetches during the run must not
@@ -282,6 +285,8 @@ export function MarathonMode({
   // WhatsApp sources open in the in-app reader (consistent with the task lists /
   // log) instead of launching the external WhatsApp client.
   const isWaSource = sourceUrl ? /wa\.me\//.test(sourceUrl) : false;
+  // SMS sources open the in-app reader too (never the OS `sms:` composer).
+  const sourceSmsPeer = smsPeerFromSourceUrl(sourceUrl);
   const sourceWaPhone = isWaSource
     ? ((sourceUrl ?? "").match(/wa\.me\/([^?#]+)/)?.[1] ?? "").replace(/\D/g, "")
     : "";
@@ -480,6 +485,18 @@ export function MarathonMode({
                           preservePane: true,
                           paneLabel: tWa("title"),
                         });
+                      }}
+                      className={chipCls}
+                    >
+                      <ExternalLink className="h-3 w-3 flex-shrink-0" /> <span className="truncate">{t("source")}</span>
+                    </button>
+                  ) : sourceSmsPeer ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Same preservePane rationale as WhatsApp: don't tear
+                        // down the running marathon by navigating this pane away.
+                        openSms(sourceSmsPeer, { preservePane: true, paneLabel: tSms("title") });
                       }}
                       className={chipCls}
                     >

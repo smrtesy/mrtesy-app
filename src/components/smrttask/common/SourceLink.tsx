@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
-import { useScreenRouter } from "@/lib/panes/nav";
 import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
+import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
 import { SourceMessageReader } from "./SourceMessageReader";
 
 
@@ -61,10 +60,10 @@ interface SourceLinkProps {
  */
 export function SourceLink({ source, stopPropagation, onNavigate, className }: SourceLinkProps) {
   const openWhatsApp = useOpenWhatsAppChat();
-  // Pane-aware: an SMS source inside the /tasks pane swaps that pane
-  // instead of navigating the top window out of the workspace.
-  const router = useScreenRouter();
-  const { locale } = useParams() as { locale: string };
+  // Pane-aware "open the in-app SMS reader" — swaps the current pane rather than
+  // navigating the top window out of the workspace, and never renders a raw
+  // `sms:` href (which would fire the OS SMS composer instead).
+  const openSms = useOpenSmsChat();
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
   // In-app email reader, opened on mobile Gmail taps (see handleClick below).
@@ -125,8 +124,11 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
   // SMS sources open the in-app SMS reader on the matching conversation, not the
   // native sms: link. The peer is stored verbatim in source_url as `sms:<peer>`.
   // sms_echo (self-notes) carry `sms:<own number>` and open the same reader.
-  if (row.source_type === "sms" || row.source_type === "sms_echo") {
-    const peer = (row.source_url ?? "").startsWith("sms:") ? (row.source_url as string).slice(4) : "";
+  // We also key off the URL shape (not just source_type), so a row whose
+  // source_type failed to join still routes to the reader instead of falling
+  // through to the generic branch below and rendering a raw `sms:` href.
+  const smsPeer = smsPeerFromSourceUrl(row.source_url);
+  if (row.source_type === "sms" || row.source_type === "sms_echo" || smsPeer) {
     return (
       <button
         type="button"
@@ -135,7 +137,7 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
           // Close the enclosing modal before navigating so it doesn't linger
           // over the SMS reader (and so its dirty-refresh fires cleanly).
           onNavigate?.();
-          router.push(peer ? `/${locale}/sms?chat_id=${encodeURIComponent(peer)}&ts=${Date.now()}` : `/${locale}/sms`);
+          openSms(smsPeer);
         }}
         title={`${label} — open in SMS`}
         className={cn(base, interactive, className)}

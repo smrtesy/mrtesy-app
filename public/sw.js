@@ -19,7 +19,7 @@
  * client-side), and the runtime cache is wiped on sign-out (CLEAR_CACHE
  * message), so a shared device doesn't replay one user's data to the next.
  */
-const VERSION = "v7";
+const VERSION = "v8";
 const STATIC_CACHE = `smrtesy-static-${VERSION}`;
 const RUNTIME_CACHE = `smrtesy-runtime-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, RUNTIME_CACHE];

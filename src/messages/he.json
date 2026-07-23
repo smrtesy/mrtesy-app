@@ -281,7 +281,11 @@
     "empty": "אין עדיין הודעות SMS. ברגע שיגיעו, הן יופיעו כאן.",
     "selectConversation": "בחר שיחה כדי לצפות בהודעות",
     "noMessages": "אין הודעות בשיחה הזו",
-    "back": "חזרה"
+    "back": "חזרה",
+    "searchPlaceholder": "חיפוש לפי מספר או טקסט…",
+    "searchOpen": "חיפוש",
+    "searchClose": "סגור חיפוש",
+    "searchNoResults": "לא נמצאו שיחות תואמות"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",
@@ -786,6 +790,7 @@
       "dismissed": "נדחה"
     },
     "approve": "אשר",
+    "fileByLevel": "תייק לפי רמה (מוסיף להיום)",
     "reminderPrefix": "תזכורת: {title}",
     "reminderClosed": "התזכורת נסגרה",
     "approvedToToday": "נוסף להיום",
@@ -3742,6 +3747,9 @@
   "focusSession": {
     "exit": "סיום",
     "currentStage": "השלב הנוכחי",
+    "openInClaude": "פתח ב-Claude",
+    "appHintPrefix": "באפליקציה במובייל: הקלד",
+    "appHintSuffix": "ושלח (בדפדפן זה נכתב מעצמו)",
     "stageDone": "סיימתי את השלב",
     "stagesDone": "{count} שלבים הושלמו",
     "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",
@@ -3852,5 +3860,45 @@
     "off": "כבוי",
     "altsTitle": "חלופות זולות יותר · ממותגים אחרים",
     "altTag": "חלופה"
+  },
+  "experiments": {
+    "title": "ניקוד ניסויים",
+    "lead": "דרגו כל תוצר 1–5. המודלים חשופים רק אחרי נעילת הציונים.",
+    "loading": "טוען...",
+    "empty": "אין תוצרים לניסוי הזה עדיין.",
+    "reveal": "חשוף מודלים / נעל ציונים",
+    "revealed": "המודלים נחשפו",
+    "model": "מודל",
+    "hidden": "מוסתר",
+    "scoreLabel": "ציון",
+    "saveError": "שמירת הציון נכשלה",
+    "loadError": "טעינת התוצרים נכשלה",
+    "filter": {
+      "all": "הכל",
+      "pass": "עברו",
+      "rejected": "נפסלו",
+      "pending": "ממתין"
+    },
+    "qc": {
+      "pass": "עבר",
+      "rejected": "נפסל",
+      "pending": "ממתין"
+    },
+    "qcScore": "ציון QC",
+    "qcReason": "סיבת פסילה",
+    "metrics": "מדדים",
+    "prompt": "פרומפט",
+    "promptMore": "עוד",
+    "promptLess": "פחות",
+    "override": "שחזר ידנית",
+    "overridden": "שוחזר",
+    "overriddenBadge": "שוחזר ידנית",
+    "dim": {
+      "overall": "כללי",
+      "consistency": "עקביות",
+      "motion": "תנועה",
+      "quality": "איכות",
+      "lipsync": "סנכרון שפתיים"
+    }
   }
 }

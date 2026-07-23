@@ -15,6 +15,7 @@ import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
+import { PullToRefresh } from "@/components/platform/pwa/PullToRefresh";
 
 export default async function AppLayout({
   children,
@@ -156,6 +157,10 @@ export default async function AppLayout({
       {/* Reliable fallback for the inline script above (which doesn't always
           execute in the App Router). */}
       <EmbedFlag />
+      {/* Pull-to-refresh for the installed PWA (standalone), where the browser
+          provides no native gesture. Inert in a normal tab, in panes, and in the
+          native app. */}
+      <PullToRefresh />
       <QueryProvider>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}

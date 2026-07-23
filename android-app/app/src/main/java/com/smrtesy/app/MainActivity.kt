@@ -130,6 +130,13 @@ class MainActivity : AppCompatActivity() {
                 hideDebug()
                 binding.webView.reload()
             }
+            // Only own the pull-down gesture when the WebView is scrolled to the
+            // very top. Otherwise report "the child can scroll up" so the drag
+            // scrolls the page instead of firing a refresh. The default check
+            // inspects the direct child's scroll offset, which was wrong while a
+            // wrapper sat between the layout and the WebView; keying off the
+            // WebView's real scrollY makes top-detection correct.
+            setOnChildScrollUpCallback { _, _ -> binding.webView.scrollY > 0 }
         }
     }
 

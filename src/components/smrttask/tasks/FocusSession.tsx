@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2 } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -16,8 +16,67 @@ interface FocusStage {
   id: string;
   title: string;
   title_he: string | null;
+  description?: string | null;
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
+}
+
+/** Render task-body text with any URL turned into a clickable link — deep links
+ *  (Claude Code, fal, upload) must stay one tap away, verbatim (product rule:
+ *  never strip a URL down to its domain). split() with a capturing group yields
+ *  alternating [text, url, text, …]; a fresh (non-global) test picks the URLs. */
+function renderWithLinks(text: string) {
+  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={i}
+        href={part}
+        target="_blank"
+        rel="noreferrer"
+        className="text-primary underline underline-offset-2 break-all"
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+/** The primary "open this task in Claude Code" link, if the body carries one. */
+function claudeLinkOf(description: string | null | undefined): string | null {
+  return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
+}
+
+/** The slash-command to type inside the Claude Code app, parsed from the link's
+ *  prompt param (e.g. prompt=run%20%2Fprices → "/prices"). The browser prefills
+ *  the box from the URL automatically, but the mobile app ignores query params,
+ *  so we surface the command for the user to type there. */
+function appCommandOf(link: string | null): string | null {
+  if (!link) return null;
+  const m = link.match(/[?&]prompt=([^&]+)/);
+  if (!m) return null;
+  const cmd = decodeURIComponent(m[1]).match(/\/[a-z][a-z-]*/);
+  return cmd ? cmd[0] : null;
+}
+
+/** Render the task body as readable, scannable blocks: blank lines become
+ *  spacing (via the container's space-y), a line that is only a Claude Code deep
+ *  link is dropped (the prominent button already covers it), a short line ending
+ *  with ':' becomes a sub-heading, and every other line is a paragraph with its
+ *  URLs linkified. Keeps long text comfortable instead of one dense blob. */
+function renderBody(description: string) {
+  return description.split("\n").map((raw, i) => {
+    const line = raw.trim();
+    if (!line) return null;
+    if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
+    const isHeading = line.endsWith(":") && line.length <= 24;
+    return (
+      <p key={i} className={isHeading ? "font-semibold text-foreground" : "[overflow-wrap:anywhere]"}>
+        {renderWithLinks(line)}
+      </p>
+    );
+  });
 }
 
 function fmtClock(totalSeconds: number): string {
@@ -186,6 +245,8 @@ export function FocusSession({
   };
 
   const stageTitle = stage ? (locale === "he" && stage.title_he ? stage.title_he : stage.title) : null;
+  const claudeLink = claudeLinkOf(stage?.description);
+  const appCommand = appCommandOf(claudeLink);
   const overtime = remaining < 0;
 
   return (
@@ -207,23 +268,51 @@ export function FocusSession({
         </Button>
       </div>
 
-      {/* The current stage */}
-      <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 py-8 text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+      {/* The current stage — the WHOLE task: title + body + its deep links, so
+          the focus screen IS the task (no separate card to open). */}
+      <div className="flex flex-1 flex-col items-center gap-5 overflow-y-auto px-6 py-8 text-center">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <ClipboardList className="h-6 w-6 text-primary" />
         </span>
         {stageTitle ? (
           <>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("currentStage")}</p>
             <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{stageTitle}</h2>
-            <Button
-              size="lg"
-              className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
-              onClick={completeStage}
-              disabled={busy}
-            >
-              <Check className="h-5 w-5" /> {t("stageDone")}
-            </Button>
+            {stage?.description ? (
+              <div
+                className="w-full max-w-2xl space-y-2 rounded-xl border bg-card p-5 text-start text-[15px] leading-7 text-foreground"
+                dir="auto"
+              >
+                {renderBody(stage.description)}
+              </div>
+            ) : null}
+            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
+              {claudeLink ? (
+                <a
+                  href={claudeLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-14 min-w-40 items-center justify-center gap-2 rounded-md border border-primary bg-primary/10 px-5 text-lg font-medium text-primary transition hover:bg-primary/20"
+                >
+                  <ExternalLink className="h-5 w-5" /> {t("openInClaude")}
+                </a>
+              ) : null}
+              <Button
+                size="lg"
+                className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
+                onClick={completeStage}
+                disabled={busy}
+              >
+                <Check className="h-5 w-5" /> {t("stageDone")}
+              </Button>
+            </div>
+            {appCommand ? (
+              <p className="text-[12px] text-muted-foreground" dir="auto">
+                {t("appHintPrefix")}
+                <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{appCommand}</code>
+                {t("appHintSuffix")}
+              </p>
+            ) : null}
           </>
         ) : (
           <p className="max-w-md text-lg text-muted-foreground" dir="auto">{t("noStage")}</p>
