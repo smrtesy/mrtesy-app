@@ -3761,6 +3761,7 @@
     "appHintSuffix": "and send (in a browser it prefills automatically)",
     "stageDone": "Stage done",
     "stagesDone": "{count} stages done",
+    "progressDone": "{done}/{total} done",
     "noStage": "No stage ready right now — every stage is blocked or complete.",
     "timeUpTitle": "Your {minutes} minutes for today are up",
     "doneToday": "Done for today",
