@@ -48,6 +48,18 @@ function claudeLinkOf(description: string | null | undefined): string | null {
   return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
 }
 
+/** The slash-command to type inside the Claude Code app, parsed from the link's
+ *  prompt param (e.g. prompt=run%20%2Fprices → "/prices"). The browser prefills
+ *  the box from the URL automatically, but the mobile app ignores query params,
+ *  so we surface the command for the user to type there. */
+function appCommandOf(link: string | null): string | null {
+  if (!link) return null;
+  const m = link.match(/[?&]prompt=([^&]+)/);
+  if (!m) return null;
+  const cmd = decodeURIComponent(m[1]).match(/\/[a-z][a-z-]*/);
+  return cmd ? cmd[0] : null;
+}
+
 /** Render the task body as readable, scannable blocks: blank lines become
  *  spacing (via the container's space-y), a line that is only a Claude Code deep
  *  link is dropped (the prominent button already covers it), a short line ending
@@ -234,6 +246,7 @@ export function FocusSession({
 
   const stageTitle = stage ? (locale === "he" && stage.title_he ? stage.title_he : stage.title) : null;
   const claudeLink = claudeLinkOf(stage?.description);
+  const appCommand = appCommandOf(claudeLink);
   const overtime = remaining < 0;
 
   return (
@@ -293,6 +306,13 @@ export function FocusSession({
                 <Check className="h-5 w-5" /> {t("stageDone")}
               </Button>
             </div>
+            {appCommand ? (
+              <p className="text-[12px] text-muted-foreground" dir="auto">
+                {t("appHintPrefix")}
+                <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{appCommand}</code>
+                {t("appHintSuffix")}
+              </p>
+            ) : null}
           </>
         ) : (
           <p className="max-w-md text-lg text-muted-foreground" dir="auto">{t("noStage")}</p>
