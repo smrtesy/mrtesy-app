@@ -429,6 +429,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
   const {
     deskQuick, deskMedium, deskBig, rest, deskRegular, waiting, reviewCandidates,
+    pickedMedium, pickedBig,
   } = useMemo(() => {
     const visible = tasks.filter((task) => {
       if (contextFilter === "home") return task.context === "home";
@@ -440,9 +441,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     });
 
     const quickList: Task[] = [];
-    const mediumPicked: Task[] = [];  // method131 ON
-    const bigPicked: Task[] = [];     // method131 ON
-    const restList: Task[] = [];      // method131 ON — the catch-all
+    const mediumPicked: Task[] = [];  // method131 ON — surfaced (picked/woke)
+    const bigPicked: Task[] = [];     // method131 ON — surfaced (picked/woke)
     const regularDesk: Task[] = [];   // method131 OFF — deadline-surfaced
     const waitingList: Task[] = [];   // method131 OFF — the rest
 
@@ -452,13 +452,19 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       const pickedToday = task.planned_for === todayStr;
 
       if (m131Enabled) {
-        // 4-list method: medium/big picked for today — OR freshly woken from
-        // snooze (the deadline reminder must stay visible, not sink into the
-        // collapsed rest) — go to their list; everything else (undated,
-        // overdue-not-picked) lands in the collapsed rest.
-        const surfaced = pickedToday || !!task.woke_from_snooze_at;
-        if (surfaced) (task.size === "big" ? bigPicked : mediumPicked).push(task);
-        else restList.push(task);
+        // 4-list method: only TODAY's items reach the desk — medium/big picked
+        // for today, OR freshly woken from snooze (a deadline reminder that must
+        // stay visible). Backlog (not picked, not woke) is NOT shown on the desk
+        // anymore; it lives in the inbox, and the pool below holds only today's
+        // overflow beyond the soft quota (docs/pool-cleanup-fix-plan.md §4.1).
+        // "surfaced" = belongs on the desk today. pending_completion (an auto-
+        // detected "looks done" awaiting the user's confirm/reopen) is kept on the
+        // desk too — otherwise a verified pending_completion medium/big, which the
+        // inbox backlog query (status inbox,in_progress) does NOT show, would be
+        // invisible once its planned_for clears (docs/pool-cleanup-fix-plan.md §4.1).
+        const surfaced = pickedToday || !!task.woke_from_snooze_at || task.status === "pending_completion";
+        if (!surfaced) continue;
+        (task.size === "big" ? bigPicked : mediumPicked).push(task);
       } else {
         // Off mode (original spec §1): a regular task rises to the desk when its
         // effective deadline is within DESK_HORIZON_WORKDAYS working days AND it
@@ -507,31 +513,55 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return byPriority(a, b);
     };
 
-    // Review banner drains the collapsed catch-all (rest / waiting) of stale rows.
-    const catchAll = m131Enabled ? restList : waitingList;
+    // method131 ON: split surfaced medium/big by the soft quota. Woke tasks
+    // (deadline reminders) always stay on the desk, uncapped; deliberate picks
+    // fill the remaining quota in position order, and picks beyond it overflow
+    // to the pool ("השאר"). So the pool holds ONLY today's overflow and empties
+    // back to the inbox each night with the rollover (docs/pool-cleanup-fix-plan.md §4.1).
+    const splitByQuota = (surfaced: Task[], quota: number) => {
+      const onDesk: Task[] = [];
+      const overflow: Task[] = [];
+      let budget = Math.max(0, quota);
+      for (const task of surfaced) {
+        // Woke reminders and pending_completion (awaiting confirm) always stay on
+        // the desk, uncapped — never demoted into the collapsed pool.
+        if (task.woke_from_snooze_at || task.status === "pending_completion") { onDesk.push(task); continue; }
+        if (budget > 0) { onDesk.push(task); budget -= 1; }
+        else overflow.push(task);
+      }
+      return { onDesk, overflow };
+    };
+    const medSplit = splitByQuota([...mediumPicked].sort(byPosition), mediumQuota);
+    const bigSplit = splitByQuota([...bigPicked].sort(byPosition), bigQuota);
+    const poolList = [...medSplit.overflow, ...bigSplit.overflow];
+
+    // Review banner drains the collapsed catch-all (pool / waiting) of stale rows.
+    const catchAll = m131Enabled ? poolList : waitingList;
     const review = catchAll.filter((task) => sittingWorkdays(task, blocked) >= AGING_REVIEW_WORKDAYS);
+
+    // Soft-quota chip counts: only DELIBERATE picks (planned_for today, not a
+    // woke deadline reminder) count toward "n/3" and "n/1".
+    const countPicks = (list: Task[]) =>
+      list.filter((tk) => tk.planned_for === todayStr && !tk.woke_from_snooze_at).length;
 
     return {
       deskQuick: [...quickList].sort(byPosition),
-      deskMedium: [...mediumPicked].sort(byPosition),
-      deskBig: [...bigPicked].sort(byPosition),
-      rest: [...restList].sort(byRest),
+      deskMedium: medSplit.onDesk,
+      deskBig: bigSplit.onDesk,
+      rest: [...poolList].sort(byRest),
       deskRegular: [...regularDesk].sort(byDeadline),
       waiting: [...waitingList].sort(byDeadline),
       reviewCandidates: review,
+      pickedMedium: countPicks(mediumPicked),
+      pickedBig: countPicks(bigPicked),
     };
-  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr]);
+  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr, mediumQuota, bigQuota]);
 
-  // Soft daily quota (method131 ON): only DELIBERATE picks (planned_for today)
-  // count — a task auto-surfaced by waking from snooze shows in the list but
-  // must not inflate the quota or read as "picked" in the build-day picker.
-  const pickedMedium = deskMedium.filter((task) => task.planned_for === todayStr).length;
-  const pickedBig = deskBig.filter((task) => task.planned_for === todayStr).length;
-  // Marathon "regular" run set: the picked medium+big (ON) or the surfaced
-  // regular desk (OFF). Quick keeps its own run.
+  // Marathon "regular" run set: the day's medium+big work — desk picks plus the
+  // pool overflow (ON), or the surfaced regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
-    () => (m131Enabled ? [...deskMedium, ...deskBig] : deskRegular),
-    [m131Enabled, deskMedium, deskBig, deskRegular],
+    () => (m131Enabled ? [...deskMedium, ...deskBig, ...rest] : deskRegular),
+    [m131Enabled, deskMedium, deskBig, rest, deskRegular],
   );
 
   // Open focused task detail after load (deep links: ?focus=<id>)
@@ -1258,10 +1288,15 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         onUpdateDeadline={
           snoozeTaskId
             ? async (newDue) => {
+                // Only move the deadline here — the dialog calls onConfirm
+                // (handleSnoozeConfirm) right after, which snoozes the task,
+                // toasts, and refetches. Toasting/refetching here too would
+                // double both. patchTask toasts its own error and returns
+                // false; throw on failure so the dialog skips the snooze
+                // rather than reporting success on a half-applied change.
                 const id = snoozeTaskId;
-                await patchTask(id, { due_date: newDue }, (task) => ({ ...task, due_date: newDue }));
-                toast.success(t("actions.snooze"));
-                fetchTasks();
+                const ok = await patchTask(id, { due_date: newDue }, (task) => ({ ...task, due_date: newDue }));
+                if (!ok) throw new Error("deadline update failed");
               }
             : undefined
         }

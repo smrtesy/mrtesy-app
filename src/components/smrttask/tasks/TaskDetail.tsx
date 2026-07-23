@@ -883,7 +883,15 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         onConfirm={handleSnoozeConfirm}
         dueDate={effectiveTask.due_date ?? null}
         onUpdateDeadline={effectiveTask.plan_id ? undefined : async (newDue) => {
-          await api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: newDue } });
+          try {
+            await api(`/api/tasks/${effectiveTask.id}`, { method: "PATCH", body: { due_date: newDue } });
+          } catch (e) {
+            // Surface the failure and re-throw so the dialog skips the snooze
+            // and stays open instead of silently half-applying (deadline lost,
+            // no toast).
+            toast.error(e instanceof Error ? e.message : "Error");
+            throw e;
+          }
           dirtyRef.current = true;
           setLiveTask((p) => (p ? { ...p, due_date: newDue } as Task : p));
         }}

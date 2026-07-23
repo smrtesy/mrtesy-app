@@ -92,13 +92,15 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, dueDate, onUpdat
     }
   }
 
-  async function handleConfirm() {
-    if (!date) return;
-    // Construct the Date in LOCAL time. `new Date("2025-05-22")` would
-    // parse as UTC midnight (per ECMAScript spec) and then setHours would
-    // be offset by the user's timezone — e.g. Israel UTC+3 would snooze
-    // 3 hours earlier than the user picked. Build from numeric parts so
-    // every field is interpreted in the browser's local zone.
+  // Build the concrete moment to resurface at, from the picked date + time.
+  // Construct the Date in LOCAL time. `new Date("2025-05-22")` would parse as
+  // UTC midnight (per ECMAScript spec) and then setHours would be offset by
+  // the user's timezone — e.g. Israel UTC+3 would snooze 3 hours earlier than
+  // the user picked. Build from numeric parts so every field is interpreted in
+  // the browser's local zone. Auto-shifts a past pick forward a day so the task
+  // doesn't wake instantly. Returns null when no date is set.
+  function buildTarget(): Date | null {
+    if (!date) return null;
     const [yy, mm, dd] = date.split("-").map((s) => parseInt(s, 10));
     const [h, m] = (time || "09:00").split(":").map((s) => parseInt(s, 10));
     const d = new Date(
@@ -111,9 +113,19 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, dueDate, onUpdat
       0,
     );
     if (d.getTime() <= Date.now()) {
-      // Auto-shift to tomorrow at the same time if user picked a past moment.
       d.setDate(d.getDate() + 1);
     }
+    return d;
+  }
+
+  // YYYY-MM-DD from a Date's LOCAL components (matches the picker's value and
+  // the `due_date` column's date-only shape).
+  const localDateStr = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  async function handleConfirm() {
+    const d = buildTarget();
+    if (!d) return;
     setSubmitting(true);
     try {
       await onConfirm(d.toISOString());
@@ -182,10 +194,23 @@ export function SnoozeDialog({ open, onClose, onConfirm, title, dueDate, onUpdat
                     variant="outline"
                     disabled={submitting}
                     onClick={async () => {
+                      const d = buildTarget();
+                      if (!d) return;
                       setSubmitting(true);
                       try {
-                        await onUpdateDeadline(date);
+                        // "Move the deadline to this date" does BOTH: set the
+                        // due date to the picked date AND defer the task to that
+                        // same moment — then close. Previously it only moved the
+                        // deadline, so the task never left the list and the whole
+                        // action looked like a no-op to the user.
+                        // If moving the deadline fails, its handler surfaces the
+                        // error and throws — skip the snooze and keep the dialog
+                        // open so nothing is silently half-applied.
+                        await onUpdateDeadline(localDateStr(d));
+                        await onConfirm(d.toISOString());
                         onClose();
+                      } catch {
+                        // Handlers toast their own errors; stay open for a retry.
                       } finally {
                         setSubmitting(false);
                       }
