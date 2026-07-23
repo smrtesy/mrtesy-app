@@ -18,6 +18,20 @@ export function ServiceWorkerRegistrar() {
       return;
     }
 
+    // When an updated worker takes control, reload once so the open app swaps
+    // to the fresh build (chunks + code) instead of running the old bundle
+    // until the user manually relaunches. Guarded: we only arm this after we
+    // detect a genuine update (a new worker installed while one already
+    // controlled the page), and reload at most once, so first-install claims
+    // and reload loops are avoided.
+    let updateArmed = false;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!updateArmed || reloaded) return;
+      reloaded = true;
+      window.location.reload();
+    });
+
     const register = () => {
       // Pass the backend origin so the SW only offline-caches API reads from
       // our own backend (never some future third-party with an /api/ path).
@@ -37,6 +51,9 @@ export function ServiceWorkerRegistrar() {
                 installing.state === "installed" &&
                 navigator.serviceWorker.controller
               ) {
+                // A new build is ready and an old worker is still in control:
+                // arm the reload, then hand control to the new worker.
+                updateArmed = true;
                 installing.postMessage("SKIP_WAITING");
               }
             });
