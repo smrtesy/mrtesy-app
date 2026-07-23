@@ -39,12 +39,29 @@ case "$BASE" in ""|http://*|https://*) ;; *) BASE="https://$BASE" ;; esac
 
 CLAUDE_ACCOUNT="$(printf '%s' "${CLAUDE_CODE_USER_EMAIL:-}" | tr '[:upper:]' '[:lower:]')"
 if [ -n "$SECRET" ] && [ -n "$BASE" ] && [ -n "$CLAUDE_ACCOUNT" ]; then
+  # (a) cache the identity for the rest of the NY day
   BODY="$(jq -n --arg claude_account "$CLAUDE_ACCOUNT" --arg worker_email "$EMAIL" \
     '{claude_account:$claude_account, worker_email:$worker_email}')"
   RESP="$(curl -sS -m 20 -L --post301 --post302 -X POST "$BASE/api/claude-session/identity" \
     -H "Content-Type: application/json" -H "X-Cron-Secret: $SECRET" \
     --data-binary "$BODY" 2>&1 || true)"
   echo "set-identity: cached $EMAIL for today → ${RESP:-<no response>}"
+
+  # (b) ALSO add it to the shared known-workers pick-list (anchored to the
+  # manager's org) so it appears in later sessions — this is what makes the list
+  # grow instead of staying empty. Best-effort.
+  MGR_EMAIL="${SMRTTASK_MANAGER_EMAIL:-${SMRTTASK_USER_EMAIL:-}}"
+  MGR_ID="${SMRTTASK_MANAGER_USER_ID:-${SMRTTASK_USER_ID:-}}"
+  if [ -n "$MGR_EMAIL" ] || [ -n "$MGR_ID" ]; then
+    KWBODY="$(jq -n --arg manager_email "$MGR_EMAIL" --arg manager_id "$MGR_ID" --arg email "$EMAIL" \
+      '{manager_email:$manager_email, manager_id:$manager_id, email:$email}')"
+    KWRESP="$(curl -sS -m 20 -L --post301 --post302 -X POST "$BASE/api/claude-session/known-workers" \
+      -H "Content-Type: application/json" -H "X-Cron-Secret: $SECRET" \
+      --data-binary "$KWBODY" 2>&1 || true)"
+    echo "set-identity: added $EMAIL to known-workers list → ${KWRESP:-<no response>}"
+  else
+    echo "set-identity: no manager anchor (SMRTTASK_MANAGER_EMAIL/SMRTTASK_USER_EMAIL) — not added to list"
+  fi
 else
   echo "set-identity: recorded $EMAIL locally (backend cache not provisioned)"
 fi
