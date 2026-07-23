@@ -94,10 +94,15 @@ function renderBody(description: string) {
     // Sub-items (indented in the source) get an extra hanging indent, like the doc.
     const indented = (raw.match(/^\s*/)?.[0].length ?? 0) >= 3;
     const pad = indented ? "ps-5" : "";
+    // A line whose content is a single `code` span (e.g. `FAL_KEY=…`) is a
+    // config value: force it left-to-right and left-aligned, like the GitHub
+    // doc — otherwise the RTL layout parks it on the right.
+    const codeOnly = (s: string) => /^`[^`]+`$/.test(s.trim());
     const bullet = line.match(/^[-•]\s+(.*)$/);
     if (bullet) {
+      const ltr = codeOnly(bullet[1]);
       return (
-        <div key={i} className={`flex gap-2 ${pad}`}>
+        <div key={i} dir={ltr ? "ltr" : undefined} className={`flex gap-2 ${pad} ${ltr ? "text-left" : ""}`}>
           <span className="select-none text-muted-foreground">•</span>
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{renderInline(bullet[1])}</span>
         </div>
@@ -111,6 +116,9 @@ function renderBody(description: string) {
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{renderInline(num[2])}</span>
         </div>
       );
+    }
+    if (codeOnly(line)) {
+      return <p key={i} dir="ltr" className={`text-left [overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
     }
     return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });
