@@ -313,11 +313,12 @@ router.get("/tasks", async (req: Request, res: Response) => {
   // Project-only workers only ever see tasks assigned to them (from a plan or by
   // another user/manager) — enforced here, not left to an optional filter.
   if (req.taskAccess === "lite") q = q.eq("assigned_to_user_id", req.user!.id);
-  // Hide tasks of draft (not-yet-approved) smrtPlan plans. Ordinary tasks have a
-  // null plan_id, so the null branch keeps them (a bare not-in would drop nulls).
-  const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
-  const draftIds = (draftPlans ?? []).map((p) => p.id as string);
-  if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
+  // smrtPlan tasks never surface in the org task pool / inbox (נכנס). They live
+  // on the plan and reach the desk ONLY through the daily focus banner
+  // (GET /plan/my-tasks feeds it separately). Standing product rule (2026-07):
+  // a plan task appears only in the focus banner + the plan itself, never in the
+  // inbox. Ordinary tasks have a null plan_id, so this keeps exactly them.
+  q = q.is("plan_id", null);
   q = q.order("created_at", { ascending: false });
   // 1000 cap: the suggestions inbox shows EVERY pending suggestion in one list.
   const n = Math.min(parseInt((limit as string) ?? "50", 10) || 50, 1000);
@@ -336,9 +337,8 @@ router.get("/tasks/count", async (req: Request, res: Response) => {
     .eq("organization_id", req.org!.id);
   q = applyTaskFilters(q, req.query, req.user!.id);
   if (req.taskAccess === "lite") q = q.eq("assigned_to_user_id", req.user!.id);
-  const { data: draftPlans } = await db.from("smrtplan_plans").select("id").eq("org_id", req.org!.id).eq("status", "draft");
-  const draftIds = (draftPlans ?? []).map((p) => p.id as string);
-  if (draftIds.length) q = q.or(`plan_id.is.null,plan_id.not.in.(${draftIds.join(",")})`);
+  // Same rule as GET /tasks: plan tasks never count toward the inbox badge.
+  q = q.is("plan_id", null);
 
   const { count, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
