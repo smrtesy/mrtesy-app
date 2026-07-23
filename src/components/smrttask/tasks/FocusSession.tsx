@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2 } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -16,8 +16,36 @@ interface FocusStage {
   id: string;
   title: string;
   title_he: string | null;
+  description?: string | null;
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
+}
+
+/** Render task-body text with any URL turned into a clickable link — deep links
+ *  (Claude Code, fal, upload) must stay one tap away, verbatim (product rule:
+ *  never strip a URL down to its domain). split() with a capturing group yields
+ *  alternating [text, url, text, …]; a fresh (non-global) test picks the URLs. */
+function renderWithLinks(text: string) {
+  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={i}
+        href={part}
+        target="_blank"
+        rel="noreferrer"
+        className="text-primary underline underline-offset-2 break-all"
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+/** The primary "open this task in Claude Code" link, if the body carries one. */
+function claudeLinkOf(description: string | null | undefined): string | null {
+  return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
 }
 
 function fmtClock(totalSeconds: number): string {
@@ -186,6 +214,7 @@ export function FocusSession({
   };
 
   const stageTitle = stage ? (locale === "he" && stage.title_he ? stage.title_he : stage.title) : null;
+  const claudeLink = claudeLinkOf(stage?.description);
   const overtime = remaining < 0;
 
   return (
@@ -207,23 +236,44 @@ export function FocusSession({
         </Button>
       </div>
 
-      {/* The current stage */}
-      <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 py-8 text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+      {/* The current stage — the WHOLE task: title + body + its deep links, so
+          the focus screen IS the task (no separate card to open). */}
+      <div className="flex flex-1 flex-col items-center gap-5 overflow-y-auto px-6 py-8 text-center">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <ClipboardList className="h-6 w-6 text-primary" />
         </span>
         {stageTitle ? (
           <>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("currentStage")}</p>
             <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{stageTitle}</h2>
-            <Button
-              size="lg"
-              className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
-              onClick={completeStage}
-              disabled={busy}
-            >
-              <Check className="h-5 w-5" /> {t("stageDone")}
-            </Button>
+            {stage?.description ? (
+              <div
+                className="w-full max-w-xl whitespace-pre-wrap rounded-lg border bg-muted/30 p-4 text-start text-sm leading-relaxed text-muted-foreground"
+                dir="auto"
+              >
+                {renderWithLinks(stage.description)}
+              </div>
+            ) : null}
+            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
+              {claudeLink ? (
+                <a
+                  href={claudeLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-14 min-w-40 items-center justify-center gap-2 rounded-md border border-primary bg-primary/10 px-5 text-lg font-medium text-primary transition hover:bg-primary/20"
+                >
+                  <ExternalLink className="h-5 w-5" /> {t("openInClaude")}
+                </a>
+              ) : null}
+              <Button
+                size="lg"
+                className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
+                onClick={completeStage}
+                disabled={busy}
+              >
+                <Check className="h-5 w-5" /> {t("stageDone")}
+              </Button>
+            </div>
           </>
         ) : (
           <p className="max-w-md text-lg text-muted-foreground" dir="auto">{t("noStage")}</p>

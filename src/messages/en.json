@@ -3748,6 +3748,7 @@
   "focusSession": {
     "exit": "End",
     "currentStage": "Current stage",
+    "openInClaude": "Open in Claude",
     "stageDone": "Stage done",
     "stagesDone": "{count} stages done",
     "noStage": "No stage ready right now — every stage is blocked or complete.",
