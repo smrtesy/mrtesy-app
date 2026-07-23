@@ -228,6 +228,70 @@ turn). A missing secret **or** URL makes the hook a silent no-op. The backend
 also hard-fails the auth check when neither secret env var is set, so an unset
 secret can never leave the route open.
 
+## Long-task auto-resume on token exhaustion
+
+**Goal:** a long task that gets interrupted because the subscription's token
+window ran out should **resume itself automatically** once the window resets —
+without the user babysitting it. Standing request (2026-07).
+
+**Why it's built the way it is (read this first):** Claude Code gives NO
+reliable hook signal for "this session stopped because tokens ran out," and no
+reset-time value. The `Stop` hook fires on a normal turn-end, not on a
+usage-limit interruption, and its payload has no "stop reason" or reset field.
+So we **cannot react after exhaustion**. Instead we **arm the resume up front**:
+the moment a task looks long, drop a checkpoint and arm a self-binding **hourly
+watchdog Routine**. If the session later dies from a usage limit, the Routine
+keeps firing every hour; the first firing after the window resets continues the
+task — in the **same conversation** (the Routine self-binds to this session by
+default, so the resumed turn has full context). Hourly is the cron minimum and
+means work resumes within ≤1 hour of the reset without ever needing to know the
+exact reset time. All of this runs on the user's **Claude subscription — ZERO
+paid API tokens** (creating/deleting Routines and continuing the chat are agent
+actions), so it is NOT subject to the cost-approval rule.
+
+**When to arm.** At the **start** of any task that plausibly outlives one usage
+window: large multi-file changes, long migrations/audits/sweeps, anything the
+user calls a "long task" / "משימה ארוכה", or work you expect to span hours. When
+in doubt on a clearly big job, arm it — arming is cheap and self-cleaning.
+
+**The protocol (agent actions):**
+1. `‎.claude/hooks/longtask.sh arm "<כותרת>" "<מצב: מה נעשה + מה נשאר>" [<max_hours>]‎`
+   — writes the checkpoint (`‎.claude/tmp/longtask-<slug>.json`, gitignored) and
+   **prints the exact `create_trigger` parameters**. `max_hours` (default 24)
+   caps the watchdog's lifetime.
+2. Call **`create_trigger`** with those params: `cron_expression: "0 * * * *"`,
+   the printed `prompt`, and **do NOT set `persistent_session_id`** (the default
+   binds the Routine to this session).
+3. `‎.claude/hooks/longtask.sh record-trigger <trigger_id>‎` — stores the id so
+   the resume is armed (and the Stop-hook enforcer stops nagging).
+4. As you make progress, keep the checkpoint fresh:
+   `‎.claude/hooks/longtask.sh update "<מצב עדכני>"‎`.
+5. **On completion:** `delete_trigger(<trigger_id>)` then
+   `‎.claude/hooks/longtask.sh done‎` (removes the checkpoint). Do this so the
+   watchdog doesn't keep firing after the work is finished.
+
+**The watchdog firing** (what the Routine's prompt makes the resumed turn do):
+run `longtask.sh tick` (bumps the attempt counter, prints `EXPIRED` past
+`max_attempts`/`max_hours`); if `NO_CHECKPOINT` / `EXPIRED` / `status=done` →
+`delete_trigger` itself and stop; otherwise continue the task from the checkpoint
++ conversation, then either `done` (finished) or `update` (more to go). So even
+an orphaned Routine **self-terminates** — it can never loop forever.
+
+**Enforcement (`Stop` hook `‎.claude/hooks/longtask-guard.sh‎`).** A shell hook
+can't call the `create_trigger` MCP tool, so reliability comes from a block: on
+turn-end, if an **open** checkpoint exists with **no** `trigger_id`, the hook
+blocks once and instructs the agent to arm the Routine. It blocks at most 3×
+per session (local counter) then degrades gracefully to "just work without a
+Routine," and it is a pure **no-op for any session without an open checkpoint**
+(the normal case → zero overhead). It coexists with the smrtTask summary Stop
+hook without fighting it (its own counter is the loop-guard, independent of
+`stop_hook_active`). Any error / non-web session / missing `jq` → exit 0.
+
+**Caveat:** the resume depends on the `claude-code-remote` MCP tools
+(`create_trigger`/`delete_trigger`) being available in the session and on the
+usage limit being a *token-window* reset (not a hard account block). If a firing
+still has no tokens it simply doesn't run — harmless — and the next hour retries.
+
 ## Push target — main by default
 
 The user has standing authorization to push fixes directly to `main` once the
