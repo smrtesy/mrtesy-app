@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -11,12 +11,16 @@ import { cn } from "@/lib/utils";
 import { DecisionDialog } from "./DecisionDialog";
 import { DebriefDialog, type DebriefPayload } from "./DebriefDialog";
 
-/** A ready plan task — the "current stage" (from GET /plan/:id/focus-stage). */
-interface FocusStage {
+/** A plan task in the focus browser (from GET /plan/:id/focus-tasks). */
+interface FocusTask {
   id: string;
   title: string;
   title_he: string | null;
   description?: string | null;
+  status: string;
+  blocked: boolean;
+  blockers: string[];
+  is_current: boolean;
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
 }
@@ -188,7 +192,9 @@ export function FocusSession({
   const t = useTranslations("focusSession");
   const [targetSeconds, setTargetSeconds] = useState(dailyMinutes * 60);
   const [elapsed, setElapsed] = useState(0);
-  const [stage, setStage] = useState<FocusStage | null>(null);
+  const [tasks, setTasks] = useState<FocusTask[]>([]);
+  const [idx, setIdx] = useState(0);
+  const placedRef = useRef(false); // land on the current task once, on first load
   const [tasksCompleted, setTasksCompleted] = useState(0);
   const [blocking, setBlocking] = useState(false);
   const [decisionOpen, setDecisionOpen] = useState(false);
@@ -213,13 +219,25 @@ export function FocusSession({
     return () => clearInterval(iv);
   }, [planId, dailyMinutes]);
 
-  const loadStage = useCallback(async () => {
+  /** Load every task (plan order). On the FIRST load, land on the current
+   *  (first-ready) task; later reloads keep the user where they are. */
+  const loadTasks = useCallback(async (landOnCurrent = false) => {
     try {
-      const { stage: s } = await api<{ stage: FocusStage | null }>(`/api/plan/${planId}/focus-stage`);
-      setStage(s);
-    } catch { /* keep the last stage on a transient error */ }
+      const { tasks: rows, currentId } = await api<{ tasks: FocusTask[]; currentId: string | null }>(
+        `/api/plan/${planId}/focus-tasks`,
+      );
+      const list = rows ?? [];
+      setTasks(list);
+      if (landOnCurrent || !placedRef.current) {
+        const at = currentId ? list.findIndex((x) => x.id === currentId) : -1;
+        setIdx(at >= 0 ? at : 0);
+        placedRef.current = true;
+      } else {
+        setIdx((i) => Math.min(i, Math.max(0, list.length - 1)));
+      }
+    } catch { /* keep the last list on a transient error */ }
   }, [planId]);
-  useEffect(() => { void loadStage(); }, [loadStage]);
+  useEffect(() => { void loadTasks(); }, [loadTasks]);
 
   const remaining = targetSeconds - elapsed;
 
@@ -254,26 +272,27 @@ export function FocusSession({
     onExit();
   }, [elapsed, tasksCompleted, onExit]);
 
-  /** Tick the current stage done → the engine releases its dependents → the
-   *  next ready stage surfaces on reload. A decision stage first asks for its
-   *  outcome (propagated to the tasks it affects). */
+  const selected: FocusTask | null = tasks[idx] ?? null;
+
+  /** Tick the selected task done → the engine releases its dependents → the
+   *  next ready task surfaces. A decision task first asks for its outcome. */
   async function completeStage() {
-    if (!stage || busy) return;
-    if (stage.requires_debrief) { setDebriefOpen(true); return; }
-    if (stage.is_decision) { setDecisionOpen(true); return; }
+    if (!selected || busy) return;
+    if (selected.requires_debrief) { setDebriefOpen(true); return; }
+    if (selected.is_decision) { setDecisionOpen(true); return; }
     await doCompleteStage();
   }
 
   async function doCompleteStage(decision?: string, debrief?: DebriefPayload) {
-    if (!stage || busy) return;
+    if (!selected || busy) return;
     setBusy(true);
     try {
-      await api(`/api/plan-tasks/${stage.id}/done`, {
+      await api(`/api/plan-tasks/${selected.id}/done`, {
         method: "PATCH",
         body: { done: true, ...(decision ? { decision } : {}), ...(debrief ? { debrief } : {}) },
       });
       setTasksCompleted((n) => n + 1);
-      await loadStage();
+      await loadTasks(true); // advance to the new current task
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
     } finally {
@@ -289,10 +308,25 @@ export function FocusSession({
     setBlocking(false);
   };
 
-  const stageTitle = stage ? (locale === "he" && stage.title_he ? stage.title_he : stage.title) : null;
-  const claudeLink = claudeLinkOf(stage?.description);
+  const selTitle = selected ? (locale === "he" && selected.title_he ? selected.title_he : selected.title) : null;
+  const isDone = selected?.status === "completed" || selected?.status === "archived";
+  const actionable = !!selected && !isDone && !selected.blocked;
+  const claudeLink = actionable ? claudeLinkOf(selected?.description) : null;
   const appCommand = appCommandOf(claudeLink);
   const overtime = remaining < 0;
+
+  /** The status chip for a task: done / blocked / today's / in-progress / upcoming. */
+  function statusBadge(tk: FocusTask): { label: string; cls: string } {
+    if (tk.status === "completed" || tk.status === "archived")
+      return { label: t("statusDone"), cls: "bg-status-ok-bg text-status-ok" };
+    if (tk.blocked)
+      return { label: t("statusBlocked"), cls: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" };
+    if (tk.is_current)
+      return { label: t("statusCurrent"), cls: "bg-primary text-primary-foreground" };
+    if (tk.status === "in_progress")
+      return { label: t("statusInProgress"), cls: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" };
+    return { label: t("statusUpcoming"), cls: "bg-muted text-muted-foreground" };
+  }
 
   return (
     <div className={`${overlayFrame} z-50 flex flex-col bg-background`} dir={locale === "he" ? "rtl" : "ltr"}>
@@ -313,50 +347,90 @@ export function FocusSession({
         </Button>
       </div>
 
-      {/* The current stage — the WHOLE task: title + body + its deep links, so
-          the focus screen IS the task (no separate card to open). */}
+      {/* Browse row: prev/next arrows + position. RTL — "previous" sits right. */}
+      {tasks.length > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1"
+            disabled={idx <= 0}
+            onClick={() => setIdx((i) => Math.max(0, i - 1))}
+            aria-label={t("prevTask")}
+          >
+            <ChevronRight className="h-4 w-4" /> {t("prevTask")}
+          </Button>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground" dir="ltr">
+            {idx + 1} / {tasks.length}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1"
+            disabled={idx >= tasks.length - 1}
+            onClick={() => setIdx((i) => Math.min(tasks.length - 1, i + 1))}
+            aria-label={t("nextTask")}
+          >
+            {t("nextTask")} <ChevronLeft className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      {/* The selected task — the WHOLE task: status + title + body + deep links. */}
       <div className="flex flex-1 flex-col items-center gap-5 overflow-y-auto px-6 py-8 text-center">
         <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <ClipboardList className="h-6 w-6 text-primary" />
         </span>
-        {stageTitle ? (
+        {selected && selTitle ? (
           <>
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("currentStage")}</p>
-            <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{stageTitle}</h2>
-            {stage?.description ? (
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge(selected).cls}`}>
+              {statusBadge(selected).label}
+            </span>
+            <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{selTitle}</h2>
+            {selected.description ? (
               <div
                 className="w-full max-w-2xl space-y-2 rounded-xl border bg-card p-5 text-start text-[15px] leading-7 text-foreground"
                 dir="auto"
               >
-                {renderBody(stage.description)}
+                {renderBody(selected.description)}
               </div>
             ) : null}
-            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
-              {claudeLink ? (
-                <a
-                  href={claudeLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-14 min-w-40 items-center justify-center gap-2 rounded-md border border-primary bg-primary/10 px-5 text-lg font-medium text-primary transition hover:bg-primary/20"
-                >
-                  <ExternalLink className="h-5 w-5" /> {t("openInClaude")}
-                </a>
-              ) : null}
-              <Button
-                size="lg"
-                className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
-                onClick={completeStage}
-                disabled={busy}
-              >
-                <Check className="h-5 w-5" /> {t("stageDone")}
-              </Button>
-            </div>
-            {appCommand ? (
-              <p className="text-[12px] text-muted-foreground" dir="auto">
-                {t("appHintPrefix")}
-                <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{appCommand}</code>
-                {t("appHintSuffix")}
+            {selected.blocked && selected.blockers.length > 0 ? (
+              <p className="flex max-w-xl items-center gap-1.5 text-[13px] text-muted-foreground" dir="auto">
+                <Lock className="h-4 w-4 shrink-0" />
+                {t("blockedBy")}: {selected.blockers.join(" · ")}
               </p>
+            ) : null}
+            {actionable ? (
+              <>
+                <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
+                  {claudeLink ? (
+                    <a
+                      href={claudeLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex h-14 min-w-40 items-center justify-center gap-2 rounded-md border border-primary bg-primary/10 px-5 text-lg font-medium text-primary transition hover:bg-primary/20"
+                    >
+                      <ExternalLink className="h-5 w-5" /> {t("openInClaude")}
+                    </a>
+                  ) : null}
+                  <Button
+                    size="lg"
+                    className="h-14 min-w-40 gap-2 bg-status-ok text-white hover:bg-status-ok/90 text-lg"
+                    onClick={completeStage}
+                    disabled={busy}
+                  >
+                    <Check className="h-5 w-5" /> {t("stageDone")}
+                  </Button>
+                </div>
+                {appCommand ? (
+                  <p className="text-[12px] text-muted-foreground" dir="auto">
+                    {t("appHintPrefix")}
+                    <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{appCommand}</code>
+                    {t("appHintSuffix")}
+                  </p>
+                ) : null}
+              </>
             ) : null}
           </>
         ) : (
@@ -383,13 +457,13 @@ export function FocusSession({
 
       <DecisionDialog
         open={decisionOpen}
-        taskTitle={stageTitle ?? ""}
+        taskTitle={selTitle ?? ""}
         onClose={() => setDecisionOpen(false)}
         onConfirm={(decision) => { setDecisionOpen(false); void doCompleteStage(decision); }}
       />
       <DebriefDialog
         open={debriefOpen}
-        taskTitle={stageTitle ?? ""}
+        taskTitle={selTitle ?? ""}
         onClose={() => setDebriefOpen(false)}
         onConfirm={(debrief) => { setDebriefOpen(false); void doCompleteStage(undefined, debrief); }}
       />
