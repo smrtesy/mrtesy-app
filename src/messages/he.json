@@ -3748,6 +3748,8 @@
     "exit": "סיום",
     "currentStage": "השלב הנוכחי",
     "openInClaude": "פתח ב-Claude",
+    "appHintPrefix": "באפליקציה במובייל: הקלד",
+    "appHintSuffix": "ושלח (בדפדפן זה נכתב מעצמו)",
     "stageDone": "סיימתי את השלב",
     "stagesDone": "{count} שלבים הושלמו",
     "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",

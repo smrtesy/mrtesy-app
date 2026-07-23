@@ -3749,6 +3749,8 @@
     "exit": "End",
     "currentStage": "Current stage",
     "openInClaude": "Open in Claude",
+    "appHintPrefix": "In the mobile app, type",
+    "appHintSuffix": "and send (in a browser it prefills automatically)",
     "stageDone": "Stage done",
     "stagesDone": "{count} stages done",
     "noStage": "No stage ready right now — every stage is blocked or complete.",
