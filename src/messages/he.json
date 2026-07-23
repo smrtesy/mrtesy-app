@@ -3766,7 +3766,10 @@
     "fiveMore": "עוד 5 דקות",
     "completed": "השלמתי",
     "copy": "העתק",
-    "copied": "הועתק"
+    "copied": "הועתק",
+    "waitForClaude": "מחכה לקלוד",
+    "statusWaitingClaude": "מחכה לקלוד",
+    "statusAwaitingConfirm": "ממתין לאישורך"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",

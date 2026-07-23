@@ -218,7 +218,7 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
   // turn-end whether or not the user happens to have a plan task in progress.
   const { data: task, error: findErr } = await db
     .from("tasks")
-    .select("id, title, title_he, plan_id")
+    .select("id, title, title_he, plan_id, claude_waiting_since")
     .eq("organization_id", orgId)
     .eq("assigned_to_user_id", userId)
     .eq("status", "in_progress")
@@ -260,6 +260,23 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
     { onConflict: "task_id,session_id" },
   );
   if (upsertErr) return res.status(500).json({ error: upsertErr.message });
+
+  // 4b. Close the "waiting on Claude" loop. When the user parked this task
+  // "waiting on Claude" (claude_waiting_since set, via the focus button) and
+  // Claude now reports it DONE, move the task to pending_completion — the
+  // existing "awaiting your confirmation" status that surfaces a green label in
+  // the task list — and clear the waiting flag. The user still makes the final
+  // call (marks it completed). Gated on claude_waiting_since so ONLY tasks the
+  // user explicitly handed to Claude auto-advance; a normal in_progress task is
+  // never flipped out from under them.
+  let awaitingConfirmation = false;
+  if (status === "done" && task.claude_waiting_since) {
+    const { error: transErr } = await db
+      .from("tasks")
+      .update({ status: "pending_completion", claude_waiting_since: null, updated_at: new Date().toISOString() })
+      .eq("id", task.id);
+    if (!transErr) awaitingConfirmation = true;
+  }
 
   // 5. File a smrtTask PROPOSAL in the plan manager's inbox (falling back to the
   // owner) — only when the status or summary actually changed. Deduped to one
@@ -303,7 +320,7 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
     }
   }
 
-  res.json({ ok: true, attached: true, task_id: task.id, manager_proposal: managerProposalFiled });
+  res.json({ ok: true, attached: true, task_id: task.id, manager_proposal: managerProposalFiled, awaiting_confirmation: awaitingConfirmation });
 });
 
 export default router;

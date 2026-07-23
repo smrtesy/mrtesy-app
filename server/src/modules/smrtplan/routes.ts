@@ -873,7 +873,7 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief";
+  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -1476,6 +1476,47 @@ router.patch("/plan-tasks/:id/done", async (req: Request, res: Response) => {
     }
   }
   await autoRecompute(req.org!.id);
+  res.json({ task: data });
+});
+
+/**
+ * PATCH /plan-tasks/:id/claude-waiting — park a plan task "waiting on Claude"
+ * (or clear the flag). Same actor rules as /done (assignee / full / super-admin),
+ * so a worker can hand their own task to Claude from the focus session without
+ * needing the smrttask app entitlement (this is a smrtplan feature, so it must
+ * not route through the smrttask-gated PATCH /tasks/:id). body: { waiting: bool }.
+ *   waiting=true  → status='in_progress' + claude_waiting_since=now, so the
+ *                   session-report hook can attach and the label shows. Does NOT
+ *                   release dependents (the task is not complete).
+ *   waiting=false → clear claude_waiting_since (status left untouched).
+ */
+router.patch("/plan-tasks/:id/claude-waiting", async (req: Request, res: Response) => {
+  const waiting = !!(req.body ?? {}).waiting;
+  const { data: task } = await db
+    .from("tasks")
+    .select("id, assigned_to_user_id")
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .not("plan_id", "is", null)
+    .maybeSingle();
+  if (!task) return res.status(404).json({ error: "task not found" });
+  const level = await resolveAccessLevel(req);
+  const allowed =
+    level === "full" ||
+    (task.assigned_to_user_id as string | null) === req.user!.id ||
+    (await isSuperAdmin(req.user!));
+  if (!allowed) return res.status(403).json({ error: "not allowed to update this task" });
+  const patch = waiting
+    ? { status: "in_progress", claude_waiting_since: new Date().toISOString() }
+    : { claude_waiting_since: null };
+  const { data, error } = await db
+    .from("tasks")
+    .update(patch)
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .select("id, status, claude_waiting_since")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
   res.json({ task: data });
 });
 
@@ -2213,6 +2254,7 @@ router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
       is_current: !!current && t.id === current.id,
       is_decision: t.is_decision ?? null,
       requires_debrief: t.requires_debrief ?? null,
+      claude_waiting_since: (t.claude_waiting_since as string | null) ?? null,
     };
   });
   res.json({ tasks: out, currentId: current?.id ?? null });
