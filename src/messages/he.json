@@ -3764,7 +3764,9 @@
     "timeUpTitle": "נגמרו {minutes} הדקות של היום",
     "doneToday": "סיימתי להיום",
     "fiveMore": "עוד 5 דקות",
-    "completed": "השלמתי"
+    "completed": "השלמתי",
+    "copy": "העתק",
+    "copied": "הועתק"
   },
   "marathon": {
     "progress": "{done} מתוך {total}",
