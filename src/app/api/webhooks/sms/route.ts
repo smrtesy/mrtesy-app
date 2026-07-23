@@ -54,6 +54,8 @@ interface SmsReceivedPayload {
   /** MMS carries its text under different keys depending on the message. */
   text?: string;
   subject?: string;
+  /** `mms:downloaded` carries the message text here (with `subject`/attachments). */
+  body?: string;
 }
 
 interface SmsWebhookEnvelope {
@@ -165,7 +167,13 @@ export async function POST(request: NextRequest): Promise<Response> {
   // mms:* events, so we must handle those too. Ack everything else (delivered/
   // failed receipts, data-SMS) so the gateway moves on.
   const event = envelope.event ?? "";
-  const isIncoming = event === "sms:received" || event === "mms:received";
+  // `mms:downloaded` is what actually fires for an incoming MMS on this fork:
+  // the MmsContentObserver picks up the fully-downloaded inbox row and emits it
+  // WITH the message body (unlike `mms:received`, which is the pre-download
+  // header notification, carries no text, and only fires from the WAP-push
+  // broadcast that a non-default app never receives). Treat both as incoming.
+  const isIncoming =
+    event === "sms:received" || event === "mms:received" || event === "mms:downloaded";
   // `sms:sent-observed` / `mms:sent-observed` are emitted by our forked gateway
   // when the user sends an SMS/MMS manually from the phone's own messaging app
   // (observed in content://sms/sent and the content://mms sent-box). Their
@@ -247,7 +255,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   let result: IngestResult;
   try {
-    result = await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {});
+    result = await ingestSms(db, conn.userId, deviceId, isIncoming, envelope.payload ?? {}, event);
   } catch (err) {
     console.error("[sms-webhook] ingest error:", err);
     await recordWebhookDebug(db, {
@@ -708,16 +716,25 @@ async function ingestSms(
   deviceId: string,
   isIncoming: boolean,
   payload: SmsReceivedPayload,
+  event: string,
 ): Promise<IngestResult> {
   const direction: "incoming" | "outgoing" = isIncoming ? "incoming" : "outgoing";
-  const messageId = String(payload.messageId ?? "").trim();
+  const rawMessageId = String(payload.messageId ?? "").trim();
+  // `content://mms` and `content://sms` have independent `_id` sequences that
+  // can overlap, so a downloaded-MMS id could collide with an SMS row's id on
+  // the (user_id, message_id) upsert key and one would clobber the other.
+  // Namespace the downloaded-MMS id to keep it distinct. (Only this new path is
+  // namespaced — existing sms/sent-observed rows keep their raw ids.)
+  const messageId =
+    event === "mms:downloaded" && rawMessageId ? `mmsdl:${rawMessageId}` : rawMessageId;
   // The conversation peer is the OTHER party: the sender for an incoming SMS,
   // the recipient for one we sent. `phoneNumber` is the deprecated fallback.
   const peer = String(
     (isIncoming ? payload.sender : payload.recipient) ?? payload.phoneNumber ?? "",
   ).trim();
-  // MMS may carry its text under `text`/`subject` rather than `message`.
-  const body = String(payload.message ?? payload.text ?? payload.subject ?? "");
+  // MMS carries its text under `body` (mms:downloaded) or `text`/`subject`
+  // rather than `message`. Prefer the actual message text over the subject.
+  const body = String(payload.message ?? payload.text ?? payload.body ?? payload.subject ?? "");
   if (!messageId || !peer) {
     console.warn("[sms-webhook] payload missing messageId/peer, skipping");
     return { outcome: "skipped", reason: "missing_fields", direction, messageId, peer, bodyPreview: body };
