@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+<!-- Root is a plain FrameLayout so the pull-to-refresh spinner, progress bar
+     and debug overlay can stack on top of the web content. Crucially, the
+     WebView is a DIRECT child of the SwipeRefreshLayout: SwipeRefreshLayout
+     cooperates with the WebView through the nested-scrolling chain, and any
+     view wedged between them (e.g. a FrameLayout) severs that chain so the
+     pull-down gesture only overscrolls the WebView and never triggers a
+     refresh. Overlays that must float above the WebView therefore live here,
+     as siblings of the SwipeRefreshLayout, not inside it. -->
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/swipeRefresh"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <FrameLayout
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
@@ -14,36 +23,36 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <ProgressBar
-            android:id="@+id/progressBar"
-            style="?android:attr/progressBarStyleHorizontal"
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_gravity="top"
+        android:max="100"
+        android:progressTint="@color/primary"
+        android:visibility="gone" />
+
+    <!-- Debug overlay — shows errors on screen -->
+    <ScrollView
+        android:id="@+id/debugOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:visibility="gone"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/debugText"
             android:layout_width="match_parent"
-            android:layout_height="3dp"
-            android:layout_gravity="top"
-            android:max="100"
-            android:progressTint="@color/primary"
-            android:visibility="gone" />
+            android:layout_height="wrap_content"
+            android:textColor="#FF4444"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true" />
 
-        <!-- Debug overlay — shows errors on screen -->
-        <ScrollView
-            android:id="@+id/debugOverlay"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="#CC000000"
-            android:visibility="gone"
-            android:padding="16dp">
+    </ScrollView>
 
-            <TextView
-                android:id="@+id/debugText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="#FF4444"
-                android:textSize="12sp"
-                android:fontFamily="monospace"
-                android:textIsSelectable="true" />
-
-        </ScrollView>
-
-    </FrameLayout>
-
-</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+</FrameLayout>
