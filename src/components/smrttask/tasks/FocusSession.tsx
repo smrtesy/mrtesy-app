@@ -48,6 +48,25 @@ function claudeLinkOf(description: string | null | undefined): string | null {
   return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
 }
 
+/** Render the task body as readable, scannable blocks: blank lines become
+ *  spacing (via the container's space-y), a line that is only a Claude Code deep
+ *  link is dropped (the prominent button already covers it), a short line ending
+ *  with ':' becomes a sub-heading, and every other line is a paragraph with its
+ *  URLs linkified. Keeps long text comfortable instead of one dense blob. */
+function renderBody(description: string) {
+  return description.split("\n").map((raw, i) => {
+    const line = raw.trim();
+    if (!line) return null;
+    if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
+    const isHeading = line.endsWith(":") && line.length <= 24;
+    return (
+      <p key={i} className={isHeading ? "font-semibold text-foreground" : "[overflow-wrap:anywhere]"}>
+        {renderWithLinks(line)}
+      </p>
+    );
+  });
+}
+
 function fmtClock(totalSeconds: number): string {
   const sign = totalSeconds < 0 ? "-" : "";
   const s = Math.abs(totalSeconds);
@@ -248,10 +267,10 @@ export function FocusSession({
             <h2 className="max-w-xl text-2xl font-bold leading-snug" dir="auto">{stageTitle}</h2>
             {stage?.description ? (
               <div
-                className="w-full max-w-xl whitespace-pre-wrap rounded-lg border bg-muted/30 p-4 text-start text-sm leading-relaxed text-muted-foreground"
+                className="w-full max-w-2xl space-y-2 rounded-xl border bg-card p-5 text-start text-[15px] leading-7 text-foreground"
                 dir="auto"
               >
-                {renderWithLinks(stage.description)}
+                {renderBody(stage.description)}
               </div>
             ) : null}
             <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center">
