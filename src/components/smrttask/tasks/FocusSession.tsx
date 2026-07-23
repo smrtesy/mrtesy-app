@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink } from "lucide-react";
@@ -21,26 +21,46 @@ interface FocusStage {
   requires_debrief?: boolean | null;
 }
 
-/** Render task-body text with any URL turned into a clickable link — deep links
- *  (Claude Code, fal, upload) must stay one tap away, verbatim (product rule:
- *  never strip a URL down to its domain). split() with a capturing group yields
- *  alternating [text, url, text, …]; a fresh (non-global) test picks the URLs. */
-function renderWithLinks(text: string) {
-  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
-    /^https?:\/\//.test(part) ? (
-      <a
-        key={i}
-        href={part}
-        target="_blank"
-        rel="noreferrer"
-        className="text-primary underline underline-offset-2 break-all"
-      >
-        {part}
-      </a>
-    ) : (
-      <span key={i}>{part}</span>
-    ),
-  );
+/** Render one line of task-body markdown: **bold**, `code`, [text](url), and
+ *  bare URLs. `code` is the key piece — English/config snippets (FAL_KEY=…,
+ *  "Add key", env-var names) render as a left-to-right monospace chip, so a
+ *  Hebrew (RTL) line no longer flips them (the "…=FAL_KEY" reversal). Deep links
+ *  stay verbatim (product rule: never strip a URL to its domain). */
+function renderInline(text: string): ReactNode[] {
+  const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]+)/g;
+  const out: ReactNode[] = [];
+  let last = 0;
+  let k = 0;
+  for (const m of text.matchAll(TOKEN)) {
+    const start = m.index ?? 0;
+    if (start > last) out.push(<span key={k++}>{text.slice(last, start)}</span>);
+    const tok = m[0];
+    if (tok.startsWith("**")) {
+      out.push(<strong key={k++} className="font-semibold text-foreground">{tok.slice(2, -2)}</strong>);
+    } else if (tok.startsWith("`")) {
+      out.push(
+        <code
+          key={k++}
+          dir="ltr"
+          className="mx-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground"
+        >
+          {tok.slice(1, -1)}
+        </code>,
+      );
+    } else {
+      const md = tok.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      const href = md ? md[2] : tok;
+      const label = md ? md[1] : tok;
+      out.push(
+        <a key={k++} href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2 break-all">
+          {label}
+        </a>,
+      );
+    }
+    last = start + tok.length;
+  }
+  if (last < text.length) out.push(<span key={k++}>{text.slice(last)}</span>);
+  return out;
 }
 
 /** The primary "open this task in Claude Code" link, if the body carries one. */
@@ -69,13 +89,30 @@ function renderBody(description: string) {
   return description.split("\n").map((raw, i) => {
     const line = raw.trim();
     if (!line) return null;
+    // The Claude Code deep link is covered by the button above — drop the line.
     if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
-    const isHeading = line.endsWith(":") && line.length <= 24;
-    return (
-      <p key={i} className={isHeading ? "font-semibold text-foreground" : "[overflow-wrap:anywhere]"}>
-        {renderWithLinks(line)}
-      </p>
-    );
+    // Sub-items (indented in the source) get an extra hanging indent, like the doc.
+    const indented = (raw.match(/^\s*/)?.[0].length ?? 0) >= 3;
+    const pad = indented ? "ps-5" : "";
+    const bullet = line.match(/^[-•]\s+(.*)$/);
+    if (bullet) {
+      return (
+        <div key={i} className={`flex gap-2 ${pad}`}>
+          <span className="select-none text-muted-foreground">•</span>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{renderInline(bullet[1])}</span>
+        </div>
+      );
+    }
+    const num = line.match(/^(\d+)\.\s+(.*)$/);
+    if (num) {
+      return (
+        <div key={i} className={`flex gap-2 ${pad}`}>
+          <span className="select-none font-medium text-foreground">{num[1]}.</span>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{renderInline(num[2])}</span>
+        </div>
+      );
+    }
+    return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });
 }
 
