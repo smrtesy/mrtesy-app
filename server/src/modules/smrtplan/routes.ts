@@ -31,6 +31,7 @@ import { notify } from "../../lib/platform";
 import { computeOrgSchedule, releaseDependents, loadBlockedDates, addWorkingDays, toISO } from "./engine";
 import { enforceDebriefOnComplete } from "./debrief";
 import { simpleCall, parseJsonResponse } from "../../anthropic";
+import { experimentsAuthedRouter } from "./experiments";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
@@ -217,6 +218,10 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtplan"));
+
+// Experiment scoring (video-lab) authed endpoints — inherit the auth/org/app
+// guards applied just above. See ./experiments.ts.
+router.use(experimentsAuthedRouter);
 
 /**
  * Supabase-js infers `GenericStringError[]` for selects built from a non-literal
