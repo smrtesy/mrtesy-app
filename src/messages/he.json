@@ -3747,6 +3747,7 @@
   "focusSession": {
     "exit": "סיום",
     "currentStage": "השלב הנוכחי",
+    "openInClaude": "פתח ב-Claude",
     "stageDone": "סיימתי את השלב",
     "stagesDone": "{count} שלבים הושלמו",
     "noStage": "אין שלב מוכן כרגע — כל השלבים חסומים או הושלמו.",
