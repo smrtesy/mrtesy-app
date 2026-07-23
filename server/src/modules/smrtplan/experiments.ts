@@ -146,6 +146,66 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
   res.json({ ok: true, id: data.id });
 });
 
+/** File extension from a MIME type (best-effort; falls back to "bin"). */
+function extFromMime(mime: string): string {
+  const sub = mime.split("/")[1]?.split(";")[0]?.trim().toLowerCase() ?? "";
+  const map: Record<string, string> = { jpeg: "jpg", "svg+xml": "svg", quicktime: "mov", mpeg: "mp3" };
+  return map[sub] || sub.replace(/[^a-z0-9]/g, "") || "bin";
+}
+
+/**
+ * POST /experiments/upload — persist a media file to the private `video-lab`
+ * Storage bucket and return a signed URL. The video-lab session has no Supabase
+ * key, so it uploads THROUGH the backend (fal links die in ~24h; we download
+ * immediately and keep our own copy). Body: { code, file_base64, mime_type,
+ * user_id|user_email }. Mirrors the whatsapp-media upload convention.
+ */
+machineRouter.post("/experiments/upload", async (req: Request, res: Response) => {
+  if (!machineAuthed(req, res)) return;
+  const body = req.body ?? {};
+
+  const code = clean(body.code, 200);
+  if (!code) return res.status(400).json({ error: "code is required" });
+  const b64 = typeof body.file_base64 === "string" ? body.file_base64 : "";
+  if (!b64) return res.status(400).json({ error: "file_base64 is required" });
+  const mime = clean(body.mime_type, 100) || "application/octet-stream";
+
+  const userId = await resolveUserId(
+    typeof body.user_id === "string" ? body.user_id : undefined,
+    typeof body.user_email === "string" ? body.user_email : undefined,
+  );
+  if (!userId) return res.status(404).json({ error: "user not found" });
+  const orgId = await resolvePrimaryOrg(userId);
+  if (!orgId) return res.status(403).json({ error: "user has no org" });
+
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(b64.replace(/^data:[^;]+;base64,/, ""), "base64");
+  } catch {
+    return res.status(400).json({ error: "invalid_base64" });
+  }
+  if (!buf.length) return res.status(400).json({ error: "empty file" });
+
+  const safe = code.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80);
+  const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+  const path = `${orgId}/${safe}-${stamp}.${extFromMime(mime)}`;
+
+  const { error: upErr } = await db.storage
+    .from("video-lab")
+    .upload(path, buf, { contentType: mime, upsert: true });
+  if (upErr) return res.status(500).json({ error: upErr.message });
+
+  // Signed URL with a long TTL so the scoring screen can render it directly
+  // over the days-long review window (private bucket → needs a signed link).
+  const YEAR = 60 * 60 * 24 * 365;
+  const { data: signed, error: signErr } = await db.storage
+    .from("video-lab")
+    .createSignedUrl(path, YEAR);
+  if (signErr || !signed) return res.status(500).json({ error: signErr?.message ?? "sign failed" });
+
+  res.json({ ok: true, path, url: signed.signedUrl });
+});
+
 /**
  * POST /experiments/approval-task — the inter-personal handoff. Opens an
  * approval task in the manager's smrtPlan inbox. The manager is the plan's owner

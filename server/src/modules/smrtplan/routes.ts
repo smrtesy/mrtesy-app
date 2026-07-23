@@ -2177,6 +2177,47 @@ router.get("/plan/:id/focus-stage", async (req: Request, res: Response) => {
   res.json({ stage: serverCurrentStage(tasks) });
 });
 
+/** GET /plan/:id/focus-tasks — ALL my tasks in this plan, in plan order (stage
+ *  sequence, then creation), each flagged with status / blocked (+ blockers) /
+ *  whether it is the current first-ready task. Powers the focus screen's
+ *  prev/next browsing with a per-task status badge. */
+router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
+  const tasks = await myPlanTasks(req.org!.id, req.user!.id, req.params.id);
+  const { data: stageRows } = await db
+    .from("smrtplan_stages")
+    .select("id, sequence")
+    .eq("org_id", req.org!.id)
+    .eq("plan_id", req.params.id);
+  const seq = new Map<string, number>();
+  for (const s of asRows(stageRows)) seq.set(s.id as string, (s.sequence as number) ?? 999);
+  const current = serverCurrentStage(tasks);
+  const ordered = [...tasks].sort((a, b) => {
+    const sa = seq.get(a.stage_id as string) ?? 999;
+    const sb = seq.get(b.stage_id as string) ?? 999;
+    if (sa !== sb) return sa - sb;
+    const ca = (a.created_at as string) ?? "";
+    const cb = (b.created_at as string) ?? "";
+    return ca < cb ? -1 : ca > cb ? 1 : 0;
+  });
+  const out = ordered.map((t) => {
+    const needs = (t.needs as { satisfied?: boolean; title?: string }[] | undefined) ?? [];
+    const blockers = needs.filter((n) => !n.satisfied).map((n) => n.title).filter(Boolean);
+    return {
+      id: t.id,
+      title: t.title,
+      title_he: t.title_he,
+      description: (t.description as string | null) ?? null,
+      status: t.status,
+      blocked: blockers.length > 0,
+      blockers,
+      is_current: !!current && t.id === current.id,
+      is_decision: t.is_decision ?? null,
+      requires_debrief: t.requires_debrief ?? null,
+    };
+  });
+  res.json({ tasks: out, currentId: current?.id ?? null });
+});
+
 /** GET /plan/focus-today — my active focus plans, each with its current stage
  *  and whether I already logged a focus session today (drives the /tasks block
  *  row). session_date is compared in the user's own timezone. */
