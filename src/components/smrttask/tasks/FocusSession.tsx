@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -26,10 +26,11 @@ interface FocusTask {
 }
 
 /** Render one line of task-body markdown: **bold**, `code`, [text](url), and
- *  bare URLs. `code` is the key piece — English/config snippets (FAL_KEY=…,
- *  "Add key", env-var names) render as a left-to-right monospace chip, so a
- *  Hebrew (RTL) line no longer flips them (the "…=FAL_KEY" reversal). Deep links
- *  stay verbatim (product rule: never strip a URL to its domain). */
+ *  bare URLs. `code` renders as a monospace chip with dir="auto", so it aligns
+ *  by its own content — an English/config snippet (FAL_KEY=…, env-var names)
+ *  stays left-to-right, a Hebrew snippet flows right-to-left — neither is forced
+ *  to the wrong side. Deep links stay verbatim (product rule: never strip a URL
+ *  to its domain). */
 function renderInline(text: string): ReactNode[] {
   const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]+)/g;
   const out: ReactNode[] = [];
@@ -45,7 +46,7 @@ function renderInline(text: string): ReactNode[] {
       out.push(
         <code
           key={k++}
-          dir="ltr"
+          dir="auto"
           className="mx-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground"
         >
           {tok.slice(1, -1)}
@@ -65,6 +66,41 @@ function renderInline(text: string): ReactNode[] {
   }
   if (last < text.length) out.push(<span key={k++}>{text.slice(last)}</span>);
   return out;
+}
+
+/** A standalone code line (the copy-paste help prompt, an env-var snippet, a
+ *  slash command) rendered as its own block with a copy button. dir="auto"
+ *  aligns it by its own content — a Hebrew prompt flows right-to-left, an
+ *  English snippet like FAL_KEY=… stays left-to-right — and the copy button
+ *  sits at the inline-end corner, so it follows the direction too. */
+function CopyableCode({ text }: { text: string }) {
+  const t = useTranslations("focusSession");
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  }, [text]);
+  return (
+    <div dir="auto" className="relative my-1 rounded-md bg-muted py-2 pe-11 ps-3">
+      <code className="block whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
+        {text}
+      </code>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? t("copied") : t("copy")}
+        title={copied ? t("copied") : t("copy")}
+        className="absolute end-1.5 top-1.5 rounded p-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  );
 }
 
 /** The primary "open this task in Claude Code" link, if the body carries one. */
@@ -95,18 +131,20 @@ function renderBody(description: string) {
     if (!line) return null;
     // The Claude Code deep link is covered by the button above — drop the line.
     if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
+    // A horizontal rule (---) becomes an actual divider, not literal dashes.
+    if (/^(-{3,}|\*{3,})$/.test(line)) return <hr key={i} className="my-3 border-border" />;
     // Sub-items (indented in the source) get an extra hanging indent, like the doc.
     const indented = (raw.match(/^\s*/)?.[0].length ?? 0) >= 3;
     const pad = indented ? "ps-5" : "";
-    // A line whose content is a single `code` span (e.g. `FAL_KEY=…`) is a
-    // config value: force it left-to-right and left-aligned, like the GitHub
-    // doc — otherwise the RTL layout parks it on the right.
+    // A line whose content is a single `code` span (the copy-paste prompt, or a
+    // config value like `FAL_KEY=…`) renders as its own copyable block, aligned
+    // by its own content direction (dir="auto") rather than forced to one side.
     const codeOnly = (s: string) => /^`[^`]+`$/.test(s.trim());
     const bullet = line.match(/^[-•]\s+(.*)$/);
     if (bullet) {
       const ltr = codeOnly(bullet[1]);
       return (
-        <div key={i} dir={ltr ? "ltr" : undefined} className={`flex gap-2 ${pad} ${ltr ? "text-left" : ""}`}>
+        <div key={i} dir={ltr ? "auto" : undefined} className={`flex gap-2 ${pad}`}>
           <span className="select-none text-muted-foreground">•</span>
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{renderInline(bullet[1])}</span>
         </div>
@@ -122,7 +160,7 @@ function renderBody(description: string) {
       );
     }
     if (codeOnly(line)) {
-      return <p key={i} dir="ltr" className={`text-left [overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
+      return <div key={i} className={pad}><CopyableCode text={line.trim().slice(1, -1)} /></div>;
     }
     return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });

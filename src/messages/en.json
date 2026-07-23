@@ -3766,7 +3766,9 @@
     "timeUpTitle": "Your {minutes} minutes for today are up",
     "doneToday": "Done for today",
     "fiveMore": "5 more minutes",
-    "completed": "Completed"
+    "completed": "Completed",
+    "copy": "Copy",
+    "copied": "Copied"
   },
   "marathon": {
     "progress": "{done} of {total}",
