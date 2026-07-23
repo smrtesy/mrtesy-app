@@ -3871,6 +3871,26 @@
     "scoreLabel": "Score",
     "saveError": "Failed to save score",
     "loadError": "Failed to load outputs",
+    "filter": {
+      "all": "All",
+      "pass": "Passed",
+      "rejected": "Rejected",
+      "pending": "Pending"
+    },
+    "qc": {
+      "pass": "Pass",
+      "rejected": "Rejected",
+      "pending": "Pending"
+    },
+    "qcScore": "QC score",
+    "qcReason": "Rejection reason",
+    "metrics": "Metrics",
+    "prompt": "Prompt",
+    "promptMore": "more",
+    "promptLess": "less",
+    "override": "Restore manually",
+    "overridden": "Restored",
+    "overriddenBadge": "Manually restored",
     "dim": {
       "overall": "Overall",
       "consistency": "Consistency",

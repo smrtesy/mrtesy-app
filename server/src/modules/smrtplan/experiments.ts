@@ -105,6 +105,18 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
     return n == null ? null : Math.trunc(n);
   };
 
+  // QC (auto-QC) fields. qc_status validated to the allowed enum; anything else
+  // (or absent) falls back to 'pending'. qc_scores is a per-metric numeric map.
+  const QC_STATUSES = ["pending", "pass", "rejected"] as const;
+  const rawQcStatus = clean(body.qc_status, 20);
+  const qcStatus = (QC_STATUSES as readonly string[]).includes(rawQcStatus)
+    ? rawQcStatus
+    : "pending";
+  const qcScores =
+    body.qc_scores && typeof body.qc_scores === "object" && !Array.isArray(body.qc_scores)
+      ? (body.qc_scores as Record<string, unknown>)
+      : {};
+
   const insert: Row = {
     org_id: orgId,
     plan_id: typeof body.plan_id === "string" && body.plan_id.trim() ? body.plan_id.trim() : null,
@@ -122,6 +134,10 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
     variation: intOrNull(body.variation),
     repeat_idx: intOrNull(body.repeat_idx),
     meta: body.meta && typeof body.meta === "object" ? body.meta : {},
+    qc_status: qcStatus,
+    qc_score: numOrNull(body.qc_score),
+    qc_reason: clean(body.qc_reason) || null,
+    qc_scores: qcScores,
     created_by: userId,
   };
 
@@ -249,8 +265,10 @@ machineRouter.post("/experiments/report", async (req: Request, res: Response) =>
 
 export const experimentsAuthedRouter = Router();
 
-/** The run fields hidden until the caller has locked a score. */
-const BLIND_FIELDS = ["model", "method", "prompt", "seed"] as const;
+/** The run fields hidden until the caller has locked a score. NOTE: `prompt` is
+ *  intentionally NOT blind — the user wants full prompt transparency at all
+ *  times; only model/method/seed stay hidden until reveal. */
+const BLIND_FIELDS = ["model", "method", "seed"] as const;
 
 /**
  * GET /experiments/runs?plan_id=&test_label= — runs for the caller's org, plan,
@@ -263,10 +281,14 @@ experimentsAuthedRouter.get("/experiments/runs", async (req: Request, res: Respo
   const userId = req.user!.id;
   const planId = typeof req.query.plan_id === "string" ? req.query.plan_id : null;
   const testLabel = typeof req.query.test_label === "string" ? req.query.test_label : null;
+  // Optional QC filter: pending|pass|rejected. Anything else (incl. 'all') = no filter.
+  const qcFilterRaw = typeof req.query.qc_status === "string" ? req.query.qc_status : "all";
+  const qcFilter = ["pending", "pass", "rejected"].includes(qcFilterRaw) ? qcFilterRaw : null;
 
   let q = db.from("experiment_runs").select("*").eq("org_id", orgId);
   if (planId) q = q.eq("plan_id", planId);
   if (testLabel) q = q.eq("test_label", testLabel);
+  if (qcFilter) q = q.eq("qc_status", qcFilter);
   const { data: runsRaw, error } = await q.order("code", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   const runs = asRows(runsRaw);
@@ -340,6 +362,38 @@ experimentsAuthedRouter.post("/experiments/scores", async (req: Request, res: Re
     },
     { onConflict: "run_id,scorer_id,dimension" },
   );
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/**
+ * POST /experiments/override — a human rescues (or un-rescues) a run the auto-QC
+ * flagged. body { run_id, overridden (bool) }. When overridden=true the run is
+ * treated as manually kept despite a 'rejected' qc_status. Org-scoped.
+ */
+experimentsAuthedRouter.post("/experiments/override", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const body = req.body ?? {};
+
+  const runId = typeof body.run_id === "string" ? body.run_id.trim() : "";
+  if (!runId) return res.status(400).json({ error: "run_id is required" });
+  const overridden = body.overridden === true;
+
+  // The run must belong to the caller's org.
+  const { data: run, error: runErr } = await db
+    .from("experiment_runs")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("id", runId)
+    .maybeSingle();
+  if (runErr) return res.status(500).json({ error: runErr.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+
+  const { error } = await db
+    .from("experiment_runs")
+    .update({ overridden })
+    .eq("org_id", orgId)
+    .eq("id", runId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });

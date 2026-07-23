@@ -3870,6 +3870,26 @@
     "scoreLabel": "ציון",
     "saveError": "שמירת הציון נכשלה",
     "loadError": "טעינת התוצרים נכשלה",
+    "filter": {
+      "all": "הכל",
+      "pass": "עברו",
+      "rejected": "נפסלו",
+      "pending": "ממתין"
+    },
+    "qc": {
+      "pass": "עבר",
+      "rejected": "נפסל",
+      "pending": "ממתין"
+    },
+    "qcScore": "ציון QC",
+    "qcReason": "סיבת פסילה",
+    "metrics": "מדדים",
+    "prompt": "פרומפט",
+    "promptMore": "עוד",
+    "promptLess": "פחות",
+    "override": "שחזר ידנית",
+    "overridden": "שוחזר",
+    "overriddenBadge": "שוחזר ידנית",
     "dim": {
       "overall": "כללי",
       "consistency": "עקביות",
