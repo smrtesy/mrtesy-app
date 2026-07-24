@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
@@ -30,19 +30,26 @@ type Run = {
   shot_key: string;
   /** The locked reference this run was anchored to (pinned for comparison). */
   reference_url: string | null;
+  /** 480px webp copies for the grid; the lightbox always opens the original. */
+  thumb_url: string | null;
+  reference_thumb_url: string | null;
 };
 
 type RunsResponse = { runs: Run[]; revealed: boolean };
 
 type QcFilter = "all" | "pass" | "rejected" | "pending";
 
-/** Dimensions to score per test. Lip-sync tests get the full rubric; everything
- *  else is a single "overall" score. Kept minimal per repo UI conventions. */
+/** What to score, per test. A still-image panel is scored on CONSISTENCY ALONE
+ *  (user decision, 7/2026): is this the same character as the reference — where
+ *  a gross defect (same face, six fingers) is NOT consistent. "Doesn't look AI"
+ *  and style fidelity are deliberately NOT scored here: they are set by the
+ *  reference image itself, a step that belongs to real production, not to
+ *  picking a model. Video adds motion/quality; lip-sync adds its own. */
 function dimensionsFor(testLabel: string | null): string[] {
-  if (testLabel && testLabel.toLowerCase().includes("lipsync")) {
-    return ["consistency", "motion", "quality", "lipsync"];
-  }
-  return ["overall"];
+  const label = (testLabel ?? "").toLowerCase();
+  if (label.includes("lipsync")) return ["consistency", "motion", "quality", "lipsync"];
+  if (label.includes("video") || label.includes("test-b")) return ["consistency", "motion", "quality"];
+  return ["consistency"];
 }
 
 function isVideo(url: string): boolean {
@@ -58,9 +65,78 @@ function formatMetrics(scores: Record<string, number> | null | undefined): strin
     .join(" · ");
 }
 
-/** Comparison-grid geometry: one column per model, sized to the image so at
- *  least five columns fit on a normal screen (5 × 232 + label ≈ 1240px). */
-const COL_W = 232;
+/** Comparison-grid geometry. The column width is DERIVED from the space the grid
+ *  actually gets (see useColumnWidth): reference + every model column must fit
+ *  without horizontal scrolling whenever they can — a fixed width meant that in a
+ *  half-width desktop pane only three of six columns were reachable. */
+const ROW_LABEL_W = 32;
+const COL_GAP = 8;
+/** Below this a column is too small to judge a character in; the grid scrolls
+ *  sideways instead of shrinking further (the reference column stays pinned). */
+const COL_W_MIN = 132;
+/** Above this the images stop gaining useful detail and just cost scrolling. */
+const COL_W_MAX = 260;
+/** Fallback for the first paint, before the container has been measured. */
+const COL_W_DEFAULT = 200;
+/** Height of the pinned model-name strip. The grid scrolls under it, so every
+ *  other sticky element (the row labels) has to start below it. */
+const HEADER_H = 26;
+/** Room the page chrome above the grid needs (title, hint, filter row) before
+ *  the grid takes the rest. The grid is its own scroll box — that is what keeps
+ *  the model names and the pose labels on screen while scrolling. */
+const CHROME_H = 200;
+
+/** Fit `columns` image columns into the measured container width. */
+function useColumnWidth(columns: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [colW, setColW] = useState(COL_W_DEFAULT);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || columns < 1) return;
+    const measure = () => {
+      const avail = el.clientWidth - ROW_LABEL_W - COL_GAP * columns;
+      const fit = Math.floor(avail / columns);
+      setColW(Math.max(COL_W_MIN, Math.min(COL_W_MAX, fit)));
+    };
+    measure();
+    // The grid lives inside a resizable desktop pane, so the width changes
+    // without a window resize — observe the element, not the window.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [columns]);
+
+  return { ref, colW };
+}
+
+/** Grid source: the pre-built 480px webp when we have one, else the original.
+ *  61 originals are ~130 MB, which is why the page crawled and most images never
+ *  appeared on a phone; the webp copies are ~15 KB each (~1 MB for the whole
+ *  grid). Storage image transformation is NOT enabled on this project — asking
+ *  /render/image/sign/ for width=240 returns the full-size bytes — so the
+ *  thumbnails are produced when the run is uploaded, not on the fly.
+ *  The lightbox always opens `output_url`, the original. */
+function gridSrc(run: Run): string {
+  return run.thumb_url ?? run.output_url ?? "";
+}
+
+/** Readable column header. The stored value is an endpoint path
+ *  ("fal-ai/flux-pro/kontext/max") — unreadable on a phone. Display only: the
+ *  run keeps its exact endpoint id, shown in the expanded panel. */
+const MODEL_NAMES: Record<string, string> = {
+  "fal-ai/nano-banana-pro": "Nano Banana Pro",
+  "fal-ai/nano-banana-2/edit": "Nano Banana 2",
+  "fal-ai/flux-pro/kontext/max": "FLUX Kontext max",
+  "bytedance/seedream/v5/pro/edit": "Seedream 5 Pro",
+  "fal-ai/qwen-image-edit": "Qwen Image Edit",
+};
+function modelName(model: string | null): string {
+  if (!model) return "—";
+  if (MODEL_NAMES[model]) return MODEL_NAMES[model];
+  const parts = model.split("/").filter((x) => x && x !== "edit" && x !== "fal-ai");
+  return parts.slice(-2).join(" ") || model;
+}
 
 /** Row label from the server's shot_key ("s:kitchen" → "kitchen"). */
 function shotLabel(shotKey: string): string {
@@ -137,14 +213,19 @@ export function ExperimentScoring({
     const cols = [...new Set(filteredRuns.map((r) => r.model_key))].sort((a, b) => a - b);
     // A cell holds a LIST: a model can have several runs for the same shot —
     // repeats (task 7 runs 3 per combination) or a re-run. Never drop one.
-    const rowMap = new Map<string, { cells: Map<number, Run[]>; reference: string | null }>();
+    const rowMap = new Map<
+      string,
+      { cells: Map<number, Run[]>; reference: string | null; referenceThumb: string | null }
+    >();
     for (const r of filteredRuns) {
-      if (!rowMap.has(r.shot_key)) rowMap.set(r.shot_key, { cells: new Map(), reference: null });
+      if (!rowMap.has(r.shot_key))
+        rowMap.set(r.shot_key, { cells: new Map(), reference: null, referenceThumb: null });
       const row = rowMap.get(r.shot_key)!;
       const list = row.cells.get(r.model_key);
       if (list) list.push(r);
       else row.cells.set(r.model_key, [r]);
       if (!row.reference && r.reference_url) row.reference = r.reference_url;
+      if (!row.referenceThumb && r.reference_thumb_url) row.referenceThumb = r.reference_thumb_url;
     }
     const rows = [...rowMap.entries()].sort((a, b) =>
       a[0].localeCompare(b[0], undefined, { numeric: true }),
@@ -154,6 +235,9 @@ export function ExperimentScoring({
       filteredRuns.find((r) => r.model_key === key)?.model ?? null;
     return { cols, rows, nameFor };
   }, [filteredRuns]);
+
+  // Reference column + one per model, all fitted into the width the grid has.
+  const { ref: gridRef, colW } = useColumnWidth(grid.cols.length + 1);
 
   function scoreFor(run: Run, dimension: string): number | null {
     const hit = run.my_scores.find((s) => s.dimension === dimension);
@@ -262,7 +346,7 @@ export function ExperimentScoring({
       {loading ? (
         <div className="flex gap-3">
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-80 animate-pulse rounded-lg bg-muted" style={{ width: COL_W }} />
+            <div key={i} className="h-80 flex-1 animate-pulse rounded-lg bg-muted" />
           ))}
         </div>
       ) : grid.rows.length === 0 ? (
@@ -272,39 +356,67 @@ export function ExperimentScoring({
       ) : (
         // Comparison grid: one column per model, one row per shot — so a single
         // row shows the same pose from every model, side by side.
-        <div className="overflow-x-auto pb-2">
+        // The grid is its OWN scroll box, in both axes: that is what makes the
+        // model-name strip stay at the top and the pose column stay at the side
+        // while scrolling (sticky resolves against the nearest scroll container,
+        // so with the page doing the scrolling the headers just scrolled away).
+        <div
+          ref={gridRef}
+          className="overflow-auto overscroll-contain pb-2"
+          style={{ maxHeight: `calc(100dvh - ${CHROME_H}px)` }}
+        >
           <div
-            className="grid gap-x-2 gap-y-4"
+            className="grid gap-y-4"
             style={{
-              gridTemplateColumns: `40px ${COL_W}px repeat(${grid.cols.length}, ${COL_W}px)`,
+              columnGap: COL_GAP,
+              gridTemplateColumns: `${ROW_LABEL_W}px repeat(${grid.cols.length + 1}, ${colW}px)`,
             }}
           >
-            {/* header: row-label gutter + pinned reference + model columns */}
-            <div className="sticky top-0 z-20 bg-background" />
-            <div className="sticky top-0 z-20 border-b bg-background pb-1.5 text-center text-[12px] font-semibold text-primary">
+            {/* header: row-label gutter + pinned reference + model columns. The
+                gutter and the reference are sticky on BOTH axes, so the corner
+                stays put no matter which way the grid is scrolled. */}
+            <div
+              className="sticky top-0 z-40 bg-background"
+              style={{ insetInlineStart: 0, height: HEADER_H }}
+            />
+            <div
+              className="sticky top-0 z-30 border-b bg-background text-center text-[12px] font-semibold leading-[18px] text-primary"
+              style={{ insetInlineStart: ROW_LABEL_W, height: HEADER_H }}
+            >
               {t("reference")}
             </div>
             {grid.cols.map((key) => (
               <div
                 key={key}
-                className="sticky top-0 z-10 truncate border-b bg-background pb-1.5 text-center text-[12px] font-semibold"
-                title={grid.nameFor(key) ?? undefined}
+                className="sticky top-0 z-20 truncate border-b bg-background text-center text-[12px] font-semibold leading-[18px]"
+                style={{ height: HEADER_H }}
+                title={grid.nameFor(key) ?? undefined}  /* exact endpoint id on hover */
               >
-                {grid.nameFor(key) ?? "—"}
+                {modelName(grid.nameFor(key))}
               </div>
             ))}
 
             {grid.rows.map(([rowKey, row]) => (
               <div key={rowKey} className="contents">
-                {/* row label — which shot this row is */}
-                <div className="flex items-start justify-center pt-1 text-[11.5px] font-semibold tracking-wide text-foreground/80">
+                {/* row label — the character and the pose/mood this row is. Sticky
+                    on both axes: it stays at the side through sideways scrolling
+                    and stays on screen (just under the header strip) for as long as
+                    its row is. */}
+                <div
+                  className="sticky z-20 flex items-start justify-center bg-background text-[11.5px] font-semibold tracking-wide text-foreground/80"
+                  style={{ insetInlineStart: 0, top: HEADER_H }}
+                >
                   <span className={sidewaysClass(shotLabel(rowKey))} title={shotLabel(rowKey)}>
                     {shotLabel(rowKey)}
                   </span>
                 </div>
 
-                {/* pinned original — always beside the outputs, for comparison */}
-                <div className="rounded-lg border-2 border-primary/40 bg-card p-1.5">
+                {/* pinned original — always beside the outputs, for comparison.
+                    Sticky so it survives sideways scrolling on a narrow pane. */}
+                <div
+                  className="sticky z-10 self-start rounded-lg border-2 border-primary/40 bg-card p-1.5"
+                  style={{ insetInlineStart: ROW_LABEL_W }}
+                >
                   {row.reference ? (
                     <button
                       type="button"
@@ -320,8 +432,10 @@ export function ExperimentScoring({
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={row.reference}
+                        src={row.referenceThumb ?? row.reference}
                         alt={t("reference")}
+                        loading="lazy"
+                        decoding="async"
                         className="aspect-[2/3] w-full cursor-zoom-in rounded-md bg-muted object-cover"
                       />
                     </button>
@@ -377,8 +491,10 @@ export function ExperimentScoring({
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={run.output_url}
+                              src={gridSrc(run)}
                               alt={run.code}
+                              loading="lazy"
+                              decoding="async"
                               className="aspect-[2/3] w-full cursor-zoom-in rounded-md bg-muted object-cover transition group-hover:opacity-90"
                             />
                           </button>
@@ -415,11 +531,9 @@ export function ExperimentScoring({
                           const current = scoreFor(run, dim);
                           return (
                             <div key={dim} className="flex items-center gap-1">
-                              {dimensions.length > 1 ? (
-                                <span className="w-14 shrink-0 truncate text-[10px] text-muted-foreground">
-                                  {t(`dim.${dim}`)}
-                                </span>
-                              ) : null}
+                              <span className="w-14 shrink-0 truncate text-[10px] font-medium text-muted-foreground">
+                                {t(`dim.${dim}`)}
+                              </span>
                               <div className="flex flex-1 gap-0.5">
                                 {[1, 2, 3, 4, 5].map((n) => (
                                   <button
@@ -482,7 +596,7 @@ export function ExperimentScoring({
                           ) : null}
 
                           <div className="text-muted-foreground">
-                            {t("model")}: {run.model ?? "—"}
+                            {t("model")}: <span className="font-mono">{run.model ?? "—"}</span>
                           </div>
 
                           {run.seed != null ? (

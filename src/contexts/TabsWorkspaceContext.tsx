@@ -38,6 +38,12 @@ type TabsWorkspaceValue = {
   tabs: WorkspaceTab[];
   activeId: string | null;
   widths: PaneWidths;
+  /** When set, this pane takes the whole workspace and the others are hidden
+   *  (not closed). Wide screens — the model-comparison grid is the reason —
+   *  are unusable in a half-width pane. */
+  soloId: string | null;
+  /** Maximize this pane, or restore the split view if it is already solo. */
+  toggleSolo: (id: string) => void;
   /** Open (or focus, if already open) a page as a pane and make it active. */
   openTab: (href: string, label: string) => void;
   closeTab: (id: string) => void;
@@ -56,6 +62,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [widths, setWidthsState] = useState<PaneWidths>({});
+  const [soloId, setSoloId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate from localStorage once, after mount, to avoid an SSR/client
@@ -68,6 +75,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           tabs?: WorkspaceTab[];
           activeId?: string | null;
           widths?: PaneWidths;
+          soloId?: string | null;
         };
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs.filter(
@@ -76,6 +84,9 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           setTabs(valid);
           const stillOpen = valid.some((t) => t.id === parsed.activeId);
           setActiveId(stillOpen ? parsed.activeId! : valid[valid.length - 1]?.id ?? null);
+          // Maximized state survives a reload — scoring a panel spans reloads —
+          // but only for a tab that is still open.
+          if (valid.some((t) => t.id === parsed.soloId)) setSoloId(parsed.soloId!);
           if (parsed.widths && typeof parsed.widths === "object") {
             // Keep only widths for tabs that are still open.
             const openIds = new Set(valid.map((t) => t.id));
@@ -96,11 +107,14 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (!hydrated) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs, activeId, widths }));
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ tabs, activeId, widths, soloId }),
+      );
     } catch {
       /* storage full / unavailable — non-fatal */
     }
-  }, [tabs, activeId, widths, hydrated]);
+  }, [tabs, activeId, widths, soloId, hydrated]);
 
   const openTab = useCallback((href: string, label: string) => {
     // Dedupe by PAGE (path without query), not by exact href: opening
@@ -119,8 +133,11 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       }
       setActiveId(href);
       // A new pane changes the layout — drop manual widths so the set
-      // re-lays out with the automatic default; the user can re-drag.
+      // re-lays out with the automatic default; the user can re-drag. It also
+      // leaves solo mode: a pane opened while another is maximized would
+      // otherwise be invisible.
       setWidthsState({});
+      setSoloId(null);
       return [...prev, { id: href, href, label }];
     });
   }, []);
@@ -143,6 +160,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       delete rest[id];
       return rest;
     });
+    setSoloId((cur) => (cur === id ? null : cur));
   }, []);
 
   // Bridge: links inside a pane (an iframe) can't reach this context, so they
@@ -165,10 +183,25 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   const setActive = useCallback((id: string) => setActiveId(id), []);
   const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);
   const resetWidths = useCallback(() => setWidthsState({}), []);
+  const toggleSolo = useCallback((id: string) => {
+    setSoloId((cur) => (cur === id ? null : id));
+    setActiveId(id);
+  }, []);
 
   return (
     <TabsWorkspaceContext.Provider
-      value={{ tabs, activeId, widths, openTab, closeTab, setActive, setWidths, resetWidths }}
+      value={{
+        tabs,
+        activeId,
+        widths,
+        soloId,
+        openTab,
+        closeTab,
+        setActive,
+        setWidths,
+        resetWidths,
+        toggleSolo,
+      }}
     >
       {children}
     </TabsWorkspaceContext.Provider>
