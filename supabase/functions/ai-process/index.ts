@@ -633,11 +633,11 @@ interface ThreadAnalysis {
 // the "now" anchor and every [INCOMING/OUTGOING <ts>] marker the model reads —
 // must be rendered in this zone, or the model writes times that are off by the
 // UTC/server offset (the bug behind the "השעות לא נכונות, צריך שעון ניו יורק"
-// corrections). Falls back to Asia/Jerusalem only when the column is null, which
-// preserves the pre-fix behaviour for any tenant that never set a zone.
+// corrections). Falls back to America/New_York only when the column is null —
+// the team is in New York (CLAUDE.md "Timezone — always New York").
 function userTz(settings: any): string {
   const tz = String(settings?.timezone ?? "").trim();
-  return tz || "Asia/Jerusalem";
+  return tz || "America/New_York";
 }
 
 function nowContextLine(tz: string): string {

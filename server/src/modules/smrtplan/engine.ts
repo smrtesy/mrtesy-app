@@ -829,7 +829,7 @@ export async function notifyManagersOfMissedFocus(orgId: string): Promise<number
 
   const blocked = await loadBlockedDates(orgId);
 
-  // Per-performer timezone (fallback Asia/Jerusalem, matching userLocalToday).
+  // Per-performer timezone (fallback America/New_York, matching userLocalToday).
   const uids = [...new Set(commitments.map((c) => c.user_id as string))];
   const { data: settings } = await db.from("user_settings").select("user_id, timezone").in("user_id", uids);
   const tzByUser = new Map<string, string>();
@@ -868,7 +868,7 @@ export async function notifyManagersOfMissedFocus(orgId: string): Promise<number
     if (plan.recipient === uid) continue;
     if (sentToday.has(focusId)) continue;
 
-    const tz = tzByUser.get(uid) || "Asia/Jerusalem";
+    const tz = tzByUser.get(uid) || "America/New_York";
     const { date: localToday, hour } = localDateHour(tz);
     const targetDay = hour >= FOCUS_ALERT_HOUR ? localToday : prevDate(localToday);
 

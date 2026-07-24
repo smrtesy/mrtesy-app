@@ -6,7 +6,8 @@
  *   task_id:          string,   // the task/suggestion to convert
  *   title:            string,   // event title (Hebrew)
  *   due_date:         string,   // "YYYY-MM-DD"
- *   due_time:         string,   // "HH:MM" (24h, Asia/Jerusalem wall-clock)
+ *   due_time:         string,   // "HH:MM" (24h, the USER's own wall-clock —
+ *                               //   user_settings.timezone, else New York)
  *   description?:     string,   // event body — keep source deep-links verbatim
  *   duration_minutes?:number,   // defaults to 60
  *   snoozed_until?:   string,   // ISO — when to resurface as a reminder
@@ -34,8 +35,25 @@ const router = Router();
 
 router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
-const EVENT_TZ = "Asia/Jerusalem";
+/** Fallback zone for the event's wall-clock, used only when the user has no
+ *  user_settings.timezone. The team is in New York (CLAUDE.md "Timezone — always
+ *  New York"): the hard-coded Asia/Jerusalem this replaced made a 14:00 pick land
+ *  on the Google event at 14:00 Israel = 07:00 New York, 7 hours early. */
+const EVENT_TZ_FALLBACK = "America/New_York";
 const pad = (n: number) => String(n).padStart(2, "0");
+
+/** True for a named IANA zone ("America/New_York", "UTC"). Intl also accepts a
+ *  bare offset ("+05:00"), which Google's `timeZone` field rejects — exclude it
+ *  so a stored offset falls back instead of 502-ing the whole insert. */
+function isIanaZone(tz: string): boolean {
+  if (!/^(UTC|[A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+)$/.test(tz)) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface ExtractedEvent {
   title: string;
@@ -140,9 +158,21 @@ router.post("/events", async (req: Request, res: Response) => {
     .single();
   if (taskErr || !task) return res.status(404).json({ error: "Task not found" });
 
-  // Build the event window as Israel wall-clock strings. Google interprets them
-  // in EVENT_TZ (via the timeZone field), so we do the +duration arithmetic on a
-  // UTC scratch date to stay independent of the server's own timezone.
+  // The wall-clock the user typed belongs to THEIR zone — resolve it before
+  // handing the strings to Google (which interprets them in `timeZone`).
+  const { data: us, error: tzErr } = await db
+    .from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  // A failed read would silently place the event in the fallback zone — log it,
+  // so an event that lands hours off is traceable instead of a mystery.
+  if (tzErr) console.error("[events] user_settings timezone read failed:", tzErr.message);
+  // Only trust a real named IANA zone: Google rejects the whole insert on a bad
+  // `timeZone`, which would turn a stored typo into a permanent 502 on "add event".
+  const rawTz = String(us?.timezone ?? "").trim();
+  const eventTz = isIanaZone(rawTz) ? rawTz : EVENT_TZ_FALLBACK;
+
+  // Build the event window as wall-clock strings in that zone. Google interprets
+  // them in `eventTz` (via the timeZone field), so we do the +duration arithmetic
+  // on a UTC scratch date to stay independent of the server's own timezone.
   const durMin = Number.isFinite(Number(duration_minutes)) && Number(duration_minutes) > 0
     ? Number(duration_minutes)
     : 60;
@@ -165,7 +195,7 @@ router.post("/events", async (req: Request, res: Response) => {
       endLocal,
       typeof description === "string" && description ? description : undefined,
       {
-        timeZone: EVENT_TZ,
+        timeZone: eventTz,
         extendedProperties: { private: { smrtesy_task_id: String(task_id), smrtesy_origin: "smrttask" } },
       },
     );
@@ -261,8 +291,16 @@ router.get("/events", async (req: Request, res: Response) => {
   }
 
   // 2. In-app-only events (chip-created reminders not pushed to / from Google).
-  const todayStr = now.toISOString().slice(0, 10);
-  const maxStr = windowEnd.toISOString().slice(0, 10);
+  // Date-only bounds in the USER's zone: a UTC slice is already tomorrow from
+  // ~20:00 in New York, which would drop today's remaining events off the agenda.
+  const { data: usAgenda } = await db
+    .from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  const rawAgendaTz = String(usAgenda?.timezone ?? "").trim();
+  const agendaTz = isIanaZone(rawAgendaTz) ? rawAgendaTz : EVENT_TZ_FALLBACK;
+  const localDate = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: agendaTz }).format(d);
+  const todayStr = localDate(now);
+  const maxStr = localDate(windowEnd);
   const { data: appTasks, error: appErr } = await db
     .from("tasks")
     .select("id, title, title_he, due_date, due_time, ai_model_used")
