@@ -212,7 +212,8 @@
     "planBoard": "Board",
     "planRepository": "Repository",
     "planMy": "My tasks",
-    "planTeam": "By worker"
+    "planTeam": "By worker",
+    "planScore": "Score outputs"
   },
   "account": {
     "title": "Account",
@@ -805,6 +806,7 @@
     "approvedToToday": "Added to today",
     "approvedToPool": "Added to the pool",
     "approvedScheduled": "Saved as scheduled",
+    "addToTasks": "Add to tasks",
     "closeReminder": "Close reminder",
     "dismiss": "Dismiss",
     "dismissing": "Dismissing...",

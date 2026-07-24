@@ -79,6 +79,7 @@ const smrtPlanItems = [
   { key: "planBoard",      href: "/plan",            icon: CalendarRange },
   { key: "planMy",         href: "/plan/my",         icon: CheckSquare   },
   { key: "planTeam",       href: "/plan/team",       icon: Users         },
+  { key: "planScore",      href: "/plan/score",      icon: FlaskConical  },
   { key: "planRepository", href: "/plan/repository", icon: Archive       },
 ] as const;
 

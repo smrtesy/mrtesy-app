@@ -212,7 +212,8 @@
     "planBoard": "לוח",
     "planRepository": "מאגר",
     "planMy": "המשימות שלי",
-    "planTeam": "לפי עובד"
+    "planTeam": "לפי עובד",
+    "planScore": "ניקוד תוצרים"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -805,6 +806,7 @@
     "approvedToToday": "נוסף להיום",
     "approvedToPool": "נוסף לבריכה",
     "approvedScheduled": "נשמר כמתוזמן",
+    "addToTasks": "הוסף למשימות",
     "closeReminder": "סגור תזכורת",
     "dismiss": "דחה",
     "dismissing": "דוחה...",

@@ -213,20 +213,82 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
   if (entErr) return res.status(500).json({ error: entErr.message });
   if (!entitled) return res.status(403).json({ error: "smrtplan not enabled for user's org" });
 
-  // 2. Find the user's current in-progress plan task (best-effort — no task id
-  // is sent, we find it). No match is NOT an error: the hook fires on every
-  // turn-end whether or not the user happens to have a plan task in progress.
-  const { data: task, error: findErr } = await db
-    .from("tasks")
-    .select("id, title, title_he, plan_id, claude_waiting_since")
-    .eq("organization_id", orgId)
-    .eq("assigned_to_user_id", userId)
-    .eq("status", "in_progress")
-    .not("plan_id", "is", null)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (findErr) return res.status(500).json({ error: findErr.message });
+  // 2. Find the task to attach to, in three tiers (most explicit first). Tier 1
+  // lets a caller that KNOWS its task (the deep link / prompt carried the id)
+  // attach regardless of status; tiers 2-3 discover it. No match is NOT an
+  // error: the hook fires on every turn-end whether or not a plan task is open.
+  const TASK_COLS = "id, title, title_he, plan_id, claude_waiting_since";
+  const explicitTaskId = clean(body.task_id);
+  let task: {
+    id: string;
+    title: string | null;
+    title_he: string | null;
+    plan_id: string | null;
+    claude_waiting_since: string | null;
+  } | null = null;
+  let attachedVia = "";
+
+  // Tier 1 — explicit task id. Same org/assignee/plan/status guards as the other
+  // tiers: org+assignee so a leaked id can't write onto someone else's task;
+  // plan_id because a non-plan task has no UI that renders task_session_reports
+  // (the report would be invisible AND would suppress the hook's proposal
+  // fallback, leaving no trace at all); the status exclusion so an explicit id
+  // can't drag an already-closed task back to pending_completion in step 4b.
+  // A malformed id (not a UUID) must NOT 500 — Postgres would raise 22P02 and we
+  // would lose both the report and the fallback; fall through to discovery instead.
+  if (explicitTaskId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(explicitTaskId)) {
+    const { data, error } = await db
+      .from("tasks")
+      .select(TASK_COLS)
+      .eq("organization_id", orgId)
+      .eq("assigned_to_user_id", userId)
+      .eq("id", explicitTaskId)
+      .not("plan_id", "is", null)
+      .not("status", "in", "(completed,dismissed,archived)")
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) { task = data; attachedVia = "task_id"; }
+  }
+
+  // Tier 2 — the user's current in-progress plan task (the original behaviour).
+  if (!task) {
+    const { data, error } = await db
+      .from("tasks")
+      .select(TASK_COLS)
+      .eq("organization_id", orgId)
+      .eq("assigned_to_user_id", userId)
+      .eq("status", "in_progress")
+      .not("plan_id", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) { task = data; attachedVia = "in_progress"; }
+  }
+
+  // Tier 3 (safety net) — a plan task the user explicitly handed to Claude
+  // (claude_waiting_since set by the launcher) but whose status never advanced.
+  // Without this, a report from such a session vanished into an inbox proposal.
+  // Bounded to the last 24h: a stale flag nobody cleared must not silently
+  // absorb reports from unrelated sessions days later.
+  if (!task) {
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await db
+      .from("tasks")
+      .select(TASK_COLS)
+      .eq("organization_id", orgId)
+      .eq("assigned_to_user_id", userId)
+      .not("claude_waiting_since", "is", null)
+      .gte("claude_waiting_since", since24h)
+      .not("plan_id", "is", null)
+      .not("status", "in", "(completed,dismissed,archived)")
+      .order("claude_waiting_since", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) { task = data; attachedVia = "waiting_on_claude"; }
+  }
+
   if (!task) return res.json({ ok: true, attached: false });
 
   // 3. Read any existing row for this (task_id, session_id) FIRST, so we can
@@ -320,7 +382,7 @@ router.post("/claude-session/task-report", async (req: Request, res: Response) =
     }
   }
 
-  res.json({ ok: true, attached: true, task_id: task.id, manager_proposal: managerProposalFiled, awaiting_confirmation: awaitingConfirmation });
+  res.json({ ok: true, attached: true, task_id: task.id, attached_via: attachedVia, manager_proposal: managerProposalFiled, awaiting_confirmation: awaitingConfirmation });
 });
 
 export default router;
