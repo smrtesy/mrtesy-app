@@ -3120,6 +3120,10 @@
     },
     "title": "Planning board",
     "lead": "Every project, the timeline, and the dependencies between them · click a row for details",
+    "reference": "Reference",
+    "noReference": "No reference image",
+    "zoom": "Zoom",
+    "needPlan": "This screen belongs to a plan. Open it from the “Score outputs” button next to the plan tabs.",
     "today": "Today",
     "newPlan": "New plan",
     "recompute": "Recompute",
@@ -3235,7 +3239,8 @@
       "reblockAction": "Re-block not-yet-started",
       "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}",
       "viewJournal": "Journal",
-      "viewReview": "Review"
+      "viewReview": "Review",
+      "viewScore": "Score outputs"
     },
     "repository": {
       "title": "Idea repository",
@@ -3888,8 +3893,13 @@
     "altTag": "alternative"
   },
   "experiments": {
-    "title": "Experiment scoring",
-    "lead": "Rate each output 1–5. Models are revealed only after you lock your scores.",
+    "title": "Score outputs",
+    "lead": "Compare each row side by side against the reference and rate 1–5. Model names are revealed only after scores are locked.",
+    "reference": "Reference",
+    "noReference": "No reference image",
+    "zoom": "Zoom",
+    "close": "Close",
+    "needPlan": "This screen belongs to a plan. Open it from the “Score outputs” button next to the plan tabs.",
     "loading": "Loading...",
     "empty": "No outputs for this test yet.",
     "reveal": "Reveal models / lock scores",
@@ -3914,6 +3924,7 @@
     "qcReason": "Rejection reason",
     "metrics": "Metrics",
     "prompt": "Prompt",
+    "seed": "Seed",
     "promptMore": "more",
     "promptLess": "less",
     "override": "Restore manually",
