@@ -67,7 +67,10 @@ export async function createCalendarEvent(
   opts?: CreateEventOptions,
 ) {
   const cal = await getCalendarClient(userId);
-  const tz = opts?.timeZone ?? "Asia/Jerusalem";
+  // Callers that know the user's zone pass it explicitly; this default only
+  // covers the ones that don't. New York, per CLAUDE.md — an Israel default put
+  // every such event 7 hours off for the team.
+  const tz = opts?.timeZone ?? "America/New_York";
   const res = await cal.events.insert({
     calendarId: "primary",
     requestBody: {

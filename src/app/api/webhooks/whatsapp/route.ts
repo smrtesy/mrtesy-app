@@ -1618,7 +1618,7 @@ function fmtTsLocal(iso: string, tz: string): string {
 async function getUserTz(db: SupabaseAdmin, userId: string): Promise<string> {
   const { data } = await db.from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
   const tz = String(data?.timezone ?? "").trim();
-  return tz || "Asia/Jerusalem";
+  return tz || "America/New_York";
 }
 
 async function refreshSourceMessageThread(

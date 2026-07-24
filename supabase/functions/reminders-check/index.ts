@@ -227,9 +227,14 @@ Deno.serve(async (req) => {
     //   MONTHLY / YEARLY /  → spawn the next occurrence snoozed to its date,
     //   HEBREW_*              leaving the overdue one visible (a missed monthly
     //                         obligation stays on the desk).
-    const today = now.slice(0, 10);
-    const yesterday = new Date(new Date(`${today}T00:00:00.000Z`).getTime() - 86_400_000)
-      .toISOString().slice(0, 10);
+    // "Today" must be each OWNER's date, never a UTC slice: with a New York user
+    // the UTC date is already tomorrow from ~20:00 local, so a UTC `today` reads
+    // a task due today as overdue and rolls the still-open occurrence forward
+    // before the user's day is even over.
+    const localTodayIn = (tz: string) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(now));
+    const prevDate = (d: string) =>
+      new Date(new Date(`${d}T00:00:00.000Z`).getTime() - 86_400_000).toISOString().slice(0, 10);
 
     const { data: openRec } = await supabase
       .from("tasks")
@@ -245,18 +250,21 @@ Deno.serve(async (req) => {
       const cur = latestPerSeries.get(key);
       if (!cur || (t.due_date as string) > (cur.due_date as string)) latestPerSeries.set(key, t);
     }
-    const toAdvance = [...latestPerSeries.values()].filter((t) => (t.due_date as string) < today);
-
-    // Batch-load owners' timezones for the 07:00-local wake of stacked/snoozed rows.
+    // Batch-load owners' timezones BEFORE the overdue filter — the filter itself
+    // needs each owner's local date, not just the 07:00-local wake below.
     const tzByUser = new Map<string, string>();
-    if (toAdvance.length) {
-      const userIds = [...new Set(toAdvance.map((t) => t.user_id as string).filter(Boolean))];
+    const candidates = [...latestPerSeries.values()];
+    if (candidates.length) {
+      const userIds = [...new Set(candidates.map((t) => t.user_id as string).filter(Boolean))];
       const { data: settings } = await supabase
         .from("user_settings").select("user_id, timezone").in("user_id", userIds);
       for (const s of settings || []) {
-        tzByUser.set(s.user_id as string, (s.timezone as string | null) || "Asia/Jerusalem");
+        tzByUser.set(s.user_id as string, (s.timezone as string | null) || "America/New_York");
       }
     }
+    const ownerToday = (t: Record<string, unknown>) =>
+      localTodayIn(tzByUser.get(t.user_id as string) || "America/New_York");
+    const toAdvance = candidates.filter((t) => (t.due_date as string) < ownerToday(t));
 
     let rolledForward = 0;
     let stacked = 0;
@@ -267,13 +275,14 @@ Deno.serve(async (req) => {
       // complete-spawn handles the next one). Leave it; advance on a later run.
       if (t.status === "in_progress" || t.status === "pending_completion") continue;
       const rule = t.recurrence_rule as string;
+      const tz = tzByUser.get(t.user_id as string) || "America/New_York";
+      const today = localTodayIn(tz);
       // First scheduled date strictly after yesterday → on/after today.
-      const next = nextOccurrence(rule, t.due_date as string, yesterday);
+      const next = nextOccurrence(rule, t.due_date as string, prevDate(today));
       if (!next || next < today) continue; // unparseable, or catch-up cap left it stale
       const until = t.recurrence_until as string | null;
       if (until && next > until) continue; // series ended
 
-      const tz = tzByUser.get(t.user_id as string) || "Asia/Jerusalem";
       const isToday = next === today; // next >= today guaranteed; equal → due today
       const status = isToday ? "inbox" : "snoozed";
       const snoozedUntil = isToday ? null : utcInstantForLocalHour(next, 7, tz).toISOString();

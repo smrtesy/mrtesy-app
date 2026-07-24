@@ -466,7 +466,7 @@ function fmtTsLocal(iso: string, tz: string): string {
 
 async function smsUserTz(db: SupabaseAdmin, userId: string): Promise<string> {
   const { data } = await db.from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
-  return String(data?.timezone ?? "").trim() || "Asia/Jerusalem";
+  return String(data?.timezone ?? "").trim() || "America/New_York";
 }
 
 /**
