@@ -36,13 +36,17 @@ type RunsResponse = { runs: Run[]; revealed: boolean };
 
 type QcFilter = "all" | "pass" | "rejected" | "pending";
 
-/** Dimensions to score per test. Lip-sync tests get the full rubric; everything
- *  else is a single "overall" score. Kept minimal per repo UI conventions. */
+/** What to score, per test. A still-image panel is scored on CONSISTENCY ALONE
+ *  (user decision, 7/2026): is this the same character as the reference — where
+ *  a gross defect (same face, six fingers) is NOT consistent. "Doesn't look AI"
+ *  and style fidelity are deliberately NOT scored here: they are set by the
+ *  reference image itself, a step that belongs to real production, not to
+ *  picking a model. Video adds motion/quality; lip-sync adds its own. */
 function dimensionsFor(testLabel: string | null): string[] {
-  if (testLabel && testLabel.toLowerCase().includes("lipsync")) {
-    return ["consistency", "motion", "quality", "lipsync"];
-  }
-  return ["overall"];
+  const label = (testLabel ?? "").toLowerCase();
+  if (label.includes("lipsync")) return ["consistency", "motion", "quality", "lipsync"];
+  if (label.includes("video") || label.includes("test-b")) return ["consistency", "motion", "quality"];
+  return ["consistency"];
 }
 
 function isVideo(url: string): boolean {
@@ -415,11 +419,9 @@ export function ExperimentScoring({
                           const current = scoreFor(run, dim);
                           return (
                             <div key={dim} className="flex items-center gap-1">
-                              {dimensions.length > 1 ? (
-                                <span className="w-14 shrink-0 truncate text-[10px] text-muted-foreground">
-                                  {t(`dim.${dim}`)}
-                                </span>
-                              ) : null}
+                              <span className="w-14 shrink-0 truncate text-[10px] font-medium text-muted-foreground">
+                                {t(`dim.${dim}`)}
+                              </span>
                               <div className="flex flex-1 gap-0.5">
                                 {[1, 2, 3, 4, 5].map((n) => (
                                   <button
