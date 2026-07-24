@@ -5,7 +5,8 @@
 #
 # Usage (either form):
 #   post-session-summary.sh "<topic>" "<summary>" "<next_step>" ["<status>"]
-#   post-session-summary.sh --json <path>   # {topic,summary,next_step,status}
+#   post-session-summary.sh --json <path>   # {topic,summary,next_step,status,task_id}
+#   post-session-summary.sh "<topic>" "<summary>" "<next_step>" [status] [plan_task_id]
 #     status ∈ in_progress|blocked|done  (default in_progress; used only when a
 #     task-report attaches to an in-progress task)
 #
@@ -44,15 +45,21 @@ IDENTITY_URL="$BASE/api/claude-session/identity"
 
 # ---- gather topic / summary / next_step / status ----
 TOPIC=""; SUMMARY=""; NEXT_STEP=""; STATUS="in_progress"
+# Optional explicit plan-task id. When the deep link / task prompt carried it,
+# the report attaches to THAT task regardless of its status (tier 1 in the
+# backend) — the safety net for a task the user never marked "in progress".
+TASK_ID="${SMRTPLAN_TASK_ID:-}"
 if [ "${1:-}" = "--json" ]; then
   F="${2:-}"; [ -f "$F" ] || { echo "post-summary: json file not found: $F — skipped"; exit 0; }
   TOPIC="$(jq -r '.topic // ""' "$F" 2>/dev/null || echo "")"
   SUMMARY="$(jq -r '.summary // ""' "$F" 2>/dev/null || echo "")"
   NEXT_STEP="$(jq -r '.next_step // ""' "$F" 2>/dev/null || echo "")"
   S="$(jq -r '.status // ""' "$F" 2>/dev/null || echo "")"; [ -n "$S" ] && STATUS="$S"
+  T="$(jq -r '.task_id // ""' "$F" 2>/dev/null || echo "")"; [ -n "$T" ] && TASK_ID="$T"
 else
   TOPIC="${1:-}"; SUMMARY="${2:-}"; NEXT_STEP="${3:-}"
   [ -n "${4:-}" ] && STATUS="$4"
+  [ -n "${5:-}" ] && TASK_ID="$5"
 fi
 case "$STATUS" in in_progress|blocked|done) ;; *) STATUS="in_progress" ;; esac
 if [ -z "$TOPIC" ] && [ -z "$SUMMARY" ]; then
@@ -117,8 +124,8 @@ post_task_report() {
     --arg session_id "$SESSION_ID" --arg session_url "$SESSION_URL" \
     --arg user_id "$RESOLVE_ID" --arg user_email "$RESOLVE_EMAIL" \
     --arg claude_user_email "$CLAUDE_EMAIL" --arg claude_user_name "$CLAUDE_NAME" \
-    --arg summary "$SUMMARY" --arg status "$STATUS" \
-    '{session_id:$session_id, session_url:$session_url, user_id:$user_id, user_email:$user_email, claude_user_email:$claude_user_email, claude_user_name:$claude_user_name, summary:$summary, status:$status}')"
+    --arg summary "$SUMMARY" --arg status "$STATUS" --arg task_id "$TASK_ID" \
+    '{session_id:$session_id, session_url:$session_url, user_id:$user_id, user_email:$user_email, claude_user_email:$claude_user_email, claude_user_name:$claude_user_name, summary:$summary, status:$status, task_id:$task_id}')"
   curl -sS -m 20 -L --post301 --post302 -X POST "$TASKREPORT_URL" \
     -H "Content-Type: application/json" -H "X-Cron-Secret: $SECRET" \
     --data-binary "$body" 2>&1 || true
