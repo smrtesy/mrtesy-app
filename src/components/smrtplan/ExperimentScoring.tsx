@@ -30,6 +30,9 @@ type Run = {
   shot_key: string;
   /** The locked reference this run was anchored to (pinned for comparison). */
   reference_url: string | null;
+  /** 480px webp copies for the grid; the lightbox always opens the original. */
+  thumb_url: string | null;
+  reference_thumb_url: string | null;
 };
 
 type RunsResponse = { runs: Run[]; revealed: boolean };
@@ -65,6 +68,34 @@ function formatMetrics(scores: Record<string, number> | null | undefined): strin
 /** Comparison-grid geometry: one column per model, sized to the image so at
  *  least five columns fit on a normal screen (5 × 232 + label ≈ 1240px). */
 const COL_W = 232;
+
+/** Grid source: the pre-built 480px webp when we have one, else the original.
+ *  61 originals are ~130 MB, which is why the page crawled and most images never
+ *  appeared on a phone; the webp copies are ~15 KB each (~1 MB for the whole
+ *  grid). Storage image transformation is NOT enabled on this project — asking
+ *  /render/image/sign/ for width=240 returns the full-size bytes — so the
+ *  thumbnails are produced when the run is uploaded, not on the fly.
+ *  The lightbox always opens `output_url`, the original. */
+function gridSrc(run: Run): string {
+  return run.thumb_url ?? run.output_url ?? "";
+}
+
+/** Readable column header. The stored value is an endpoint path
+ *  ("fal-ai/flux-pro/kontext/max") — unreadable on a phone. Display only: the
+ *  run keeps its exact endpoint id, shown in the expanded panel. */
+const MODEL_NAMES: Record<string, string> = {
+  "fal-ai/nano-banana-pro": "Nano Banana Pro",
+  "fal-ai/nano-banana-2/edit": "Nano Banana 2",
+  "fal-ai/flux-pro/kontext/max": "FLUX Kontext max",
+  "bytedance/seedream/v5/pro/edit": "Seedream 5 Pro",
+  "fal-ai/qwen-image-edit": "Qwen Image Edit",
+};
+function modelName(model: string | null): string {
+  if (!model) return "—";
+  if (MODEL_NAMES[model]) return MODEL_NAMES[model];
+  const parts = model.split("/").filter((x) => x && x !== "edit" && x !== "fal-ai");
+  return parts.slice(-2).join(" ") || model;
+}
 
 /** Row label from the server's shot_key ("s:kitchen" → "kitchen"). */
 function shotLabel(shotKey: string): string {
@@ -141,14 +172,19 @@ export function ExperimentScoring({
     const cols = [...new Set(filteredRuns.map((r) => r.model_key))].sort((a, b) => a - b);
     // A cell holds a LIST: a model can have several runs for the same shot —
     // repeats (task 7 runs 3 per combination) or a re-run. Never drop one.
-    const rowMap = new Map<string, { cells: Map<number, Run[]>; reference: string | null }>();
+    const rowMap = new Map<
+      string,
+      { cells: Map<number, Run[]>; reference: string | null; referenceThumb: string | null }
+    >();
     for (const r of filteredRuns) {
-      if (!rowMap.has(r.shot_key)) rowMap.set(r.shot_key, { cells: new Map(), reference: null });
+      if (!rowMap.has(r.shot_key))
+        rowMap.set(r.shot_key, { cells: new Map(), reference: null, referenceThumb: null });
       const row = rowMap.get(r.shot_key)!;
       const list = row.cells.get(r.model_key);
       if (list) list.push(r);
       else row.cells.set(r.model_key, [r]);
       if (!row.reference && r.reference_url) row.reference = r.reference_url;
+      if (!row.referenceThumb && r.reference_thumb_url) row.referenceThumb = r.reference_thumb_url;
     }
     const rows = [...rowMap.entries()].sort((a, b) =>
       a[0].localeCompare(b[0], undefined, { numeric: true }),
@@ -292,9 +328,9 @@ export function ExperimentScoring({
               <div
                 key={key}
                 className="sticky top-0 z-10 truncate border-b bg-background pb-1.5 text-center text-[12px] font-semibold"
-                title={grid.nameFor(key) ?? undefined}
+                title={grid.nameFor(key) ?? undefined}  /* exact endpoint id on hover */
               >
-                {grid.nameFor(key) ?? "—"}
+                {modelName(grid.nameFor(key))}
               </div>
             ))}
 
@@ -324,8 +360,10 @@ export function ExperimentScoring({
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={row.reference}
+                        src={row.referenceThumb ?? row.reference}
                         alt={t("reference")}
+                        loading="lazy"
+                        decoding="async"
                         className="aspect-[2/3] w-full cursor-zoom-in rounded-md bg-muted object-cover"
                       />
                     </button>
@@ -381,8 +419,10 @@ export function ExperimentScoring({
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={run.output_url}
+                              src={gridSrc(run)}
                               alt={run.code}
+                              loading="lazy"
+                              decoding="async"
                               className="aspect-[2/3] w-full cursor-zoom-in rounded-md bg-muted object-cover transition group-hover:opacity-90"
                             />
                           </button>
@@ -484,7 +524,7 @@ export function ExperimentScoring({
                           ) : null}
 
                           <div className="text-muted-foreground">
-                            {t("model")}: {run.model ?? "—"}
+                            {t("model")}: <span className="font-mono">{run.model ?? "—"}</span>
                           </div>
 
                           {run.seed != null ? (
