@@ -332,12 +332,14 @@ machineRouter.post("/experiments/report", async (req: Request, res: Response) =>
 
 export const experimentsAuthedRouter = Router();
 
-/** The run fields hidden until the caller has locked a score. NOTE: `prompt` and
- *  `seed` are intentionally NOT blind — the user wants full transparency of what
- *  produced each output while scoring, and neither identifies the model (the
- *  harness runs the SAME seed across every model for a given shot). Only the
- *  model and its feeding method stay hidden until reveal. */
-const BLIND_FIELDS = ["model", "method"] as const;
+/** NOTHING is hidden from the operator (video-lab CLAUDE.md rule 9, 7/2026:
+ *  "ניקוד: הכל גלוי, ההכרעה שלך — אין הסתרה של שום דבר", and there is no
+ *  `unblind` step). The model name, method, prompt, seed and QC score are all
+ *  returned from the start: the short run code stays as a convenient label, not
+ *  a disguise. What is enforced instead is that the DECISION is human and
+ *  recorded, and that the criteria weights were locked BEFORE any results were
+ *  seen (docs/criteria.md) — that is the bias guard that remains. */
+const BLIND_FIELDS = [] as const;
 
 /** Comparison-grid keys, always returned — they let the UI pivot runs into
  *  "a column per model, a row per shot" WITHOUT leaking identity while blind:
