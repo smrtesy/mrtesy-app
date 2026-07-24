@@ -917,6 +917,10 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
+  // serial = the table-wide insert counter (one sequence for all tasks, across
+  // orgs), used only as the FINAL tiebreaker when every other sort key is equal
+  // (see serverCurrentStage / focus-tasks).
+  "serial, " +
   "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
@@ -2132,11 +2136,35 @@ const PROJECTION_BUFFER = 0.2;
 
 const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
 
+/** Stable tiebreaker for two tasks of the same plan: creation time, then the
+ *  table-wide insert counter. A bulk-created plan (one transaction) gives every
+ *  row the SAME created_at — Postgres returns one now() per transaction — so
+ *  created_at alone leaves the order undefined. serial is monotonic per insert
+ *  (BEFORE INSERT trigger off task_serial_seq), so it restores the order the
+ *  plan was written in. A row missing EITHER field sorts last rather than
+ *  jumping to the front — neither is nullable in practice, so this only keeps
+ *  the two null paths consistent with each other. */
+function byPlanOrder(a: Row, b: Row): number {
+  // ￿ sorts after any real timestamp, matching the nulls-last serial branch.
+  const ca = (a.created_at as string) ?? "￿";
+  const cb = (b.created_at as string) ?? "￿";
+  if (ca !== cb) return ca < cb ? -1 : 1;
+  const sa = a.serial == null ? Number.MAX_SAFE_INTEGER : Number(a.serial);
+  const sb = b.serial == null ? Number.MAX_SAFE_INTEGER : Number(b.serial);
+  return sa === sb ? 0 : sa < sb ? -1 : 1;
+}
+
 /** First ready task of mine (server mirror of the client zoneOf/byUrgency util,
  *  which can't be imported across the client/server package boundary — §5).
  *  A task is ready when no need is unsatisfied and it isn't in a terminal state;
  *  order is earliest effective deadline (min of due_date, latest_finish) first,
- *  critical breaking ties. */
+ *  critical breaking ties, then insert order.
+ *
+ *  That last key matters more than it looks: a freshly built plan has no dates
+ *  and nothing marked critical, so every earlier comparison returns 0 and the
+ *  "current task" would otherwise be whichever row the DB happened to return —
+ *  it could even change between refreshes. Falling back to serial (and created_at
+ *  before it) makes "what's next" the plan's own first task, deterministically. */
 function serverCurrentStage(tasks: Row[]): Row | null {
   const eff = (t: Row): string | null => {
     const due = (t.due_date as string | null) ?? null;
@@ -2154,7 +2182,7 @@ function serverCurrentStage(tasks: Row[]): Row | null {
     else if (da) return -1;
     else if (db_) return 1;
     if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
-    return 0;
+    return byPlanOrder(a, b);
   });
   return ready[0] ?? null;
 }
@@ -2308,9 +2336,7 @@ router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
     const sa = seq.get(a.stage_id as string) ?? 999;
     const sb = seq.get(b.stage_id as string) ?? 999;
     if (sa !== sb) return sa - sb;
-    const ca = (a.created_at as string) ?? "";
-    const cb = (b.created_at as string) ?? "";
-    return ca < cb ? -1 : ca > cb ? 1 : 0;
+    return byPlanOrder(a, b);
   });
   const isDone = (s: unknown) => s === "completed" || s === "archived";
   const out = ordered.map((t) => {
