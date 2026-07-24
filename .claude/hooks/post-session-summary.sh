@@ -144,7 +144,9 @@ case "$ROLE" in
     echo "post-summary [$ROLE] task-report → ${RESP:-<no response>}"
     # No in-progress task to attach to → fall back to a proposal so the session
     # still leaves a trace (manager: own inbox; worker: own inbox).
-    ATTACHED="$(printf '%s' "$RESP" | jq -r '.attached // empty' 2>/dev/null || echo "")"
+    # NOTE: jq's // treats false as absent — 'attached // empty' returned "" for
+    # attached:false, silently skipping the proposal fallback (bug found 2026-07-24).
+    ATTACHED="$(printf '%s' "$RESP" | jq -r 'if has("attached") then (.attached|tostring) else "" end' 2>/dev/null || echo "")"
     if [ "$ATTACHED" = "false" ]; then
       RESP2="$(post_proposal)"
       echo "post-summary [$ROLE] no in-progress task → proposal → ${RESP2:-<no response>}"
