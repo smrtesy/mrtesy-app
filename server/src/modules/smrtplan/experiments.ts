@@ -144,6 +144,23 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
   // Idempotent on the blind code: the harness re-posts the same run whenever it
   // re-syncs runs.jsonl (its authoritative local log) — e.g. after QC is
   // recomputed — so a plain insert duplicated rows. (org_id, code) is unique.
+  //
+  // `meta` is MERGED, not replaced: a re-sync from a caller that doesn't know
+  // about a key would otherwise erase it. That already happened — a verification
+  // re-post wiped a run's reference, and it would have wiped the grid thumbnails
+  // too. Incoming nulls are dropped for the same reason; to clear a key, write it
+  // directly rather than through this route.
+  const { data: prev } = await db
+    .from("experiment_runs")
+    .select("meta")
+    .eq("org_id", orgId)
+    .eq("code", code)
+    .maybeSingle();
+  const incoming = insert.meta as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...((prev?.meta as Record<string, unknown>) ?? {}) };
+  for (const [k, v] of Object.entries(incoming)) if (v !== null && v !== undefined) merged[k] = v;
+  insert.meta = merged;
+
   const { data, error } = await db
     .from("experiment_runs")
     .upsert(insert, { onConflict: "org_id,code" })
@@ -418,6 +435,14 @@ experimentsAuthedRouter.get("/experiments/runs", async (req: Request, res: Respo
       // The locked reference the run was anchored to — shown pinned beside the
       // outputs so the operator can compare against the original.
       reference_url: typeof meta.reference_url === "string" ? meta.reference_url : null,
+      // Pre-built 480px webp copies kept in the bucket next to the originals. The
+      // grid shows ~60 images at once and the originals are 0.6–5 MB PNGs (over
+      // 100 MB per page); Storage image transformation is not enabled on this
+      // project — /render/image/sign/ hands back the original bytes — so the
+      // thumbnails are generated at upload time instead.
+      thumb_url: typeof meta.thumb_url === "string" ? meta.thumb_url : null,
+      reference_thumb_url:
+        typeof meta.reference_thumb_url === "string" ? meta.reference_thumb_url : null,
     };
     if (!revealed) for (const f of BLIND_FIELDS) run[f] = null;
     return run;
