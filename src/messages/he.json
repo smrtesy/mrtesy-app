@@ -212,7 +212,8 @@
     "planBoard": "לוח",
     "planRepository": "מאגר",
     "planMy": "המשימות שלי",
-    "planTeam": "לפי עובד"
+    "planTeam": "לפי עובד",
+    "planScore": "ניקוד תוצרים"
   },
   "account": {
     "title": "ניהול חשבון",
