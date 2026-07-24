@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
@@ -65,9 +65,50 @@ function formatMetrics(scores: Record<string, number> | null | undefined): strin
     .join(" · ");
 }
 
-/** Comparison-grid geometry: one column per model, sized to the image so at
- *  least five columns fit on a normal screen (5 × 232 + label ≈ 1240px). */
-const COL_W = 232;
+/** Comparison-grid geometry. The column width is DERIVED from the space the grid
+ *  actually gets (see useColumnWidth): reference + every model column must fit
+ *  without horizontal scrolling whenever they can — a fixed width meant that in a
+ *  half-width desktop pane only three of six columns were reachable. */
+const ROW_LABEL_W = 32;
+const COL_GAP = 8;
+/** Below this a column is too small to judge a character in; the grid scrolls
+ *  sideways instead of shrinking further (the reference column stays pinned). */
+const COL_W_MIN = 132;
+/** Above this the images stop gaining useful detail and just cost scrolling. */
+const COL_W_MAX = 260;
+/** Fallback for the first paint, before the container has been measured. */
+const COL_W_DEFAULT = 200;
+/** Height of the pinned model-name strip. The grid scrolls under it, so every
+ *  other sticky element (the row labels) has to start below it. */
+const HEADER_H = 26;
+/** Room the page chrome above the grid needs (title, hint, filter row) before
+ *  the grid takes the rest. The grid is its own scroll box — that is what keeps
+ *  the model names and the pose labels on screen while scrolling. */
+const CHROME_H = 200;
+
+/** Fit `columns` image columns into the measured container width. */
+function useColumnWidth(columns: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [colW, setColW] = useState(COL_W_DEFAULT);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || columns < 1) return;
+    const measure = () => {
+      const avail = el.clientWidth - ROW_LABEL_W - COL_GAP * columns;
+      const fit = Math.floor(avail / columns);
+      setColW(Math.max(COL_W_MIN, Math.min(COL_W_MAX, fit)));
+    };
+    measure();
+    // The grid lives inside a resizable desktop pane, so the width changes
+    // without a window resize — observe the element, not the window.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [columns]);
+
+  return { ref, colW };
+}
 
 /** Grid source: the pre-built 480px webp when we have one, else the original.
  *  61 originals are ~130 MB, which is why the page crawled and most images never
@@ -195,6 +236,9 @@ export function ExperimentScoring({
     return { cols, rows, nameFor };
   }, [filteredRuns]);
 
+  // Reference column + one per model, all fitted into the width the grid has.
+  const { ref: gridRef, colW } = useColumnWidth(grid.cols.length + 1);
+
   function scoreFor(run: Run, dimension: string): number | null {
     const hit = run.my_scores.find((s) => s.dimension === dimension);
     return hit ? hit.score : null;
@@ -302,7 +346,7 @@ export function ExperimentScoring({
       {loading ? (
         <div className="flex gap-3">
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-80 animate-pulse rounded-lg bg-muted" style={{ width: COL_W }} />
+            <div key={i} className="h-80 flex-1 animate-pulse rounded-lg bg-muted" />
           ))}
         </div>
       ) : grid.rows.length === 0 ? (
@@ -312,22 +356,40 @@ export function ExperimentScoring({
       ) : (
         // Comparison grid: one column per model, one row per shot — so a single
         // row shows the same pose from every model, side by side.
-        <div className="overflow-x-auto pb-2">
+        // The grid is its OWN scroll box, in both axes: that is what makes the
+        // model-name strip stay at the top and the pose column stay at the side
+        // while scrolling (sticky resolves against the nearest scroll container,
+        // so with the page doing the scrolling the headers just scrolled away).
+        <div
+          ref={gridRef}
+          className="overflow-auto overscroll-contain pb-2"
+          style={{ maxHeight: `calc(100dvh - ${CHROME_H}px)` }}
+        >
           <div
-            className="grid gap-x-2 gap-y-4"
+            className="grid gap-y-4"
             style={{
-              gridTemplateColumns: `40px ${COL_W}px repeat(${grid.cols.length}, ${COL_W}px)`,
+              columnGap: COL_GAP,
+              gridTemplateColumns: `${ROW_LABEL_W}px repeat(${grid.cols.length + 1}, ${colW}px)`,
             }}
           >
-            {/* header: row-label gutter + pinned reference + model columns */}
-            <div className="sticky top-0 z-20 bg-background" />
-            <div className="sticky top-0 z-20 border-b bg-background pb-1.5 text-center text-[12px] font-semibold text-primary">
+            {/* header: row-label gutter + pinned reference + model columns. The
+                gutter and the reference are sticky on BOTH axes, so the corner
+                stays put no matter which way the grid is scrolled. */}
+            <div
+              className="sticky top-0 z-40 bg-background"
+              style={{ insetInlineStart: 0, height: HEADER_H }}
+            />
+            <div
+              className="sticky top-0 z-30 border-b bg-background text-center text-[12px] font-semibold leading-[18px] text-primary"
+              style={{ insetInlineStart: ROW_LABEL_W, height: HEADER_H }}
+            >
               {t("reference")}
             </div>
             {grid.cols.map((key) => (
               <div
                 key={key}
-                className="sticky top-0 z-10 truncate border-b bg-background pb-1.5 text-center text-[12px] font-semibold"
+                className="sticky top-0 z-20 truncate border-b bg-background text-center text-[12px] font-semibold leading-[18px]"
+                style={{ height: HEADER_H }}
                 title={grid.nameFor(key) ?? undefined}  /* exact endpoint id on hover */
               >
                 {modelName(grid.nameFor(key))}
@@ -336,15 +398,25 @@ export function ExperimentScoring({
 
             {grid.rows.map(([rowKey, row]) => (
               <div key={rowKey} className="contents">
-                {/* row label — which shot this row is */}
-                <div className="flex items-start justify-center pt-1 text-[11.5px] font-semibold tracking-wide text-foreground/80">
+                {/* row label — the character and the pose/mood this row is. Sticky
+                    on both axes: it stays at the side through sideways scrolling
+                    and stays on screen (just under the header strip) for as long as
+                    its row is. */}
+                <div
+                  className="sticky z-20 flex items-start justify-center bg-background text-[11.5px] font-semibold tracking-wide text-foreground/80"
+                  style={{ insetInlineStart: 0, top: HEADER_H }}
+                >
                   <span className={sidewaysClass(shotLabel(rowKey))} title={shotLabel(rowKey)}>
                     {shotLabel(rowKey)}
                   </span>
                 </div>
 
-                {/* pinned original — always beside the outputs, for comparison */}
-                <div className="rounded-lg border-2 border-primary/40 bg-card p-1.5">
+                {/* pinned original — always beside the outputs, for comparison.
+                    Sticky so it survives sideways scrolling on a narrow pane. */}
+                <div
+                  className="sticky z-10 self-start rounded-lg border-2 border-primary/40 bg-card p-1.5"
+                  style={{ insetInlineStart: ROW_LABEL_W }}
+                >
                   {row.reference ? (
                     <button
                       type="button"

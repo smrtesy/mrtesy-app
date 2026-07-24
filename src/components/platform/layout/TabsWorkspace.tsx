@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
@@ -66,11 +66,22 @@ type DragState = {
  * to resize, and double-clicking a divider restores the default layout.
  */
 export function TabsWorkspace() {
-  const { tabs, activeId, widths, setActive, closeTab, setWidths, resetWidths } =
+  const { tabs, activeId, widths, soloId, setActive, closeTab, setWidths, resetWidths, toggleSolo } =
     useTabsWorkspace();
   const t = useTranslations("tabsWorkspace");
   const locale = useLocale();
   const isRtl = locale === "he";
+
+  // Escape leaves maximized view — the pane covers the whole workspace, so the
+  // way back has to be reachable without hunting for the button.
+  useEffect(() => {
+    if (!soloId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") toggleSolo(soloId);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [soloId, toggleSolo]);
 
   // Pin the WhatsApp pane to the physical-left edge regardless of when it was
   // opened. The panes are a flex row that follows the page direction, so the
@@ -87,8 +98,13 @@ export function TabsWorkspace() {
     return isRtl ? [...rest, ...wa] : [...wa, ...rest];
   }, [tabs, isRtl]);
 
-  const n = orderedTabs.length;
-  const fractions = resolveFractions(orderedTabs, activeId, widths);
+  // Maximized: render only that pane. The others stay open (and keep their
+  // widths) — they are hidden, not closed.
+  const solo = soloId ? orderedTabs.find((tab) => tab.id === soloId) ?? null : null;
+  const visibleTabs = solo ? [solo] : orderedTabs;
+
+  const n = visibleTabs.length;
+  const fractions = resolveFractions(visibleTabs, activeId, widths);
 
   const dragRef = useRef<DragState | null>(null);
   const [resizingIdx, setResizingIdx] = useState<number | null>(null);
@@ -160,8 +176,8 @@ export function TabsWorkspace() {
 
   return (
     <div className="flex h-[calc(100dvh_-_var(--wc-bar-h,0px))] w-full overflow-x-auto">
-      {orderedTabs.map((tab, i) => {
-        const active = tab.id === activeId;
+      {visibleTabs.map((tab, i) => {
+        const active = solo ? true : tab.id === activeId;
         const frac = fractions[tab.id] ?? 1 / n;
         return (
           <Fragment key={tab.id}>
@@ -187,26 +203,43 @@ export function TabsWorkspace() {
                     className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
-                {/* Floating close — top-left, above the focus overlay (z-70) so it
-                    works on inactive panes too; hover-reveal on desktop, always on
-                    touch. */}
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                  aria-label={t("close")}
-                  title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
-                  className="absolute left-2 top-2 z-[70] inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                {/* Floating controls — top-left, above the focus overlay (z-70) so
+                    they work on inactive panes too; hover-reveal on desktop, always
+                    on touch. Maximize stays visible while solo: it is the way back. */}
+                <div className="absolute left-2 top-2 z-[70] flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                    aria-label={t("close")}
+                    title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                  {/* Wide screens (the model-comparison grid) are unusable in a
+                      half-width pane. This gives one pane the whole workspace
+                      without closing the working set. */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); toggleSolo(tab.id); }}
+                    aria-label={solo ? t("restorePane") : t("maximizePane")}
+                    title={solo ? t("restorePane") : t("maximizePane")}
+                    className={cn(
+                      "inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground",
+                      solo ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100",
+                    )}
+                  >
+                    {solo ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             </section>
-            {i < n - 1 && (
+            {i < n - 1 && !solo && (
               <div
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("resizePane")}
-                onPointerDown={(e) => onHandleDown(e, i, tab, orderedTabs[i + 1])}
+                onPointerDown={(e) => onHandleDown(e, i, tab, visibleTabs[i + 1])}
                 onPointerMove={onHandleMove}
                 onPointerUp={onHandleUp}
                 onPointerCancel={onHandleUp}

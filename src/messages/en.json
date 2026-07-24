@@ -173,7 +173,9 @@
     "focusPane": "Focus this tab",
     "resizePane": "Resize",
     "paneError": "Something went wrong in this tab",
-    "paneReload": "Reload"
+    "paneReload": "Reload",
+    "maximizePane": "Full width",
+    "restorePane": "Back to split view (Esc)"
   },
   "nav": {
     "tasks": "Tasks",
