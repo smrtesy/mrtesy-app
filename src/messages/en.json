@@ -708,6 +708,15 @@
         "reason": "Why was no experiment run?",
         "reasonPh": "Short explanation"
       },
+      "deliverable": {
+        "path": "Deliverable path — exactly where it was saved (the contract path from the artifact map)",
+        "pathPh": "e.g. docs/models/shortlist-image.json, or a full link"
+      },
+      "consumer": {
+        "confirm": "I opened the consuming task/skill and verified it acts on the deliverable without guessing",
+        "note": "What was checked with the consumer",
+        "notePh": "Who the consumer is and what was verified (e.g. /test-a reads 3 leaders + method, no open question)"
+      },
       "q": {
         "workedBest": "What worked best?",
         "trick": "Which trick/setting made the difference?",

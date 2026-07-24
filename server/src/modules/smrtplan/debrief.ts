@@ -27,6 +27,9 @@ export interface DebriefInput {
   external_results?: unknown;
   external_scores?: unknown;
   no_experiment_reason?: unknown;
+  deliverable_path?: unknown;
+  consumer_check_confirmed?: unknown;
+  consumer_check_note?: unknown;
   q_worked_best?: unknown;
   q_trick?: unknown;
   q_surprise?: unknown;
@@ -94,6 +97,28 @@ export function validateDebrief(input: DebriefInput | null | undefined): { ok: t
     answers.no_experiment_reason = reason;
   }
 
+  // Deliverable contract + consumer check (protocol §16.20/§16.21) — always
+  // required, in every branch: a research task is not "done" until its
+  // deliverable sits at the exact contract path AND the consuming task/skill
+  // was opened and verified to act on it without guessing. This is the
+  // system-level layer of the enforcement (works even when the repo hooks
+  // don't run). Root cause: a research task once "completed" with its report
+  // never saved where the next task read from.
+  const deliverable = str(input.deliverable_path);
+  if (!deliverable) {
+    return { ok: false, error: "debrief.deliverable_path is required (the exact contract path / link where the deliverable was saved)" };
+  }
+  if (input.consumer_check_confirmed !== true) {
+    return { ok: false, error: "debrief.consumer_check_confirmed must be confirmed (the consuming task/skill was opened and acts on the deliverable without guessing)" };
+  }
+  const consumerNote = str(input.consumer_check_note);
+  if (!consumerNote) {
+    return { ok: false, error: "debrief.consumer_check_note is required (who the consumer is and what was verified)" };
+  }
+  answers.deliverable_path = deliverable;
+  answers.consumer_check_confirmed = true;
+  answers.consumer_check_note = consumerNote;
+
   // The three fixed playbook questions — always required.
   const workedBest = str(input.q_worked_best);
   if (!workedBest) return { ok: false, error: "debrief.q_worked_best is required" };
@@ -113,6 +138,8 @@ function debriefSummary(d: NormalizedDebrief): string {
   const a = d.answers;
   const lines = [
     `תחקיר סגירה (${d.conducted_in})`,
+    a.deliverable_path ? `תוצר בנתיב-החוזה: ${a.deliverable_path}` : "",
+    a.consumer_check_note ? `בדיקת-צרכן: ${a.consumer_check_note}` : "",
     a.q_worked_best ? `מה עבד הכי טוב: ${a.q_worked_best}` : "",
     a.q_trick ? `הטריק/ההגדרה שעשו את ההבדל: ${a.q_trick}` : "",
     a.q_surprise ? `מה הפתיע לרעה: ${a.q_surprise}` : "",

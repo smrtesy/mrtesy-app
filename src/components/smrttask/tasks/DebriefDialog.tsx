@@ -21,6 +21,9 @@ export interface DebriefPayload {
   external_results?: string;
   external_scores?: string;
   no_experiment_reason?: string;
+  deliverable_path: string;
+  consumer_check_confirmed: boolean;
+  consumer_check_note: string;
   q_worked_best: string;
   q_trick: string;
   q_surprise: string;
@@ -55,6 +58,9 @@ export function DebriefDialog({
   const [results, setResults] = useState("");
   const [extScores, setExtScores] = useState("");
   const [noReason, setNoReason] = useState("");
+  const [deliverablePath, setDeliverablePath] = useState("");
+  const [consumerConfirmed, setConsumerConfirmed] = useState(false);
+  const [consumerNote, setConsumerNote] = useState("");
   const [workedBest, setWorkedBest] = useState("");
   const [trick, setTrick] = useState("");
   const [surprise, setSurprise] = useState("");
@@ -66,6 +72,7 @@ export function DebriefDialog({
     setClaudeLink(""); setClaudeScores("");
     setTool(""); setSteps(""); setResults(""); setExtScores("");
     setNoReason("");
+    setDeliverablePath(""); setConsumerConfirmed(false); setConsumerNote("");
     setWorkedBest(""); setTrick(""); setSurprise("");
   }, [open]);
 
@@ -75,16 +82,20 @@ export function DebriefDialog({
 
   const valid = useMemo(() => {
     if (!workedBest.trim() || !trick.trim() || !surprise.trim()) return false;
+    if (!deliverablePath.trim() || !consumerConfirmed || !consumerNote.trim()) return false;
     if (showClaude && (!claudeConfirmed || !claudeLink.trim() || !claudeScores.trim())) return false;
     if (showExternal && (!tool.trim() || !steps.trim() || !results.trim() || !extScores.trim())) return false;
     if (showNone && !noReason.trim()) return false;
     return true;
-  }, [workedBest, trick, surprise, showClaude, claudeConfirmed, claudeLink, claudeScores, showExternal, tool, steps, results, extScores, showNone, noReason]);
+  }, [workedBest, trick, surprise, deliverablePath, consumerConfirmed, consumerNote, showClaude, claudeConfirmed, claudeLink, claudeScores, showExternal, tool, steps, results, extScores, showNone, noReason]);
 
   function submit() {
     if (!valid) return;
     const payload: DebriefPayload = {
       conducted_in: conductedIn,
+      deliverable_path: deliverablePath.trim(),
+      consumer_check_confirmed: true,
+      consumer_check_note: consumerNote.trim(),
       q_worked_best: workedBest.trim(),
       q_trick: trick.trim(),
       q_surprise: surprise.trim(),
@@ -180,6 +191,24 @@ export function DebriefDialog({
               <Textarea value={noReason} onChange={(e) => setNoReason(e.target.value)} rows={2} dir="auto" placeholder={t("noExperiment.reasonPh")} />
             </div>
           )}
+
+          {/* Deliverable contract + consumer check — always required (§16.20/§16.21):
+              research is not done until the deliverable sits at its contract path
+              and the consuming task/skill was verified to act on it without guessing. */}
+          <div className="space-y-2 rounded-md border border-input p-2.5">
+            <div className="space-y-1">
+              <label className="text-[12.5px] font-medium">{t("deliverable.path")}</label>
+              <Input value={deliverablePath} onChange={(e) => setDeliverablePath(e.target.value)} dir="auto" placeholder={t("deliverable.pathPh")} />
+            </div>
+            <label className="flex items-start gap-2 text-[12.5px]" dir="auto">
+              <input type="checkbox" className="mt-0.5" checked={consumerConfirmed} onChange={(e) => setConsumerConfirmed(e.target.checked)} />
+              <span>{t("consumer.confirm")}</span>
+            </label>
+            <div className="space-y-1">
+              <label className="text-[11.5px] text-muted-foreground">{t("consumer.note")}</label>
+              <Textarea value={consumerNote} onChange={(e) => setConsumerNote(e.target.value)} rows={2} dir="auto" placeholder={t("consumer.notePh")} />
+            </div>
+          </div>
 
           {/* The three fixed playbook questions — always required. */}
           <div className="space-y-2 border-t pt-3">
