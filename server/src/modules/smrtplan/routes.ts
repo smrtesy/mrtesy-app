@@ -917,8 +917,9 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  // serial = the org-wide insert counter, used only as the FINAL tiebreaker when
-  // every other sort key is equal (see serverCurrentStage / focus-tasks).
+  // serial = the table-wide insert counter (one sequence for all tasks, across
+  // orgs), used only as the FINAL tiebreaker when every other sort key is equal
+  // (see serverCurrentStage / focus-tasks).
   "serial, " +
   "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since";
 
@@ -2136,14 +2137,17 @@ const PROJECTION_BUFFER = 0.2;
 const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
 
 /** Stable tiebreaker for two tasks of the same plan: creation time, then the
- *  org-wide insert counter. A bulk-created plan (one transaction) gives every
+ *  table-wide insert counter. A bulk-created plan (one transaction) gives every
  *  row the SAME created_at — Postgres returns one now() per transaction — so
- *  created_at alone leaves the order undefined. serial is monotonic per insert,
- *  so it restores the order the plan was written in. Rows missing serial sort
- *  last rather than jumping to the front. */
+ *  created_at alone leaves the order undefined. serial is monotonic per insert
+ *  (BEFORE INSERT trigger off task_serial_seq), so it restores the order the
+ *  plan was written in. A row missing EITHER field sorts last rather than
+ *  jumping to the front — neither is nullable in practice, so this only keeps
+ *  the two null paths consistent with each other. */
 function byPlanOrder(a: Row, b: Row): number {
-  const ca = (a.created_at as string) ?? "";
-  const cb = (b.created_at as string) ?? "";
+  // ￿ sorts after any real timestamp, matching the nulls-last serial branch.
+  const ca = (a.created_at as string) ?? "￿";
+  const cb = (b.created_at as string) ?? "￿";
   if (ca !== cb) return ca < cb ? -1 : 1;
   const sa = a.serial == null ? Number.MAX_SAFE_INTEGER : Number(a.serial);
   const sb = b.serial == null ? Number.MAX_SAFE_INTEGER : Number(b.serial);
