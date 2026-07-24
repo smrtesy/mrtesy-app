@@ -3251,7 +3251,9 @@
         "shaping": "Shaping",
         "active": "Active"
       },
-      "promote": "Put on timeline"
+      "promote": "Put on timeline",
+      "promoteConfirm": "Put this plan on the timeline with start date {date}? It moves from the repository to the board.",
+      "promoted": "Plan moved to the board"
     },
     "countdown": {
       "today": "Today!",
@@ -3354,7 +3356,16 @@
       "actStageDel": "Delete stage",
       "stageShort": "Stage",
       "description": "Description / instructions",
-      "descriptionPlaceholder": "What exactly to do — step by step, in plain language"
+      "descriptionPlaceholder": "What exactly to do — step by step, in plain language",
+      "manager": "Manager / approver",
+      "assignAll": "Assign every task to one person",
+      "assignAllNone": "No — each task has its own owner",
+      "assignAllHint": "Picking someone hands them every open task in this plan on save, and the minutes and workdays below are set for them.",
+      "dailyMinutesFor": "Minutes per day (for the chosen person)",
+      "costThreshold": "Cost-approval ceiling (USD)",
+      "costThresholdHint": "Recorded on the plan as the agreed limit: spending above it needs the manager's approval. For now this is a reminder only — no approval task is opened automatically. Blank = no ceiling.",
+      "costThresholdInvalid": "The cost ceiling must be a non-negative number",
+      "assignedAll": "{n, plural, =0 {No open tasks to assign} one {1 task assigned} other {# tasks assigned}}"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
