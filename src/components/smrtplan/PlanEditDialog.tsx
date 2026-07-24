@@ -57,8 +57,14 @@ export function PlanEditDialog({
     start_date: "",
     end_date: "",
     owner_user_id: "",
+    manager_user_id: "",
+    cost_approval_threshold_usd: "",
   });
   const [saving, setSaving] = useState(false);
+  // Single-performer plan: hand every open task to one person on save, and point
+  // the minutes/workdays commitment below at THAT person instead of the editor.
+  // Blank = leave per-task assignees alone (a mixed-team plan).
+  const [assignAllTo, setAssignAllTo] = useState("");
   // My daily-minutes commitment to this plan (the focus tool, §6). Blank = no
   // commitment; entering a value upserts smrtplan_focus on save. Only meaningful
   // for an existing plan (a new plan has no id to attach the commitment to yet).
@@ -89,16 +95,25 @@ export function PlanEditDialog({
       start_date: plan?.start_date ?? "",
       end_date: plan?.end_date ?? "",
       owner_user_id: plan?.owner_user_id ?? "",
+      manager_user_id: plan?.manager_user_id ?? "",
+      cost_approval_threshold_usd:
+        plan?.cost_approval_threshold_usd != null ? String(plan.cost_approval_threshold_usd) : "",
     });
+    setAssignAllTo("");
   }, [open, plan]);
 
-  // Prefill the daily-minutes commitment when editing an existing plan.
+  // Prefill the daily-minutes commitment when editing an existing plan. When a
+  // single performer is chosen we read THEIR commitment, so the minutes/workdays
+  // shown are the ones actually being edited (and not silently the editor's).
   useEffect(() => {
     setDailyMinutes("");
     setWorkdays(DEFAULT_WORKDAYS);
     if (!open || !plan?.id) return;
     let alive = true;
-    api<{ focus: { daily_minutes: number; workdays: number[] | null } | null }>(`/api/plan/${plan.id}/focus`)
+    const q = assignAllTo ? `?user_id=${encodeURIComponent(assignAllTo)}` : "";
+    api<{ focus: { daily_minutes: number; workdays: number[] | null } | null }>(
+      `/api/plan/${plan.id}/focus${q}`,
+    )
       .then((d) => {
         if (!alive || !d.focus) return;
         setDailyMinutes(String(d.focus.daily_minutes));
@@ -106,7 +121,7 @@ export function PlanEditDialog({
       })
       .catch(() => {});
     return () => { alive = false; };
-  }, [open, plan?.id, DEFAULT_WORKDAYS]);
+  }, [open, plan?.id, assignAllTo, DEFAULT_WORKDAYS]);
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -116,6 +131,18 @@ export function PlanEditDialog({
     if (!form.title_he.trim()) {
       toast.error(te("titleHe"));
       return;
+    }
+    // A threshold is money — reject a non-numeric/negative entry rather than
+    // silently sending NaN and storing nothing.
+    const threshold = form.cost_approval_threshold_usd.trim();
+    let thresholdValue: number | null = null;
+    if (threshold) {
+      const n = Number(threshold);
+      if (!Number.isFinite(n) || n < 0) {
+        toast.error(te("costThresholdInvalid"));
+        return;
+      }
+      thresholdValue = n;
     }
     setSaving(true);
     const body = {
@@ -131,19 +158,37 @@ export function PlanEditDialog({
       start_date: form.start_date || null,
       end_date: form.end_date || null,
       owner_user_id: form.owner_user_id || null,
+      manager_user_id: form.manager_user_id || null,
+      cost_approval_threshold_usd: thresholdValue,
     };
     try {
       if (plan?.id) {
         await api(`/api/plans/${plan.id}`, { method: "PATCH", body });
+        // Single-performer plan: hand every still-open task to that person. Runs
+        // before the commitment upsert so the minutes land on someone who now
+        // actually holds the tasks.
+        if (assignAllTo) {
+          const { assigned } = await api<{ assigned: number }>(`/api/plans/${plan.id}/assign-all`, {
+            method: "POST",
+            body: { assignee_user_id: assignAllTo },
+          });
+          toast.success(te("assignedAll", { n: assigned }));
+        }
         // Upsert the daily-focus commitment alongside the plan edit. A positive
         // value sets/updates it; blank leaves any existing commitment untouched
         // (deactivating is done from the focus tool, not by clearing this field).
+        // With a single performer chosen, the commitment is THEIRS.
         const mins = parseInt(dailyMinutes, 10);
         if (Number.isInteger(mins) && mins > 0) {
           const sorted = [...workdays].sort((a, b) => a - b);
           await api(`/api/plan/${plan.id}/focus`, {
             method: "PUT",
-            body: { daily_minutes: mins, active: true, workdays: sorted.length ? sorted : null },
+            body: {
+              daily_minutes: mins,
+              active: true,
+              workdays: sorted.length ? sorted : null,
+              ...(assignAllTo ? { user_id: assignAllTo } : {}),
+            },
           });
         }
       } else {
@@ -266,8 +311,23 @@ export function PlanEditDialog({
             </Field>
           </div>
 
+          {/* One person does the whole plan — the common case. Picking someone
+              hands them every open task on save, and points the minutes/workdays
+              below at them instead of at whoever is editing. */}
           {plan?.id && (
-            <Field label={te("dailyMinutes")}>
+            <Field label={te("assignAll")}>
+              <select className={fieldCls} value={assignAllTo} onChange={(e) => setAssignAllTo(e.target.value)}>
+                <option value="">{te("assignAllNone")}</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{personLabel(m)}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">{te("assignAllHint")}</p>
+            </Field>
+          )}
+
+          {plan?.id && (
+            <Field label={assignAllTo ? te("dailyMinutesFor") : te("dailyMinutes")}>
               <Input type="number" min={1} step={5} value={dailyMinutes}
                 onChange={(e) => setDailyMinutes(e.target.value)} dir="ltr" placeholder={te("dailyMinutesHint")} />
             </Field>
@@ -297,13 +357,32 @@ export function PlanEditDialog({
             </Field>
           )}
 
-          <Field label={te("owner")}>
-            <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
-              <option value="">{te("unassigned")}</option>
-              {members.map((m) => (
-                <option key={m.user_id} value={m.user_id}>{personLabel(m)}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={te("owner")}>
+              <select className={fieldCls} value={form.owner_user_id} onChange={(e) => set("owner_user_id", e.target.value)}>
+                <option value="">{te("unassigned")}</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{personLabel(m)}</option>
+                ))}
+              </select>
+            </Field>
+            {/* Who approves deliverables and gets progress reports. */}
+            <Field label={te("manager")}>
+              <select className={fieldCls} value={form.manager_user_id} onChange={(e) => set("manager_user_id", e.target.value)}>
+                <option value="">{te("unassigned")}</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>{personLabel(m)}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          {/* Money ceiling: spend at/above it needs the manager's approval. */}
+          <Field label={te("costThreshold")}>
+            <Input type="number" min={0} step={10} value={form.cost_approval_threshold_usd}
+              onChange={(e) => set("cost_approval_threshold_usd", e.target.value)} dir="ltr"
+              placeholder={te("costThresholdHint")} />
+            <p className="mt-1 text-[11px] text-muted-foreground">{te("costThresholdHint")}</p>
           </Field>
 
           <Field label={te("color")}>

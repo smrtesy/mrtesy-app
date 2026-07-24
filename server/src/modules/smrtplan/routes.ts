@@ -310,12 +310,13 @@ function requireFull(req: Request, res: Response, next: NextFunction) {
 const PLAN_FIELDS =
   "id, org_id, parent_id, project_id, title_he, title_en, goal, kind, group_label, " +
   "start_date, end_date, stage, status, is_capability, is_available, progress, progress_manual, is_critical, color, " +
-  "is_private, owner_user_id, manager_user_id, created_by, created_at, updated_at";
+  "is_private, owner_user_id, manager_user_id, cost_approval_threshold_usd, created_by, created_at, updated_at";
 
 const PLAN_WRITABLE = new Set([
   "parent_id", "project_id", "title_he", "title_en", "goal", "kind", "group_label",
   "start_date", "end_date", "stage", "status", "is_capability", "is_available",
   "progress_manual", "color", "is_private", "owner_user_id", "manager_user_id",
+  "cost_approval_threshold_usd",
 ]);
 
 function pickPlan(body: Record<string, unknown>): Record<string, unknown> {
@@ -422,6 +423,42 @@ router.post("/plans/recompute", requireFull, async (req: Request, res: Response)
     console.error("[smrtplan] recompute failed:", e);
     res.status(500).json({ error: e instanceof Error ? e.message : "recompute failed" });
   }
+});
+
+/** POST /plans/:id/assign-all — hand every task in this plan to one person.
+ *  A single-performer plan (the common case: one person does the whole thing) is
+ *  otherwise re-assigned task by task. Only tasks that are still open move, so a
+ *  completed/dismissed task keeps its real history. The assignee must be a member
+ *  of this org — a foreign uuid would break the FK and half-assign the plan. */
+router.post("/plans/:id/assign-all", requireFull, async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const assignee = (req.body ?? {}).assignee_user_id;
+  if (typeof assignee !== "string" || !assignee) {
+    return res.status(400).json({ error: "assignee_user_id is required" });
+  }
+  const { data: member, error: mErr } = await db
+    .from("org_members").select("user_id")
+    .eq("org_id", orgId).eq("user_id", assignee).maybeSingle();
+  if (mErr) return res.status(500).json({ error: mErr.message });
+  if (!member) return res.status(400).json({ error: "assignee_user_id is not a member of this org" });
+
+  const { data: plan, error: pErr } = await db
+    .from("smrtplan_plans").select("id")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+
+  const { data, error } = await db
+    .from("tasks")
+    .update({ assigned_to_user_id: assignee, assignment_status: "accepted", updated_at: new Date().toISOString() })
+    .eq("organization_id", orgId)
+    .eq("plan_id", req.params.id)
+    // Same "still open" definition the scheduler uses (engine.ts TASK_OPEN_FILTER),
+    // by exclusion — an inclusion list would silently skip any status added later.
+    .not("status", "in", "(archived,completed,dismissed)")
+    .select("id");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ assigned: asRows(data).length });
 });
 
 router.get("/plans/repository", async (req: Request, res: Response) => {
@@ -2142,22 +2179,51 @@ async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<
   return attachStageTitles(orgId, await attachPlanTitles(orgId, await attachNeedsHandoff(orgId, asRows(data))));
 }
 
-/** GET /plan/:id/focus — my daily-minutes commitment to a plan (or null). */
+/** GET /plan/:id/focus — a daily-minutes commitment to a plan (or null).
+ *  Defaults to mine; `?user_id=` reads another member's (planner-only, so the
+ *  edit dialog can prefill the performer's minutes/workdays on a
+ *  single-performer plan). Org-scoped so a foreign plan's rows never leak. */
 router.get("/plan/:id/focus", async (req: Request, res: Response) => {
+  let targetUser = req.user!.id;
+  const asked = typeof req.query.user_id === "string" ? req.query.user_id : "";
+  if (asked && asked !== req.user!.id) {
+    if ((await resolveAccessLevel(req)) !== "full") {
+      return res.status(403).json({ error: "reading another member's commitment requires full (creator) access" });
+    }
+    targetUser = asked;
+  }
   const { data, error } = await db
     .from("smrtplan_focus")
     .select("*")
+    .eq("org_id", req.org!.id)
     .eq("plan_id", req.params.id)
-    .eq("user_id", req.user!.id)
+    .eq("user_id", targetUser)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ focus: data ?? null });
 });
 
-/** PUT /plan/:id/focus — upsert my daily-minutes commitment to a plan. */
+/** PUT /plan/:id/focus — upsert a daily-minutes commitment to a plan.
+ *  Defaults to MY commitment. A planner (full access) may pass `user_id` to set
+ *  the commitment for another member — needed for a single-performer plan, where
+ *  the manager configures the performer's minutes/workdays rather than their own.
+ *  Anyone else passing a foreign user_id is rejected, so a member can never
+ *  rewrite a teammate's commitment. */
 router.put("/plan/:id/focus", async (req: Request, res: Response) => {
   const planId = req.params.id;
   const body = req.body ?? {};
+  let targetUser = req.user!.id;
+  if (typeof body.user_id === "string" && body.user_id && body.user_id !== req.user!.id) {
+    if ((await resolveAccessLevel(req)) !== "full") {
+      return res.status(403).json({ error: "setting another member's commitment requires full (creator) access" });
+    }
+    const { data: member, error: memberErr } = await db
+      .from("org_members").select("user_id")
+      .eq("org_id", req.org!.id).eq("user_id", body.user_id).maybeSingle();
+    if (memberErr) return res.status(500).json({ error: memberErr.message });
+    if (!member) return res.status(400).json({ error: "user_id is not a member of this org" });
+    targetUser = body.user_id;
+  }
   const minutes = body.daily_minutes;
   if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes <= 0) {
     return res.status(400).json({ error: "daily_minutes must be a positive integer" });
@@ -2193,7 +2259,7 @@ router.put("/plan/:id/focus", async (req: Request, res: Response) => {
   const upsertRow: Record<string, unknown> = {
     org_id: req.org!.id,
     plan_id: planId,
-    user_id: req.user!.id,
+    user_id: targetUser,
     daily_minutes: minutes,
     active,
     updated_at: new Date().toISOString(),

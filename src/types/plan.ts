@@ -41,6 +41,11 @@ export interface Plan {
   color: string | null;
   is_private: boolean;
   owner_user_id: string | null;
+  /** Who approves this plan's deliverables and receives progress reports. */
+  manager_user_id?: string | null;
+  /** Cost-approval ceiling in USD: spend at/above it needs the manager's
+   *  approval. null = not configured. */
+  cost_approval_threshold_usd?: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

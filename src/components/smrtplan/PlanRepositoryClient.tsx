@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Lightbulb } from "lucide-react";
+import { Lightbulb, Settings2 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { PlanEditDialog } from "@/components/smrtplan/PlanEditDialog";
 import type { Plan, PlanStage } from "@/types/plan";
 
 const stageClasses: Record<PlanStage, string> = {
@@ -18,23 +20,46 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
   const t = useTranslations("smrtPlan");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
+  // The plan whose settings dialog is open. A repository card had no way to open
+  // anything, so a plan with no start_date was stranded here — this is the way in.
+  const [editing, setEditing] = useState<Plan | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const { plans } = await api<{ plans: Plan[] }>("/api/plans/repository");
+      setPlans(plans ?? []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const { plans } = await api<{ plans: Plan[] }>("/api/plans/repository");
-        if (alive) setPlans(plans ?? []);
-      } catch (e) {
-        if (alive) toast.error(e instanceof Error ? e.message : "Error");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    void load();
+  }, [load]);
+
+  /** Put a repository plan on the timeline: a start_date is exactly what moves it
+   *  from here to the board. Opens the settings dialog right after, since the
+   *  date, minutes, workdays and performer are all set in one place there.
+   *
+   *  "Today" is resolved in New York, not in the browser's/container's zone — a
+   *  plan started at 20:00 EDT must not be dated tomorrow. en-CA gives YYYY-MM-DD. */
+  async function promote(p: Plan) {
+    const iso = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    try {
+      await api(`/api/plans/${p.id}`, { method: "PATCH", body: { start_date: iso } });
+      setEditing({ ...p, start_date: iso });
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
 
   const title = (p: Plan) => (locale === "en" ? p.title_en || p.title_he : p.title_he);
 
@@ -78,11 +103,29 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
                   </div>
                   {p.goal && <p className="mt-1 text-[12.5px] text-muted-foreground">{p.goal}</p>}
                 </div>
+                {/* Quiet icon + one action, per the compact-UI rule: settings for
+                    configuring in place, promote for putting it on the board. */}
+                <div className="flex flex-shrink-0 items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(p)}
+                    title={t("edit.editPlan")} aria-label={t("edit.editPlan")}>
+                    <Settings2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => promote(p)}>
+                    {t("repository.promote")}
+                  </Button>
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
+
+      <PlanEditDialog
+        plan={editing}
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => void load()}
+      />
     </div>
   );
 }
