@@ -79,6 +79,8 @@ const smrtPlanItems = [
   { key: "planBoard",      href: "/plan",            icon: CalendarRange },
   { key: "planMy",         href: "/plan/my",         icon: CheckSquare   },
   { key: "planTeam",       href: "/plan/team",       icon: Users         },
+  // No planScore entry: the scoring screen belongs to a plan and is opened from
+  // the button beside the plan tabs (PlanBoardClient), not from the main nav.
   { key: "planRepository", href: "/plan/repository", icon: Archive       },
 ] as const;
 

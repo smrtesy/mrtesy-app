@@ -960,22 +960,23 @@ function SuggestionActions({
       <IconButton label={t("dismissWithReason")} color="violet" onClick={onDismissWithReason}>
         <ThumbsDown />
       </IconButton>
-      {/* NO generic "approve" on an unverified suggestion — the ONLY way it
-          leaves the inbox for the desk is file-by-level (the level dropdown
-          above), which verifies + commits it to today. This kills the old
-          one-tap approve that dropped a suggestion straight into the pool
-          (docs/pool-cleanup-fix-plan.md §4.2). Two exceptions keep a button:
-          an event ✓ closes its reminder; a backlog task (already verified,
-          resurfaced here) commits to today via "הוסף להיום". */}
-      {(isEvent || isBacklog) && (
-        <IconButton
-          label={isEvent ? t("closeReminder") : tTasks("row.addToToday")}
-          color="blue"
-          onClick={isEvent ? onApprove : onPlanToday}
-        >
-          {isEvent ? <Check /> : <ListPlus />}
-        </IconButton>
-      )}
+      {/* One-tap "add" on EVERY card, so an unverified suggestion doesn't force a
+          detour through the level dropdown just to be accepted:
+            • event            → ✓ closes its reminder (the canonical complete flow).
+            • backlog (verified, resurfaced) → "הוסף להיום" (planned_for = today).
+            • unverified suggestion → handleApprove: verifies AND commits to today
+              (quick → verified only; future-dated → the scheduled track).
+          This is NOT the old §4.2 one-tap approve: that one dropped a suggestion
+          into a standing pool with no day attached, which is what made cards
+          silently vanish. Approve now always lands on a concrete track — the same
+          destination file-by-level produces, minus the size decision. */}
+      <IconButton
+        label={isEvent ? t("closeReminder") : isBacklog ? tTasks("row.addToToday") : t("addToTasks")}
+        color="blue"
+        onClick={isEvent ? onApprove : isBacklog ? onPlanToday : onApprove}
+      >
+        {isEvent ? <Check /> : <ListPlus />}
+      </IconButton>
     </div>
   );
 }

@@ -2169,7 +2169,7 @@ const MINE_OR = (uid: string) => `assigned_to_user_id.eq.${uid},and(assigned_to_
 async function userLocalToday(uid: string): Promise<string> {
   const { data: us } = await db
     .from("user_settings").select("timezone").eq("user_id", uid).maybeSingle();
-  const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+  const tz = (us?.timezone as string | null) || "America/New_York";
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 }
 
