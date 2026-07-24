@@ -35,9 +35,14 @@ interface FocusTask {
  *  by its own content — an English/config snippet (FAL_KEY=…, env-var names)
  *  stays left-to-right, a Hebrew snippet flows right-to-left — neither is forced
  *  to the wrong side. Deep links stay verbatim (product rule: never strip a URL
- *  to its domain). */
+ *  to its domain).
+ *
+ *  A bare URL stops before trailing sentence punctuation, so "ראה
+ *  https://docs.example.com/a/b." links to …/a/b and not …/a/b. (which 404s) —
+ *  the one-click rule again. A URL that genuinely ends in ')' should be written
+ *  as a [text](url) link, which is matched first. */
 function renderInline(text: string): ReactNode[] {
-  const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]+)/g;
+  const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]*[^\s.,;:!?)\]])/g;
   const out: ReactNode[] = [];
   let last = 0;
   let k = 0;
@@ -157,31 +162,45 @@ function appCommandOf(link: string | null): string | null {
 }
 
 /** A short label at the start of a line ("הקשר:", "צעדים:", "המלצה:") — the
- *  structure plan descriptions are written in. Bounded to 18 letters so it can
- *  never match a sentence that merely contains a colon, and it requires
- *  whitespace after the colon so a URL ("https://…") is never a label. */
-const LABEL = /^([\p{L}\p{M}\- ]{2,18}):(\s+(.*))?$/u;
+ *  structure plan descriptions are written in. At most THREE words, so an
+ *  ordinary clause that merely happens to contain a colon ("בדוק את הקובץ ותקן:
+ *  זה חשוב") is not mistaken for a label; digits are allowed so "שלב 2:" and
+ *  "מקור 1:" qualify; and whitespace after the colon is required so a URL
+ *  ("https://…") can never be read as a label. */
+const WORD = "[\\p{L}\\p{M}\\p{N}\\-]+";
+const LABEL = new RegExp(`^(${WORD}(?: ${WORD}){0,2}):(\\s+(.*))?$`, "u");
 
-/** Split a description into display lines.
+/** Split ONE authored line into display lines.
  *
  *  Some plans are authored with real line breaks (the video pilot: 10–19 per
  *  task) and render as steps and sub-headings. Others arrive as ONE flowing
  *  paragraph with the structure inline — "הקשר: … צעדים: 1) … 2) … ❓ …" — and
  *  used to render as a single dense blob, which is what made the recruitment
- *  plan's tasks unreadable next to the video pilot's. When a description has no
- *  newline of its own we recover the structure it does carry: break before a
- *  label that opens a new clause, before an inline step marker ("1)" / "2."),
- *  and before a ❓/⚠️ callout. Nothing is dropped or reworded — only wrapped. */
+ *  plan's tasks unreadable next to the video pilot's. We recover the structure
+ *  such a line does carry: break before a label that opens a new SENTENCE,
+ *  before an inline "N)" step marker, and before a ❓/⚠️ callout. Nothing is
+ *  dropped or reworded — only wrapped. */
+function splitInline(line: string): string {
+  return (
+    line
+      // "…בהיקף. צעדים: 1) …" → a line of its own for "צעדים:". The boundary
+      // deliberately excludes ':' — "הקשר: ראה כאן: <url>" must stay one line
+      // rather than break into an empty "הקשר:" heading.
+      .replace(new RegExp(`(?<=[.!?;])\\s+(?=${WORD}(?: ${WORD}){0,2}:\\s)`, "gu"), "\n")
+      // Inline step markers are the "N)" form only. "N." is recognised at the
+      // START of an authored line (renderBody) but never mid-sentence, so prose
+      // like "גרסה 2. 10. עדכן" or "סעיף 3. ראה" is left alone.
+      .replace(/\s+(?=\d{1,2}\)\s)/g, "\n")
+      // The "ask Claude if this is unclear" callout the plan protocol appends.
+      .replace(/\s+(?=[❓⚠])/gu, "\n")
+  );
+}
+
+/** Every display line of a description. Runs on each authored line, so a
+ *  half-formatted description (some real newlines, steps still inline) gets the
+ *  same treatment as a single-paragraph one. */
 function toLines(description: string): string[] {
-  if (description.includes("\n")) return description.split("\n");
-  return description
-    // "…בהיקף. צעדים: 1) …" → a line of its own for "צעדים:".
-    .replace(/(?<=[.!?:;])\s+(?=[\p{L}\p{M}\- ]{2,18}:\s)/gu, "\n")
-    // Step markers. 1–2 digits only, so a year ("ב-2026. אחר כך") is not a step.
-    .replace(/\s+(?=\d{1,2}[).]\s)/g, "\n")
-    // The "ask Claude if this is unclear" callout the plan protocol appends.
-    .replace(/\s+(?=[❓⚠])/gu, "\n")
-    .split("\n");
+  return description.split("\n").flatMap((line) => splitInline(line).split("\n"));
 }
 
 /** Render the task body as readable, scannable blocks: blank lines become
@@ -194,8 +213,10 @@ function renderBody(description: string) {
   return toLines(description).map((raw, i) => {
     const line = raw.trim();
     if (!line) return null;
-    // The Claude Code deep link is covered by the button above — drop the line.
-    if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
+    // A line that is ONLY the Claude Code deep link is covered by the button
+    // above — drop it. Must be anchored: a link sitting inside a sentence
+    // ("חומרים: <link> ואחריו עדכן…") would take the whole sentence with it.
+    if (/^https?:\/\/claude\.ai\/code\S*$/.test(line)) return null;
     // A horizontal rule (---) becomes an actual divider, not literal dashes.
     if (/^(-{3,}|\*{3,})$/.test(line)) return <hr key={i} className="my-3 border-border" />;
     // Sub-items (indented in the source) get an extra hanging indent, like the doc.
@@ -247,6 +268,11 @@ function renderBody(description: string) {
     return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });
 }
+
+/** A task in a terminal state. Mirrors the server's TASK_DONE set exactly —
+ *  'dismissed' included — so a dismissed task can't show as "upcoming" with a
+ *  live Done button while the server refuses to ever name it today's task. */
+const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
 function fmtClock(totalSeconds: number): string {
   const sign = totalSeconds < 0 ? "-" : "";
@@ -462,9 +488,9 @@ export function FocusSession({
     setBlocking(false);
   };
 
-  const doneCount = tasks.filter((tk) => tk.status === "completed" || tk.status === "archived").length;
+  const doneCount = tasks.filter((tk) => DONE_STATUSES.has(tk.status)).length;
   const selTitle = selected ? (locale === "he" && selected.title_he ? selected.title_he : selected.title) : null;
-  const isDone = selected?.status === "completed" || selected?.status === "archived";
+  const isDone = !!selected && DONE_STATUSES.has(selected.status);
   const actionable = !!selected && !isDone && !selected.blocked;
   const claudeLink = actionable ? claudeLinkOf(selected?.description) : null;
   const appCommand = appCommandOf(claudeLink);
@@ -472,7 +498,7 @@ export function FocusSession({
 
   /** The status chip for a task: done / blocked / today's / in-progress / upcoming. */
   function statusBadge(tk: FocusTask): { label: string; cls: string } {
-    if (tk.status === "completed" || tk.status === "archived")
+    if (DONE_STATUSES.has(tk.status))
       return { label: t("statusDone"), cls: "bg-status-ok-bg text-status-ok" };
     if (tk.blocked)
       return { label: t("statusBlocked"), cls: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" };

@@ -2218,7 +2218,10 @@ function dependencyDepths(tasks: Row[]): Map<string, number> {
  *  (verified: all of the video pilot's tasks carry 22:53:01.740642), which made
  *  the sort a total tie and let Postgres' arbitrary row order decide the list;
  *  and it can be plain wrong (verified: one recruitment-plan task carries the
- *  FIRST task's timestamp).
+ *  FIRST task's timestamp). `serial` is assigned per insert by trg_tasks_serial
+ *  (the column is nullable and carries no unique constraint, but nothing writes
+ *  it by hand and every existing row has a distinct value; a NULL would sort
+ *  last, not at random).
  *
  *  Why depth before `serial`: creation order is not always plan order either —
  *  the video pilot's tasks were inserted REVERSED inside each stage (בדיקה B
@@ -2227,7 +2230,7 @@ function dependencyDepths(tasks: Row[]): Map<string, number> {
  *  dependency graph, which is correct in both plans, and `serial` only breaks
  *  ties between genuinely parallel tasks. */
 async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<Row[]> {
-  const [{ data, error }, { data: stageRows }] = await Promise.all([
+  const [{ data, error }, { data: stageRows, error: stageErr }] = await Promise.all([
     db
       .from("tasks")
       .select(MY_TASK_FIELDS)
@@ -2239,6 +2242,9 @@ async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<
     db.from("smrtplan_stages").select("id, sequence").eq("org_id", orgId).eq("plan_id", planId),
   ]);
   if (error) console.error("[smrtplan focus] myPlanTasks:", error.message);
+  // A silent stages failure would flatten every task to rank 999, which turns
+  // the plan order (and therefore "today's task") into insertion order.
+  if (stageErr) console.error("[smrtplan focus] myPlanTasks stages:", stageErr.message);
   const seq = new Map<string, number>();
   for (const s of asRows(stageRows)) seq.set(s.id as string, (s.sequence as number) ?? 999);
   // needs must be attached BEFORE ordering — the depth is computed from it.
@@ -2920,7 +2926,8 @@ const PLAN_BUILD_SYSTEM = `אתה מתכנן פרויקטים. מקבל תיאו
 - 🤖 full = ה-AI עושה לבד · 🤝 assist = ה-AI מנסח והאדם מאשר · 👤 human = אנושי. תן ai_prompt מוכן ל-full/assist.
 - שמור קישורים עמוקים (URLs) כלשונם בכל שדה טקסט — לעולם אל תקצר לדומיין.
 - **פורמט ה-description — חובה.** העובד קורא אותו במסך המשימה היומית, שמרנדר
-  שורות. כתוב אותו בשורות אמיתיות (\\n), לא כפסקה אחת רצופה:
+  שורות. הפרד שורות בתו הבריחה \\n **בתוך** מחרוזת ה-JSON (לא שורה פיזית —
+  שורה פיזית בתוך מחרוזת שוברת את ה-JSON). לא פסקה אחת רצופה:
   שורה "הקשר: <למה זה נדרש>"; שורה "צעדים:"; ואחריה כל צעד בשורה נפרדת
   בפורמט "1. <פעולה אחת>"; שורה "חומרים:" עם הקישורים המלאים אם יש.
   צעד = פעולה אחת בלשון פקודה. ערך טכני (שם משתנה, פקודה, נתיב) בגרשיים
