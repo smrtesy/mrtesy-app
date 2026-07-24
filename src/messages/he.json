@@ -173,7 +173,9 @@
     "focusPane": "מקד טאב זה",
     "resizePane": "שנה רוחב",
     "paneError": "משהו השתבש בטאב הזה",
-    "paneReload": "טען מחדש"
+    "paneReload": "טען מחדש",
+    "maximizePane": "רוחב מלא",
+    "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
   },
   "nav": {
     "tasks": "משימות",
