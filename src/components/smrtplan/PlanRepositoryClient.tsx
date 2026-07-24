@@ -23,6 +23,17 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
   // The plan whose settings dialog is open. A repository card had no way to open
   // anything, so a plan with no start_date was stranded here — this is the way in.
   const [editing, setEditing] = useState<Plan | null>(null);
+  // Only a planner (full access) may edit or promote — the same gate the board
+  // applies. Without it, a lite member gets buttons that 403 (and a Delete).
+  const [canEdit, setCanEdit] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ access_level: string }>("/api/plans/access")
+      .then((d) => { if (alive) setCanEdit(d.access_level === "full"); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -52,8 +63,12 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
       month: "2-digit",
       day: "2-digit",
     }).format(new Date());
+    // The plan leaves this screen for the board, and closing the dialog does not
+    // undo it — so confirm first rather than moving it on a stray click.
+    if (!confirm(t("repository.promoteConfirm", { date: iso }))) return;
     try {
       await api(`/api/plans/${p.id}`, { method: "PATCH", body: { start_date: iso } });
+      toast.success(t("repository.promoted"));
       setEditing({ ...p, start_date: iso });
       await load();
     } catch (e) {
@@ -105,15 +120,17 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
                 </div>
                 {/* Quiet icon + one action, per the compact-UI rule: settings for
                     configuring in place, promote for putting it on the board. */}
-                <div className="flex flex-shrink-0 items-center gap-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(p)}
-                    title={t("edit.editPlan")} aria-label={t("edit.editPlan")}>
-                    <Settings2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => promote(p)}>
-                    {t("repository.promote")}
-                  </Button>
-                </div>
+                {canEdit && (
+                  <div className="flex flex-shrink-0 items-center gap-1">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(p)}
+                      title={t("edit.editPlan")} aria-label={t("edit.editPlan")}>
+                      <Settings2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => promote(p)}>
+                      {t("repository.promote")}
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}

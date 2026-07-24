@@ -455,9 +455,16 @@ router.post("/plans/:id/assign-all", requireFull, async (req: Request, res: Resp
     .eq("plan_id", req.params.id)
     // Same "still open" definition the scheduler uses (engine.ts TASK_OPEN_FILTER),
     // by exclusion — an inclusion list would silently skip any status added later.
+    // 'declined' is also left alone: re-accepting refused work behind the
+    // performer's back is a decision, not a bulk edit.
     .not("status", "in", "(archived,completed,dismissed)")
+    .neq("assignment_status", "declined")
     .select("id");
   if (error) return res.status(500).json({ error: error.message });
+  // A task's duration is estimated_hours ÷ ITS ASSIGNEE's capacity, so changing
+  // assignees invalidates every computed date. Without this, Gantt bars and the
+  // late/at_risk health verdict stay stale until the next org-wide recompute.
+  await autoRecompute(orgId);
   res.json({ assigned: asRows(data).length });
 });
 

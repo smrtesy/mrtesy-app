@@ -61,6 +61,11 @@ export function PlanEditDialog({
     cost_approval_threshold_usd: "",
   });
   const [saving, setSaving] = useState(false);
+  // Snapshot of the form as it was loaded, so an edit PATCHes only the fields the
+  // user actually touched. Sending the whole record would let a dialog left open
+  // for hours write back stale values — e.g. re-writing status 'draft' after
+  // someone else approved the plan, which re-hides every task from the team.
+  const [initial, setInitial] = useState<Record<string, unknown> | null>(null);
   // Single-performer plan: hand every open task to one person on save, and point
   // the minutes/workdays commitment below at THAT person instead of the editor.
   // Blank = leave per-task assignees alone (a mixed-team plan).
@@ -82,7 +87,7 @@ export function PlanEditDialog({
 
   useEffect(() => {
     if (!open) return;
-    setForm({
+    const loaded = {
       title_he: plan?.title_he ?? "",
       title_en: plan?.title_en ?? "",
       goal: plan?.goal ?? "",
@@ -98,16 +103,25 @@ export function PlanEditDialog({
       manager_user_id: plan?.manager_user_id ?? "",
       cost_approval_threshold_usd:
         plan?.cost_approval_threshold_usd != null ? String(plan.cost_approval_threshold_usd) : "",
-    });
+    };
+    setForm(loaded);
+    setInitial(loaded);
     setAssignAllTo("");
   }, [open, plan]);
 
   // Prefill the daily-minutes commitment when editing an existing plan. When a
   // single performer is chosen we read THEIR commitment, so the minutes/workdays
   // shown are the ones actually being edited (and not silently the editor's).
+  // Prefill on open only. Switching the performer does NOT clear what was typed —
+  // that value is exactly what should be written for the newly chosen person; it
+  // is only replaced when that person already has a commitment of their own.
   useEffect(() => {
+    if (!open || !plan?.id) return;
     setDailyMinutes("");
     setWorkdays(DEFAULT_WORKDAYS);
+  }, [open, plan?.id, DEFAULT_WORKDAYS]);
+
+  useEffect(() => {
     if (!open || !plan?.id) return;
     let alive = true;
     const q = assignAllTo ? `?user_id=${encodeURIComponent(assignAllTo)}` : "";
@@ -145,7 +159,7 @@ export function PlanEditDialog({
       thresholdValue = n;
     }
     setSaving(true);
-    const body = {
+    const full: Record<string, unknown> = {
       title_he: form.title_he.trim(),
       title_en: form.title_en.trim() || null,
       goal: form.goal.trim() || null,
@@ -161,9 +175,19 @@ export function PlanEditDialog({
       manager_user_id: form.manager_user_id || null,
       cost_approval_threshold_usd: thresholdValue,
     };
+    // Editing: PATCH only what changed in THIS dialog, so a value someone else
+    // updated meanwhile (notably status draft→active) is never overwritten.
+    const changed: Record<string, unknown> = {};
+    if (initial) {
+      for (const [k, v] of Object.entries(full)) {
+        if (form[k as keyof typeof form] !== initial[k]) changed[k] = v;
+      }
+    }
     try {
       if (plan?.id) {
-        await api(`/api/plans/${plan.id}`, { method: "PATCH", body });
+        if (Object.keys(changed).length) {
+          await api(`/api/plans/${plan.id}`, { method: "PATCH", body: changed });
+        }
         // Single-performer plan: hand every still-open task to that person. Runs
         // before the commitment upsert so the minutes land on someone who now
         // actually holds the tasks.
@@ -192,7 +216,7 @@ export function PlanEditDialog({
           });
         }
       } else {
-        await api("/api/plans", { method: "POST", body });
+        await api("/api/plans", { method: "POST", body: full });
       }
       onSaved();
       onClose();
@@ -377,11 +401,11 @@ export function PlanEditDialog({
             </Field>
           </div>
 
-          {/* Money ceiling: spend at/above it needs the manager's approval. */}
+          {/* Money ceiling: recorded on the plan as the agreed limit. No approval
+              task is opened automatically yet — the hint says so plainly. */}
           <Field label={te("costThreshold")}>
             <Input type="number" min={0} step={10} value={form.cost_approval_threshold_usd}
-              onChange={(e) => set("cost_approval_threshold_usd", e.target.value)} dir="ltr"
-              placeholder={te("costThresholdHint")} />
+              onChange={(e) => set("cost_approval_threshold_usd", e.target.value)} dir="ltr" />
             <p className="mt-1 text-[11px] text-muted-foreground">{te("costThresholdHint")}</p>
           </Field>
 
