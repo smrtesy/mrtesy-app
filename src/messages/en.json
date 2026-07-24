@@ -3797,6 +3797,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "waitForClaude": "Waiting for Claude",
+    "aiPrompt": "Ready-to-run Claude prompt",
+    "aiPromptHint": "Copy it into a Claude chat to start this task",
     "statusWaitingClaude": "Waiting for Claude",
     "statusAwaitingConfirm": "Awaiting your confirmation"
   },
