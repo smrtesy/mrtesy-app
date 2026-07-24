@@ -922,7 +922,8 @@ const MY_TASK_FIELDS =
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
   "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since, " +
-  // serial = the per-insert sequence, the plan-order key (see myPlanTasks).
+  // serial = the table-wide insert counter (one sequence for all tasks, across
+  // orgs), monotonic per insert — the plan-order key (see myPlanTasks).
   // ai_tier/ai_prompt = how this task gets done + its ready-to-run opening
   // prompt; the focus screen shows the prompt, so it must be selected here.
   "serial, ai_tier, ai_prompt";
@@ -2151,7 +2152,16 @@ const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
  *  deadline sort ranked the plan's very first task last (verified on the
  *  recruitment plan: task 1 → 2026-10-30, a mid-plan decision → 2026-10-19) and
  *  picked an arbitrary middle task as "today's". Plan order is what the worker
- *  expects: do the plan from the top. */
+ *  expects: do the plan from the top.
+ *
+ *  Supersedes the deadline sort + byPlanOrder tiebreaker that landed on main in
+ *  92a2c4a from a parallel session: that fix made a TIE deterministic, which
+ *  helps a plan with no dates (the video pilot), but the recruitment plan HAS
+ *  engine dates, so the deadline comparison was not a tie at all — it decided,
+ *  and decided wrongly. Plan order removes the need for a tiebreaker entirely,
+ *  and myPlanTasks keeps `serial` as its own last key. A real user-set due_date
+ *  therefore no longer jumps the queue in a sequential plan; that is deliberate.
+ */
 function serverCurrentStage(tasks: Row[]): Row | null {
   return (
     tasks.find(

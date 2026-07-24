@@ -25,7 +25,7 @@ type Run = {
   qc_scores: Record<string, number>;
   overridden: boolean;
   my_scores: MyScore[];
-  /** Grid keys from the server — safe while blind (see comparisonKeys). */
+  /** Grid keys from the server: which column (model) and which row (shot). */
   model_key: number;
   shot_key: string;
   /** The locked reference this run was anchored to (pinned for comparison). */
@@ -61,13 +61,6 @@ function formatMetrics(scores: Record<string, number> | null | undefined): strin
 /** Comparison-grid geometry: one column per model, sized to the image so at
  *  least five columns fit on a normal screen (5 × 232 + label ≈ 1240px). */
 const COL_W = 232;
-
-/** Blind column labels — a model's identity stays hidden until scores are
- *  locked, so columns are letters ("model A/B/C") and only then real names. */
-const BLIND_LETTERS = "אבגדהוזחטי";
-function blindName(i: number): string {
-  return BLIND_LETTERS[i] ?? String(i + 1);
-}
 
 /** Row label from the server's shot_key ("s:kitchen" → "kitchen"). */
 function shotLabel(shotKey: string): string {
@@ -140,7 +133,7 @@ export function ExperimentScoring({
   /** Pivot the flat run list into the comparison grid: a stable column per
    *  model, a row per shot, and the run that sits in each cell. */
   const grid = useMemo(() => {
-    // Columns: the server's anonymous model_key (stable, blind-safe).
+    // Columns: one per model, keyed by the server's stable model_key.
     const cols = [...new Set(filteredRuns.map((r) => r.model_key))].sort((a, b) => a - b);
     // A cell holds a LIST: a model can have several runs for the same shot —
     // repeats (task 7 runs 3 per combination) or a re-run. Never drop one.
@@ -156,7 +149,7 @@ export function ExperimentScoring({
     const rows = [...rowMap.entries()].sort((a, b) =>
       a[0].localeCompare(b[0], undefined, { numeric: true }),
     );
-    // Real names only after reveal; before that the column is just a letter.
+    // Column header: the model name — nothing is hidden (rule 9).
     const nameFor = (key: number) =>
       filteredRuns.find((r) => r.model_key === key)?.model ?? null;
     return { cols, rows, nameFor };
@@ -291,13 +284,13 @@ export function ExperimentScoring({
             <div className="sticky top-0 z-20 border-b bg-background pb-1.5 text-center text-[12px] font-semibold text-primary">
               {t("reference")}
             </div>
-            {grid.cols.map((key, i) => (
+            {grid.cols.map((key) => (
               <div
                 key={key}
                 className="sticky top-0 z-10 truncate border-b bg-background pb-1.5 text-center text-[12px] font-semibold"
-                title={revealed ? grid.nameFor(key) ?? undefined : undefined}
+                title={grid.nameFor(key) ?? undefined}
               >
-                {revealed ? grid.nameFor(key) ?? "—" : `${t("model")} ${blindName(i)}`}
+                {grid.nameFor(key) ?? "—"}
               </div>
             ))}
 
@@ -489,7 +482,7 @@ export function ExperimentScoring({
                           ) : null}
 
                           <div className="text-muted-foreground">
-                            {t("model")}: {revealed ? run.model ?? "—" : t("hidden")}
+                            {t("model")}: {run.model ?? "—"}
                           </div>
 
                           {run.seed != null ? (
