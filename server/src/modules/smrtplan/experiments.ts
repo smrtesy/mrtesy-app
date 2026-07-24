@@ -141,8 +141,15 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
     created_by: userId,
   };
 
-  const { data, error } = await db.from("experiment_runs").insert(insert).select("id").single();
-  if (error || !data) return res.status(500).json({ error: error?.message ?? "insert failed" });
+  // Idempotent on the blind code: the harness re-posts the same run whenever it
+  // re-syncs runs.jsonl (its authoritative local log) — e.g. after QC is
+  // recomputed — so a plain insert duplicated rows. (org_id, code) is unique.
+  const { data, error } = await db
+    .from("experiment_runs")
+    .upsert(insert, { onConflict: "org_id,code" })
+    .select("id")
+    .single();
+  if (error || !data) return res.status(500).json({ error: error?.message ?? "upsert failed" });
   res.json({ ok: true, id: data.id });
 });
 
