@@ -332,10 +332,31 @@ machineRouter.post("/experiments/report", async (req: Request, res: Response) =>
 
 export const experimentsAuthedRouter = Router();
 
-/** The run fields hidden until the caller has locked a score. NOTE: `prompt` is
- *  intentionally NOT blind — the user wants full prompt transparency at all
- *  times; only model/method/seed stay hidden until reveal. */
-const BLIND_FIELDS = ["model", "method", "seed"] as const;
+/** The run fields hidden until the caller has locked a score. NOTE: `prompt` and
+ *  `seed` are intentionally NOT blind — the user wants full transparency of what
+ *  produced each output while scoring, and neither identifies the model (the
+ *  harness runs the SAME seed across every model for a given shot). Only the
+ *  model and its feeding method stay hidden until reveal. */
+const BLIND_FIELDS = ["model", "method"] as const;
+
+/** Comparison-grid keys, always returned — they let the UI pivot runs into
+ *  "a column per model, a row per shot" WITHOUT leaking identity while blind:
+ *   - model_key: the model's index among the distinct models in this response
+ *     (sorted, so it is stable across reloads). The UI shows it as a letter.
+ *   - shot_key: which shot this is (scene, else variation, else seed), so the
+ *     same pose from every model lands in one row. Derived, never the raw seed.
+ */
+function comparisonKeys(runs: Row[]): { modelKey: Map<string, number>; shotKeyOf: (r: Row) => string } {
+  const models = [...new Set(runs.map((r) => String(r.model ?? "")))].sort();
+  const modelKey = new Map(models.map((m, i) => [m, i]));
+  const shotKeyOf = (r: Row): string => {
+    if (r.scene) return `s:${String(r.scene)}`;
+    if (r.variation != null) return `v:${String(r.variation)}`;
+    if (r.seed != null) return `d:${String(r.seed)}`;
+    return `r:${String(r.id)}`;
+  };
+  return { modelKey, shotKeyOf };
+}
 
 /**
  * GET /experiments/runs?plan_id=&test_label= — runs for the caller's org, plan,
@@ -383,8 +404,19 @@ experimentsAuthedRouter.get("/experiments/runs", async (req: Request, res: Respo
     scoresByRun.set(rid, arr);
   }
 
+  // Grid keys are computed BEFORE blinding (they are derived, not identifying).
+  const { modelKey, shotKeyOf } = comparisonKeys(runs);
   const out = runs.map((r) => {
-    const run: Row = { ...r, my_scores: scoresByRun.get(r.id as string) ?? [] };
+    const meta = (r.meta ?? {}) as Record<string, unknown>;
+    const run: Row = {
+      ...r,
+      my_scores: scoresByRun.get(r.id as string) ?? [],
+      model_key: modelKey.get(String(r.model ?? "")) ?? 0,
+      shot_key: shotKeyOf(r),
+      // The locked reference the run was anchored to — shown pinned beside the
+      // outputs so the operator can compare against the original.
+      reference_url: typeof meta.reference_url === "string" ? meta.reference_url : null,
+    };
     if (!revealed) for (const f of BLIND_FIELDS) run[f] = null;
     return run;
   });
