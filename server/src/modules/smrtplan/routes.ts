@@ -591,7 +591,9 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
   } else {
     query = query.eq("plan_id", req.params.id);
   }
-  const { data: tasks, error } = await query.order("created_at", { ascending: true });
+  // serial (per-insert sequence), not created_at: a batch-created plan can share
+  // one created_at across every task, which made the board order arbitrary.
+  const { data: tasks, error } = await query.order("serial", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   // Roster tasks live in other plans, so show which plan each is in.
   const enriched = await attachNeedsHandoff(req.org!.id, asRows(tasks));
@@ -752,7 +754,9 @@ router.get("/plans/:id/review", async (req: Request, res: Response) => {
     .eq("organization_id", orgId)
     .eq("plan_id", planId)
     .order("due_date", { ascending: true, nullsFirst: false })
-    .order("created_at", { ascending: true });
+    // serial breaks the tie: a plan with no dates ties on every row, and
+    // created_at is not unique per task (batch create), so it decided nothing.
+    .order("serial", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   const tasks = asRows(taskRows);
 
@@ -864,7 +868,7 @@ router.get("/plans/:id/dep-candidates", requireFull, async (req: Request, res: R
       .select("id, title, title_he, plan_id")
       .eq("organization_id", req.org!.id)
       .not("plan_id", "is", null)
-      .order("created_at", { ascending: true }),
+      .order("serial", { ascending: true }),
     db
       .from("smrtplan_plans")
       .select("id, title_he, title_en, is_capability")
@@ -902,7 +906,7 @@ router.get("/plan/all-tasks", async (req: Request, res: Response) => {
     .eq("organization_id", req.org!.id)
     .not("plan_id", "is", null)
     .order("plan_id", { ascending: true })
-    .order("created_at", { ascending: true });
+    .order("serial", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ tasks: await attachPlanTitles(req.org!.id, await attachNeedsHandoff(req.org!.id, asRows(data))) });
 });
@@ -917,7 +921,11 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since";
+  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since, " +
+  // serial = the per-insert sequence, the plan-order key (see myPlanTasks).
+  // ai_tier/ai_prompt = how this task gets done + its ready-to-run opening
+  // prompt; the focus screen shows the prompt, so it must be selected here.
+  "serial, ai_tier, ai_prompt";
 
 /** Attach each task's plan title (so a worker/me view can show which plan it's in). */
 async function attachPlanTitles(orgId: string, tasks: Row[]): Promise<Row[]> {
@@ -2132,31 +2140,25 @@ const PROJECTION_BUFFER = 0.2;
 
 const TASK_DONE = new Set(["completed", "archived", "dismissed"]);
 
-/** First ready task of mine (server mirror of the client zoneOf/byUrgency util,
- *  which can't be imported across the client/server package boundary — §5).
- *  A task is ready when no need is unsatisfied and it isn't in a terminal state;
- *  order is earliest effective deadline (min of due_date, latest_finish) first,
- *  critical breaking ties. */
+/** The ONE definition of "my current task" in a plan: the FIRST task in plan
+ *  order that is open (not terminal) and not blocked by an unsatisfied need.
+ *  `tasks` must already be in plan order — myPlanTasks() guarantees that, and it
+ *  is the only source these callers use, so the focus screen, the daily desk
+ *  block and /focus-stage can never disagree about which task is "today's".
+ *
+ *  It deliberately does NOT sort by deadline. latest_finish is a backward-pass
+ *  slack value: a task with no dependents gets the LATEST allowed finish, so a
+ *  deadline sort ranked the plan's very first task last (verified on the
+ *  recruitment plan: task 1 → 2026-10-30, a mid-plan decision → 2026-10-19) and
+ *  picked an arbitrary middle task as "today's". Plan order is what the worker
+ *  expects: do the plan from the top. */
 function serverCurrentStage(tasks: Row[]): Row | null {
-  const eff = (t: Row): string | null => {
-    const due = (t.due_date as string | null) ?? null;
-    const lf = (t.latest_finish as string | null) ?? null;
-    if (due && lf) return due < lf ? due : lf;
-    return due || lf || null;
-  };
-  const ready = tasks.filter(
-    (t) => !TASK_DONE.has(t.status as string)
-      && !((t.needs as { satisfied?: boolean }[] | undefined) ?? []).some((n) => !n.satisfied),
+  return (
+    tasks.find(
+      (t) => !TASK_DONE.has(t.status as string)
+        && !((t.needs as { satisfied?: boolean }[] | undefined) ?? []).some((n) => !n.satisfied),
+    ) ?? null
   );
-  ready.sort((a, b) => {
-    const da = eff(a); const db_ = eff(b);
-    if (da && db_) { if (da !== db_) return da < db_ ? -1 : 1; }
-    else if (da) return -1;
-    else if (db_) return 1;
-    if (!!a.is_critical !== !!b.is_critical) return a.is_critical ? -1 : 1;
-    return 0;
-  });
-  return ready[0] ?? null;
 }
 
 /** "My tasks" ownership filter: assigned to me, or unassigned ones I created —
@@ -2173,17 +2175,86 @@ async function userLocalToday(uid: string): Promise<string> {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 }
 
-/** Fetch MY open (non-done) tasks for one plan, with needs/plan/stage attached. */
+/** How many prerequisites deep each task sits — the longest chain of `needs`
+ *  edges behind it. A task nobody gates is 0; a task whose deepest input is at
+ *  depth 2 is 3. This is the plan's real sequence: it is derived from the
+ *  dependency graph the plan was built with, so it holds even when the rows were
+ *  created in an order that does not match the plan.
+ *
+ *  Memoized DFS, cycle-safe (a task caught in a cycle resolves to its
+ *  already-computed partial depth instead of recursing forever). Prerequisites
+ *  outside the given set (another member's task) count as depth 0 — they still
+ *  gate via `needs`/blocked, they just can't deepen a chain we can't see. */
+function dependencyDepths(tasks: Row[]): Map<string, number> {
+  const byId = new Map(tasks.map((t) => [t.id as string, t]));
+  const depth = new Map<string, number>();
+  const visiting = new Set<string>();
+  const of = (id: string): number => {
+    const cached = depth.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) return 0; // cycle — stop, don't recurse
+    const t = byId.get(id);
+    if (!t) return 0;
+    visiting.add(id);
+    const needs = (t.needs as { task_id?: string }[] | undefined) ?? [];
+    let d = 0;
+    for (const n of needs) {
+      if (!n.task_id || !byId.has(n.task_id)) continue;
+      d = Math.max(d, of(n.task_id) + 1);
+    }
+    visiting.delete(id);
+    depth.set(id, d);
+    return d;
+  };
+  for (const t of tasks) of(t.id as string);
+  return depth;
+}
+
+/** Fetch MY tasks for one plan, with needs/plan/stage attached, IN PLAN ORDER:
+ *  stage sequence → dependency depth → `serial`.
+ *
+ *  Why not `created_at` (what this used to sort on): it is not usable as an
+ *  ordering key. A batch-created plan can share ONE timestamp across every task
+ *  (verified: all of the video pilot's tasks carry 22:53:01.740642), which made
+ *  the sort a total tie and let Postgres' arbitrary row order decide the list;
+ *  and it can be plain wrong (verified: one recruitment-plan task carries the
+ *  FIRST task's timestamp).
+ *
+ *  Why depth before `serial`: creation order is not always plan order either —
+ *  the video pilot's tasks were inserted REVERSED inside each stage (בדיקה B
+ *  before בדיקה A, "להפיק את כל השוטים" before the shot list it needs), so
+ *  serial alone would have browsed the plan backwards. Depth comes from the
+ *  dependency graph, which is correct in both plans, and `serial` only breaks
+ *  ties between genuinely parallel tasks. */
 async function myPlanTasks(orgId: string, uid: string, planId: string): Promise<Row[]> {
-  const { data, error } = await db
-    .from("tasks")
-    .select(MY_TASK_FIELDS)
-    .eq("organization_id", orgId)
-    .eq("plan_id", planId)
-    .or(MINE_OR(uid))
-    .not("assignment_status", "in", "(proposed,declined)");
+  const [{ data, error }, { data: stageRows }] = await Promise.all([
+    db
+      .from("tasks")
+      .select(MY_TASK_FIELDS)
+      .eq("organization_id", orgId)
+      .eq("plan_id", planId)
+      .or(MINE_OR(uid))
+      .not("assignment_status", "in", "(proposed,declined)")
+      .order("serial", { ascending: true }),
+    db.from("smrtplan_stages").select("id, sequence").eq("org_id", orgId).eq("plan_id", planId),
+  ]);
   if (error) console.error("[smrtplan focus] myPlanTasks:", error.message);
-  return attachStageTitles(orgId, await attachPlanTitles(orgId, await attachNeedsHandoff(orgId, asRows(data))));
+  const seq = new Map<string, number>();
+  for (const s of asRows(stageRows)) seq.set(s.id as string, (s.sequence as number) ?? 999);
+  // needs must be attached BEFORE ordering — the depth is computed from it.
+  const withNeeds = await attachNeedsHandoff(orgId, asRows(data));
+  const depth = dependencyDepths(withNeeds);
+  const rank = (t: Row): number[] => [
+    seq.get(t.stage_id as string) ?? 999,
+    depth.get(t.id as string) ?? 0,
+    (t.serial as number) ?? 0,
+  ];
+  withNeeds.sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2];
+  });
+  return attachStageTitles(orgId, await attachPlanTitles(orgId, withNeeds));
 }
 
 /** GET /plan/:id/focus — a daily-minutes commitment to a plan (or null).
@@ -2292,27 +2363,12 @@ router.get("/plan/:id/focus-stage", async (req: Request, res: Response) => {
 });
 
 /** GET /plan/:id/focus-tasks — ALL my tasks in this plan, in plan order (stage
- *  sequence, then creation), each flagged with status / blocked (+ blockers) /
- *  whether it is the current first-ready task. Powers the focus screen's
- *  prev/next browsing with a per-task status badge. */
+ *  sequence, then `serial` — see myPlanTasks), each flagged with status /
+ *  blocked (+ blockers) / whether it is the current first-ready task, and
+ *  carrying its ready-to-run Claude prompt. Powers the focus screen's prev/next
+ *  browsing with a per-task status badge. */
 router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
-  const tasks = await myPlanTasks(req.org!.id, req.user!.id, req.params.id);
-  const { data: stageRows } = await db
-    .from("smrtplan_stages")
-    .select("id, sequence")
-    .eq("org_id", req.org!.id)
-    .eq("plan_id", req.params.id);
-  const seq = new Map<string, number>();
-  for (const s of asRows(stageRows)) seq.set(s.id as string, (s.sequence as number) ?? 999);
-  const ordered = [...tasks].sort((a, b) => {
-    const sa = seq.get(a.stage_id as string) ?? 999;
-    const sb = seq.get(b.stage_id as string) ?? 999;
-    if (sa !== sb) return sa - sb;
-    const ca = (a.created_at as string) ?? "";
-    const cb = (b.created_at as string) ?? "";
-    return ca < cb ? -1 : ca > cb ? 1 : 0;
-  });
-  const isDone = (s: unknown) => s === "completed" || s === "archived";
+  const ordered = await myPlanTasks(req.org!.id, req.user!.id, req.params.id);
   const out = ordered.map((t) => {
     const needs = (t.needs as { satisfied?: boolean; title?: string }[] | undefined) ?? [];
     const blockers = needs.filter((n) => !n.satisfied).map((n) => n.title).filter(Boolean);
@@ -2328,12 +2384,14 @@ router.get("/plan/:id/focus-tasks", async (req: Request, res: Response) => {
       is_decision: t.is_decision ?? null,
       requires_debrief: t.requires_debrief ?? null,
       claude_waiting_since: (t.claude_waiting_since as string | null) ?? null,
+      ai_tier: (t.ai_tier as string | null) ?? null,
+      ai_prompt: (t.ai_prompt as string | null) ?? null,
     };
   });
-  // The current task = the FIRST in plan order that is open (not done) and not
-  // blocked — intuitive "what's next", instead of a deadline/critical sort that
-  // is arbitrary when the plan has no dates.
-  const currentItem = out.find((t) => !isDone(t.status) && !t.blocked) ?? null;
+  // "Today's task" comes from the SAME helper the daily desk block and
+  // /focus-stage use, so the two screens can never name different tasks.
+  const current = serverCurrentStage(ordered);
+  const currentItem = current ? out.find((t) => t.id === (current.id as string)) ?? null : null;
   if (currentItem) currentItem.is_current = true;
   res.json({ tasks: out, currentId: currentItem?.id ?? null });
 });
@@ -2842,7 +2900,7 @@ const PLAN_BUILD_SYSTEM = `אתה מתכנן פרויקטים. מקבל תיאו
     "key": "t1", "stage": "s1",
     "title": "כותרת המשימה בעברית",
     "definition_of_done": "מבחן הזר — איך יודעים שהמשימה הושלמה",
-    "description": "הקשר + צעדים + חומרים. שמור קישורים עמוקים כלשונם, מילה במילה.",
+    "description": "הקשר + צעדים + חומרים, מפורמט בשורות (ראה כלל הפורמט). שמור קישורים עמוקים כלשונם, מילה במילה.",
     "estimated_hours": <number>,
     "assignee": null,
     "depends_on": ["t0"],
@@ -2860,7 +2918,13 @@ const PLAN_BUILD_SYSTEM = `אתה מתכנן פרויקטים. מקבל תיאו
 - משימות בגודל ~1–4 שעות. אומדן מבוסס פרטים, לא ניחוש.
 - שאלות פתוחות = משימות-החלטה (is_decision: true), והמשימות שתלויות בהחלטה מפנות אליהן ב-affected_by.
 - 🤖 full = ה-AI עושה לבד · 🤝 assist = ה-AI מנסח והאדם מאשר · 👤 human = אנושי. תן ai_prompt מוכן ל-full/assist.
-- שמור קישורים עמוקים (URLs) כלשונם בכל שדה טקסט — לעולם אל תקצר לדומיין.`;
+- שמור קישורים עמוקים (URLs) כלשונם בכל שדה טקסט — לעולם אל תקצר לדומיין.
+- **פורמט ה-description — חובה.** העובד קורא אותו במסך המשימה היומית, שמרנדר
+  שורות. כתוב אותו בשורות אמיתיות (\\n), לא כפסקה אחת רצופה:
+  שורה "הקשר: <למה זה נדרש>"; שורה "צעדים:"; ואחריה כל צעד בשורה נפרדת
+  בפורמט "1. <פעולה אחת>"; שורה "חומרים:" עם הקישורים המלאים אם יש.
+  צעד = פעולה אחת בלשון פקודה. ערך טכני (שם משתנה, פקודה, נתיב) בגרשיים
+  אחוריות — \`כך\`. פסקה אחת רצופה נחשבת פלט שגוי.`;
 
 router.post("/plans/ai-build", requireFull, async (req: Request, res: Response) => {
   const uid = req.user!.id;

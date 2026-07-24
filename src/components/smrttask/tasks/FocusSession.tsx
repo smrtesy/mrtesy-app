@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock, Copy, Bot } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Lock, Copy, Bot, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -24,6 +24,10 @@ interface FocusTask {
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
   claude_waiting_since?: string | null;
+  /** How this task gets done: full = AI alone, assist = AI drafts, human = me. */
+  ai_tier?: string | null;
+  /** The ready-to-run opening prompt for the AI tiers (plan payload §13). */
+  ai_prompt?: string | null;
 }
 
 /** Render one line of task-body markdown: **bold**, `code`, [text](url), and
@@ -104,6 +108,37 @@ function CopyableCode({ text }: { text: string }) {
   );
 }
 
+/** The task's ready-to-run opening prompt for Claude (tasks.ai_prompt), which
+ *  the plan payload fills for every AI task. It was written to the DB on import
+ *  but nothing ever read it back, so on a plan whose descriptions carry no
+ *  claude.ai/code link the worker had no prompt at all — this is what puts it
+ *  back on screen. Collapsed by default (product rule: a new surface is a quiet
+ *  entry point, not permanent chrome); expanding reveals it with a copy button. */
+function ReadyPrompt({ text }: { text: string }) {
+  const t = useTranslations("focusSession");
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="w-full max-w-2xl text-start">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-medium text-primary transition-colors hover:bg-primary/10"
+      >
+        <Sparkles className="h-4 w-4" />
+        {t("aiPrompt")}
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {open ? (
+        <>
+          <CopyableCode text={text} />
+          <p className="px-2 text-[12px] text-muted-foreground" dir="auto">{t("aiPromptHint")}</p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /** The primary "open this task in Claude Code" link, if the body carries one. */
 function claudeLinkOf(description: string | null | undefined): string | null {
   return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
@@ -121,13 +156,42 @@ function appCommandOf(link: string | null): string | null {
   return cmd ? cmd[0] : null;
 }
 
+/** A short label at the start of a line ("הקשר:", "צעדים:", "המלצה:") — the
+ *  structure plan descriptions are written in. Bounded to 18 letters so it can
+ *  never match a sentence that merely contains a colon, and it requires
+ *  whitespace after the colon so a URL ("https://…") is never a label. */
+const LABEL = /^([\p{L}\p{M}\- ]{2,18}):(\s+(.*))?$/u;
+
+/** Split a description into display lines.
+ *
+ *  Some plans are authored with real line breaks (the video pilot: 10–19 per
+ *  task) and render as steps and sub-headings. Others arrive as ONE flowing
+ *  paragraph with the structure inline — "הקשר: … צעדים: 1) … 2) … ❓ …" — and
+ *  used to render as a single dense blob, which is what made the recruitment
+ *  plan's tasks unreadable next to the video pilot's. When a description has no
+ *  newline of its own we recover the structure it does carry: break before a
+ *  label that opens a new clause, before an inline step marker ("1)" / "2."),
+ *  and before a ❓/⚠️ callout. Nothing is dropped or reworded — only wrapped. */
+function toLines(description: string): string[] {
+  if (description.includes("\n")) return description.split("\n");
+  return description
+    // "…בהיקף. צעדים: 1) …" → a line of its own for "צעדים:".
+    .replace(/(?<=[.!?:;])\s+(?=[\p{L}\p{M}\- ]{2,18}:\s)/gu, "\n")
+    // Step markers. 1–2 digits only, so a year ("ב-2026. אחר כך") is not a step.
+    .replace(/\s+(?=\d{1,2}[).]\s)/g, "\n")
+    // The "ask Claude if this is unclear" callout the plan protocol appends.
+    .replace(/\s+(?=[❓⚠])/gu, "\n")
+    .split("\n");
+}
+
 /** Render the task body as readable, scannable blocks: blank lines become
  *  spacing (via the container's space-y), a line that is only a Claude Code deep
- *  link is dropped (the prominent button already covers it), a short line ending
- *  with ':' becomes a sub-heading, and every other line is a paragraph with its
- *  URLs linkified. Keeps long text comfortable instead of one dense blob. */
+ *  link is dropped (the prominent button already covers it), a line that is only
+ *  a label becomes a sub-heading (and a label + text keeps the label bold), and
+ *  every other line is a paragraph with its URLs linkified. Keeps long text
+ *  comfortable instead of one dense blob. */
 function renderBody(description: string) {
-  return description.split("\n").map((raw, i) => {
+  return toLines(description).map((raw, i) => {
     const line = raw.trim();
     if (!line) return null;
     // The Claude Code deep link is covered by the button above — drop the line.
@@ -151,7 +215,8 @@ function renderBody(description: string) {
         </div>
       );
     }
-    const num = line.match(/^(\d+)\.\s+(.*)$/);
+    // Both step forms — "1. צעד" (own-line authoring) and "1) צעד" (inline).
+    const num = line.match(/^(\d+)[.)]\s+(.*)$/);
     if (num) {
       return (
         <div key={i} className={`flex gap-2 ${pad}`}>
@@ -162,6 +227,22 @@ function renderBody(description: string) {
     }
     if (codeOnly(line)) {
       return <div key={i} className={pad}><CopyableCode text={line.trim().slice(1, -1)} /></div>;
+    }
+    // "צעדים:" alone → a sub-heading. "הקשר: <text>" → bold label + the text.
+    const label = line.match(LABEL);
+    if (label) {
+      const rest = label[3] ?? "";
+      if (!rest) {
+        return (
+          <p key={i} className={`pt-1 font-semibold text-foreground ${pad}`}>{label[1]}:</p>
+        );
+      }
+      return (
+        <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>
+          <strong className="font-semibold text-foreground">{label[1]}:</strong>{" "}
+          {renderInline(rest)}
+        </p>
+      );
     }
     return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });
@@ -475,6 +556,7 @@ export function FocusSession({
                 {renderBody(selected.description)}
               </div>
             ) : null}
+            {actionable && selected.ai_prompt ? <ReadyPrompt text={selected.ai_prompt} /> : null}
             {selected.blocked && selected.blockers.length > 0 ? (
               <p className="flex max-w-xl items-center gap-1.5 text-[13px] text-muted-foreground" dir="auto">
                 <Lock className="h-4 w-4 shrink-0" />

@@ -3796,6 +3796,8 @@
     "copy": "העתק",
     "copied": "הועתק",
     "waitForClaude": "מחכה לקלוד",
+    "aiPrompt": "פרומפט מוכן לקלוד",
+    "aiPromptHint": "העתק והדבק בצ׳אט של קלוד כדי להתחיל את המשימה",
     "statusWaitingClaude": "מחכה לקלוד",
     "statusAwaitingConfirm": "ממתין לאישורך"
   },
