@@ -3907,7 +3907,7 @@
   },
   "experiments": {
     "title": "Score outputs",
-    "lead": "Compare each row side by side against the reference and rate 1–5. Model names are revealed only after scores are locked.",
+    "lead": "Compare each row against the reference and rate 1–5: is this the same character? (Consistent with six fingers is not consistent.) Every click saves.",
     "reference": "Reference",
     "noReference": "No reference image",
     "zoom": "Zoom",
