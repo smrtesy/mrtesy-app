@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut, Sparkles } from "lucide-react";
+import Link from "next/link";
+import { RefreshCw, Plus, Pencil, Flag, Check, ChevronDown, ChevronLeft, AlertTriangle, Pin, X, Settings2, Undo2, Redo2, ZoomIn, ZoomOut, Sparkles, FlaskConical } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { cn } from "@/lib/utils";
@@ -1392,19 +1393,30 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           ) : (
             <>
               {/* list (rows + needs) vs gantt (bars + dependency arrows) */}
-              <div className="mb-3 flex w-fit gap-1 rounded-lg border bg-card p-1">
-                {([["list", "effort.viewList"], ["gantt", "effort.viewGantt"], ["journal", "effort.viewJournal"], ["review", "effort.viewReview"]] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setDetailView(key)}
-                    className={cn(
-                      "rounded-md px-3 py-1 text-[12px] font-medium transition-colors",
-                      detailView === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
-                    )}
-                  >
-                    {t(label)}
-                  </button>
-                ))}
+              <div className="mb-3 flex w-fit flex-wrap items-center gap-2">
+                <div className="flex w-fit gap-1 rounded-lg border bg-card p-1">
+                  {([["list", "effort.viewList"], ["gantt", "effort.viewGantt"], ["journal", "effort.viewJournal"], ["review", "effort.viewReview"]] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setDetailView(key)}
+                      className={cn(
+                        "rounded-md px-3 py-1 text-[12px] font-medium transition-colors",
+                        detailView === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                      )}
+                    >
+                      {t(label)}
+                    </button>
+                  ))}
+                </div>
+                {/* Scoring belongs to THIS plan — carries plan_id, so the screen
+                    opens scoped instead of showing every org run. */}
+                <Link
+                  href={`/${locale}/plan/score?plan_id=${selected.id}`}
+                  className="flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent"
+                >
+                  <FlaskConical className="h-3.5 w-3.5" />
+                  {t("effort.viewScore")}
+                </Link>
               </div>
               {detailView === "gantt" ? (
                 <PlanTaskGantt key={selected.id} plan={selected} locale={locale} canEdit={canEdit} onChanged={reloadBoard} />

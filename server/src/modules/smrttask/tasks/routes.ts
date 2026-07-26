@@ -52,6 +52,23 @@ function utcInstantForLocalHour(dateStr: string, hour: number, tz: string): Date
   return new Date(x);
 }
 
+/** The user's IANA zone (user_settings.timezone), falling back to New York —
+ *  the team's zone (CLAUDE.md "Timezone — always New York"). */
+async function userTz(userId: string): Promise<string> {
+  const { data: us, error } = await db
+    .from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+  if (error) console.error("[tasks] user_settings timezone read failed:", error.message);
+  return (us?.timezone as string | null) || "America/New_York";
+}
+
+/** Today's date (YYYY-MM-DD) as the USER sees it. Never use a UTC slice for a
+ *  day-boundary comparison that is paired with utcInstantForLocalHour: with a
+ *  New York user, UTC is already tomorrow from ~20:00 local, so "is this date in
+ *  the future" and "is this occurrence due today" both flip a day too early. */
+function localToday(tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+}
+
 // Every task route requires auth + active org + smrtTask enabled for that org.
 // attachTaskAccess resolves req.taskAccess ("full" | "lite") once for the whole
 // router so list filtering + the per-:id ownership guard below can read it.
@@ -715,11 +732,8 @@ router.post("/tasks", requireFullTask, async (req: Request, res: Response) => {
   if (typeof updates.recurrence_rule === "string"
       && typeof updates.due_date === "string"
       && updates.status === undefined && updates.snoozed_until === undefined) {
-    const today = new Date().toISOString().slice(0, 10);
-    if (updates.due_date > today) {
-      const { data: us } = await db
-        .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
-      const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
+    const tz = await userTz(req.user!.id);
+    if (updates.due_date > localToday(tz)) {
       updates.status = "snoozed";
       updates.snoozed_until = utcInstantForLocalHour(updates.due_date, 7, tz).toISOString();
     }
@@ -987,7 +1001,11 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   // still advances by one day from its scheduled date.
   let nextTask = null;
   if (data.recurrence_rule) {
-    const today = now.slice(0, 10);
+    // The user's own date, not a UTC slice: from ~20:00 in New York the UTC date
+    // is already tomorrow, which would make tomorrow's occurrence spawn straight
+    // into tonight's inbox instead of snoozed to its morning.
+    const tz = await userTz(req.user!.id);
+    const today = localToday(tz);
     const base = (data.due_date as string | null) ?? today;
     // Floor on today so a task completed late still advances to a future date.
     const next = nextOccurrence(data.recurrence_rule as string, base, today);
@@ -1013,9 +1031,6 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
       let spawnStatus = "inbox";
       let spawnSnoozedUntil: string | null = null;
       if (next > today) {
-        const { data: us } = await db
-          .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
-        const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
         spawnStatus = "snoozed";
         spawnSnoozedUntil = utcInstantForLocalHour(next, 7, tz).toISOString();
       }
@@ -1059,13 +1074,10 @@ router.post("/tasks/:id/snooze", async (req: Request, res: Response) => {
   if (req.body?.until && typeof req.body.until === "string") {
     until = req.body.until;
   } else {
-    const { data: us } = await db
-      .from("user_settings").select("timezone").eq("user_id", req.user!.id).maybeSingle();
-    const tz = (us?.timezone as string | null) || "Asia/Jerusalem";
-    // Today's calendar date in the user's tz (en-CA formats as YYYY-MM-DD),
-    // then +1 day in date space — safe across month/year boundaries.
-    const todayLocal = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
-    const tomorrow = new Date(Date.parse(`${todayLocal}T00:00:00.000Z`) + 24 * 60 * 60 * 1000)
+    const tz = await userTz(req.user!.id);
+    // Today's calendar date in the user's tz, then +1 day in date space — safe
+    // across month/year boundaries.
+    const tomorrow = new Date(Date.parse(`${localToday(tz)}T00:00:00.000Z`) + 24 * 60 * 60 * 1000)
       .toISOString().slice(0, 10);
     until = utcInstantForLocalHour(tomorrow, 9, tz).toISOString();
   }

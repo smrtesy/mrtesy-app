@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
-import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, Lock, Copy, Bot } from "lucide-react";
+import { Timer, X, Check, ClipboardList, CheckCircle2, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Lock, Copy, Bot, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
@@ -24,6 +24,10 @@ interface FocusTask {
   is_decision?: boolean | null;
   requires_debrief?: boolean | null;
   claude_waiting_since?: string | null;
+  /** How this task gets done: full = AI alone, assist = AI drafts, human = me. */
+  ai_tier?: string | null;
+  /** The ready-to-run opening prompt for the AI tiers (plan payload §13). */
+  ai_prompt?: string | null;
 }
 
 /** Render one line of task-body markdown: **bold**, `code`, [text](url), and
@@ -31,9 +35,14 @@ interface FocusTask {
  *  by its own content — an English/config snippet (FAL_KEY=…, env-var names)
  *  stays left-to-right, a Hebrew snippet flows right-to-left — neither is forced
  *  to the wrong side. Deep links stay verbatim (product rule: never strip a URL
- *  to its domain). */
+ *  to its domain).
+ *
+ *  A bare URL stops before trailing sentence punctuation, so "ראה
+ *  https://docs.example.com/a/b." links to …/a/b and not …/a/b. (which 404s) —
+ *  the one-click rule again. A URL that genuinely ends in ')' should be written
+ *  as a [text](url) link, which is matched first. */
 function renderInline(text: string): ReactNode[] {
-  const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]+)/g;
+  const TOKEN = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s]*[^\s.,;:!?)\]])/g;
   const out: ReactNode[] = [];
   let last = 0;
   let k = 0;
@@ -104,6 +113,37 @@ function CopyableCode({ text }: { text: string }) {
   );
 }
 
+/** The task's ready-to-run opening prompt for Claude (tasks.ai_prompt), which
+ *  the plan payload fills for every AI task. It was written to the DB on import
+ *  but nothing ever read it back, so on a plan whose descriptions carry no
+ *  claude.ai/code link the worker had no prompt at all — this is what puts it
+ *  back on screen. Collapsed by default (product rule: a new surface is a quiet
+ *  entry point, not permanent chrome); expanding reveals it with a copy button. */
+function ReadyPrompt({ text }: { text: string }) {
+  const t = useTranslations("focusSession");
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="w-full max-w-2xl text-start">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-medium text-primary transition-colors hover:bg-primary/10"
+      >
+        <Sparkles className="h-4 w-4" />
+        {t("aiPrompt")}
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {open ? (
+        <>
+          <CopyableCode text={text} />
+          <p className="px-2 text-[12px] text-muted-foreground" dir="auto">{t("aiPromptHint")}</p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /** The primary "open this task in Claude Code" link, if the body carries one. */
 function claudeLinkOf(description: string | null | undefined): string | null {
   return description?.match(/https?:\/\/claude\.ai\/code[^\s]*/)?.[0] ?? null;
@@ -121,17 +161,62 @@ function appCommandOf(link: string | null): string | null {
   return cmd ? cmd[0] : null;
 }
 
+/** A short label at the start of a line ("הקשר:", "צעדים:", "המלצה:") — the
+ *  structure plan descriptions are written in. At most THREE words, so an
+ *  ordinary clause that merely happens to contain a colon ("בדוק את הקובץ ותקן:
+ *  זה חשוב") is not mistaken for a label; digits are allowed so "שלב 2:" and
+ *  "מקור 1:" qualify; and whitespace after the colon is required so a URL
+ *  ("https://…") can never be read as a label. */
+const WORD = "[\\p{L}\\p{M}\\p{N}\\-]+";
+const LABEL = new RegExp(`^(${WORD}(?: ${WORD}){0,2}):(\\s+(.*))?$`, "u");
+
+/** Split ONE authored line into display lines.
+ *
+ *  Some plans are authored with real line breaks (the video pilot: 10–19 per
+ *  task) and render as steps and sub-headings. Others arrive as ONE flowing
+ *  paragraph with the structure inline — "הקשר: … צעדים: 1) … 2) … ❓ …" — and
+ *  used to render as a single dense blob, which is what made the recruitment
+ *  plan's tasks unreadable next to the video pilot's. We recover the structure
+ *  such a line does carry: break before a label that opens a new SENTENCE,
+ *  before an inline "N)" step marker, and before a ❓/⚠️ callout. Nothing is
+ *  dropped or reworded — only wrapped. */
+function splitInline(line: string): string {
+  return (
+    line
+      // "…בהיקף. צעדים: 1) …" → a line of its own for "צעדים:". The boundary
+      // deliberately excludes ':' — "הקשר: ראה כאן: <url>" must stay one line
+      // rather than break into an empty "הקשר:" heading.
+      .replace(new RegExp(`(?<=[.!?;])\\s+(?=${WORD}(?: ${WORD}){0,2}:\\s)`, "gu"), "\n")
+      // Inline step markers are the "N)" form only. "N." is recognised at the
+      // START of an authored line (renderBody) but never mid-sentence, so prose
+      // like "גרסה 2. 10. עדכן" or "סעיף 3. ראה" is left alone.
+      .replace(/\s+(?=\d{1,2}\)\s)/g, "\n")
+      // The "ask Claude if this is unclear" callout the plan protocol appends.
+      .replace(/\s+(?=[❓⚠])/gu, "\n")
+  );
+}
+
+/** Every display line of a description. Runs on each authored line, so a
+ *  half-formatted description (some real newlines, steps still inline) gets the
+ *  same treatment as a single-paragraph one. */
+function toLines(description: string): string[] {
+  return description.split("\n").flatMap((line) => splitInline(line).split("\n"));
+}
+
 /** Render the task body as readable, scannable blocks: blank lines become
  *  spacing (via the container's space-y), a line that is only a Claude Code deep
- *  link is dropped (the prominent button already covers it), a short line ending
- *  with ':' becomes a sub-heading, and every other line is a paragraph with its
- *  URLs linkified. Keeps long text comfortable instead of one dense blob. */
+ *  link is dropped (the prominent button already covers it), a line that is only
+ *  a label becomes a sub-heading (and a label + text keeps the label bold), and
+ *  every other line is a paragraph with its URLs linkified. Keeps long text
+ *  comfortable instead of one dense blob. */
 function renderBody(description: string) {
-  return description.split("\n").map((raw, i) => {
+  return toLines(description).map((raw, i) => {
     const line = raw.trim();
     if (!line) return null;
-    // The Claude Code deep link is covered by the button above — drop the line.
-    if (/https?:\/\/claude\.ai\/code/.test(line)) return null;
+    // A line that is ONLY the Claude Code deep link is covered by the button
+    // above — drop it. Must be anchored: a link sitting inside a sentence
+    // ("חומרים: <link> ואחריו עדכן…") would take the whole sentence with it.
+    if (/^https?:\/\/claude\.ai\/code\S*$/.test(line)) return null;
     // A horizontal rule (---) becomes an actual divider, not literal dashes.
     if (/^(-{3,}|\*{3,})$/.test(line)) return <hr key={i} className="my-3 border-border" />;
     // Sub-items (indented in the source) get an extra hanging indent, like the doc.
@@ -151,7 +236,8 @@ function renderBody(description: string) {
         </div>
       );
     }
-    const num = line.match(/^(\d+)\.\s+(.*)$/);
+    // Both step forms — "1. צעד" (own-line authoring) and "1) צעד" (inline).
+    const num = line.match(/^(\d+)[.)]\s+(.*)$/);
     if (num) {
       return (
         <div key={i} className={`flex gap-2 ${pad}`}>
@@ -163,9 +249,30 @@ function renderBody(description: string) {
     if (codeOnly(line)) {
       return <div key={i} className={pad}><CopyableCode text={line.trim().slice(1, -1)} /></div>;
     }
+    // "צעדים:" alone → a sub-heading. "הקשר: <text>" → bold label + the text.
+    const label = line.match(LABEL);
+    if (label) {
+      const rest = label[3] ?? "";
+      if (!rest) {
+        return (
+          <p key={i} className={`pt-1 font-semibold text-foreground ${pad}`}>{label[1]}:</p>
+        );
+      }
+      return (
+        <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>
+          <strong className="font-semibold text-foreground">{label[1]}:</strong>{" "}
+          {renderInline(rest)}
+        </p>
+      );
+    }
     return <p key={i} className={`[overflow-wrap:anywhere] ${pad}`}>{renderInline(line)}</p>;
   });
 }
+
+/** A task in a terminal state. Mirrors the server's TASK_DONE set exactly —
+ *  'dismissed' included — so a dismissed task can't show as "upcoming" with a
+ *  live Done button while the server refuses to ever name it today's task. */
+const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
 function fmtClock(totalSeconds: number): string {
   const sign = totalSeconds < 0 ? "-" : "";
@@ -381,9 +488,9 @@ export function FocusSession({
     setBlocking(false);
   };
 
-  const doneCount = tasks.filter((tk) => tk.status === "completed" || tk.status === "archived").length;
+  const doneCount = tasks.filter((tk) => DONE_STATUSES.has(tk.status)).length;
   const selTitle = selected ? (locale === "he" && selected.title_he ? selected.title_he : selected.title) : null;
-  const isDone = selected?.status === "completed" || selected?.status === "archived";
+  const isDone = !!selected && DONE_STATUSES.has(selected.status);
   const actionable = !!selected && !isDone && !selected.blocked;
   const claudeLink = actionable ? claudeLinkOf(selected?.description) : null;
   const appCommand = appCommandOf(claudeLink);
@@ -391,7 +498,7 @@ export function FocusSession({
 
   /** The status chip for a task: done / blocked / today's / in-progress / upcoming. */
   function statusBadge(tk: FocusTask): { label: string; cls: string } {
-    if (tk.status === "completed" || tk.status === "archived")
+    if (DONE_STATUSES.has(tk.status))
       return { label: t("statusDone"), cls: "bg-status-ok-bg text-status-ok" };
     if (tk.blocked)
       return { label: t("statusBlocked"), cls: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" };
@@ -475,6 +582,7 @@ export function FocusSession({
                 {renderBody(selected.description)}
               </div>
             ) : null}
+            {actionable && selected.ai_prompt ? <ReadyPrompt text={selected.ai_prompt} /> : null}
             {selected.blocked && selected.blockers.length > 0 ? (
               <p className="flex max-w-xl items-center gap-1.5 text-[13px] text-muted-foreground" dir="auto">
                 <Lock className="h-4 w-4 shrink-0" />

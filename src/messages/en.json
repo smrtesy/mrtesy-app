@@ -173,7 +173,9 @@
     "focusPane": "Focus this tab",
     "resizePane": "Resize",
     "paneError": "Something went wrong in this tab",
-    "paneReload": "Reload"
+    "paneReload": "Reload",
+    "maximizePane": "Full width",
+    "restorePane": "Back to split view (Esc)"
   },
   "nav": {
     "tasks": "Tasks",
@@ -212,7 +214,8 @@
     "planBoard": "Board",
     "planRepository": "Repository",
     "planMy": "My tasks",
-    "planTeam": "By worker"
+    "planTeam": "By worker",
+    "planScore": "Score outputs"
   },
   "account": {
     "title": "Account",
@@ -805,6 +808,7 @@
     "approvedToToday": "Added to today",
     "approvedToPool": "Added to the pool",
     "approvedScheduled": "Saved as scheduled",
+    "addToTasks": "Add to tasks",
     "closeReminder": "Close reminder",
     "dismiss": "Dismiss",
     "dismissing": "Dismissing...",
@@ -3118,6 +3122,10 @@
     },
     "title": "Planning board",
     "lead": "Every project, the timeline, and the dependencies between them · click a row for details",
+    "reference": "Reference",
+    "noReference": "No reference image",
+    "zoom": "Zoom",
+    "needPlan": "This screen belongs to a plan. Open it from the “Score outputs” button next to the plan tabs.",
     "today": "Today",
     "newPlan": "New plan",
     "recompute": "Recompute",
@@ -3233,7 +3241,8 @@
       "reblockAction": "Re-block not-yet-started",
       "reblocked": "{n, plural, =0 {nothing to re-block — all are in progress or done} one {1 task re-blocked} other {# tasks re-blocked}}",
       "viewJournal": "Journal",
-      "viewReview": "Review"
+      "viewReview": "Review",
+      "viewScore": "Score outputs"
     },
     "repository": {
       "title": "Idea repository",
@@ -3244,7 +3253,9 @@
         "shaping": "Shaping",
         "active": "Active"
       },
-      "promote": "Put on timeline"
+      "promote": "Put on timeline",
+      "promoteConfirm": "Put this plan on the timeline with start date {date}? It moves from the repository to the board.",
+      "promoted": "Plan moved to the board"
     },
     "countdown": {
       "today": "Today!",
@@ -3347,7 +3358,16 @@
       "actStageDel": "Delete stage",
       "stageShort": "Stage",
       "description": "Description / instructions",
-      "descriptionPlaceholder": "What exactly to do — step by step, in plain language"
+      "descriptionPlaceholder": "What exactly to do — step by step, in plain language",
+      "manager": "Manager / approver",
+      "assignAll": "Assign every task to one person",
+      "assignAllNone": "No — each task has its own owner",
+      "assignAllHint": "Picking someone hands them every open task in this plan on save, and the minutes and workdays below are set for them.",
+      "dailyMinutesFor": "Minutes per day (for the chosen person)",
+      "costThreshold": "Cost-approval ceiling (USD)",
+      "costThresholdHint": "Recorded on the plan as the agreed limit: spending above it needs the manager's approval. For now this is a reminder only — no approval task is opened automatically. Blank = no ceiling.",
+      "costThresholdInvalid": "The cost ceiling must be a non-negative number",
+      "assignedAll": "{n, plural, =0 {No open tasks to assign} one {1 task assigned} other {# tasks assigned}}"
     },
     "gantt": {
       "connectHint": "Click a task's link icon, then another task — to draw a dependency arrow.",
@@ -3785,6 +3805,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "waitForClaude": "Waiting for Claude",
+    "aiPrompt": "Ready-to-run Claude prompt",
+    "aiPromptHint": "Copy it into a Claude chat to start this task",
     "statusWaitingClaude": "Waiting for Claude",
     "statusAwaitingConfirm": "Awaiting your confirmation"
   },
@@ -3892,12 +3914,17 @@
     "altTag": "alternative"
   },
   "experiments": {
-    "title": "Experiment scoring",
-    "lead": "Rate each output 1–5. Models are revealed only after you lock your scores.",
+    "title": "Score outputs",
+    "lead": "Compare each row against the reference and rate 1–5: is this the same character? (Consistent with six fingers is not consistent.) Every click saves.",
+    "reference": "Reference",
+    "noReference": "No reference image",
+    "zoom": "Zoom",
+    "close": "Close",
+    "needPlan": "This screen belongs to a plan. Open it from the “Score outputs” button next to the plan tabs.",
     "loading": "Loading...",
     "empty": "No outputs for this test yet.",
-    "reveal": "Reveal models / lock scores",
-    "revealed": "Models revealed",
+    "reveal": "Lock scores",
+    "revealed": "Scores locked",
     "model": "Model",
     "hidden": "hidden",
     "scoreLabel": "Score",
@@ -3918,6 +3945,7 @@
     "qcReason": "Rejection reason",
     "metrics": "Metrics",
     "prompt": "Prompt",
+    "seed": "Seed",
     "promptMore": "more",
     "promptLess": "less",
     "override": "Restore manually",

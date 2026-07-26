@@ -141,8 +141,32 @@ machineRouter.post("/experiments/runs", async (req: Request, res: Response) => {
     created_by: userId,
   };
 
-  const { data, error } = await db.from("experiment_runs").insert(insert).select("id").single();
-  if (error || !data) return res.status(500).json({ error: error?.message ?? "insert failed" });
+  // Idempotent on the blind code: the harness re-posts the same run whenever it
+  // re-syncs runs.jsonl (its authoritative local log) — e.g. after QC is
+  // recomputed — so a plain insert duplicated rows. (org_id, code) is unique.
+  //
+  // `meta` is MERGED, not replaced: a re-sync from a caller that doesn't know
+  // about a key would otherwise erase it. That already happened — a verification
+  // re-post wiped a run's reference, and it would have wiped the grid thumbnails
+  // too. Incoming nulls are dropped for the same reason; to clear a key, write it
+  // directly rather than through this route.
+  const { data: prev } = await db
+    .from("experiment_runs")
+    .select("meta")
+    .eq("org_id", orgId)
+    .eq("code", code)
+    .maybeSingle();
+  const incoming = insert.meta as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...((prev?.meta as Record<string, unknown>) ?? {}) };
+  for (const [k, v] of Object.entries(incoming)) if (v !== null && v !== undefined) merged[k] = v;
+  insert.meta = merged;
+
+  const { data, error } = await db
+    .from("experiment_runs")
+    .upsert(insert, { onConflict: "org_id,code" })
+    .select("id")
+    .single();
+  if (error || !data) return res.status(500).json({ error: error?.message ?? "upsert failed" });
   res.json({ ok: true, id: data.id });
 });
 
@@ -325,10 +349,33 @@ machineRouter.post("/experiments/report", async (req: Request, res: Response) =>
 
 export const experimentsAuthedRouter = Router();
 
-/** The run fields hidden until the caller has locked a score. NOTE: `prompt` is
- *  intentionally NOT blind — the user wants full prompt transparency at all
- *  times; only model/method/seed stay hidden until reveal. */
-const BLIND_FIELDS = ["model", "method", "seed"] as const;
+/** NOTHING is hidden from the operator (video-lab CLAUDE.md rule 9, 7/2026:
+ *  "ניקוד: הכל גלוי, ההכרעה שלך — אין הסתרה של שום דבר", and there is no
+ *  `unblind` step). The model name, method, prompt, seed and QC score are all
+ *  returned from the start: the short run code stays as a convenient label, not
+ *  a disguise. What is enforced instead is that the DECISION is human and
+ *  recorded, and that the criteria weights were locked BEFORE any results were
+ *  seen (docs/criteria.md) — that is the bias guard that remains. */
+const BLIND_FIELDS = [] as const;
+
+/** Comparison-grid keys, always returned — they let the UI pivot runs into
+ *  "a column per model, a row per shot" WITHOUT leaking identity while blind:
+ *   - model_key: the model's index among the distinct models in this response
+ *     (sorted, so it is stable across reloads). The UI shows it as a letter.
+ *   - shot_key: which shot this is (scene, else variation, else seed), so the
+ *     same pose from every model lands in one row. Derived, never the raw seed.
+ */
+function comparisonKeys(runs: Row[]): { modelKey: Map<string, number>; shotKeyOf: (r: Row) => string } {
+  const models = [...new Set(runs.map((r) => String(r.model ?? "")))].sort();
+  const modelKey = new Map(models.map((m, i) => [m, i]));
+  const shotKeyOf = (r: Row): string => {
+    if (r.scene) return `s:${String(r.scene)}`;
+    if (r.variation != null) return `v:${String(r.variation)}`;
+    if (r.seed != null) return `d:${String(r.seed)}`;
+    return `r:${String(r.id)}`;
+  };
+  return { modelKey, shotKeyOf };
+}
 
 /**
  * GET /experiments/runs?plan_id=&test_label= — runs for the caller's org, plan,
@@ -376,8 +423,27 @@ experimentsAuthedRouter.get("/experiments/runs", async (req: Request, res: Respo
     scoresByRun.set(rid, arr);
   }
 
+  // Grid keys are computed BEFORE blinding (they are derived, not identifying).
+  const { modelKey, shotKeyOf } = comparisonKeys(runs);
   const out = runs.map((r) => {
-    const run: Row = { ...r, my_scores: scoresByRun.get(r.id as string) ?? [] };
+    const meta = (r.meta ?? {}) as Record<string, unknown>;
+    const run: Row = {
+      ...r,
+      my_scores: scoresByRun.get(r.id as string) ?? [],
+      model_key: modelKey.get(String(r.model ?? "")) ?? 0,
+      shot_key: shotKeyOf(r),
+      // The locked reference the run was anchored to — shown pinned beside the
+      // outputs so the operator can compare against the original.
+      reference_url: typeof meta.reference_url === "string" ? meta.reference_url : null,
+      // Pre-built 480px webp copies kept in the bucket next to the originals. The
+      // grid shows ~60 images at once and the originals are 0.6–5 MB PNGs (over
+      // 100 MB per page); Storage image transformation is not enabled on this
+      // project — /render/image/sign/ hands back the original bytes — so the
+      // thumbnails are generated at upload time instead.
+      thumb_url: typeof meta.thumb_url === "string" ? meta.thumb_url : null,
+      reference_thumb_url:
+        typeof meta.reference_thumb_url === "string" ? meta.reference_thumb_url : null,
+    };
     if (!revealed) for (const f of BLIND_FIELDS) run[f] = null;
     return run;
   });

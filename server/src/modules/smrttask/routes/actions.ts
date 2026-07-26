@@ -8,7 +8,7 @@
 
 import { Router, Request, Response } from "express";
 import { db, loadRules } from "../../../db";
-import { simpleCall } from "../../../anthropic";
+import { MODELS, simpleCall } from "../../../anthropic";
 import { createDraft, searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
 import { createCalendarEvent } from "../../../services/calendar";
 import { getUserPromptContext } from "../../../lib/user-context";
@@ -152,9 +152,12 @@ router.post("/execute", async (req: Request, res: Response) => {
   let actionError: string | undefined;
   let totalCost = 0;
   const startedAt = Date.now();
+  // Recorded label only — the actual call passes the "opus"/"sonnet" key to
+  // simpleCall. Read it off MODELS so the label cannot drift from the model
+  // that really ran when an alias is repointed.
   const modelUsed = action_type === "financial_advisor" || action_type === "draft_settlement_request"
-    ? "claude-opus-4-7"
-    : "claude-sonnet-4-6";
+    ? MODELS.opus
+    : MODELS.sonnet;
 
   try {
     switch (action_type) {
@@ -283,20 +286,27 @@ router.post("/execute", async (req: Request, res: Response) => {
       // ── Set reminder ────────────────────────────────────────────────────────
       case "set_reminder": {
         const timeStr = custom_action ?? "9:00 tomorrow";
-        const reminderDate = new Date();
-        reminderDate.setDate(reminderDate.getDate() + 1);
-        reminderDate.setHours(9, 0, 0, 0);
+        // 09:00 tomorrow in the USER's zone. `setHours(9)` used to run in SERVER
+        // time (Railway is UTC) and was then sent as a Z-suffixed instant, which
+        // Google honours over `timeZone` — the reminder landed at 09:00 UTC =
+        // 05:00 New York. Send a wall-clock string + the zone instead.
+        const { data: usTz } = await db
+          .from("user_settings").select("timezone").eq("user_id", userId).maybeSingle();
+        const reminderTz = (usTz?.timezone as string | null) || "America/New_York";
+        const todayLocal = new Intl.DateTimeFormat("en-CA", { timeZone: reminderTz }).format(new Date());
+        const tomorrowLocal = new Date(Date.parse(`${todayLocal}T00:00:00.000Z`) + 86_400_000)
+          .toISOString().slice(0, 10);
 
         try {
-          const endDate = new Date(reminderDate.getTime() + 30 * 60 * 1000);
           await createCalendarEvent(
             userId,
             `תזכורת: ${task.title_he ?? task.title}`,
-            reminderDate.toISOString(),
-            endDate.toISOString(),
+            `${tomorrowLocal}T09:00:00`,
+            `${tomorrowLocal}T09:30:00`,
             task.description ?? undefined,
+            { timeZone: reminderTz },
           );
-          result = `תזכורת נוצרה ל-${reminderDate.toLocaleDateString("he-IL")} ${reminderDate.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`;
+          result = `תזכורת נוצרה ל-${tomorrowLocal} 09:00`;
         } catch (e) {
           result = `לא ניתן ליצור אירוע ב-Calendar: ${e}. זמן מוצע: ${timeStr}`;
         }

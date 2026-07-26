@@ -42,6 +42,7 @@ import { InfoClient } from "@/components/smrtinfo/InfoClient";
 import { PlanBoardClient } from "@/components/smrtplan/PlanBoardClient";
 import { TeamViewClient } from "@/components/smrtplan/TeamViewClient";
 import { PlanRepositoryClient } from "@/components/smrtplan/PlanRepositoryClient";
+import { ExperimentScoringPane } from "@/components/smrtplan/ExperimentScoringPane";
 import { VoiceNav } from "@/components/smrtvoice/VoiceNav";
 import { ProjectsList } from "@/components/smrtvoice/ProjectsList";
 import { BudgetIndicator } from "@/components/smrtvoice/BudgetIndicator";
@@ -259,6 +260,9 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/info", render: () => <InfoPane /> },
   { match: (p) => p === "/plan", render: (locale) => <PlanBoardClient locale={locale} /> },
   { match: (p) => p === "/plan/team", render: (locale) => <TeamViewClient locale={locale} /> },
+  // Per-plan outputs scoring. plan_id comes from the query string, which the
+  // render(locale) contract does not carry — the pane wrapper reads it.
+  { match: (p) => p === "/plan/score", render: () => <ExperimentScoringPane /> },
   {
     match: (p) => p === "/plan/repository",
     render: (locale) => <PlanRepositoryClient locale={locale} />,

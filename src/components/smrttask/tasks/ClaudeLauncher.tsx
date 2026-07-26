@@ -96,19 +96,28 @@ export function ClaudeLauncher({
 
     if (!waiting) {
       const since = new Date().toISOString();
-      onOptimistic?.({ claude_waiting_since: since });
+      // Also move the task to "in progress" — the Claude-Code session report
+      // (POST /claude-session/task-report) attaches only to a task the user has
+      // marked in_progress, and opening this launcher used to leave the task in
+      // inbox, so reports silently fell back to an inbox proposal instead of
+      // landing on the card (2026-07). Handing a task to Claude IS starting it.
+      // Only advance from a not-yet-started state; never pull a task back out of
+      // a completion status.
+      const advance = task.status === "inbox" || task.status === "snoozed";
+      const prevStatus = task.status;
+      onOptimistic?.({ claude_waiting_since: since, ...(advance ? { status: "in_progress" } : {}) });
       api(`/api/tasks/${task.id}`, {
         method: "PATCH",
-        body: { claude_waiting_since: since },
+        body: { claude_waiting_since: since, ...(advance ? { status: "in_progress" } : {}) },
       })
         .then(() => {
           toast.success(t("dispatched"));
           onUpdate();
         })
         .catch((e) => {
-          // Roll back the optimistic flag so the open detail doesn't show a
-          // "waiting" state the DB never persisted.
-          onOptimistic?.({ claude_waiting_since: null });
+          // Roll back the optimistic changes so the open detail doesn't show a
+          // state the DB never persisted.
+          onOptimistic?.({ claude_waiting_since: null, ...(advance ? { status: prevStatus } : {}) });
           toast.error(e instanceof Error ? e.message : "Error");
         });
     }
