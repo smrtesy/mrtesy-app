@@ -3578,8 +3578,14 @@
       "vault": "Passwords in the vault",
       "vaultHint": "The password is saved in smrtVault — open it and click 'reveal'."
     },
-    "tabs": { "all": "All" },
-    "scope": { "personal": "Personal", "org": "Organization", "unclassified": "Unclassified" },
+    "tabs": {
+      "all": "All"
+    },
+    "scope": {
+      "personal": "Personal",
+      "org": "Organization",
+      "unclassified": "Unclassified"
+    },
     "facts": {
       "empty": "No facts yet. Add one manually, or run extraction over your history.",
       "unverified": "Unverified",
@@ -3923,6 +3929,25 @@
       "motion": "Motion",
       "quality": "Quality",
       "lipsync": "Lip-sync"
+    }
+  },
+  "claudeRuns": {
+    "title": "Claude runs",
+    "newRun": "New run",
+    "cancel": "Cancel",
+    "launch": "Launch",
+    "launched": "Run launched",
+    "titlePlaceholder": "Title (optional)",
+    "promptPlaceholder": "What should Claude do…",
+    "costNote": "Runs on the subscription — no API cost. Anything that triggers a paid service needs explicit cost approval first.",
+    "empty": "No runs yet",
+    "noEvents": "No events for this run",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "canceled": "Canceled"
     }
   }
 }
