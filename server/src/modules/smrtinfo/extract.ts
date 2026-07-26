@@ -136,12 +136,20 @@ export async function extractAndStore(
     .filter((l) => l !== null)
     .join("\n");
 
+  // cacheSystem: this prompt is ~1,970 tokens (well over Sonnet's 1024-token
+  // minimum) and is ~88% of a typical request's input, while the per-message
+  // part is only a few hundred tokens. It is also byte-identical across every
+  // message in a run — buildInfoExtractSystem depends only on the user's
+  // identity and stored context profile, neither of which changes mid-run — so
+  // a backfill pays for the prompt once and reads it back on every later
+  // message at 0.1× input price.
   const { content: raw, costUsd } = await simpleCall(
     "sonnet",
     system,
     userMessage,
     2048,
     { component: "server.smrtinfo.extract", userId, refId: src.sourceMessageId ?? undefined },
+    { cacheSystem: true },
   );
   result.costUsd = costUsd;
 

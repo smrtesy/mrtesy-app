@@ -110,7 +110,12 @@ function estimateCost(model: string, usage: {
   if (!pricing) return 0;
   const read   = (usage.cache_read_input_tokens ?? 0) / 1_000_000 * pricing.cacheRead;
   const write  = (usage.cache_creation_input_tokens ?? 0) / 1_000_000 * pricing.cacheWrite;
-  const input  = (usage.input_tokens - (usage.cache_read_input_tokens ?? 0) - (usage.cache_creation_input_tokens ?? 0)) / 1_000_000 * pricing.input;
+  // usage.input_tokens is ALREADY the uncached remainder — the full prompt is
+  // input_tokens + cache_creation_input_tokens + cache_read_input_tokens. The
+  // previous version subtracted the cache counts a second time, which drove
+  // this term negative and under-reported cost on every cached call. Dormant
+  // until now only because no server path set cache_control.
+  const input  = usage.input_tokens / 1_000_000 * pricing.input;
   const output = usage.output_tokens / 1_000_000 * pricing.output;
   return read + write + input + output;
 }
@@ -170,19 +175,48 @@ export async function cachedCall(opts: CachedCallOptions, meta?: AiUsageMeta): P
   };
 }
 
-/** Simple (non-cached) call for one-off actions */
+export interface SimpleCallOptions {
+  /**
+   * Mark the system prompt with cache_control (1h TTL) so repeated calls that
+   * share it byte-for-byte read it back at 0.1× input price instead of paying
+   * full price every time.
+   *
+   * Opt-in per call site, deliberately. It pays off only when the prompt is a
+   * large, STABLE prefix reused across several calls close together:
+   *   - Below the model's minimum cacheable prefix (1024 tokens on Sonnet 4.6 /
+   *     Sonnet 5, 4096 on Haiku 4.5) nothing is cached and nothing is charged
+   *     extra — it silently does nothing.
+   *   - Above it, the first call pays a 2× write premium, so the break-even is
+   *     the 3rd call sharing the prefix within the hour. A large prompt that is
+   *     unique per call would be a net LOSS, which is why this is not the
+   *     default for all 30 simpleCall sites.
+   */
+  cacheSystem?: boolean;
+}
+
+/** One-off call. Pass `{ cacheSystem: true }` to cache a large stable prompt. */
 export async function simpleCall(
   model: ModelKey,
   systemPrompt: string,
   userMessage: string,
   maxTokens = 2048,
   meta?: AiUsageMeta,
+  opts?: SimpleCallOptions,
 ): Promise<{ content: string; costUsd: number }> {
   const modelId = MODELS[model];
+  // Cast: older @anthropic-ai/sdk type defs omit cache_control on text blocks,
+  // so go through unknown to stay compilable across SDK versions.
+  const system = opts?.cacheSystem
+    ? ([{
+        type: "text",
+        text: systemPrompt,
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      }] as unknown as Anthropic.TextBlockParam[])
+    : systemPrompt;
   const response = await client.messages.create({
     model: modelId,
     max_tokens: maxTokens,
-    system: systemPrompt,
+    system,
     messages: [{ role: "user", content: userMessage }],
   });
 
