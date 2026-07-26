@@ -170,6 +170,66 @@ function mapLine(line: unknown, nextSeq: () => number): PendingEvent[] {
   return out;
 }
 
+const finiteOrNull = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+/**
+ * Pull the usage figures out of the stream's `result` event.
+ *
+ * Token totals are summed across `modelUsage` rather than read from the
+ * top-level `usage` block, because a single run can touch more than one model —
+ * a main turn on Sonnet plus a Haiku side task, say — and the top-level block
+ * reports only the main one. `total_cost_usd` already covers every model, so it
+ * is taken as given.
+ *
+ * On a subscription these runs are not billed per token; the cost figure is the
+ * engine's equivalent-API estimate and is stored as a consumption measure only.
+ */
+function usageFromResult(result: Record<string, unknown> | null) {
+  if (!result) return {};
+
+  const models = (result.modelUsage ?? null) as Record<string, Record<string, unknown>> | null;
+  const top = (result.usage ?? {}) as Record<string, unknown>;
+
+  let input: number | null = null;
+  let output: number | null = null;
+  let cacheRead: number | null = null;
+  let cacheCreate: number | null = null;
+
+  if (models && typeof models === "object") {
+    let i = 0;
+    let o = 0;
+    let cr = 0;
+    let cc = 0;
+    for (const m of Object.values(models)) {
+      i += finiteOrNull(m?.inputTokens) ?? 0;
+      o += finiteOrNull(m?.outputTokens) ?? 0;
+      cr += finiteOrNull(m?.cacheReadInputTokens) ?? 0;
+      cc += finiteOrNull(m?.cacheCreationInputTokens) ?? 0;
+    }
+    input = i;
+    output = o;
+    cacheRead = cr;
+    cacheCreate = cc;
+  } else {
+    input = finiteOrNull(top.input_tokens);
+    output = finiteOrNull(top.output_tokens);
+    cacheRead = finiteOrNull(top.cache_read_input_tokens);
+    cacheCreate = finiteOrNull(top.cache_creation_input_tokens);
+  }
+
+  return {
+    total_cost_usd: finiteOrNull(result.total_cost_usd),
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_tokens: cacheRead,
+    cache_creation_tokens: cacheCreate,
+    num_turns: finiteOrNull(result.num_turns),
+    duration_ms: finiteOrNull(result.duration_ms),
+    model_usage: models,
+  };
+}
+
 /**
  * Execute a queued run to completion. Resolves once the run row reaches a
  * terminal status — it never throws at the caller, because the run's own
@@ -178,7 +238,7 @@ function mapLine(line: unknown, nextSeq: () => number): PendingEvent[] {
 export async function executeRun(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status")
+    .select("id, prompt, cwd, status, model, effort")
     .eq("id", runId)
     .maybeSingle();
 
@@ -240,7 +300,12 @@ export async function executeRun(runId: string): Promise<void> {
 
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
-  const args = ["-p", run.prompt, "--output-format", "stream-json", "--verbose", ...extra];
+  const args = ["-p", run.prompt, "--output-format", "stream-json", "--verbose"];
+  // Omitted when unset rather than defaulted, so a run without a choice follows
+  // the CLI's current default instead of being pinned to a model that will age.
+  if (run.model) args.push("--model", run.model);
+  if (run.effort) args.push("--effort", run.effort);
+  args.push(...extra);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
   let seq = 0;
@@ -248,6 +313,9 @@ export async function executeRun(runId: string): Promise<void> {
   let buffer: PendingEvent[] = [];
   let sessionId: string | null = null;
   let lastResult: string | null = null;
+  // The whole `result` event, kept because its usage/cost/turn figures are what
+  // the usage view is built from.
+  let resultEvent: Record<string, unknown> | null = null;
   let stderrTail = "";
   // A spawn failure (most often the binary not being found on the host) produces
   // no stderr and a null exit code, so it has to be captured here or the run
@@ -301,7 +369,10 @@ export async function executeRun(runId: string): Promise<void> {
       }
       const obj = parsed as Record<string, unknown>;
       if (!sessionId && typeof obj.session_id === "string") sessionId = obj.session_id;
-      if (obj.type === "result" && typeof obj.result === "string") lastResult = obj.result;
+      if (obj.type === "result") {
+        resultEvent = obj;
+        if (typeof obj.result === "string") lastResult = obj.result;
+      }
       buffer.push(...mapLine(parsed, nextSeq));
       if (buffer.length >= FLUSH_EVERY) void flush();
     }
@@ -361,6 +432,9 @@ export async function executeRun(runId: string): Promise<void> {
     status: ok ? "done" : "failed",
     session_id: sessionId,
     result_summary: truncate(lastResult),
+    // Recorded even for a failed run: a run that burned tokens before failing
+    // still consumed them, and hiding that would understate real usage.
+    ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
