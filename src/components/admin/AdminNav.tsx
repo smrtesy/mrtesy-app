@@ -15,6 +15,7 @@ import {
   DollarSign,
   Globe,
   ShoppingCart,
+  Bot,
 } from "lucide-react";
 
 // Platform-level only. Per-app concerns (services, prompts) now live
@@ -32,6 +33,11 @@ const items = [
   { key: "docs",         href: "docs",           labelKey: "docs",         icon: BookOpen },
   { key: "domain-tracker", href: "domain-tracker", labelKey: "domainTracker", icon: Globe },
   { key: "price-tracker",  href: "price-tracker",  labelKey: "priceTracker",  icon: ShoppingCart },
+  // Claude runs launched from inside the app (docs/claude-console/plan.md). Lives
+  // here rather than in the app sidebar because it is platform-level and gated by
+  // the same super-admin check as the rest of /admin, matching the Express
+  // requireSuperAdmin on its routes.
+  { key: "claude",         href: "claude",         labelKey: "claude",        icon: Bot },
 ];
 
 export function AdminNav() {

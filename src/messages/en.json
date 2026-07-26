@@ -1627,7 +1627,8 @@
     "usage": "AI Usage",
     "docs": "Docs",
     "domainTracker": "Domain Tracker",
-    "priceTracker": "Price Compare"
+    "priceTracker": "Price Compare",
+    "claude": "Claude runs"
   },
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
