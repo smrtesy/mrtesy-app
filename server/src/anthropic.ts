@@ -62,29 +62,39 @@ interface CachedCallResult {
   costUsd: number;
 }
 
-// Token cost table (USD per 1M tokens). Verified against
+// Base token prices (USD per 1M tokens). Verified against
 // platform.claude.com/docs/en/about-claude/pricing on 2026-07-26.
-// cacheWrite = 1.25× input (5-minute TTL); cacheRead = 0.1× input.
 // Previous values were wrong on two rows: Haiku carried Haiku-3.5 prices
 // ($0.8/$4) and Opus carried Opus-4.1 prices ($15/$75), so Haiku spend was
 // under-reported ~25% and Opus over-reported 3×.
+//
+// Only input/output live here. The cache rates are fixed multipliers of input
+// for every model, so they are derived rather than listed — a hand-written
+// cache column is how the table drifted out of sync with the TTL actually
+// requested (a 1h write priced at the 5m rate under-reports it by 37.5%).
 const COST = {
-  "claude-haiku-4-5-20251001":   { input: 1,    output: 5,    cacheWrite: 1.25, cacheRead: 0.1  },
-  "claude-sonnet-4-6":           { input: 3,    output: 15,   cacheWrite: 3.75, cacheRead: 0.3  },
-  "claude-opus-5":               { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
+  "claude-haiku-4-5-20251001":   { input: 1,  output: 5  },
+  "claude-sonnet-4-6":           { input: 3,  output: 15 },
+  "claude-opus-5":               { input: 5,  output: 25 },
   // Older Opus ids stay listed: they are still selectable in smrtVoice
   // settings, and an unlisted id used to price at $0.
-  "claude-opus-4-8":             { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
-  "claude-opus-4-7":             { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
+  "claude-opus-4-8":             { input: 5,  output: 25 },
+  "claude-opus-4-7":             { input: 5,  output: 25 },
 } as const;
 
-type Pricing = { input: number; output: number; cacheWrite: number; cacheRead: number };
+type Pricing = { input: number; output: number };
+
+/** Cache-price multipliers on the base input rate — identical for all models. */
+const CACHE_WRITE_MULT = { "5m": 1.25, "1h": 2 } as const;
+const CACHE_READ_MULT = 0.1;
+
+export type CacheTtl = keyof typeof CACHE_WRITE_MULT;
 
 /** Per-family rates, used when an exact model id is not in COST. */
 const FAMILY_COST: Record<"haiku" | "sonnet" | "opus", Pricing> = {
-  haiku:  { input: 1, output: 5,  cacheWrite: 1.25, cacheRead: 0.1 },
-  sonnet: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
-  opus:   { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  haiku:  { input: 1, output: 5  },
+  sonnet: { input: 3, output: 15 },
+  opus:   { input: 5, output: 25 },
 };
 
 /**
@@ -100,16 +110,21 @@ function pricingFor(model: string): Pricing | null {
   return null;
 }
 
+/**
+ * @param cacheTtl the TTL the CALLER requested on its cache_control block —
+ * a 1h write costs 2× input, a 5m write 1.25×. Must match the request or the
+ * ledger silently drifts from the invoice.
+ */
 function estimateCost(model: string, usage: {
   input_tokens: number;
   output_tokens: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
-}): number {
+}, cacheTtl: CacheTtl = "5m"): number {
   const pricing = pricingFor(model);
   if (!pricing) return 0;
-  const read   = (usage.cache_read_input_tokens ?? 0) / 1_000_000 * pricing.cacheRead;
-  const write  = (usage.cache_creation_input_tokens ?? 0) / 1_000_000 * pricing.cacheWrite;
+  const read   = (usage.cache_read_input_tokens ?? 0) / 1_000_000 * pricing.input * CACHE_READ_MULT;
+  const write  = (usage.cache_creation_input_tokens ?? 0) / 1_000_000 * pricing.input * CACHE_WRITE_MULT[cacheTtl];
   // usage.input_tokens is ALREADY the uncached remainder — the full prompt is
   // input_tokens + cache_creation_input_tokens + cache_read_input_tokens. The
   // previous version subtracted the cache counts a second time, which drove
@@ -204,13 +219,17 @@ export async function simpleCall(
   opts?: SimpleCallOptions,
 ): Promise<{ content: string; costUsd: number }> {
   const modelId = MODELS[model];
+  // 1h rather than the 5m default: extraction runs as a batch, but a batch can
+  // stall on a slow message or a retry, and a >5m gap would re-pay the write.
+  // Keep this in step with the ttl passed to estimateCost below.
+  const cacheTtl: CacheTtl = "1h";
   // Cast: older @anthropic-ai/sdk type defs omit cache_control on text blocks,
   // so go through unknown to stay compilable across SDK versions.
   const system = opts?.cacheSystem
     ? ([{
         type: "text",
         text: systemPrompt,
-        cache_control: { type: "ephemeral", ttl: "1h" },
+        cache_control: { type: "ephemeral", ttl: cacheTtl },
       }] as unknown as Anthropic.TextBlockParam[])
     : systemPrompt;
   const response = await client.messages.create({
@@ -225,7 +244,7 @@ export async function simpleCall(
     .map((b) => (b as Anthropic.TextBlock).text)
     .join("");
 
-  const costUsd = estimateCost(modelId, response.usage);
+  const costUsd = estimateCost(modelId, response.usage, opts?.cacheSystem ? cacheTtl : "5m");
   await logAiUsage(modelId, response.usage, costUsd, meta);
   return { content, costUsd };
 }
