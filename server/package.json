@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
-    "postinstall": "node -e \"if(process.env.INSTALL_CHROMIUM==='1')require('child_process').execSync('playwright install-deps chromium',{stdio:'inherit'});else console.log('[postinstall] skipping Chromium system deps (set INSTALL_CHROMIUM=1 to enable domain-tracker)')\""
+    "postinstall": "node -e \"if(process.env.INSTALL_CHROMIUM==='1')require('child_process').execSync('playwright install-deps chromium',{stdio:'inherit'});else console.log('[postinstall] skipping Chromium system deps (set INSTALL_CHROMIUM=1 to enable domain-tracker)')\"",
+    "verify:claude": "SUPABASE_URL=http://localhost SUPABASE_SERVICE_ROLE_KEY=dummy tsx scripts/verify-claude-runner.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.220",
