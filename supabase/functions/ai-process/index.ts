@@ -4110,7 +4110,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
 }
 
 function estimateCost(input: number, output: number, cacheRead: number, cacheWrite: number, type: string): number {
-  const rate = type === "haiku" ? { in: 0.80, out: 4 } : type === "opus" ? { in: 15, out: 75 } : { in: 3, out: 15 };
+  // Rates verified against platform.claude.com/docs/en/about-claude/pricing on
+  // 2026-07-26: Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7–5 $5/$25 per 1M.
+  // Previous values were Haiku 3.5's ($0.80/$4) and Opus 4.1's ($15/$75), which
+  // under-reported Haiku spend ~25% and over-reported Opus 3×.
+  const rate = type === "haiku" ? { in: 1, out: 5 } : type === "opus" ? { in: 5, out: 25 } : { in: 3, out: 15 };
   // cache read ≈ 0.1× input rate; cache write (5-min TTL) ≈ 1.25× input rate.
   return (input * rate.in + output * rate.out + cacheRead * rate.in * 0.1 + cacheWrite * rate.in * 1.25) / 1_000_000;
 }

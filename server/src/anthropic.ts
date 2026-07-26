@@ -38,7 +38,8 @@ async function logAiUsage(
 export const MODELS = {
   haiku: "claude-haiku-4-5-20251001",
   sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-4-7",
+  // Opus 4.7 → Opus 5: same list price ($5/$25 per 1M), newer model.
+  opus: "claude-opus-5",
 } as const;
 
 export type ModelKey = keyof typeof MODELS;
@@ -61,12 +62,43 @@ interface CachedCallResult {
   costUsd: number;
 }
 
-// Rough token cost table (USD per 1M tokens) — update as pricing changes
+// Token cost table (USD per 1M tokens). Verified against
+// platform.claude.com/docs/en/about-claude/pricing on 2026-07-26.
+// cacheWrite = 1.25× input (5-minute TTL); cacheRead = 0.1× input.
+// Previous values were wrong on two rows: Haiku carried Haiku-3.5 prices
+// ($0.8/$4) and Opus carried Opus-4.1 prices ($15/$75), so Haiku spend was
+// under-reported ~25% and Opus over-reported 3×.
 const COST = {
-  "claude-haiku-4-5-20251001":   { input: 0.8,  output: 4,    cacheWrite: 1,    cacheRead: 0.08 },
+  "claude-haiku-4-5-20251001":   { input: 1,    output: 5,    cacheWrite: 1.25, cacheRead: 0.1  },
   "claude-sonnet-4-6":           { input: 3,    output: 15,   cacheWrite: 3.75, cacheRead: 0.3  },
-  "claude-opus-4-7":             { input: 15,   output: 75,   cacheWrite: 18.75,cacheRead: 1.5  },
+  "claude-opus-5":               { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
+  // Older Opus ids stay listed: they are still selectable in smrtVoice
+  // settings, and an unlisted id used to price at $0.
+  "claude-opus-4-8":             { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
+  "claude-opus-4-7":             { input: 5,    output: 25,   cacheWrite: 6.25, cacheRead: 0.5  },
 } as const;
+
+type Pricing = { input: number; output: number; cacheWrite: number; cacheRead: number };
+
+/** Per-family rates, used when an exact model id is not in COST. */
+const FAMILY_COST: Record<"haiku" | "sonnet" | "opus", Pricing> = {
+  haiku:  { input: 1, output: 5,  cacheWrite: 1.25, cacheRead: 0.1 },
+  sonnet: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
+  opus:   { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+};
+
+/**
+ * Resolve pricing for a model id. Falls back to the family rate for ids not in
+ * COST, so pointing MODELS at a newer model never silently logs $0 spend.
+ */
+function pricingFor(model: string): Pricing | null {
+  const exact = COST[model as keyof typeof COST];
+  if (exact) return exact;
+  if (model.includes("haiku"))  return FAMILY_COST.haiku;
+  if (model.includes("opus"))   return FAMILY_COST.opus;
+  if (model.includes("sonnet")) return FAMILY_COST.sonnet;
+  return null;
+}
 
 function estimateCost(model: string, usage: {
   input_tokens: number;
@@ -74,7 +106,7 @@ function estimateCost(model: string, usage: {
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
 }): number {
-  const pricing = COST[model as keyof typeof COST];
+  const pricing = pricingFor(model);
   if (!pricing) return 0;
   const read   = (usage.cache_read_input_tokens ?? 0) / 1_000_000 * pricing.cacheRead;
   const write  = (usage.cache_creation_input_tokens ?? 0) / 1_000_000 * pricing.cacheWrite;
