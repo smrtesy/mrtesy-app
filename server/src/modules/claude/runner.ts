@@ -23,7 +23,23 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { db } from "../../db";
+import { db, getAppSecret } from "../../db";
+
+/**
+ * Where the subscription token is stored.
+ *
+ * app_secrets (via getAppSecret) rather than a bare Railway variable, for three
+ * reasons: it is encrypted at rest in Supabase Vault, it is editable from our own
+ * admin screen at /admin/apps/smrttask/secrets instead of a third-party
+ * dashboard, and getAppSecret still falls back to the environment variable of the
+ * same name — so an existing Railway variable keeps working unchanged.
+ *
+ * The slug is the platform's core app (smrttask, renamed from the legacy
+ * "smrtesy") because this credential is platform infrastructure shared by every
+ * Claude run, not a feature of one product.
+ */
+const TOKEN_APP_SLUG = "smrttask";
+const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
  * Locate the Claude Code binary.
@@ -188,14 +204,16 @@ export async function executeRun(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] finish update failed:", error.message);
   };
 
-  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const token = await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY);
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
       status: "failed",
       error:
-        "CLAUDE_CODE_OAUTH_TOKEN is not set. Generate one with `claude setup-token` " +
-        "(it authenticates with the Claude subscription) and set it on the backend.",
+        `${TOKEN_KEY} is not configured. Generate one with ` +
+        "`npx @anthropic-ai/claude-code setup-token` (it authenticates with the Claude " +
+        `subscription), then save it under /admin/apps/${TOKEN_APP_SLUG}/secrets — or ` +
+        "set an environment variable of the same name on the backend.",
     });
     return;
   }
