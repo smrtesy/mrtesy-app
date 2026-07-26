@@ -3976,6 +3976,34 @@
       "done": "הסתיים",
       "failed": "נכשל",
       "canceled": "בוטל"
+    },
+    "submitHint": "Enter שולח · Shift+Enter שורה חדשה",
+    "model": {
+      "label": "מודל",
+      "default": "ברירת מחדל"
+    },
+    "effort": {
+      "label": "חוזק",
+      "default": "ברירת מחדל",
+      "low": "נמוך",
+      "medium": "בינוני",
+      "high": "גבוה",
+      "xhigh": "גבוה מאוד",
+      "max": "מקסימלי"
+    },
+    "usage": {
+      "title": "שימוש",
+      "windowDays": "{days} ימים אחרונים",
+      "runs": "הרצות",
+      "failed": "נכשלו",
+      "inputTokens": "טוקני קלט",
+      "outputTokens": "טוקני פלט",
+      "cacheRead": "קריאה מ-cache",
+      "cacheWrite": "כתיבה ל-cache",
+      "turns": "תורים",
+      "duration": "משך",
+      "costEquivalent": "שווי-ערך",
+      "byModel": "לפי מודל"
     }
   }
 }

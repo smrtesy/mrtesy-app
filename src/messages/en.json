@@ -3977,6 +3977,34 @@
       "done": "Done",
       "failed": "Failed",
       "canceled": "Canceled"
+    },
+    "submitHint": "Enter sends · Shift+Enter for a new line",
+    "model": {
+      "label": "Model",
+      "default": "Default"
+    },
+    "effort": {
+      "label": "Effort",
+      "default": "Default",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Very high",
+      "max": "Max"
+    },
+    "usage": {
+      "title": "Usage",
+      "windowDays": "last {days} days",
+      "runs": "Runs",
+      "failed": "Failed",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "cacheRead": "Cache read",
+      "cacheWrite": "Cache write",
+      "turns": "Turns",
+      "duration": "Duration",
+      "costEquivalent": "Equivalent value",
+      "byModel": "By model"
     }
   }
 }
