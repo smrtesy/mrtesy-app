@@ -204,7 +204,9 @@ export async function executeRun(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] finish update failed:", error.message);
   };
 
-  const token = await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY);
+  // Trimmed because this value is pasted by a human through an admin form, where a
+  // stray newline or space rides along easily and would be sent verbatim.
+  const token = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
@@ -341,12 +343,29 @@ export async function executeRun(runId: string): Promise<void> {
 
   const exitCode = child.exitCode;
   const ok = spawnError === null && exitCode === 0;
+
+  // A wrong paste in the token field surfaces as "401 Invalid bearer token" from
+  // inside the stream, which reads like an outage rather than a misconfiguration.
+  // Anthropic credentials are `sk-ant-…`, so when the configured value isn't, say
+  // so alongside the failure instead of leaving the 401 to be interpreted.
+  const failureText = `${lastResult ?? ""} ${stderrTail}`;
+  const authLooksWrong =
+    !ok && /401|invalid bearer|authenticat/i.test(failureText) && !token.startsWith("sk-ant-");
+  const hint = authLooksWrong
+    ? ` — hint: the configured ${TOKEN_KEY} does not start with 'sk-ant-', which is ` +
+      "unusual for a Claude credential. Check that the saved value is the token " +
+      "printed by `claude setup-token`."
+    : "";
+
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
     result_summary: truncate(lastResult),
     error: ok
       ? null
-      : truncate(spawnError || stderrTail || `exit code ${String(exitCode)}`, 4000),
+      : truncate(
+          `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+          4000,
+        ),
   });
 }

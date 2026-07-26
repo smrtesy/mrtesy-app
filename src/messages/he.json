@@ -1627,7 +1627,8 @@
     "usage": "עלויות AI",
     "docs": "מסמכים",
     "domainTracker": "מעקב דומיינים",
-    "priceTracker": "השוואת מחירים"
+    "priceTracker": "השוואת מחירים",
+    "claude": "עבודות קלוד"
   },
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."
