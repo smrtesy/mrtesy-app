@@ -21,7 +21,26 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { db } from "../../db";
+
+/**
+ * Locate the Claude Code binary.
+ *
+ * Railway's start command is `node dist/index.js` rather than an npm script, so
+ * node_modules/.bin is NOT on PATH — resolving the dependency's binary by
+ * absolute path is what makes this work on the deployed host. CLAUDE_CLI_PATH
+ * overrides everything (a system-wide install, or a pinned build), and bare
+ * "claude" stays as the last resort for a shell where it is on PATH.
+ */
+function resolveCli(): string {
+  const explicit = process.env.CLAUDE_CLI_PATH;
+  if (explicit) return explicit;
+  const local = path.join(process.cwd(), "node_modules", ".bin", "claude");
+  if (existsSync(local)) return local;
+  return "claude";
+}
 
 /** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -199,7 +218,7 @@ export async function executeRun(runId: string): Promise<void> {
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
-  const bin = process.env.CLAUDE_CLI_PATH || "claude";
+  const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
   const args = ["-p", run.prompt, "--output-format", "stream-json", "--verbose", ...extra];
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
@@ -210,6 +229,10 @@ export async function executeRun(runId: string): Promise<void> {
   let sessionId: string | null = null;
   let lastResult: string | null = null;
   let stderrTail = "";
+  // A spawn failure (most often the binary not being found on the host) produces
+  // no stderr and a null exit code, so it has to be captured here or the run
+  // would be recorded as an unexplained "exit code null".
+  let spawnError: string | null = null;
 
   const flush = async () => {
     if (buffer.length === 0) return;
@@ -272,10 +295,11 @@ export async function executeRun(runId: string): Promise<void> {
 
   await new Promise<void>((resolve) => {
     child.on("error", (err) => {
+      spawnError = `could not start '${bin}': ${err.message}`;
       buffer.push({
         seq: nextSeq(),
         kind: "error",
-        text: truncate(err.message),
+        text: truncate(spawnError),
         tool_name: null,
         payload: null,
       });
@@ -298,11 +322,13 @@ export async function executeRun(runId: string): Promise<void> {
   await flush();
 
   const exitCode = child.exitCode;
-  const ok = exitCode === 0;
+  const ok = spawnError === null && exitCode === 0;
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
     result_summary: truncate(lastResult),
-    error: ok ? null : truncate(stderrTail || `exit code ${String(exitCode)}`, 4000),
+    error: ok
+      ? null
+      : truncate(spawnError || stderrTail || `exit code ${String(exitCode)}`, 4000),
   });
 }
