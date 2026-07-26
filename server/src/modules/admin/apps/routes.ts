@@ -193,6 +193,10 @@ const SMRTTASK_PLATFORM_KEYS = [
   { key: "GEMINI_MODEL",          is_secret: false, default_value: "gemini-3-flash-preview" },
   { key: "GEMINI_THINKING_LEVEL", is_secret: false, default_value: "low" },
   { key: "META_API_VERSION",      is_secret: false, default_value: "v21.0" },
+  // Subscription OAuth token (from `claude setup-token`) used by the Claude runner
+  // in modules/claude. Listed here so it can be set from this screen instead of a
+  // hosting dashboard; getAppSecret still falls back to the same-named env var.
+  { key: "CLAUDE_CODE_OAUTH_TOKEN", is_secret: true, default_value: null },
 ] as const;
 
 /** Apps whose platform secrets live in app_secrets / Vault and are editable

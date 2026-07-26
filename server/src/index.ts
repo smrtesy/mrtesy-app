@@ -32,6 +32,7 @@ import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as sm
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
+import claudeRouter from "./modules/claude";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -189,6 +190,7 @@ app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
 app.use("/api", smrtvaultRouter);
 app.use("/api", smrtinfoRouter);
+app.use("/api", claudeRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
