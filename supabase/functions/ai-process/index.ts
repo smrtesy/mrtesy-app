@@ -2377,7 +2377,9 @@ async function checkCrossSourceLink(
       const m = result.text.match(/\{[\s\S]*\}/);
       if (!m) return null;
       const parsed = JSON.parse(m[0]);
-      if (parsed.match && parsed.matched_id) {
+      // Only an id that was actually IN the candidate list — never a fabricated
+      // or remembered one (same guard findDuplicateOpenTask applies).
+      if (parsed.match && parsed.matched_id && (tasks as any[]).some((t) => t.id === parsed.matched_id)) {
         return { taskId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
       }
     } catch { /* ignore */ }
@@ -2416,7 +2418,7 @@ async function checkCrossSourceLink(
       const m = result.text.match(/\{[\s\S]*\}/);
       if (!m) return null;
       const parsed = JSON.parse(m[0]);
-      if (parsed.match && parsed.matched_id) {
+      if (parsed.match && parsed.matched_id && candidates.some((e: any) => e.id === parsed.matched_id)) {
         return { taskId: newTaskId!, sourceMessageId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
       }
     } catch { /* ignore */ }
@@ -2449,6 +2451,12 @@ interface DupeProbe {
   emails: Set<string>;
   domains: Set<string>;
   phones: Set<string>;
+  /**
+   * The incoming message's channel counterparty (sender address / chat phone) —
+   * narrower than `emails`/`phones` above, which include anything scraped from
+   * the body for RECALL. Only this field is allowed to decide identity.
+   */
+  party: PartyIds;
 }
 
 function extractEmails(...vals: (string | null | undefined)[]): Set<string> {
@@ -2496,6 +2504,173 @@ function extractUrls(text: string): string[] {
   return m ? Array.from(new Set(m)) : [];
 }
 
+// ── Party identity — verified in code, never taken on the model's word ───────
+// The AI gates below decide SAME MATTER. They must NEVER be the only authority
+// on SAME PARTY: the cheap classification_model repeatedly manufactured an
+// identity to justify a merge — "3475848008 = 347-584-8008, תואם 972584146670",
+// "מספר טלפון 972537701510 מתאים ל-7706484073 כנראה שגיאת הקלדה" — and fused two
+// unrelated people into one task. T1804 is the reference case: לאה's "she'll
+// call back" task was renamed to מענדי's AI-voices ask, keeping לאה's contact and
+// description; T276 then collected four more updates from the wrong chat because
+// the bad link also re-pointed that chat's thread memory. Replaying the last 90
+// days: of 105 two-party chat auto-merges, 81 were party-verified, 7 were
+// unverifiable — and 15 had a provably different counterparty.
+//
+// So identity is checked deterministically: the channel counterparty of the
+// incoming item vs the counterparty the candidate task records (its contact
+// fields AND the message it was born from). A verified mismatch downgrades the
+// verdict one tier instead of merging.
+interface PartyIds {
+  emails: Set<string>;
+  domains: Set<string>;
+  /** Last-9-digit phone keys — country-code / leading-zero tolerant. */
+  phones: Set<string>;
+}
+
+// Key on the last EIGHT digits, which is what survives every form the same
+// number is written in here: +1-347-584-8008 / 3475848008 / 13475848008 → 75848008,
+// +972-58-414-6670 / 058-414-6670 → 84146670, and — the reason it is 8 and not 9
+// — an Israeli 9-digit landline written locally (03-123-4567) vs internationally
+// (+972-3-123-4567), which extractPhones truncates to 7231234567: only the last
+// 8 digits agree. Two genuinely different numbers still differ (75848008 ≠
+// 84146670, the exact pair the model declared equal on T1804); a collision needs
+// the same 7-digit subscriber number AND the same final area-code digit, and it
+// would only cost a veto, never cause a wrong one.
+function phoneKeys(...vals: (string | null | undefined)[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of extractPhones(...vals)) if (p.length >= 9) out.add(p.slice(-8));
+  return out;
+}
+
+function partyIdsFrom(
+  emailish: (string | null | undefined)[],
+  phonish: (string | null | undefined)[],
+): PartyIds {
+  const emails = extractEmails(...emailish);
+  return { emails, domains: emailDomains(emails), phones: phoneKeys(...phonish) };
+}
+
+// Who the INCOMING item is with: the channel counterparty ONLY — sender address,
+// chat phone. Deliberately NOT the body: a number quoted inside a message is not
+// the party, and scraping those is exactly how a "same phone" fantasy gets
+// manufactured. Self-chat rows (whatsapp_echo/sms_echo) have no counterparty, so
+// they yield no verdict and keep their existing behaviour.
+function msgPartyIds(msg: any): PartyIds {
+  if (msg?.source_type === "whatsapp_echo" || msg?.source_type === "sms_echo") {
+    return partyIdsFrom([], []);
+  }
+  const md = (msg?.metadata ?? {}) as any;
+  // On the user's OWN outbound mail the sender is the user — the counterparty is
+  // the recipient. metadata.to is used for gmail_sent ONLY: on incoming mail it
+  // holds the user's own alias, and folding that in would make every pair of
+  // emails "share a party" and disable the check entirely.
+  if (msg?.source_type === "gmail_sent") return partyIdsFrom([md?.to], []);
+  return partyIdsFrom([msg?.sender_email, msg?.sender], [md?.fromPhone, md?.peerPhone, md?.chatId]);
+}
+
+/** Who a candidate TASK is with, from the contact fields the builder filled. */
+function taskPartyIds(task: any): PartyIds {
+  return partyIdsFrom(
+    [task?.related_contact_email, task?.related_contact],
+    [task?.related_contact_phone, task?.related_contact],
+  );
+}
+
+function mergeParties(a: PartyIds, b: PartyIds): PartyIds {
+  return {
+    emails: new Set([...a.emails, ...b.emails]),
+    domains: new Set([...a.domains, ...b.domains]),
+    phones: new Set([...a.phones, ...b.phones]),
+  };
+}
+
+// mail.dep.nyc.gov and dep.nyc.gov are the same authority (the DEP dunning case
+// the matcher must keep merging); a.com and b.com are not.
+function domainsRelated(a: string, b: string): boolean {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
+ * True only when the two sides carry COMPARABLE identifiers of the same kind
+ * (phone↔phone or email↔email) and they are verifiably NOT the same party.
+ *
+ * Two deliberate non-verdicts, so this stays a mismatch detector and not a
+ * blanket "different source" block:
+ *  • One side anonymous (a calendar event, a Drive scan, a task with no contact)
+ *    — nothing to compare, and those are the genuine cross-source links this
+ *    matcher exists for.
+ *  • Nothing comparable (a WhatsApp phone vs a task known only by email) — a
+ *    person can own both, so this is UNVERIFIABLE, not proven different.
+ * A match on ANY kind clears the whole check: a shared email is identity even if
+ * some phone in the free-text contact field differs.
+ */
+function partiesConflict(incoming: PartyIds, task: PartyIds): boolean {
+  const comparable =
+    (incoming.phones.size > 0 && task.phones.size > 0) ||
+    (incoming.emails.size > 0 && task.emails.size > 0);
+  return comparable && !partiesMatch(incoming, task);
+}
+
+/** A POSITIVE identity match — a shared phone, address, or related domain. */
+function partiesMatch(a: PartyIds, b: PartyIds): boolean {
+  for (const p of a.phones) if (b.phones.has(p)) return true;
+  for (const e of a.emails) if (b.emails.has(e)) return true;
+  for (const d of a.domains) for (const d2 of b.domains) if (domainsRelated(d, d2)) return true;
+  return false;
+}
+
+/**
+ * The task's own TEXT already names the incoming counterparty (their number or
+ * address appears in its title/description) → they really are involved in this
+ * matter even though the contact fields point elsewhere. This is the evidence
+ * that rescues the legitimate case: a person replying from their own number
+ * about a matter opened through someone else (T1086 — Rabbi Nagel's number is
+ * written in the task the model matched). Evidence in the data, not a claim in
+ * the reason string.
+ */
+function taskTextNamesParty(task: any, incoming: PartyIds): boolean {
+  const blob = `${task?.title_he ?? ""} ${task?.title ?? ""} ${String(task?.description ?? "")}`;
+  const ids = partyIdsFrom([blob], [blob]);
+  if (partiesMatch(incoming, ids)) return true;
+  // Domain named in the text, even without a full address: covers a vendor that
+  // rotates sending domains (billing@x.com → notices@x-mail.net) where the task
+  // itself says who it is about. Generic consumer domains are already filtered
+  // out of PartyIds.domains, so "gmail.com" can never rescue a merge.
+  const lower = blob.toLowerCase();
+  for (const d of incoming.domains) if (lower.includes(d)) return true;
+  return false;
+}
+
+/** Compact "who" for the audit trail in the log / ✨ panel. */
+function describeParty(p: PartyIds): string {
+  const ids = [...p.phones, ...p.emails];
+  return ids.length ? ids.slice(0, 3).join(", ") : "—";
+}
+
+/**
+ * True when `tkey` is NOT the thread/chat the task was born in. Used to keep
+ * thread_memory honest: binding a whole WhatsApp chat to a task born in another
+ * chat routes every FUTURE message from that contact onto a stranger's matter
+ * (how T276 kept collecting updates from the wrong person long after the one bad
+ * link). A task with no originating thread (calendar / Drive / manual) never
+ * crosses, so genuine cross-source bindings still register.
+ */
+async function threadCrossesTask(taskId: string, tkey: string): Promise<boolean> {
+  // Fails CLOSED: a lookup that errors reports "crosses", because a query blip
+  // must not license a cross-party binding — that is how the T276 damage
+  // persisted. Cost of a false "crosses" is one lost auto-attach, which the next
+  // message on the thread re-establishes.
+  const { data: t, error: taskErr } = await supabase
+    .from("tasks").select("source_message_id").eq("id", taskId).maybeSingle();
+  if (taskErr) return true;
+  if (!t?.source_message_id) return false;
+  const { data: origin, error: originErr } = await supabase
+    .from("source_messages").select("source_type, metadata").eq("id", t.source_message_id).maybeSingle();
+  if (originErr) return true;
+  const originKey = origin ? threadKey(origin) : null;
+  return originKey !== null && originKey !== tkey;
+}
+
 function dayDiff(a: string | null, b: string | null): number | null {
   if (!a || !b) return null;
   const ta = Date.parse(a.length === 10 ? `${a}T00:00:00Z` : a);
@@ -2539,6 +2714,7 @@ function buildProbe(msg: any, ownerContact?: string | null): DupeProbe {
     emails,
     domains: emailDomains(emails),
     phones,
+    party: msgPartyIds(msg),
   };
 }
 
@@ -2565,6 +2741,10 @@ function buildProbeFromTask(msg: any, task: any): DupeProbe {
     emails,
     domains: emailDomains(emails),
     phones,
+    // Identity is still the MESSAGE's counterparty — a produced task's own text
+    // may name other people, but the party this item arrived from is the chat /
+    // sender it came in on.
+    party: msgPartyIds(msg),
   };
 }
 
@@ -2580,6 +2760,24 @@ confidence:
 • "medium" — strong overlap but one pillar is ambiguous (e.g. same person and topic but the date is unclear). Suggest to the user; do NOT auto-merge.
 
 NEVER match on person alone. NEVER match on topic alone. Two DIFFERENT meetings with the same person are NOT a match. A recurring event's separate occurrences are NOT a match unless the date is the same. When unsure, return {"match": false}. A false match is worse than a missed one.
+
+IDENTIFIERS ARE LITERAL (mandatory): a phone number, email address, account /
+invoice / case number counts as the SAME PARTY only when the identifiers are
+identical character-for-character after stripping formatting (spaces, dashes,
+parentheses, a leading + or country code). Numbers that merely look similar
+belong to DIFFERENT people. NEVER reason that a number matches "when you swap
+the country code", is "probably a typo", "seems to be the same family", or "is
+likely the same person" — if you cannot point at identical digits, the party
+does NOT match, and you must not write that it does. Two different WhatsApp
+chats / phone numbers are two different parties even when both write about the
+same subject on the same day.
+
+DIFFERENT PARTIES: when the two items are from different parties, return
+{"match": false} — unless the SAME concrete reference (invoice / order / case
+number, document name, or named event) appears VERBATIM in both. "Same day +
+related topic" between two different people is NEVER a match: those are two
+people talking to the user about a shared subject, which is normal and must stay
+two separate matters.
 
 ACTION GATE (mandatory — applies even when 2+ pillars above agree): a match ALSO requires the SAME underlying obligation/action. From a single high-volume sender (Amazon, a bank, a marketplace, a SaaS) "same party + a nearby date" is NOT sufficient on its own. "Review / skip an upcoming delivery", "fix a failed or expired payment method", "track a shipment", "claim a refund", and "a price-change notice" are DIFFERENT obligations even when they arrive from the same sender in the same week — do NOT merge one into another. Merge ONLY when the new item is the SAME obligation: a follow-up about the very same delivery, invoice, appointment, reference/order number, or decision.
 
@@ -2604,7 +2802,7 @@ async function findDuplicateOpenTask(
   const titleTokens = textTokens(`${probe.title} ${probe.description.slice(0, 300)}`);
   if (probe.emails.size === 0 && probe.phones.size === 0 && !probe.dueDate && titleTokens.size < 2) return null;
 
-  const cols = "id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone, status, recurrence_parent_id";
+  const cols = "id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone, status, recurrence_parent_id, source_message_id";
   const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
   const { data: open, error: openErr } = await supabase
     .from("tasks")
@@ -2736,11 +2934,46 @@ async function findDuplicateOpenTask(
         }
       }
 
+      // ── Identity veto: the model does not get the last word on WHO ─────────
+      // Verify the party in code (see partiesConflict). The task's identity is
+      // its contact fields PLUS the message it was born from — a WhatsApp task's
+      // chat phone is identity even when related_contact is null, which is how a
+      // chunk of these merges escaped any contact comparison at all.
+      // A verified mismatch costs the verdict one tier: high becomes a
+      // user-decidable suggestion, medium disappears. That way a wrong guess can
+      // never rewrite a task, and the "duplicate of a completed task"
+      // suppression can never silently swallow a real ask from someone else.
+      let confidence: "high" | "medium" = parsed.confidence;
+      let reason = String(parsed.reason_he ?? "");
+      let taskParty = taskPartyIds(chosen);
+      let originUnknown = false;
+      if (chosen.source_message_id) {
+        const { data: origin, error: originErr } = await supabase
+          .from("source_messages")
+          .select("sender, sender_email, source_type, metadata")
+          .eq("id", chosen.source_message_id)
+          .maybeSingle();
+        if (originErr) originUnknown = true;
+        else if (origin) taskParty = mergeParties(taskParty, msgPartyIds(origin));
+      }
+      // A failed origin lookup may have hidden the task's ONLY identity (a chat
+      // task whose related_contact is null), and "no verdict" is exactly the hole
+      // this veto exists to close. So when the origin is unknown, auto-merging
+      // requires a POSITIVE identity match rather than merely the absence of a
+      // provable conflict.
+      const partyConflict = partiesConflict(probe.party, taskParty)
+        || (originUnknown && !partiesMatch(probe.party, taskParty));
+      if (partyConflict && !taskTextNamesParty(chosen, probe.party)) {
+        if (confidence !== "high") return null;
+        confidence = "medium";
+        reason = `⚠️ זהות הצדדים לא אומתה (${describeParty(probe.party)} ≠ ${describeParty(taskParty)}) — לא מוזג אוטומטית, הצעה בלבד: ${reason}`;
+      }
+
       return {
         taskId: String(chosen.id),
         serial: chosen.serial_display || "",
-        confidence: parsed.confidence,
-        reason: String(parsed.reason_he ?? ""),
+        confidence,
+        reason,
         // snoozed matches (the same-day recurring guard above) fold like an open
         // task — linkAndEnrichDuplicate suppresses the duplicate instead of the
         // escalation path spawning a tagged re-creation.
@@ -2825,6 +3058,14 @@ async function linkAndEnrichDuplicate(
     // Don't clobber the existing task's description with this message's summary;
     // record the cross-source link reason + the verbatim deep link(s) instead.
     newSummary: "",
+    // Same reason the summary is dropped, and just as mandatory: a linked
+    // message is EVIDENCE on an existing matter, never a re-definition of it.
+    // Letting the link carry newTitle through renamed the task to the new
+    // message's ask while its contact and description stayed with the original
+    // party — T1804 read "מענדי מבקש כמה קולות AI" on לאה's callback task — and
+    // the renamed title then fed detectMaterialChanges below, which dutifully
+    // reported a "⚠️ מה השתנה" diff between two unrelated matters.
+    newTitle: "",
     completionSignal: false,
     completionReason: "",
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
@@ -2876,8 +3117,15 @@ async function linkAndEnrichDuplicate(
 
   // Register thread memory for the NEW message's own thread (Gmail/WhatsApp)
   // so the next reply on it attaches here too. Calendar has no thread key.
+  // NEVER for a CHAT whose task was born in a different chat: a WhatsApp/SMS
+  // thread key is a PERSON, so binding it to someone else's task routes every
+  // future message from that contact onto a stranger's matter — one bad link on
+  // T276 kept pulling in a second chat's messages for hours. Gmail thread keys
+  // are matter-scoped (not person-scoped), so they still register as before.
   const tk = threadKey(msg);
-  if (tk) await upsertThreadMemory(msg.user_id, tk, { related_task_id: taskId, last_message_id: msg.id });
+  if (tk && !(isConversational(msg) && await threadCrossesTask(taskId, tk))) {
+    await upsertThreadMemory(msg.user_id, tk, { related_task_id: taskId, last_message_id: msg.id });
+  }
 }
 
 // MEDIUM-confidence: the new task was created normally but flagged as a
@@ -4015,6 +4263,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         if (targetTask) {
           const completionAnalysis: ThreadAnalysis = {
             ...analysis,
+            // A confirmation email CLOSES the matched task — it does not get to
+            // rename it or overwrite its description with this email's own
+            // summary (the same clobber that made T1804 unreadable). Only the
+            // completion signal and the linking reason cross over.
+            newSummary: "",
+            newTitle: "",
             completionSignal: true,
             completionReason: link.reason,
             reason: link.reason,
@@ -4068,10 +4322,20 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // ── Persist thread memory ─────────────────────────────────────────────────
   if (tkey) {
     try {
+      // Keep the pointer honest. A chat's thread key is a PERSON, so it must
+      // never point at a task born in a DIFFERENT chat — that is what turned
+      // every later message from מענדי into an update on לאה's task (T1804) after
+      // a single bad cross-source link. Cross-chat → keep the previous pointer.
+      // Checked only when the pointer would actually change, so the common
+      // same-chat case costs nothing.
+      const crossChat = !!linkedTaskId
+        && isConversational(msg)
+        && linkedTaskId !== memory?.related_task_id
+        && await threadCrossesTask(linkedTaskId, tkey);
       await upsertThreadMemory(msg.user_id, tkey, {
         summary: analysis.newSummary || memory?.summary || "",
         state: analysis.state,
-        related_task_id: linkedTaskId ?? memory?.related_task_id ?? null,
+        related_task_id: (crossChat ? memory?.related_task_id : linkedTaskId ?? memory?.related_task_id) ?? null,
         last_message_id: msg.id,
       });
     } catch (e) {
