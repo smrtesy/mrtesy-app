@@ -217,7 +217,10 @@ export async function cloneWorkspace(
   const url = `https://x-access-token:${token}@github.com/${repo}.git`;
   const args = ["clone", "--depth", "1"];
   if (branch) args.push("--branch", branch);
-  args.push(url, dir);
+  // "--" so the two positionals can never be parsed as options. The URL is always
+  // https-prefixed, but a repo name may legally start with "-" and `git clone … -foo`
+  // would read as a flag.
+  args.push("--", url, dir);
 
   const { code, stderr } = await run("git", args, { timeoutMs: CLONE_TIMEOUT_MS });
   if (code !== 0) {

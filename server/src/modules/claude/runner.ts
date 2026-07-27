@@ -61,6 +61,8 @@ function resolveCli(): string {
 
 /** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+/** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
+const SIGKILL_GRACE_MS = 10_000;
 /** Events are flushed in batches — a write per event would serialize the stream. */
 const FLUSH_EVERY = 25;
 const FLUSH_INTERVAL_MS = 1000;
@@ -235,8 +237,41 @@ function usageFromResult(result: Record<string, unknown> | null) {
  * Execute a queued run to completion. Resolves once the run row reaches a
  * terminal status — it never throws at the caller, because the run's own
  * `status`/`error` columns are the report, and callers fire this and move on.
+ *
+ * This wrapper exists for ONE reason: the cloned workspace holds the GitHub token
+ * in its .git/config, so it must be deleted on every exit path — including an
+ * unexpected throw anywhere in the body. A `finally` here is the only structure
+ * that guarantees that; scattered cleanup calls cannot. The holder is what lets
+ * the finally reach a workspace the inner function created.
  */
 export async function executeRun(runId: string): Promise<void> {
+  const held: { ws: Workspace | null } = { ws: null };
+  try {
+    await executeRunBody(runId, held);
+  } catch (e) {
+    // An unexpected throw would otherwise leave the row 'running' — a live status
+    // the screen polls forever. Record it as the failure it is.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[claude/runner] unexpected failure:", message);
+    const { error } = await db
+      .from("claude_runs")
+      .update({
+        status: "failed",
+        error: truncate(message, 4000),
+        ended_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", runId)
+      // Only from a non-terminal state: a run that already finished must not be
+      // rewritten by a throw in the teardown that followed it.
+      .in("status", ["queued", "running"]);
+    if (error) console.error("[claude/runner] could not record failure:", error.message);
+  } finally {
+    await held.ws?.cleanup();
+  }
+}
+
+async function executeRunBody(runId: string, held: { ws: Workspace | null }): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
     .select("id, prompt, cwd, status, model, effort, repo, git_branch")
@@ -304,6 +339,9 @@ export async function executeRun(runId: string): Promise<void> {
     }
     try {
       workspace = await cloneWorkspace(run.repo, run.git_branch, ghToken);
+      // Handed to the holder immediately: from here on the outer finally is what
+      // guarantees the tokenised clone is deleted, on every exit path.
+      held.ws = workspace;
     } catch (e) {
       await finish({
         status: "failed",
@@ -326,7 +364,9 @@ export async function executeRun(runId: string): Promise<void> {
     .eq("id", runId);
   if (startError) {
     console.error("[claude/runner] could not mark running:", startError.message);
-    await workspace?.cleanup();
+    // Recorded as failed, not left as-is: 'queued' is a live status the screen polls
+    // forever, so a run that can never start would spin in the UI for good.
+    await finish({ status: "failed", error: truncate(startError.message, 4000) });
     return;
   }
 
@@ -399,8 +439,14 @@ export async function executeRun(runId: string): Promise<void> {
     void flush();
   }, FLUSH_INTERVAL_MS);
 
+  // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
+  // only SIGTERM, a child that ignores it never emits 'close' — the await below
+  // would never resolve, the run would sit in 'running' forever, and the cloned
+  // workspace (which holds the GitHub token in .git/config) would stay on disk.
+  let hardKillTimer: ReturnType<typeof setTimeout> | null = null;
   const killTimer = setTimeout(() => {
     child.kill("SIGTERM");
+    hardKillTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
   }, timeoutMs);
 
   let stdoutRest = "";
@@ -460,6 +506,7 @@ export async function executeRun(runId: string): Promise<void> {
 
   clearInterval(timer);
   clearTimeout(killTimer);
+  if (hardKillTimer) clearTimeout(hardKillTimer);
   if (stdoutRest.trim()) {
     buffer.push({
       seq: nextSeq(),
@@ -504,9 +551,4 @@ export async function executeRun(runId: string): Promise<void> {
           4000,
         ),
   });
-
-  // Always last, and after `finish` so a cleanup failure cannot lose the run's
-  // outcome. The clone's .git/config holds the GitHub token in its remote URL —
-  // deleting the workspace is part of how that token stays on this host.
-  await workspace?.cleanup();
 }

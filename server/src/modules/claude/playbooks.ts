@@ -41,13 +41,22 @@ function str(v: unknown, max: number): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Only ever store an http(s) URL. A `javascript:`/`data:` value would become a
- *  live link in the list, so it is rejected at the door rather than at render. */
-function safeUrl(v: unknown): string | null {
+/**
+ * Only ever store an http(s) URL. A `javascript:`/`data:` value would become a live
+ * link in the list, so it is rejected at the door rather than at render.
+ *
+ * Three-way on purpose: `null` = no URL given, `false` = a URL was given but is not
+ * http(s). Coercing the second case to null silently discarded a link the user had
+ * pasted (a scheme-less "github.com/…" is the common slip) and still answered
+ * "saved" — so `false` becomes a 400 instead.
+ */
+function parseUrl(v: unknown): string | null | false {
   const s = str(v, MAX_URL);
   if (!s) return null;
-  return /^https?:\/\//i.test(s) ? s : null;
+  return /^https?:\/\//i.test(s) ? s : false;
 }
+
+const URL_ERROR = "doc_url must start with http:// or https://";
 
 const SELECT =
   "id, kind, name, doc_url, doc_path, repo, instructions, source, is_active, sort_order, doc_updated_at, created_at, updated_at";
@@ -186,6 +195,9 @@ router.post("/claude/playbooks", async (req: Request, res: Response) => {
   if (!KINDS.has(kind)) return res.status(400).json({ error: `kind must be one of ${[...KINDS].join(", ")}` });
   if (!name) return res.status(400).json({ error: "name is required" });
 
+  const docUrl = parseUrl(body.doc_url);
+  if (docUrl === false) return res.status(400).json({ error: URL_ERROR });
+
   const { data, error } = await db
     .from("claude_playbooks")
     .insert({
@@ -193,7 +205,7 @@ router.post("/claude/playbooks", async (req: Request, res: Response) => {
       created_by: req.user!.id,
       kind,
       name,
-      doc_url: safeUrl(body.doc_url),
+      doc_url: docUrl,
       doc_path: str(body.doc_path, 500) || null,
       repo: str(body.repo, 200) || null,
       instructions: str(body.instructions, MAX_BODY) || null,
@@ -229,7 +241,11 @@ router.patch("/claude/playbooks/:id", async (req: Request, res: Response) => {
     if (!name) return res.status(400).json({ error: "name cannot be empty" });
     patch.name = name;
   }
-  if (body.doc_url !== undefined) patch.doc_url = safeUrl(body.doc_url);
+  if (body.doc_url !== undefined) {
+    const docUrl = parseUrl(body.doc_url);
+    if (docUrl === false) return res.status(400).json({ error: URL_ERROR });
+    patch.doc_url = docUrl;
+  }
   if (body.doc_path !== undefined) patch.doc_path = str(body.doc_path, 500) || null;
   if (body.repo !== undefined) patch.repo = str(body.repo, 200) || null;
   if (body.instructions !== undefined) patch.instructions = str(body.instructions, MAX_BODY) || null;
@@ -413,6 +429,36 @@ export interface ComposedPrompt {
 }
 
 /**
+ * Byte budget for the composed prompt.
+ *
+ * The runner passes it as a single argv entry, and Linux caps one argument at
+ * MAX_ARG_STRLEN (131 072 bytes). Hebrew is 2 bytes per character in UTF-8, so the
+ * field limits alone (60k + 60k + 20k chars) could produce ~280 KB and the run would
+ * die as an opaque `spawn E2BIG`. 100 KB leaves clear headroom.
+ */
+const MAX_COMPOSED_BYTES = 100_000;
+const byteLen = (s: string) => Buffer.byteLength(s, "utf8");
+
+/** Trim to a byte budget on a character boundary, with a visible marker so a
+ *  truncated instruction never reads as a complete one. */
+function clampBytes(text: string, budget: number): string {
+  if (byteLen(text) <= budget) return text;
+  const marker = "\n…[נחתך]";
+  // Budget too small to hold even the marker: return nothing, so the result is
+  // always within budget rather than the marker alone overflowing it.
+  if (budget <= byteLen(marker)) return "";
+  let end = Math.max(0, budget - byteLen(marker));
+  // Walk back until the slice fits: a multi-byte character straddling the cut would
+  // otherwise push it back over the budget.
+  let out = text.slice(0, end);
+  while (byteLen(out) > budget - byteLen(marker) && end > 0) {
+    end -= 1;
+    out = text.slice(0, end);
+  }
+  return out + marker;
+}
+
+/**
  * Build the text actually handed to the engine: standing instructions, then the
  * chosen method (with its deep link emitted verbatim so the run can open the
  * defining document itself), then what the human asked for.
@@ -428,6 +474,12 @@ export async function composePrompt(
 ): Promise<ComposedPrompt> {
   const parts: string[] = [];
 
+  // The task itself is never trimmed — only the two context sections are, and they
+  // split whatever budget the task leaves. Truncating what the user actually asked
+  // for to make room for boilerplate would be the wrong way round.
+  const taskBytes = byteLen(userPrompt);
+  const contextBudget = Math.max(0, MAX_COMPOSED_BYTES - taskBytes - 200);
+
   const { data: standing, error: sErr } = await db
     .from("claude_instructions")
     .select("body")
@@ -435,7 +487,9 @@ export async function composePrompt(
     .maybeSingle();
   if (sErr) console.error("[claude/compose] instructions fetch failed:", sErr.message);
   if (standing?.body?.trim()) {
-    parts.push(`# הוראות קבועות\n\n${standing.body.trim()}`);
+    parts.push(
+      `# הוראות קבועות\n\n${clampBytes(standing.body.trim(), Math.floor(contextBudget / 2))}`,
+    );
   }
 
   let playbook: ComposedPrompt["playbook"] = null;
@@ -450,8 +504,12 @@ export async function composePrompt(
     if (data) {
       playbook = { id: data.id, kind: data.kind, name: data.name, doc_url: data.doc_url };
       const head = `# שיטת עבודה: ${data.name}`;
+      // The link is emitted verbatim and BEFORE the body, so it survives a trim —
+      // a truncated method still tells the run where to read the whole thing.
       const link = data.doc_url ? `\n\nהמסמך המלא: ${data.doc_url}` : "";
-      const bodyText = data.instructions?.trim() ? `\n\n${data.instructions.trim()}` : "";
+      const bodyText = data.instructions?.trim()
+        ? `\n\n${clampBytes(data.instructions.trim(), Math.floor(contextBudget / 2))}`
+        : "";
       parts.push(`${head}${link}${bodyText}`);
     }
   }

@@ -70,6 +70,13 @@ export function DictationButton({
    *  rather than something that just happens. */
   const [quiet, setQuiet] = useState(0);
 
+  /** Held in a ref because the transcript is delivered from `mr.onstop`, a closure
+   *  created when the mic was pressed. Calling the captured `onText` would use the
+   *  caller's state from THAT render — so anything the user picked or typed while
+   *  recording (a working method, a repo, more prompt text) would be ignored. */
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
+
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -125,7 +132,7 @@ export function DictationButton({
         toast.error(t("empty"));
         return;
       }
-      onText(cleaned);
+      onTextRef.current(cleaned);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -153,9 +160,12 @@ export function DictationButton({
       mr.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
         teardown();
-        // Guard on BOTH flags: an aborted recording must not spend money, and a
-        // recording that captured nothing has nothing to transcribe.
-        if (!cancelledRef.current && heardSpeechRef.current && blob.size > 0) void transcribe(blob);
+        // Deliberately NOT gated on heardSpeechRef: the analyser is only how the
+        // auto-stop is timed, and when it is unavailable or suspended it reports
+        // silence for real speech. Gating transcription on it turned that into
+        // "press, speak, stop, nothing happens" with no error at all. An aborted
+        // recording still never spends money, and an empty blob has nothing to send.
+        if (!cancelledRef.current && blob.size > 0) void transcribe(blob);
       };
       mr.start();
       recorderRef.current = mr;
@@ -173,6 +183,11 @@ export function DictationButton({
       }
       const ctx = new AudioCtor();
       audioCtxRef.current = ctx;
+      // The context is created after `await getUserMedia`, so it is no longer inside
+      // the click gesture and browsers (iOS Safari, autoplay policy) can start it
+      // suspended. A suspended context feeds the analyser pure silence — the
+      // auto-stop would never fire. Same fix as WhatsApp's voice meter.
+      void ctx.resume?.();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
       ctx.createMediaStreamSource(stream).connect(analyser);
