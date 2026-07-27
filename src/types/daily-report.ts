@@ -65,6 +65,8 @@ export interface ReportDay {
   answered: number;
   complete: boolean;
   is_today: boolean;
+  /** The user dismissed this day — it no longer pins to the task list. */
+  skipped: boolean;
 }
 export interface DailyReportDays {
   today: string;
