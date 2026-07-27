@@ -98,6 +98,12 @@ ALTER TABLE claude_runs
 CREATE INDEX IF NOT EXISTS idx_claude_runs_thread
   ON claude_runs (thread_id, created_at);
 
+-- Which turn this is, 1-based. Kept explicitly rather than derived from
+-- created_at: two turns can share a timestamp to the millisecond, and the order
+-- of a conversation must never be ambiguous.
+ALTER TABLE claude_runs
+  ADD COLUMN IF NOT EXISTS turn_index integer;
+
 -- The real guard against two concurrent turns. The application also checks for a
 -- live run first, but that is a check-then-insert race: two requests milliseconds
 -- apart both see none, both compute the same turn_index, and two engine processes
@@ -105,12 +111,6 @@ CREATE INDEX IF NOT EXISTS idx_claude_runs_thread
 -- the second insert fail instead.
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_claude_runs_thread_turn
   ON claude_runs (thread_id, turn_index) WHERE thread_id IS NOT NULL;
-
--- Which turn this is, 1-based. Kept explicitly rather than derived from
--- created_at: two turns can share a timestamp to the millisecond, and the order
--- of a conversation must never be ambiguous.
-ALTER TABLE claude_runs
-  ADD COLUMN IF NOT EXISTS turn_index integer;
 
 -- True when the run was resumed into an existing session rather than starting
 -- one. Makes "why does this turn know things the prompt never said" answerable
@@ -158,6 +158,11 @@ COMMENT ON TABLE claude_attachments IS
 -- documents, recordings) and nothing outside the backend should be able to fetch
 -- one by guessing a URL. Every read goes through a signed URL minted by the
 -- service role, so no client policy is granted at all.
+--
+-- The bucket's own cap is 25 MB, but the API path is limited to ~7 MB: uploads
+-- arrive as base64 in a JSON body and express.json is capped at 10mb globally. The
+-- headroom is left here deliberately for a future direct-to-storage upload, which
+-- would not pass through the body parser.
 --
 -- If bucket creation via SQL fails (permissions), create it manually:
 --   Storage → New bucket → name: claude-attachments → Public: NO
