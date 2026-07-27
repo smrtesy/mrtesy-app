@@ -20,8 +20,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { getAppSecret } from "../../db";
 
@@ -156,7 +156,7 @@ export async function fileLastCommitDate(repo: string, filePath: string): Promis
 function run(
   bin: string,
   args: string[],
-  opts: { cwd?: string; timeoutMs: number },
+  opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(bin, args, {
@@ -164,7 +164,7 @@ function run(
       stdio: ["ignore", "ignore", "pipe"],
       // Never let git open an interactive credential prompt on the server: a
       // missing/expired token must fail fast instead of hanging the run.
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo" },
+      env: opts.env ?? { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo" },
     });
     let stderr = "";
     child.stderr?.on("data", (c) => {
@@ -185,46 +185,70 @@ function run(
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-export interface Workspace {
-  dir: string;
-  cleanup: () => Promise<void>;
+/**
+ * The environment a git command needs to authenticate WITHOUT the token touching
+ * disk.
+ *
+ * The token used to be embedded in the remote URL, which git writes into
+ * .git/config — fine when the clone was deleted after every turn, but a chat
+ * thread keeps its working directory across turns (engine sessions are stored per
+ * project directory), so a tokenised config would persist for the life of the
+ * conversation. A credential helper reads it from the process environment
+ * instead: nothing durable on disk, and each turn supplies it fresh.
+ */
+function gitAuthEnv(token: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    SMRTESY_GH_TOKEN: token,
+    // !f(){...};f is git's own convention for an inline shell credential helper.
+    // It prints the credential on stdout; git never stores it.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_VALUE_0:
+      '!f() { echo username=x-access-token; echo "password=$SMRTESY_GH_TOKEN"; }; f',
+  };
 }
 
 /**
- * Clone a repo into a throwaway workspace the run can work in.
+ * Clone a repo into `dir`, or leave an existing checkout alone.
  *
- * Depth 1 on a single branch: a run needs the current tree, not the history, and a
- * shallow clone of a large repo is the difference between seconds and minutes.
+ * Depth 1 on a single branch: a turn needs the current tree, not the history.
  * `git config user.*` is set locally so a commit the run makes has an author —
- * without it git aborts the commit and the run's work would be unpushable.
+ * without it git aborts the commit and the work would be unpushable.
  *
- * The token rides in the remote URL, which is what lets the run push back. That
- * URL is written into .git/config, so `cleanup()` deleting the directory is part
- * of the security model, not just tidiness — the caller must always call it.
+ * Idempotent on purpose. A thread clones on its first repo turn and REUSES the
+ * checkout afterwards, which is what lets turn 2 see the edits turn 1 made, and is
+ * required for `--resume` to find the session at all.
  */
-export async function cloneWorkspace(
+export async function ensureClone(
+  dir: string,
   repo: string,
   branch: string | null,
   token: string,
-): Promise<Workspace> {
+): Promise<void> {
   if (!isValidRepo(repo)) throw new Error(`invalid repo: ${repo}`);
   if (branch && !isValidBranch(branch)) throw new Error(`invalid branch: ${branch}`);
 
-  const base = await mkdtemp(path.join(os.tmpdir(), "claude-ws-"));
-  const dir = path.join(base, repo.split("/")[1]);
-  const cleanup = () => rm(base, { recursive: true, force: true }).catch(() => {});
+  // Already a checkout: nothing to do. Re-cloning would throw away uncommitted
+  // work the conversation is in the middle of.
+  if (existsSync(path.join(dir, ".git"))) return;
 
-  const url = `https://x-access-token:${token}@github.com/${repo}.git`;
+  await mkdir(path.dirname(dir), { recursive: true });
+
+  const url = `https://github.com/${repo}.git`;
   const args = ["clone", "--depth", "1"];
   if (branch) args.push("--branch", branch);
-  // "--" so the two positionals can never be parsed as options. The URL is always
-  // https-prefixed, but a repo name may legally start with "-" and `git clone … -foo`
-  // would read as a flag.
+  // "--" so the two positionals can never be parsed as options: a repo name may
+  // legally start with "-" and `git clone … -foo` would read as a flag.
   args.push("--", url, dir);
 
-  const { code, stderr } = await run("git", args, { timeoutMs: CLONE_TIMEOUT_MS });
+  const { code, stderr } = await run("git", args, {
+    timeoutMs: CLONE_TIMEOUT_MS,
+    env: gitAuthEnv(token),
+  });
   if (code !== 0) {
-    await cleanup();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
     const hint =
       code === null && /ENOENT/.test(stderr)
         ? "git is not installed on the backend host (add it to server/nixpacks.toml nixPkgs)"
@@ -235,6 +259,10 @@ export async function cloneWorkspace(
   // Local config only — it must not leak into the host's global git identity.
   await run("git", ["config", "user.name", "smrtesy Claude"], { cwd: dir, timeoutMs: 10_000 });
   await run("git", ["config", "user.email", "claude@smrtesy.local"], { cwd: dir, timeoutMs: 10_000 });
+}
 
-  return { dir, cleanup };
+/** The credential-helper environment a spawned turn needs so `git push` inside the
+ *  conversation works without the token ever being written to the checkout. */
+export function gitEnvForRun(token: string | null): NodeJS.ProcessEnv {
+  return token ? gitAuthEnv(token) : { ...process.env };
 }

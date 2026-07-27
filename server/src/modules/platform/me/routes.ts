@@ -63,13 +63,27 @@ router.patch("/me/settings", requireAuth, async (req: Request, res: Response) =>
     .eq("user_id", req.user!.id)
     .maybeSingle();
 
-  // day_tools is a JSONB map keyed by tool slug. Merge at the tool-key level
-  // so a PATCH that toggles one tool (e.g. { marathon: { enabled: false } })
-  // leaves every other tool's config untouched. A plain column write would
-  // replace the whole object and silently drop the others.
+  // day_tools is a JSONB map keyed by tool slug. Merge PER TOOL — one level
+  // deeper than the slug — so a PATCH that touches one tool leaves every other
+  // tool AND every key of that same tool untouched. A slug-level merge replaces
+  // the whole tool object, which silently dropped keys the caller did not know
+  // about: the client caches day_tools at mount, so a setting written by another
+  // route afterwards (e.g. the daily report's dismissed days, POST
+  // /daily-report/skip) was erased the next time the user changed any setting of
+  // that tool from the settings tab. Every tool config is a flat map, so a
+  // shallow per-tool merge is lossless.
   if (updates.day_tools && typeof updates.day_tools === "object") {
     const prev = (existing?.day_tools as Record<string, unknown> | null) ?? {};
-    updates.day_tools = { ...prev, ...(updates.day_tools as Record<string, unknown>) };
+    const merged: Record<string, unknown> = { ...prev };
+    for (const [slug, cfg] of Object.entries(updates.day_tools as Record<string, unknown>)) {
+      const prevCfg = prev[slug];
+      merged[slug] =
+        cfg && typeof cfg === "object" && !Array.isArray(cfg) &&
+        prevCfg && typeof prevCfg === "object" && !Array.isArray(prevCfg)
+          ? { ...(prevCfg as Record<string, unknown>), ...(cfg as Record<string, unknown>) }
+          : cfg;
+    }
+    updates.day_tools = merged;
   }
 
   if (existing) {

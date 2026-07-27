@@ -8,6 +8,7 @@
  *   GET  /daily-report/pending         incomplete fill-dates in the recent window
  *   GET  /daily-report/days?limit=     recent fill-dates with their fill status
  *                                      (all of them — powers editing a past day)
+ *   POST /daily-report/skip            dismiss/restore a fill-date (reversible)
  *   POST /daily-report/generate        generate + deliver a report now → { report }
  *   GET  /daily-report/preview?period= compute a report without delivering
  *   GET  /daily-report/runs            recent generated reports
@@ -15,7 +16,8 @@
  * Two-day model: a question's `segment` decides which calendar day its answer
  * belongs to. Filling on day F, an 'end' question closes F−1 (stored with
  * entry_date=F−1) and a 'start' question opens F (entry_date=F). A question's
- * `weekdays` restricts it to certain weekdays OF THE DAY IT BELONGS TO.
+ * `weekdays` restricts it to certain weekdays OF THE DAY IT BELONGS TO, and a
+ * question is never due before the day it was created (see `dueOn`).
  *
  * All personal (user-scoped within the org). See docs/daily-report-plan.md.
  */
@@ -47,15 +49,45 @@ const MISSED_LOOKBACK_DAYS = 14; // how far back incomplete fill-days surface
 const EDIT_WINDOW_DAYS = 60;     // how far back a past fill-day may be edited
 const DEFAULT_DAYS_LIMIT = 14;   // default span of GET /daily-report/days
 
-/** The caller's display timezone (defaults to New York). */
-async function userTz(userId: string): Promise<string> {
-  const { data } = await db
+/**
+ * Per-user context from `user_settings`: the display timezone and the fill-days
+ * the user explicitly dismissed.
+ *
+ * Dismissed days live in the day-tool config blob
+ * (`day_tools.dailyreport.skipped_days`) rather than a table of their own: it is
+ * a handful of date strings, it is already the tool's settings home, and it ships
+ * without a migration. The list is pruned to the edit window on every write.
+ */
+interface UserCtx { tz: string; skipped: Set<string> }
+
+async function userCtx(userId: string): Promise<UserCtx> {
+  const { data, error } = await db
     .from("user_settings")
-    .select("timezone")
+    .select("timezone, day_tools")
     .eq("user_id", userId)
     .maybeSingle();
-  const tz = (data?.timezone as string | null)?.trim();
-  return tz || DEFAULT_TZ;
+  // A transient failure silently falls back to New York + "nothing dismissed".
+  // Not fatal (both sides of every date comparison use the same tz), but it must
+  // not be invisible.
+  if (error) console.warn("[daily-report] user settings lookup failed:", error.message);
+  const tz = (data?.timezone as string | null)?.trim() || DEFAULT_TZ;
+  return { tz, skipped: parseSkippedDays(data?.day_tools) };
+}
+
+/** The caller's display timezone (defaults to New York). */
+async function userTz(userId: string): Promise<string> {
+  return (await userCtx(userId)).tz;
+}
+
+/** Pull a validated set of YYYY-MM-DD dismissed days out of the day_tools blob. */
+function parseSkippedDays(dayTools: unknown): Set<string> {
+  const out = new Set<string>();
+  const cfg = (dayTools as Record<string, { skipped_days?: unknown }> | null | undefined)?.dailyreport;
+  const list = Array.isArray(cfg?.skipped_days) ? cfg.skipped_days : [];
+  for (const d of list) {
+    if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) out.add(d);
+  }
+  return out;
 }
 
 function clampLabel(v: unknown): string {
@@ -261,15 +293,22 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
 
 // ── check-in (two sections keyed by fill date) ───────────────────────────────
 
-interface ActiveItem { id: string; label: string; segment: string; weekdays: number[] | null }
+interface ActiveItem {
+  id: string;
+  label: string;
+  segment: string;
+  weekdays: number[] | null;
+  /** The question's creation date in the caller's tz — it is not due before it. */
+  created_ymd: string;
+}
 interface OptionLite { id: string; item_id: string; label: string; score: number | null; position: number }
 
 /** Load the caller's active questions + their options. `error` set on failure
  *  so callers can 500 instead of silently treating a DB error as "no data". */
-async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsByItem: Map<string, OptionLite[]>; error: string | null }> {
+async function loadActive(userId: string, tz: string): Promise<{ items: ActiveItem[]; optsByItem: Map<string, OptionLite[]>; error: string | null }> {
   const { data: items, error: itemsErr } = await db
     .from("daily_report_items")
-    .select("id, label, segment, weekdays, position")
+    .select("id, label, segment, weekdays, position, created_at")
     .eq("user_id", userId)
     .eq("active", true)
     .order("position", { ascending: true });
@@ -289,9 +328,43 @@ async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsBy
     arr.push(o);
     optsByItem.set(o.item_id, arr);
   }
-  const list = ((items as { id: string; label: string; segment: string | null; weekdays: number[] | null }[] | null) ?? [])
-    .map((it) => ({ id: it.id, label: it.label, segment: it.segment ?? "start", weekdays: it.weekdays ?? null }));
+  const list = ((items as { id: string; label: string; segment: string | null; weekdays: number[] | null; created_at: string }[] | null) ?? [])
+    .map((it) => {
+      // created_at is NOT NULL in the schema, but Intl.DateTimeFormat THROWS on
+      // an invalid date and Express 4 does not route an async throw to the error
+      // middleware — the request would hang instead of 500ing. Fall back to the
+      // epoch, i.e. "always due", which is the safe direction.
+      const created = it.created_at ? new Date(it.created_at) : null;
+      return {
+        id: it.id,
+        label: it.label,
+        segment: it.segment ?? "start",
+        weekdays: it.weekdays ?? null,
+        created_ymd: created && !Number.isNaN(created.getTime()) ? ymdInTz(created, tz) : "1970-01-01",
+      };
+    });
   return { items: list, optsByItem, error: err };
+}
+
+/**
+ * Could this question have been asked on a given FILL-DAY? A question is not due
+ * on a fill-day earlier than the day it was created.
+ *
+ * This gate exists because "due" is computed from the question set as it stands
+ * NOW, against historical days. Without it, adding a question makes every past
+ * day retroactively incomplete — the day pins as "missed" for a question that
+ * did not exist then, and the user cannot possibly clear it (real case,
+ * 2026-07-27: one question added that morning re-opened four days the user had
+ * actually filled).
+ *
+ * The gate is on the FILL-DAY, not on the answer's entry_date. An 'end' question
+ * stores entry_date = fillDate−1, so gating on entry_date would delay a new
+ * question's first appearance by a day — and on setup day it would leave a
+ * question set made only of 'end' questions with NOTHING due, which reads as
+ * "no questions configured" and makes the tool look broken on day one.
+ */
+function dueOnFillDay(item: ActiveItem, fillDate: string, belongsTo: string): boolean {
+  return fillDate >= item.created_ymd && appliesOn(item.weekdays, belongsTo);
 }
 
 /** The items due for a given fill date, split into the two sections. */
@@ -300,8 +373,8 @@ function dueSections(items: ActiveItem[], fillDate: string): {
   start: { entry_date: string; items: ActiveItem[] };
 } {
   const yesterday = addDays(fillDate, -1);
-  const end = items.filter((it) => it.segment === "end" && appliesOn(it.weekdays, yesterday));
-  const start = items.filter((it) => it.segment === "start" && appliesOn(it.weekdays, fillDate));
+  const end = items.filter((it) => it.segment === "end" && dueOnFillDay(it, fillDate, yesterday));
+  const start = items.filter((it) => it.segment === "start" && dueOnFillDay(it, fillDate, fillDate));
   return {
     end: { entry_date: yesterday, items: end },
     start: { entry_date: fillDate, items: start },
@@ -322,7 +395,7 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "fillDate outside the edit window" });
   }
 
-  const { items, optsByItem, error: loadErr } = await loadActive(userId);
+  const { items, optsByItem, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   const sec = dueSections(items, fillDate);
   const entryDates = [sec.end.entry_date, sec.start.entry_date];
@@ -448,13 +521,17 @@ router.put("/daily-report/checkin", async (req: Request, res: Response) => {
  * only today, and the day-before-first-fill ghost (an 'end' answer stores
  * entry_date=fill−1, which would otherwise anchor one day too early) never
  * surfaces. Today is always shown when it is still incomplete.
+ *
+ * A day the user DISMISSED never surfaces, however incomplete it is — some missed
+ * days are simply not worth back-filling, and a row that cannot be cleared is
+ * noise. Dismissal is reversible from the report screen's day list.
  */
 router.get("/daily-report/pending", async (req: Request, res: Response) => {
   const userId = req.user!.id;
-  const tz = await userTz(userId);
+  const { tz, skipped } = await userCtx(userId);
   const today = ymdInTz(new Date(), tz);
 
-  const { items, error: loadErr } = await loadActive(userId);
+  const { items, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   if (items.length === 0) return res.json({ today, days: [] });
 
@@ -495,6 +572,9 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
     const answered = due.filter((d) => isAnswered(d.entry_date, d.id)).length;
     if (answered > 0) earliestEngaged = F; // keeps moving back as we go older
     if (answered >= due.length) continue; // fully filled → not pending
+    // A dismissed day still anchors earliestEngaged above (its answers are real);
+    // it just never becomes a row.
+    if (skipped.has(F)) continue;
     rows.push({ fill_date: F, total_due: due.length, answered, is_today: F === today });
   }
 
@@ -519,14 +599,14 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
  */
 router.get("/daily-report/days", async (req: Request, res: Response) => {
   const userId = req.user!.id;
-  const tz = await userTz(userId);
+  const { tz, skipped } = await userCtx(userId);
   const today = ymdInTz(new Date(), tz);
   const rawLimit = Number(req.query.limit);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0
     ? Math.min(Math.trunc(rawLimit), EDIT_WINDOW_DAYS)
     : DEFAULT_DAYS_LIMIT;
 
-  const { items, error: loadErr } = await loadActive(userId);
+  const { items, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   if (items.length === 0) return res.json({ today, days: [] });
 
@@ -547,7 +627,7 @@ router.get("/daily-report/days", async (req: Request, res: Response) => {
     answeredSet.add(`${e.entry_date}:${e.item_id}`);
   }
 
-  type Row = { fill_date: string; total_due: number; answered: number; complete: boolean; is_today: boolean };
+  type Row = { fill_date: string; total_due: number; answered: number; complete: boolean; is_today: boolean; skipped: boolean };
   const rows: Row[] = [];
   let earliestEngaged: string | null = null; // oldest enumerated fill-day with any answer
   for (let F = today; F >= floor; F = addDays(F, -1)) {
@@ -559,18 +639,72 @@ router.get("/daily-report/days", async (req: Request, res: Response) => {
     if (due.length === 0) continue;
     const answered = due.filter((d) => answeredSet.has(`${d.entry_date}:${d.id}`)).length;
     if (answered > 0) earliestEngaged = F; // keeps moving back as we go older
+    // A dismissed day stays LISTED here (unlike /pending) — this is the screen
+    // that lets the user reopen or un-dismiss it.
     rows.push({
       fill_date: F,
       total_due: due.length,
       answered,
       complete: answered >= due.length,
       is_today: F === today,
+      skipped: skipped.has(F),
     });
   }
 
   const days = rows.filter((r) => r.is_today || (earliestEngaged != null && r.fill_date >= earliestEngaged));
 
   res.json({ today, days });
+});
+
+/**
+ * Dismiss / restore one fill-day (`{ fill_date, skipped }`). A dismissed day stops
+ * surfacing as a pinned "fill your report" row but keeps every answer it has and
+ * stays editable from the report screen, so this is never destructive and always
+ * reversible.
+ *
+ * Stored in the day-tool config blob. The read-modify-write merges at the tool key
+ * so a concurrent toggle of another day-tool is not clobbered, and the list is
+ * pruned to the edit window so it cannot grow without bound.
+ */
+router.post("/daily-report/skip", async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const { tz } = await userCtx(userId);
+  const today = ymdInTz(new Date(), tz);
+  const fillDate = typeof req.body?.fill_date === "string" ? req.body.fill_date : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fillDate)) return res.status(400).json({ error: "fill_date required (YYYY-MM-DD)" });
+  if (fillDate > today || fillDate < oldestFillDate(today)) {
+    return res.status(400).json({ error: "fill_date outside the edit window" });
+  }
+  // Explicit false (in either JSON or form-encoded shape) restores; anything else
+  // dismisses. `!== false` alone made "false"/0/null dismiss too.
+  const skip = req.body?.skipped !== false && req.body?.skipped !== "false";
+
+  const { data: row, error: readErr } = await db
+    .from("user_settings")
+    .select("id, day_tools")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (readErr) return res.status(500).json({ error: readErr.message });
+
+  const dayTools = (row?.day_tools as Record<string, Record<string, unknown>> | null) ?? {};
+  const cfg = { ...(dayTools.dailyreport ?? {}) };
+  const set = parseSkippedDays(dayTools);
+  if (skip) set.add(fillDate);
+  else set.delete(fillDate);
+
+  const floor = oldestEntryDate(today);
+  const nextDays = [...set].filter((d) => d >= floor).sort().reverse();
+  cfg.skipped_days = nextDays;
+
+  const nextDayTools = { ...dayTools, dailyreport: cfg };
+  // A user with no settings row yet must not get a silent ok:true — an update
+  // matching zero rows reports no error (same defensive pattern as /me/settings).
+  const { error: writeErr } = row
+    ? await db.from("user_settings").update({ day_tools: nextDayTools }).eq("user_id", userId)
+    : await db.from("user_settings").insert({ user_id: userId, day_tools: nextDayTools });
+  if (writeErr) return res.status(500).json({ error: writeErr.message });
+
+  res.json({ ok: true, fill_date: fillDate, skipped: skip, skipped_days: nextDays });
 });
 
 // ── generate now + preview + history ─────────────────────────────────────────

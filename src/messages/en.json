@@ -1159,6 +1159,11 @@
     "editPastTitle": "Edit previous days",
     "editPastNote": "Pick a day to edit its answers. An already-generated report does not change — generate it again to refresh it.",
     "editPastEmpty": "No days to edit.",
+    "dismissDay": "Hide this day",
+    "restoreDay": "Restore this day",
+    "dayDismissed": "Hidden",
+    "dayDismissedToast": "Day hidden — you can restore it here any time",
+    "dayRestoredToast": "Day restored",
     "dayComplete": "Complete",
     "dayProgress": "{answered}/{total} answered",
     "dayIsToday": "{date} · today"
@@ -1707,7 +1712,14 @@
     "accessToken": "Access Token",
     "appSecret": "App Secret",
     "verifyToken": "Verify Token",
-    "nothingToSave": "Nothing entered to update"
+    "nothingToSave": "Nothing entered to update",
+    "addKey": "Add a key",
+    "keyPlaceholder": "Key name (e.g. GITHUB_TOKEN)",
+    "newValuePlaceholder": "Value",
+    "storeEncrypted": "Store encrypted",
+    "keyInvalid": "Key must be UPPER_SNAKE_CASE (A-Z, 0-9, _)",
+    "customKey": "added by hand",
+    "addKeyHint": "A key added here is stored, but only takes effect if code reads that exact name. There is no delete — correct a value by editing it, which rotates it in place."
   },
   "admin": {
     "title": "Admin Dashboard",
@@ -4201,6 +4213,38 @@
       "branchPlaceholder": "Branch",
       "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
+  },
+  "claudeChat": {
+    "placeholder": "Write a message…",
+    "send": "Send",
+    "stop": "Stop",
+    "stopped": "Turn stopped",
+    "attach": "Attach a file",
+    "removeAttachment": "Remove",
+    "fileTooLarge": "{name} is too large (7MB max)",
+    "newChat": "New chat",
+    "noThreads": "No chats yet",
+    "untitled": "Untitled",
+    "showList": "Show chat list",
+    "hideList": "Hide chat list",
+    "rename": "Rename",
+    "delete": "Delete",
+    "confirmDelete": "Delete this chat and all of its turns?",
+    "settings": "Conversation settings",
+    "empty": "Write a message to begin",
+    "thinking": "Thinking…",
+    "toolCount": "{count} tool calls",
+    "effortDefault": "Effort: default",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Very high",
+      "max": "Max"
+    },
+    "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
+    "taskRouter": "Free-text task update",
+    "contextLost": "This turn started a new session — it does not know the earlier messages"
   },
   "markdown": {
     "anchor": "Link to section {title}",

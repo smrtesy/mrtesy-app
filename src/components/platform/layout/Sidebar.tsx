@@ -105,6 +105,24 @@ const smrtStudioItems = [
 
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
+// Every nav href across all apps + the management group. Used by isActive() to
+// decide, for a parent route like /whatsapp or /plan, whether a more-specific
+// sibling (/whatsapp/autoreply, /plan/my) actually owns the current page — so
+// the parent doesn't also light up when you're on a child screen.
+const ALL_NAV_HREFS: readonly string[] = [
+  ...smrtTaskItems,
+  ...smrtVoiceItems,
+  ...smrtCrmItems,
+  ...smrtReachItems,
+  ...smrtBotItems,
+  ...smrtPlanItems,
+  ...smrtVaultItems,
+  ...smrtInfoItems,
+  ...smrtStudioItems,
+]
+  .map((i): string => i.href)
+  .concat(["/inbox", "/settings", "/transcription-experiment", "/admin"]);
+
 export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
   // Project-only ("lite") worker: smrtTask collapses to just the task list — no
@@ -283,7 +301,20 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
       if (voiceNamedSections.some((p) => pathname.startsWith(p))) return false;
       return pathname.startsWith(`${basePath}/voice/`);
     }
-    return pathname.startsWith(fullPath);
+    // Exact match on this screen — always the active item.
+    if (pathname === fullPath) return true;
+    // Descendant screen (e.g. /whatsapp when on /whatsapp/autoreply): only claim
+    // it as active if no more-specific sibling nav item owns that screen. This is
+    // what stops a parent item from lighting up alongside its own child.
+    if (pathname.startsWith(`${fullPath}/`)) {
+      const ownedByMoreSpecific = ALL_NAV_HREFS.some((other) => {
+        if (other.length <= href.length || !other.startsWith(`${href}/`)) return false;
+        const otherFull = `${basePath}${other}`;
+        return pathname === otherFull || pathname.startsWith(`${otherFull}/`);
+      });
+      return !ownedByMoreSpecific;
+    }
+    return false;
   }
 
   function badgeFor(itemKey: string): { count: number; tone: "red" | "blue" } | null {

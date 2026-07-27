@@ -11,6 +11,7 @@ import { Router } from "express";
 import { requireAuth, requireOrg, requireSuperAdmin } from "../../middleware";
 import claudeRoutes from "./routes";
 import playbookRoutes from "./playbooks";
+import threadRoutes from "./threads";
 
 const router = Router();
 
@@ -28,6 +29,7 @@ const router = Router();
 router.use("/claude", requireAuth, requireOrg, requireSuperAdmin);
 router.use(claudeRoutes);
 router.use(playbookRoutes);
+router.use(threadRoutes);
 
 export default router;
 export { executeRun } from "./runner";
