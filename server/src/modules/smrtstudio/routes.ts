@@ -17,7 +17,8 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp } from "../../middleware";
+import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
+import { fetchCatalog, probeAudio, isVideoCategory } from "./indexer";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
@@ -243,26 +244,40 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     }
   }
 
+  // Ordered the way the work flows — characters, voices, sets, frames, motion,
+  // lip-sync — not alphabetically and not by fal's taxonomy. Within a stage the
+  // ranked models come first, then the rest of the shelf.
+  // Curated rows first, then pipeline order within them. Putting stage_order
+  // first buried the whole ranked shortlist: after a sweep there are ~570 image
+  // models at stage 3, so the ranked video (7), lip-sync (8) and QC (98) models
+  // fell past the page limit entirely.
   const { data, error, count } = await q
     .order("verified_schema", { ascending: false })
+    .order("stage_order", { ascending: true })
     .order("shortlist_rank", { ascending: true, nullsFirst: false })
     .order("endpoint_id")
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });
 
   // Kind tallies over the whole catalog, independent of the current filter.
-  const { data: allKinds, error: kindsErr } = await db
+  const { data: allKinds, error: kindsErr, count: kindsCount } = await db
     .from("studio_models")
-    .select("kind,verified_schema")
-    .eq("org_id", orgId);
+    .select("kind,verified_schema,audio_input,audio_probed", { count: "exact" })
+    .eq("org_id", orgId)
+    .range(0, 4999);
   if (kindsErr) return res.status(500).json({ error: kindsErr.message });
 
   const counts: Record<string, number> = {};
+  const audioCounts: Record<string, number> = {};
   let verifiedTotal = 0;
+  let probedTotal = 0;
   for (const m of allKinds ?? []) {
     const k = String((m as Row).kind);
     counts[k] = (counts[k] ?? 0) + 1;
     if ((m as Row).verified_schema === true) verifiedTotal += 1;
+    if ((m as Row).audio_probed === true) probedTotal += 1;
+    const role = (m as Row).audio_input;
+    if (typeof role === "string") audioCounts[role] = (audioCounts[role] ?? 0) + 1;
   }
 
   res.json({
@@ -271,8 +286,12 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     returned: (data ?? []).length,
     limit,
     counts,
-    total: (allKinds ?? []).length,
+    // The exact count, so a capped page reports the catalog size honestly.
+    total: kindsCount ?? (allKinds ?? []).length,
+    tallied: (allKinds ?? []).length,
     verified_total: verifiedTotal,
+    audio_counts: audioCounts,
+    audio_probed_total: probedTotal,
   });
 });
 
@@ -298,6 +317,167 @@ router.get("/studio/investment", async (req: Request, res: Response) => {
         .reduce((a, r) => a + num((r as Row).value_usd), 0)
         .toFixed(2),
     ),
+  });
+});
+
+/**
+ * POST /studio/models/index — run the fal catalog indexer.
+ *
+ * FREE: reads fal's catalog and OpenAPI schema endpoints only, never an
+ * inference endpoint, so no run is ever billed. That is what makes it safe to
+ * re-run whenever we want to know what changed in the catalog.
+ *
+ * Body / query:
+ *   probe_audio  — also run the audio probe over video endpoints (default true)
+ *   probe_limit  — cap the probe at N endpoints this call (default 120). The
+ *                  probe skips endpoints already probed, so repeated calls walk
+ *                  the remaining set instead of one request outliving its own
+ *                  timeout.
+ *
+ * Restricted to super-admins: it rewrites the shared catalog, which is a
+ * platform-level action rather than per-user work.
+ */
+router.post("/studio/models/index", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await isSuperAdmin(req.user!))) {
+    return res.status(403).json({ error: "super admin required" });
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const probeAudioFlag = body.probe_audio !== false && req.query.probe_audio !== "0";
+  const rawLimit = Number(body.probe_limit ?? req.query.probe_limit);
+  // Each probe is a sequential HTTPS round trip; 35 catalog fetches plus a large
+  // batch runs past a typical proxy timeout. 25 keeps a call well inside it, and
+  // the probe is resumable, so pressing again walks the rest.
+  const probeLimit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 0), 200) : 25;
+
+  // ── pass 1: the catalog ──
+  let catalog;
+  try {
+    catalog = await fetchCatalog();
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: `fal catalog unreachable: ${e instanceof Error ? e.message : String(e)}` });
+  }
+
+  const indexedAt = new Date().toISOString();
+  // Rows already carrying a hand-written recipe keep their curated fields: the
+  // catalog knows the model exists, but only we know it was schema-verified and
+  // where it ranks. The upsert below therefore never touches verified_schema,
+  // shortlist_rank, recipe_path, price_usd or the audio classification.
+  const { data: curatedRows, error: curatedErr } = await db
+    .from("studio_models")
+    .select("endpoint_id")
+    .eq("org_id", orgId)
+    .eq("verified_schema", true);
+  if (curatedErr) return res.status(500).json({ error: curatedErr.message });
+  const curated = new Set((curatedRows ?? []).map((r) => String((r as Row).endpoint_id)));
+
+  const catalogIds = new Set(catalog.models.map((m) => m.endpoint_id));
+  // A curated row fal no longer lists is either renamed or withdrawn. It is
+  // skipped by both write paths, so it would silently stop being refreshed —
+  // reported instead of left to rot.
+  const curatedMissing = [...curated].filter((id) => !catalogIds.has(id));
+  const fresh = catalog.models.filter((m) => !curated.has(m.endpoint_id));
+  let written = 0;
+  // Chunked so one oversized statement cannot fail the whole sweep.
+  for (let i = 0; i < fresh.length; i += 250) {
+    const chunk = fresh
+      .slice(i, i + 250)
+      // `category` is the column the table shipped with; `fal_category` is the
+      // one the new code reads. Both are written so neither is a dead field.
+      .map((m) => ({ ...m, category: m.fal_category, org_id: orgId, indexed_at: indexedAt }));
+    const { error } = await db
+      .from("studio_models")
+      .upsert(chunk, { onConflict: "org_id,endpoint_id" });
+    if (error) return res.status(500).json({ error: `upsert failed: ${error.message}` });
+    written += chunk.length;
+  }
+  // Curated rows still get their catalog-owned facts refreshed — deprecation and
+  // hosting type change on fal's side and we want to know — without losing the
+  // curation. Done one row at a time because the column set differs.
+  for (const m of catalog.models.filter((x) => curated.has(x.endpoint_id))) {
+    const { error } = await db
+      .from("studio_models")
+      // ONLY catalog-owned facts. `kind`, `stage_slug` and `stage_order` are
+      // curation: six curated rows are classified `lipsync` / stage 8, and fal
+      // files those same endpoints under image-to-video / video-to-video, so
+      // refreshing them from the category would demote every one to motion.
+      .update({
+        category: m.fal_category,
+        fal_category: m.fal_category,
+        deprecated: m.deprecated,
+        hosting_type: m.hosting_type,
+        license_type: m.license_type,
+        indexed_at: indexedAt,
+      })
+      .eq("org_id", orgId)
+      .eq("endpoint_id", m.endpoint_id);
+    if (error) return res.status(500).json({ error: `refresh failed: ${error.message}` });
+  }
+
+  // ── pass 2: the audio probe ──
+  const videoModels = catalog.models.filter((m) => isVideoCategory(m.fal_category));
+  const videoIds = videoModels.map((m) => m.endpoint_id);
+  const categoryOf = new Map(videoModels.map((m) => [m.endpoint_id, m.fal_category]));
+
+  let probed = 0;
+  let driving = 0;
+  let remaining = 0;
+  if (probeAudioFlag && probeLimit > 0) {
+    const { data: doneRows, error: doneErr } = await db
+      .from("studio_models")
+      .select("endpoint_id")
+      .eq("org_id", orgId)
+      .eq("audio_probed", true)
+      .range(0, 4999);
+    if (doneErr) return res.status(500).json({ error: doneErr.message });
+    const alreadyProbed = new Set((doneRows ?? []).map((r) => String((r as Row).endpoint_id)));
+
+    const todo = videoIds.filter((id) => !alreadyProbed.has(id));
+    remaining = Math.max(0, todo.length - probeLimit);
+
+    for (const id of todo.slice(0, probeLimit)) {
+      const probe = await probeAudio(id, categoryOf.get(id) ?? "");
+      // A model that takes our audio as a DRIVING input is its own category:
+      // it can carry the motion stage and the lip-sync stage in one call, which
+      // no silent image-to-video model can do.
+      const patch: Record<string, unknown> = {
+        audio_probed: true,
+        audio_input: probe.audio_input,
+        audio_field: probe.audio_field,
+        audio_note: probe.audio_note,
+      };
+      if (probe.audio_input === "driving") {
+        patch.kind = "video_audio";
+        patch.stage_slug = "motion";
+        patch.stage_order = 7;
+        driving += 1;
+      }
+      const { error } = await db
+        .from("studio_models")
+        .update(patch)
+        .eq("org_id", orgId)
+        .eq("endpoint_id", id);
+      if (error) return res.status(500).json({ error: `probe write failed: ${error.message}` });
+      probed += 1;
+    }
+  }
+
+  res.json({
+    ok: true,
+    indexed_at: indexedAt,
+    catalog_total: catalog.total,
+    catalog_pages: catalog.pages,
+    models_seen: catalog.models.length,
+    models_written: written,
+    curated_preserved: curated.size,
+    curated_missing_from_catalog: curatedMissing,
+    video_endpoints: videoIds.length,
+    audio_probed_this_call: probed,
+    audio_driving_found_this_call: driving,
+    audio_probe_remaining: remaining,
   });
 });
 

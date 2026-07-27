@@ -4057,9 +4057,22 @@
       "lipsync": "Lip-sync",
       "voice": "Voice",
       "qc": "QC",
-      "other": "Other"
+      "other": "Other",
+      "video_audio": "Video+audio"
     },
-    "modelsShelfNote": "What you see here is the tier verified against fal's official schema. The full shelf (1,394 models) arrives with an indexing run, which has not happened yet."
+    "modelsShelfNote": "The sweep is free — it reads only fal's catalog and schemas, never a billed endpoint. Ordered by pipeline stage: characters → voices → motion → motion driven by our audio → lip-sync.",
+    "modelsAudioDriving": "Accept our audio",
+    "colAudio": "Our audio",
+    "audioNone": "No audio input",
+    "audioUnprobed": "Not probed yet",
+    "indexRun": "Sweep the catalog",
+    "indexRunning": "Sweeping…",
+    "indexDone": "Catalog swept: {total} models on fal, {written} written. Probed {probed} video endpoints — {driving} take our audio as a driver. {remaining} left to probe — press again to continue.",
+    "audioRole": {
+      "driving": "Driving",
+      "reference": "Reference",
+      "mux": "Muxed only"
+    }
   },
   "claudeRuns": {
     "title": "Claude runs",

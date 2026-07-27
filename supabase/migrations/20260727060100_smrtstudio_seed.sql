@@ -485,8 +485,8 @@ cross join (values
  ('fal-ai/elevenlabs/voice-changer','ElevenLabs Voice Changer','voice','ElevenLabs','proxy',0.30,'minute',5,'docs/models/elevenlabs-voice-changer.md','2026-07-26'),
  ('fal-ai/gemini-3.1-flash-tts','Gemini 3.1 Flash TTS','voice','Google','proxy',null,'characters',6,'docs/models/gemini-3.1-flash-tts.md','2026-07-26'),
  ('fal-ai/maya','Maya 1','voice','Maya','proxy',null,'second',7,'docs/models/maya1.md','2026-07-26'),
- ('fal-ai/chatterbox/multilingual','Chatterbox Multilingual','voice','Resemble','serverless',null,'second',8,'docs/models/chatterbox-multilingual.md','2026-07-26'),
- ('fal-ai/chatterboxhd/speech-to-speech','ChatterboxHD Speech-to-Speech','voice','Resemble','serverless',null,'second',9,'docs/models/chatterboxhd-speech-to-speech.md','2026-07-26'),
+ ('fal-ai/chatterbox/text-to-speech/multilingual','Chatterbox Multilingual','voice','Resemble','serverless',null,'second',8,'docs/models/chatterbox-multilingual.md','2026-07-26'),
+ ('resemble-ai/chatterboxhd/speech-to-speech','ChatterboxHD Speech-to-Speech','voice','Resemble','serverless',null,'second',9,'docs/models/chatterboxhd-speech-to-speech.md','2026-07-26'),
  -- QC (qc-models.json)
  ('fal-ai/elevenlabs/speech-to-text/scribe-v2','ElevenLabs Scribe v2 (read-back check)','qc','ElevenLabs','proxy',0.008,'input audio minute',1,'docs/models/qc-models.json','2026-07-26'),
  ('openrouter/router/vision','VLM judge via OpenRouter','qc','OpenRouter','proxy',0.001,'check',2,'docs/models/qc-models.json','2026-07-24')
