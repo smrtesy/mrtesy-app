@@ -69,6 +69,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   google: "Google (Gemini)",
   resemble: "Resemble (TTS)",
   voyage: "Voyage AI (Embeddings)",
+  fal: "fal.ai (image/video)",
 };
 
 const PROVIDER_URL: Record<string, string> = {
@@ -76,6 +77,7 @@ const PROVIDER_URL: Record<string, string> = {
   google:    "https://aistudio.google.com/app/apikey",
   resemble:  "https://app.resemble.ai/billing",
   voyage:    "https://dash.voyageai.com/",
+  fal:       "https://fal.ai/dashboard/usage",
 };
 
 function usd(n: number): string {
@@ -141,14 +143,20 @@ export default async function AdminUsagePage({
   const providerRows = [...byProvider.entries()].sort((a, b) => b[1].cost - a[1].cost);
   const componentRows = [...summary.groups].sort((a, b) => b.cost - a.cost);
 
+  // Rows that carry no cost at all make the total a FLOOR, not a total. Saying
+  // so is the difference between an estimate and a number that can be trusted;
+  // fal runs in particular reach experiment_runs without a cost about a third of
+  // the time, and silently treating those as $0 is how a total starts lying.
+  const missingCost = summary.groups.reduce((s, g) => s + g.missingCost, 0);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">AI Usage &amp; Cost</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Every paid AI call across the edge functions, server and voice-engine. To reconcile
-            against the Anthropic / Google / Resemble consoles, pick a{" "}
+            Every paid AI call across the edge functions, server, voice-engine and smrtStudio.
+            To reconcile against the Anthropic / Google / Resemble / fal consoles, pick a{" "}
             <span className="font-medium">month</span> — the providers bill by calendar month
             (UTC), so a rolling window will never match an invoice.
           </p>
@@ -181,6 +189,14 @@ export default async function AdminUsagePage({
       {summary.warning && (
         <div className="rounded-lg border border-status-warn bg-status-warn-bg p-3 text-sm text-status-warn">
           {summary.warning}
+        </div>
+      )}
+
+      {missingCost > 0 && (
+        <div className="rounded-lg border border-status-warn bg-status-warn-bg p-3 text-sm text-status-warn">
+          {missingCost.toLocaleString()} run{missingCost === 1 ? "" : "s"} in this window recorded
+          no cost, so the totals below are a <span className="font-medium">lower bound</span>. See
+          the &ldquo;no cost&rdquo; column for which components.
         </div>
       )}
 
@@ -254,6 +270,7 @@ export default async function AdminUsagePage({
                         input rate. Without them on screen the cost column looks
                         unreconcilable against the token counts next to it. */}
                     <th className="py-2 pr-4 font-medium text-right">Cache r/w</th>
+                    <th className="py-2 pr-4 font-medium text-right">No cost</th>
                     <th className="py-2 font-medium text-right">Cost</th>
                   </tr>
                 </thead>
@@ -277,6 +294,13 @@ export default async function AdminUsagePage({
                           ? "—"
                           : `${tok(c.cacheReadTok)} / ${tok(c.cacheWriteTok)}`}
                       </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {c.missingCost > 0 ? (
+                          <span className="text-status-warn font-medium">{c.missingCost}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="py-2 text-right tabular-nums font-medium">{usd(c.cost)}</td>
                     </tr>
                   ))}
@@ -296,11 +320,14 @@ export default async function AdminUsagePage({
               invoice from rounding and from the provider&apos;s own billing cut-off.
             </p>
             <p>
-              <span className="font-medium">Not included here:</span> fal.ai image/video
-              generation for smrtStudio, which is billed separately and recorded per run in
-              {" "}<code className="font-mono">experiment_runs</code> (see /studio); and Claude
-              Code agent runs, which bill to the Claude subscription rather than an API key
-              (see /claude).
+              fal.ai rows come from <code className="font-mono">experiment_runs</code> (the
+              video-lab harness records cost per run there, not through an API-token ledger), so
+              they carry no token counts. Their model names are withheld to keep smrtStudio&apos;s
+              blind scoring intact — cost does not depend on knowing which model produced a run.
+            </p>
+            <p>
+              <span className="font-medium">Not included here:</span> Claude Code agent runs,
+              which bill to the Claude subscription rather than to an API key (see /claude).
             </p>
           </div>
         </CardContent>
