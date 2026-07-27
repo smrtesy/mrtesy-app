@@ -1712,7 +1712,14 @@
     "accessToken": "Access Token",
     "appSecret": "App Secret",
     "verifyToken": "Verify Token",
-    "nothingToSave": "לא הזנת אף ערך חדש"
+    "nothingToSave": "לא הזנת אף ערך חדש",
+    "addKey": "הוסף מפתח",
+    "keyPlaceholder": "שם המפתח (למשל GITHUB_TOKEN)",
+    "newValuePlaceholder": "הערך",
+    "storeEncrypted": "שמור מוצפן",
+    "keyInvalid": "שם המפתח באותיות גדולות באנגלית, ספרות וקו תחתון בלבד",
+    "customKey": "נוסף ידנית",
+    "addKeyHint": "מפתח שנוסף כאן נשמר, אבל הוא משפיע רק אם הקוד קורא אותו בשם הזה בדיוק. אין מחיקה — תיקון ערך נעשה בעריכה, שמסובבת אותו במקום."
   },
   "admin": {
     "title": "ניהול מערכת",

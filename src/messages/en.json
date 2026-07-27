@@ -1712,7 +1712,14 @@
     "accessToken": "Access Token",
     "appSecret": "App Secret",
     "verifyToken": "Verify Token",
-    "nothingToSave": "Nothing entered to update"
+    "nothingToSave": "Nothing entered to update",
+    "addKey": "Add a key",
+    "keyPlaceholder": "Key name (e.g. GITHUB_TOKEN)",
+    "newValuePlaceholder": "Value",
+    "storeEncrypted": "Store encrypted",
+    "keyInvalid": "Key must be UPPER_SNAKE_CASE (A-Z, 0-9, _)",
+    "customKey": "added by hand",
+    "addKeyHint": "A key added here is stored, but only takes effect if code reads that exact name. There is no delete — correct a value by editing it, which rotates it in place."
   },
   "admin": {
     "title": "Admin Dashboard",
