@@ -159,8 +159,8 @@ completed_quick, completed_medium, completed_big, closed_at)` + RLS.
 
 ### 3.4 המסווג קובע מהיר/בינוני — לא "גדול" (החלטה, יולי 2026)
 
-ה-classifier (`server/src/prompts/classifier.ts`) לא פולט `size` בכלל —
-כל משימה חדשה נולדת `medium`. השלמה:
+ה-classifier (הפרומפט החי ב-`supabase/functions/ai-process/index.ts`) לא
+פלט `size` בכלל — כל משימה חדשה נולדה `medium`. השלמה:
 
 - הוספת שדה `size` לסכמת ה-JSON של בונה-המשימות, **בשני ערכים בלבד:**
   **מהיר** = פעולה אחת תחומה בלי הכנה (לענות/לאשר/להתקשר/לקבוע/לשלוח);

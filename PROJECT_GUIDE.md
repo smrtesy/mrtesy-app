@@ -114,7 +114,7 @@ These are the tables. Everything important lives here.
 | `contacts` | People extracted from messages. |
 | `reminders` | Scheduled reminders. |
 | **`rules_memory`** | **Filter rules — the single source of truth for "skip this sender", "skip emails to office@maor.org", etc.** Editable from `/admin/rules`. Read by Part 1 and by the `gmail-sync` / `initial-scan` Edge Functions. |
-| `ai_prompts` | Editable system prompts for AI calls. Editable from `/admin/prompts`. |
+| `ai_prompts` | Editable system prompts for AI calls. Editable from `/admin/apps/smrttask/prompts`. When empty (the default), the pipeline uses the prompts hardcoded in `supabase/functions/ai-process/index.ts` — that file is the source of truth. |
 | `log_entries` | Application log (errors, AI calls, costs). |
 | `run_sessions` | Each Part 1/2/3 run gets a row here with stats (items processed, errors, cost). |
 | `sync_state` | Sync checkpoints per source ("last historyId", "last synced at"). |
