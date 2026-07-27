@@ -13,7 +13,7 @@
  * permanent toolbar sitting above the content.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Search, X, ShieldCheck, AlertTriangle, RefreshCw } from "lucide-react";
 
@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { ModelsResponse } from "./types";
+import { StudioModelDetail } from "./StudioModelDetail";
 
 /** Ordered the way the work flows, not alphabetically: characters → voices →
  *  motion → motion driven by OUR audio → lip-sync → QC. `video_audio` is the
@@ -43,6 +44,14 @@ export function StudioModels() {
   const [error, setError] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexNote, setIndexNote] = useState<string | null>(null);
+  /** The model whose full detail is open. One at a time, inline under the
+   *  table — a dialog would hide the list you are comparing against. */
+  const [openModel, setOpenModel] = useState<string | null>(null);
+  /** Monotonic id of the newest request. Two filter clicks in a row put two
+   *  fetches in flight, and without this the slower one can land last and paint
+   *  the PREVIOUS filter's rows — which looked exactly like "the filter only
+   *  works on the second click", and could show QC models under `image`. */
+  const reqId = useRef(0);
 
   /** A catalog row's `kind` comes from the DB and may be a value the messages
    *  file does not know yet (a new bucket added by an indexer run). Show the
@@ -51,6 +60,7 @@ export function StudioModels() {
     t.has(`modelKind.${value}`) ? t(`modelKind.${value}`) : value;
 
   const load = useCallback(async () => {
+    const mine = ++reqId.current;
     setLoading(true);
     setError(null);
     try {
@@ -58,11 +68,15 @@ export function StudioModels() {
       if (kind !== "all") params.set("kind", kind);
       if (verifiedOnly) params.set("verified", "1");
       if (term.trim()) params.set("q", term.trim());
-      setData(await api<ModelsResponse>(`/api/studio/models?${params.toString()}`));
+      const res = await api<ModelsResponse>(`/api/studio/models?${params.toString()}`);
+      // Drop a response that a newer request has already superseded.
+      if (mine !== reqId.current) return;
+      setData(res);
     } catch (e) {
+      if (mine !== reqId.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (mine === reqId.current) setLoading(false);
     }
   }, [kind, verifiedOnly, term]);
 
@@ -113,6 +127,7 @@ export function StudioModels() {
         <div>
           <h1 className="text-xl font-semibold">{t("modelsTitle")}</h1>
           <p className="text-xs text-muted-foreground">{t("modelsSubtitle")}</p>
+          <p className="text-[11px] text-muted-foreground">{t("modelsRowHint")}</p>
         </div>
         <div className="flex items-center gap-1.5">
           {searchOpen ? (
@@ -236,7 +251,15 @@ export function StudioModels() {
           {data && data.total === 0 ? t("modelsEmptyCatalog") : t("modelsNoMatch")}
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
+        // Dimmed while a fetch is in flight: previously the old rows stayed
+        // fully opaque, so a click on a filter looked like nothing happened.
+        <div
+          className={cn(
+            "overflow-x-auto rounded-xl border transition-opacity",
+            loading && "pointer-events-none opacity-50",
+          )}
+          aria-busy={loading}
+        >
           <table className="w-full min-w-[720px] text-xs">
             <thead className="bg-secondary/55 text-[10.5px] uppercase tracking-wide">
               <tr>
@@ -250,7 +273,15 @@ export function StudioModels() {
             </thead>
             <tbody>
               {data.items.map((m) => (
-                <tr key={m.id} className="border-t align-top">
+                <tr
+                  key={m.id}
+                  onClick={() => setOpenModel(m.endpoint_id)}
+                  aria-selected={m.endpoint_id === openModel}
+                  className={cn(
+                    "cursor-pointer border-t align-top hover:bg-secondary/50",
+                    m.endpoint_id === openModel && "bg-secondary/60",
+                  )}
+                >
                   <td className="px-3 py-2">
                     <b className="block">{m.title || m.endpoint_id}</b>
                     <code dir="ltr" className="text-[10px] text-muted-foreground">
@@ -308,6 +339,10 @@ export function StudioModels() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {openModel && (
+        <StudioModelDetail endpointId={openModel} onClose={() => setOpenModel(null)} />
       )}
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">{t("modelsShelfNote")}</p>
