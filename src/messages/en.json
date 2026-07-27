@@ -4200,8 +4200,8 @@
       "never": "No instructions saved yet",
       "repoCopy": "Repo copy",
       "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately.",
-      "edit": "Edit source",
-      "preview": "Rendered view"
+      "codeView": "Code view",
+      "richView": "Rich editing"
     },
     "github": {
       "pick": "Pick a repo",
