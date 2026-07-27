@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { anthropicCostUsd } from "../_shared/ai-pricing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -121,7 +122,12 @@ Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
     const result = data.content?.[0]?.text || "";
     const inputTokens = data.usage?.input_tokens || 0;
     const outputTokens = data.usage?.output_tokens || 0;
-    const cost = (inputTokens * 3 + outputTokens * 15) / 1_000_000;
+    const cacheReadTokens = data.usage?.cache_read_input_tokens || 0;
+    const cacheWriteTokens = data.usage?.cache_creation_input_tokens || 0;
+    // `model` is caller-selectable, but this was hardcoded to Sonnet's $3/$15 —
+    // so a Haiku quick-action over-reported 3× and an Opus one under-reported.
+    // Price it from the model actually used (_shared/ai-pricing.ts).
+    const cost = anthropicCostUsd(model, data.usage);
 
     // Save to ai_generated_content only for existing tasks (not new-task)
     if (task_id !== "new-task") {
@@ -171,6 +177,8 @@ Original message: ${(sourceMsg?.body_text || "").substring(0, 3000)}`;
         model,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
+        cache_read_tokens: cacheReadTokens,
+        cache_write_tokens: cacheWriteTokens,
         cost_usd: cost,
         ref_id: task_id === "new-task" ? null : task_id,
       });
