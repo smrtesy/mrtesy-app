@@ -177,28 +177,66 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
     }
     keptIds.add(itemId);
 
-    // Replace this item's options wholesale. Entries snapshot label+score, so
-    // deleting an option only nulls entries.option_id — history is preserved.
-    const { error: delErr } = await db
+    // Reconcile this item's options IN PLACE — update the ones the payload still
+    // carries an id for, insert the new ones, delete only what was removed.
+    //
+    // This used to delete every option and re-insert it, which nulled
+    // entries.option_id on ALL history (ON DELETE SET NULL) on every settings
+    // save. Entries do snapshot label + score, so the report stayed correct, but
+    // an answer that lost its option_id could no longer be pre-selected in the
+    // check-in, and anything testing option_id read the day as never filled.
+    const { data: existingOpts, error: exOptErr } = await db
       .from("daily_report_options")
-      .delete()
+      .select("id")
       .eq("user_id", userId)
       .eq("item_id", itemId);
-    if (delErr) return res.status(500).json({ error: delErr.message });
+    if (exOptErr) return res.status(500).json({ error: exOptErr.message });
+    const existingOptIds = new Set((existingOpts ?? []).map((r) => r.id as string));
+    const keptOptIds = new Set<string>();
 
-    const rows = opts
+    const incoming = opts
       .map((o, j) => ({
-        item_id: itemId as string,
-        user_id: userId,
-        org_id: orgId,
+        id: typeof o.id === "string" && existingOptIds.has(o.id) ? o.id : null,
         label: clampLabel(o.label),
         score: parseScore(o.score),
         position: j,
       }))
       .filter((r) => r.label);
-    if (rows.length) {
-      const { error: insErr } = await db.from("daily_report_options").insert(rows);
-      if (insErr) return res.status(500).json({ error: insErr.message });
+
+    for (const o of incoming) {
+      if (o.id) {
+        const { error } = await db
+          .from("daily_report_options")
+          .update({ label: o.label, score: o.score, position: o.position })
+          .eq("user_id", userId)
+          .eq("item_id", itemId)
+          .eq("id", o.id);
+        if (error) return res.status(500).json({ error: error.message });
+        keptOptIds.add(o.id);
+      } else {
+        const { error } = await db.from("daily_report_options").insert({
+          item_id: itemId as string,
+          user_id: userId,
+          org_id: orgId,
+          label: o.label,
+          score: o.score,
+          position: o.position,
+        });
+        if (error) return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Only options the user actually removed get deleted (their entries keep the
+    // label + score snapshot and simply lose the pointer).
+    const staleOptIds = [...existingOptIds].filter((id) => !keptOptIds.has(id));
+    if (staleOptIds.length) {
+      const { error: delErr } = await db
+        .from("daily_report_options")
+        .delete()
+        .eq("user_id", userId)
+        .eq("item_id", itemId)
+        .in("id", staleOptIds);
+      if (delErr) return res.status(500).json({ error: delErr.message });
     }
   }
 
@@ -280,27 +318,40 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
   const sec = dueSections(items, fillDate);
   const entryDates = [sec.end.entry_date, sec.start.entry_date];
 
-  // Saved answers for the two entry-dates this fill covers.
+  // Saved answers for the two entry-dates this fill covers. option_label comes
+  // along because option_id is NOT a reliable handle on the answer: editing the
+  // question set replaces the option rows, and the FK nulls option_id on every
+  // historical entry (ON DELETE SET NULL). The label snapshot is the durable
+  // record, so we fall back to it to re-select the answer.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id, option_id, option_label")
     .eq("user_id", userId)
     .in("entry_date", entryDates);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
-  const savedByKey = new Map<string, string | null>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    savedByKey.set(`${e.entry_date}:${e.item_id}`, e.option_id);
+  type SavedEntry = { option_id: string | null; option_label: string };
+  const savedByKey = new Map<string, SavedEntry>();
+  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null; option_label: string }[] | null) ?? []) {
+    savedByKey.set(`${e.entry_date}:${e.item_id}`, { option_id: e.option_id, option_label: e.option_label });
   }
 
   const buildSection = (segment: "end" | "start", entry_date: string, secItems: ActiveItem[]) => ({
     segment,
     entry_date,
-    items: secItems.map((it) => ({
-      id: it.id,
-      label: it.label,
-      options: (optsByItem.get(it.id) ?? []).map((o) => ({ id: o.id, label: o.label, score: o.score })),
-      selected_option_id: savedByKey.get(`${entry_date}:${it.id}`) ?? null,
-    })),
+    items: secItems.map((it) => {
+      const opts = optsByItem.get(it.id) ?? [];
+      const saved = savedByKey.get(`${entry_date}:${it.id}`);
+      // Prefer the live id; if it was nulled by an option rewrite, re-resolve by
+      // the snapshotted label so the user's own answer is still pre-selected.
+      const selected =
+        saved?.option_id ?? (saved ? opts.find((o) => o.label === saved.option_label)?.id ?? null : null);
+      return {
+        id: it.id,
+        label: it.label,
+        options: opts.map((o) => ({ id: o.id, label: o.label, score: o.score })),
+        selected_option_id: selected,
+      };
+    }),
   });
 
   const sections = [
@@ -309,8 +360,10 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
   ].filter((s) => s.items.length > 0);
 
   const totalDue = sec.end.items.length + sec.start.items.length;
-  const answered = sections.reduce(
-    (n, s) => n + s.items.filter((i) => i.selected_option_id).length,
+  // An answer counts as given when its entry row exists — same rule /pending and
+  // /days use, so a day never reads "filled" in one place and "missed" in another.
+  const answered = [sec.end, sec.start].reduce(
+    (n, s) => n + s.items.filter((it) => savedByKey.has(`${s.entry_date}:${it.id}`)).length,
     0,
   );
   const done = totalDue === 0 || answered >= totalDue;
@@ -399,16 +452,23 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
   const floor = addDays(today, -(MISSED_LOOKBACK_DAYS - 1));
 
   // All answers in the covered range (floor−1 .. today), one query.
+  //
+  // The existence of the ROW is what makes a question answered — never
+  // `option_id != null`. Saving the question editor deletes and recreates the
+  // option rows, and the FK nulls option_id on every historical entry
+  // (ON DELETE SET NULL, by design: label + score are snapshotted on the entry).
+  // Testing option_id made every day before the last settings save look
+  // untouched, which collapsed earliestEngaged to today and hid every missed day.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id")
     .eq("user_id", userId)
     .gte("entry_date", addDays(floor, -1))
     .lte("entry_date", today);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
   const answeredSet = new Set<string>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    if (e.option_id) answeredSet.add(`${e.entry_date}:${e.item_id}`);
+  for (const e of (entries as { entry_date: string; item_id: string }[] | null) ?? []) {
+    answeredSet.add(`${e.entry_date}:${e.item_id}`);
   }
 
   // Enumerate fill-days floor..today (newest first) with their due/answered counts.
@@ -464,17 +524,18 @@ router.get("/daily-report/days", async (req: Request, res: Response) => {
   const floor = addDays(today, -(limit - 1));
 
   // One query for every answer the enumerated fill-days could touch (an 'end'
-  // answer of the oldest fill-day lands on floor−1).
+  // answer of the oldest fill-day lands on floor−1). Row existence = answered,
+  // for the same reason spelled out in /pending — option_id is not durable.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id")
     .eq("user_id", userId)
     .gte("entry_date", addDays(floor, -1))
     .lte("entry_date", today);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
   const answeredSet = new Set<string>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    if (e.option_id) answeredSet.add(`${e.entry_date}:${e.item_id}`);
+  for (const e of (entries as { entry_date: string; item_id: string }[] | null) ?? []) {
+    answeredSet.add(`${e.entry_date}:${e.item_id}`);
   }
 
   type Row = { fill_date: string; total_due: number; answered: number; complete: boolean; is_today: boolean };
