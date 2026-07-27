@@ -1631,7 +1631,8 @@
     "usage": "AI Usage",
     "docs": "Docs",
     "domainTracker": "Domain Tracker",
-    "priceTracker": "Price Compare"
+    "priceTracker": "Price Compare",
+    "claude": "Claude runs"
   },
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."
@@ -4059,5 +4060,52 @@
       "other": "Other"
     },
     "modelsShelfNote": "What you see here is the tier verified against fal's official schema. The full shelf (1,394 models) arrives with an indexing run, which has not happened yet."
+  },
+  "claudeRuns": {
+    "title": "Claude runs",
+    "newRun": "New run",
+    "cancel": "Cancel",
+    "launch": "Launch",
+    "launched": "Run launched",
+    "titlePlaceholder": "Title (optional)",
+    "promptPlaceholder": "What should Claude do…",
+    "costNote": "Runs on the subscription — no API cost. Anything that triggers a paid service needs explicit cost approval first.",
+    "empty": "No runs yet",
+    "noEvents": "No events for this run",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "canceled": "Canceled"
+    },
+    "submitHint": "Enter sends · Shift+Enter for a new line",
+    "model": {
+      "label": "Model",
+      "default": "Default"
+    },
+    "effort": {
+      "label": "Effort",
+      "default": "Default",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Very high",
+      "max": "Max"
+    },
+    "usage": {
+      "title": "Usage",
+      "windowDays": "last {days} days",
+      "runs": "Runs",
+      "failed": "Failed",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "cacheRead": "Cache read",
+      "cacheWrite": "Cache write",
+      "turns": "Turns",
+      "duration": "Duration",
+      "costEquivalent": "Equivalent value",
+      "byModel": "By model"
+    }
   }
 }

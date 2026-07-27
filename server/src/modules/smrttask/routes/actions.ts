@@ -8,7 +8,7 @@
 
 import { Router, Request, Response } from "express";
 import { db, loadRules } from "../../../db";
-import { simpleCall } from "../../../anthropic";
+import { MODELS, simpleCall } from "../../../anthropic";
 import { createDraft, searchGmail, getMessage, extractEmailText } from "../../../services/gmail";
 import { createCalendarEvent } from "../../../services/calendar";
 import { getUserPromptContext } from "../../../lib/user-context";
@@ -152,9 +152,12 @@ router.post("/execute", async (req: Request, res: Response) => {
   let actionError: string | undefined;
   let totalCost = 0;
   const startedAt = Date.now();
+  // Recorded label only — the actual call passes the "opus"/"sonnet" key to
+  // simpleCall. Read it off MODELS so the label cannot drift from the model
+  // that really ran when an alias is repointed.
   const modelUsed = action_type === "financial_advisor" || action_type === "draft_settlement_request"
-    ? "claude-opus-4-7"
-    : "claude-sonnet-4-6";
+    ? MODELS.opus
+    : MODELS.sonnet;
 
   try {
     switch (action_type) {
