@@ -12,6 +12,7 @@
  * contacts", which the Cloud API does not expose.
  */
 import type { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import { anthropicCostUsd, type AnthropicUsage } from "@/lib/ai/anthropic-pricing";
 
 type SupabaseAdmin = NonNullable<ReturnType<typeof createAdminSupabaseClient>>;
 
@@ -84,7 +85,21 @@ async function isKnownSender(db: SupabaseAdmin, userId: string, sender: string):
   return !!hist;
 }
 
-async function aiReply(instructions: string | null, text: string): Promise<string | null> {
+/**
+ * Generate the reply body with Claude.
+ *
+ * Writes one row to the unified `ai_usage` ledger per call. It previously wrote
+ * none and discarded `data.usage` entirely, so every AI auto-reply was spend
+ * that appeared on the Anthropic invoice but nowhere in /admin/usage — the
+ * ledger's whole promise is that it accounts for EVERY paid call.
+ */
+async function aiReply(
+  instructions: string | null,
+  text: string,
+  db: SupabaseAdmin,
+  userId: string,
+  refId: string | null,
+): Promise<string | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
   const system =
@@ -110,8 +125,29 @@ async function aiReply(instructions: string | null, text: string): Promise<strin
       console.error("[wa-autoreply] anthropic", res.status, (await res.text()).slice(0, 200));
       return null;
     }
-    const data = (await res.json()) as { content?: { type: string; text?: string }[] };
+    const data = (await res.json()) as {
+      content?: { type: string; text?: string }[];
+      usage?: AnthropicUsage;
+    };
     const out = (data.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("").trim();
+
+    // Unified cost ledger (best-effort — must never break the reply path).
+    try {
+      const { error: usageErr } = await db.from("ai_usage").insert({
+        user_id: userId,
+        provider: "anthropic",
+        component: "whatsapp.autoreply",
+        model: ANTHROPIC_MODEL,
+        input_tokens: data.usage?.input_tokens ?? 0,
+        output_tokens: data.usage?.output_tokens ?? 0,
+        cache_read_tokens: data.usage?.cache_read_input_tokens ?? 0,
+        cache_write_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+        cost_usd: anthropicCostUsd(ANTHROPIC_MODEL, data.usage),
+        ref_id: refId,
+      });
+      if (usageErr) console.error("[wa-autoreply] ai_usage insert failed:", usageErr.message);
+    } catch { /* ledger must never block a reply */ }
+
     return out || null;
   } catch (e) {
     console.error("[wa-autoreply] anthropic", e instanceof Error ? e.message : String(e));
@@ -207,7 +243,7 @@ export async function runAutoReplies(
 
       let body = rule.reply_text ?? "";
       if (rule.response_mode === "ai") {
-        const ai = await aiReply(rule.ai_instructions, msg.text);
+        const ai = await aiReply(rule.ai_instructions, msg.text, db, userId, msg.wamid || null);
         if (!ai) {
           if (!body) continue; // no AI + no fallback text → stay silent
         } else {
