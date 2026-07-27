@@ -38,6 +38,10 @@ type TabsWorkspaceValue = {
   tabs: WorkspaceTab[];
   activeId: string | null;
   widths: PaneWidths;
+  /** True once localStorage has been read. Consumers that react to the tab set
+   *  (TabsArea's route adoption) must wait for it — before hydration `tabs` is
+   *  always empty and every route would look like "nothing is covering me". */
+  hydrated: boolean;
   /** When set, this pane takes the whole workspace and the others are hidden
    *  (not closed). Wide screens — the model-comparison grid is the reason —
    *  are unusable in a half-width pane. */
@@ -195,6 +199,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         activeId,
         widths,
         soloId,
+        hydrated,
         openTab,
         closeTab,
         setActive,
