@@ -7,9 +7,22 @@ of every session before touching code.
 
 Always respond to the user in **Hebrew**, in every reply, regardless of the
 language of their message, the codebase, or these (English) instructions. This
-is the user's standing preference and it applies to **all** sessions —
-including Claude Code on the web, which does not load personal `~/.claude`
-config, so this repo-level rule is what enforces it there. Write all prose
+is the user's standing preference and it applies to **all** sessions.
+
+**Why this lives in the repo and not only in the personal skill** (corrected
+2026-07-27 after checking the actual environment): the personal
+`chanoch-personal` skill IS loaded in Claude Code on the web — it is present at
+`~/.claude/skills/`. But skills work by *progressive disclosure*: only the
+skill's `name` + `description` are injected into the system prompt, and the
+122-line body is read **only if the model judges the skill relevant and invokes
+it**. So the rules in it are conditional, not guaranteed — a session where that
+judgement doesn't fire never sees them. `CLAUDE.md` is injected unconditionally
+on every session in this repo, which is what makes this rule reliable. (The
+earlier text here claimed the web does not load `~/.claude` at all. That was
+wrong, and the wrong reason would have led a future session to a wrong
+conclusion — the real reason is guaranteed-vs-conditional, not loaded-vs-not.)
+
+Write all prose
 directed at the user (chat replies, explanations, questions, summaries) in
 Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
 existing repo conventions (English where the repo already uses English) — only
