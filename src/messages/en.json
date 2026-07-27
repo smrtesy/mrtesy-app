@@ -178,6 +178,9 @@
     "restorePane": "Back to split view (Esc)"
   },
   "nav": {
+    "account": "Account",
+    "dailyReport": "Daily report",
+    "dayTools": "Day tools",
     "tasks": "Tasks",
     "suggestions": "Suggestions",
     "log": "Log",

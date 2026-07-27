@@ -15,6 +15,10 @@
 const NAV_LABEL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["/inbox", "inboxIncoming"],
   ["/tasks", "tasks"],
+  ["/suggestions", "suggestions"],
+  ["/daily-report", "dailyReport"],
+  ["/day-tools", "dayTools"],
+  ["/account", "account"],
   ["/whatsapp", "whatsapp"],
   ["/whatsapp/autoreply", "whatsappAutoreply"],
   ["/sms", "sms"],
@@ -58,9 +62,11 @@ export function navLabelKeyFor(path: string): string | null {
   return best;
 }
 
-/** Last resort when no nav section owns the path: its last segment. */
+/** Last resort when no nav section owns the path: its last segment. Every real
+ *  screen is covered by the map above, so this is reached only by a route added
+ *  without a nav entry — never by "/" itself, which has no pane. */
 export function fallbackRouteLabel(path: string): string {
   const segs = path.split("/").filter(Boolean);
   const last = segs[segs.length - 1];
-  return last ? last.replace(/[-_]/g, " ") : path;
+  return last ? last.replace(/[-_]/g, " ") : "smrtesy";
 }

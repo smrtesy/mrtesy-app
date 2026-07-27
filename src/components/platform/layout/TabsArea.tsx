@@ -104,11 +104,24 @@ export function TabsArea({ children }: { children: React.ReactNode }) {
     }
 
     // In-session navigation. Panes never change the URL, so a changed URL here
-    // is always a real navigation — and with panes open it lands out of sight.
-    if (href === settledHrefRef.current) return;
+    // is a real navigation — and with panes open it lands out of sight.
+    const settled = settledHrefRef.current;
+    if (href === settled) return;
     settledHrefRef.current = href;
+
+    // …with one exception. The routed page still mounts and runs its effects
+    // for the commit before hydration swaps it for the panes, and the OAuth
+    // return screens use exactly that commit to strip their result param from
+    // the URL (ReachSettingsClient.tsx:66, AccountClient.tsx:53 —
+    // router.replace to the bare path). That lands here as a URL change; if we
+    // adopted it, openTab would dedupe onto the pane just created and rewrite
+    // its href back to the bare path, reloading the pane WITHOUT the deep link
+    // the operator followed. Same path with the query gone is cleanup, not a
+    // navigation.
+    if (!search && settled !== null && settled.split("?")[0] === pathname) return;
+
     if (tabs.length > 0) adopt();
-  }, [href, pathname, tabs.length, hydrated, mqReady, isDesktop, isEmbedded, openTab, t]);
+  }, [href, pathname, search, tabs.length, hydrated, mqReady, isDesktop, isEmbedded, openTab, t]);
 
   if (!isEmbedded && isDesktop && tabs.length > 0) {
     return <TabsWorkspace />;

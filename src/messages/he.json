@@ -178,6 +178,9 @@
     "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
   },
   "nav": {
+    "account": "ניהול חשבון",
+    "dailyReport": "דוח יומי",
+    "dayTools": "כלי היום",
     "tasks": "משימות",
     "suggestions": "הצעות",
     "log": "לוג",
