@@ -30,6 +30,7 @@ import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/sm
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
+import smrtstudioRouter from "./modules/smrtstudio";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 
@@ -187,6 +188,7 @@ app.use("/api", smrtcrmRouter);
 app.use("/api", smrtreachRouter);
 app.use("/api", smrtbotRouter);
 app.use("/api", smrtplanRouter);
+app.use("/api", smrtstudioRouter);
 app.use("/api", smrtvaultRouter);
 app.use("/api", smrtinfoRouter);
 app.use("/api/quick-action", quickActionRouter);

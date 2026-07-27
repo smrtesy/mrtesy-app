@@ -215,7 +215,11 @@
     "planRepository": "Repository",
     "planMy": "My tasks",
     "planTeam": "By worker",
-    "planScore": "Score outputs"
+    "planScore": "Score outputs",
+    "studio": "smrtStudio",
+    "studioModels": "Model catalog",
+    "studioResearch": "Research centre",
+    "studioInvestor": "Investor page"
   },
   "account": {
     "title": "Account",
@@ -3598,8 +3602,14 @@
       "vault": "Passwords in the vault",
       "vaultHint": "The password is saved in smrtVault — open it and click 'reveal'."
     },
-    "tabs": { "all": "All" },
-    "scope": { "personal": "Personal", "org": "Organization", "unclassified": "Unclassified" },
+    "tabs": {
+      "all": "All"
+    },
+    "scope": {
+      "personal": "Personal",
+      "org": "Organization",
+      "unclassified": "Unclassified"
+    },
     "facts": {
       "empty": "No facts yet. Add one manually, or run extraction over your history.",
       "unverified": "Unverified",
@@ -3952,5 +3962,102 @@
       "quality": "Quality",
       "lipsync": "Lip-sync"
     }
+  },
+  "smrtStudio": {
+    "title": "smrtStudio — production console",
+    "subtitle": "The pipeline, the models, the research and the provenance — one screen for planning, building and daily work",
+    "empty": "No stages defined yet.",
+    "loadFailed": "Could not load the data",
+    "retry": "Retry",
+    "close": "Close",
+    "navModels": "Model catalog",
+    "navResearch": "Research centre",
+    "navInvestor": "Investor page",
+    "waitingTitle": "What is waiting for you",
+    "waitScore": "Outputs to score",
+    "waitScoreSub": "Runs that still have no score",
+    "waitTakes": "Voice takes not approved",
+    "waitTakesSub": "Of {total} · {approved} approved",
+    "waitCost": "Runs with no recorded cost",
+    "waitCostSub": "A documentation gap — true spend is higher than shown",
+    "pipelineTitle": "The pipeline",
+    "pipelineHint": "Select a stage to open all of its decisions, difficulties, research and outputs",
+    "lockedOf": "{done} of {total} stages locked",
+    "gatesTitle": "What must pass before this stage is settled",
+    "gatesOf": "{done}/{total} steps",
+    "solvedOf": "{done} solved of {total}",
+    "solvedPrefix": "Solved —",
+    "challengesExpected": "Difficulties we expected",
+    "challengesHit": "Difficulties actually hit",
+    "noChallengesMapped": "No difficulties mapped for this stage yet",
+    "noChallengesHit": "Not run enough yet to hit real difficulties",
+    "stageResearch": "Research done for this stage",
+    "stageOutputs": "Outputs of this stage",
+    "noResearch": "No research touching this stage yet",
+    "outOutputs": "Outputs produced",
+    "outScored": "Scored / approved",
+    "outModels": "Models run",
+    "outCost": "Recorded cost",
+    "outMissingCost": "Runs with no cost",
+    "decisionLabel": "Decision: {state}",
+    "crossStage": "Cross-stage",
+    "filterAll": "All",
+    "researchTitle": "Research centre",
+    "researchHint": "Every research artifact — one source, filtered by stage",
+    "researchCount": "{n} research items",
+    "costTitle": "Actual cost",
+    "costPartial": "Partial records",
+    "costRecorded": "Recorded",
+    "costRuns": "Total runs",
+    "costMissing": "No cost recorded",
+    "costNote": "True spend is higher than shown — some early runs recorded no cost. The provenance layer closes the gap by recording a cost and its source on every run.",
+    "modelsTitle": "Model catalog",
+    "modelsSubtitle": "The full shelf by kind, and above it the tier verified against the official schema",
+    "modelsSearch": "Search",
+    "modelsSearchPlaceholder": "Endpoint, title or vendor",
+    "modelsIndexed": "Models indexed",
+    "modelsVerified": "Schema-verified",
+    "modelsMatched": "Matching the filter",
+    "modelsVerifiedOnly": "Verified only",
+    "modelsNoMatch": "No model matches the filter",
+    "modelsEmptyCatalog": "The catalog is empty — no model is registered for this org yet",
+    "modelsTruncated": "Showing {shown} of {matched} — narrow the filter to see the rest",
+    "colModel": "Model",
+    "colKind": "Kind",
+    "colVendor": "Vendor",
+    "colPrice": "Price",
+    "colVerified": "Verification",
+    "verifiedYes": "Verified",
+    "verifiedNo": "Shelf",
+    "activity": {
+      "idle": "Idle",
+      "research": "Research",
+      "running": "Producing",
+      "scoring": "Scoring",
+      "blocked": "Blocked"
+    },
+    "decision": {
+      "none": "None",
+      "testing": "Testing",
+      "decided": "Decided",
+      "locked": "Locked"
+    },
+    "researchStatus": {
+      "draft": "Draft",
+      "locked": "Locked",
+      "applied": "Applied",
+      "living": "Living",
+      "superseded": "Superseded"
+    },
+    "modelKind": {
+      "all": "All",
+      "image": "Image",
+      "video": "Video",
+      "lipsync": "Lip-sync",
+      "voice": "Voice",
+      "qc": "QC",
+      "other": "Other"
+    },
+    "modelsShelfNote": "What you see here is the tier verified against fal's official schema. The full shelf (1,394 models) arrives with an indexing run, which has not happened yet."
   }
 }
