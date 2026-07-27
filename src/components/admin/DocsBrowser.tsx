@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Download } from "lucide-react";
+import { Code2, Download, FileText } from "lucide-react";
+import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 
 interface Doc {
@@ -12,11 +14,16 @@ interface Doc {
   updated: string | null;
 }
 
+/** New York, per CLAUDE.md — never the viewer's local zone, never raw UTC. */
 function fmt(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString("he-IL", {
+    timeZone: "America/New_York",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 export function DocsBrowser({
@@ -31,6 +38,8 @@ export function DocsBrowser({
 }) {
   const preferred = docs.findIndex((d) => d.filename === "new-app-guide.md");
   const [idx, setIdx] = useState(preferred >= 0 ? preferred : 0);
+  /** Rendered by default; the raw source is one quiet toggle away. */
+  const [raw, setRaw] = useState(false);
 
   if (docs.length === 0) {
     return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
@@ -84,14 +93,32 @@ export function DocsBrowser({
               </span>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5 shrink-0">
-            <Download className="h-3.5 w-3.5" />
-            הורד .md
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <IconButton
+              label={raw ? "תצוגה מעוצבת" : "מקור Markdown"}
+              color="primary"
+              onClick={() => setRaw((v) => !v)}
+            >
+              {raw ? <FileText className="h-4 w-4" /> : <Code2 className="h-4 w-4" />}
+            </IconButton>
+            <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5">
+              <Download className="h-3.5 w-3.5" />
+              הורד .md
+            </Button>
+          </div>
         </div>
-        <pre className="rounded-lg border bg-muted/40 p-4 text-xs font-mono leading-relaxed overflow-auto max-h-[75vh] whitespace-pre-wrap break-words">
-          {active.content}
-        </pre>
+        {raw ? (
+          <pre
+            dir="ltr"
+            className="rounded-lg border bg-muted/40 p-4 text-xs font-mono leading-relaxed overflow-auto max-h-[75vh] whitespace-pre-wrap break-words text-start"
+          >
+            {active.content}
+          </pre>
+        ) : (
+          <div className="rounded-lg border bg-card p-5 overflow-auto max-h-[75vh]">
+            <Markdown>{active.content}</Markdown>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -4181,7 +4181,9 @@
       "updatedAt": "Updated {when}",
       "never": "No instructions saved yet",
       "repoCopy": "Repo copy",
-      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately."
+      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately.",
+      "edit": "Edit source",
+      "preview": "Rendered view"
     },
     "github": {
       "pick": "Pick a repo",
