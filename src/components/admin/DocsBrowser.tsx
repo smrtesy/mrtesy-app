@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Download } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
+import { Code2, Download, FileText } from "lucide-react";
+import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 
 interface Doc {
@@ -12,28 +15,45 @@ interface Doc {
   updated: string | null;
 }
 
-function fmt(iso: string | null): string | null {
+/** New York, per CLAUDE.md — never the viewer's local zone, never raw UTC. */
+function fmt(iso: string | null, locale: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString(locale === "he" ? "he-IL" : "en-US", {
+    timeZone: "America/New_York",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 export function DocsBrowser({
   docs,
   pathPrefix = "docs/",
-  emptyMessage = "אין מסמכים.",
+  emptyMessage,
+  linkBase,
 }: {
   docs: Doc[];
   /** Path label shown above the rendered doc (e.g. "docs/apps/smrtvoice/"). */
   pathPrefix?: string;
   emptyMessage?: string;
+  /**
+   * Where these documents live, for resolving their relative cross-references
+   * (`./plan.md`). Repo docs pass their GitHub directory URL; documents stored
+   * in the DB have no such home, so they omit it and relative links stay inert
+   * instead of 404-ing against the app's own origin.
+   */
+  linkBase?: string;
 }) {
+  const t = useTranslations("admin");
+  const locale = useLocale();
   const preferred = docs.findIndex((d) => d.filename === "new-app-guide.md");
   const [idx, setIdx] = useState(preferred >= 0 ? preferred : 0);
+  /** Rendered by default; the raw source is one quiet toggle away. */
+  const [raw, setRaw] = useState(false);
 
   if (docs.length === 0) {
-    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
+    return <p className="text-sm text-muted-foreground">{emptyMessage ?? t("docsEmpty")}</p>;
   }
 
   const active = docs[idx] ?? docs[0];
@@ -64,9 +84,9 @@ export function DocsBrowser({
             )}
           >
             <span className="block truncate">{d.filename}</span>
-            {fmt(d.created) && (
+            {fmt(d.created, locale) && (
               <span className={cn("block text-[10px] mt-0.5", i === idx ? "opacity-80" : "opacity-60")}>
-                נוצר: {fmt(d.created)}
+                {t("docsCreated")}: {fmt(d.created, locale)}
               </span>
             )}
           </button>
@@ -77,21 +97,41 @@ export function DocsBrowser({
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <code className="block text-xs text-muted-foreground truncate">{pathPrefix}{active.filename}</code>
-            {fmt(active.created) && (
+            {fmt(active.created, locale) && (
               <span className="block text-[11px] text-muted-foreground mt-0.5">
-                נוצר: {fmt(active.created)}
-                {fmt(active.updated) && active.updated !== active.created ? ` · עודכן: ${fmt(active.updated)}` : ""}
+                {t("docsCreated")}: {fmt(active.created, locale)}
+                {fmt(active.updated, locale) && active.updated !== active.created
+                  ? ` · ${t("docsUpdated")}: ${fmt(active.updated, locale)}`
+                  : ""}
               </span>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5 shrink-0">
-            <Download className="h-3.5 w-3.5" />
-            הורד .md
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <IconButton
+              label={raw ? t("docsRendered") : t("docsSource")}
+              color="primary"
+              onClick={() => setRaw((v) => !v)}
+            >
+              {raw ? <FileText className="h-4 w-4" /> : <Code2 className="h-4 w-4" />}
+            </IconButton>
+            <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5">
+              <Download className="h-3.5 w-3.5" />
+              {t("docsDownload")}
+            </Button>
+          </div>
         </div>
-        <pre className="rounded-lg border bg-muted/40 p-4 text-xs font-mono leading-relaxed overflow-auto max-h-[75vh] whitespace-pre-wrap break-words">
-          {active.content}
-        </pre>
+        {raw ? (
+          <pre
+            dir="ltr"
+            className="rounded-lg border bg-muted/40 p-4 text-xs font-mono leading-relaxed overflow-auto max-h-[75vh] whitespace-pre-wrap break-words text-start"
+          >
+            {active.content}
+          </pre>
+        ) : (
+          <div className="rounded-lg border bg-card p-5 overflow-auto max-h-[75vh]">
+            <Markdown linkBase={linkBase}>{active.content}</Markdown>
+          </div>
+        )}
       </div>
     </div>
   );

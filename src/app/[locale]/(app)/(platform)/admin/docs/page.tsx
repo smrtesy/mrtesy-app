@@ -31,7 +31,12 @@ export default function AdminDocsPage() {
           תיעוד פנימי — {docs.length} מסמכים ב-docs/
         </p>
       </div>
-      <DocsBrowser docs={docs} />
+      {/* These are the repo's own docs/*.md, so their relative cross-links
+          resolve against the directory they actually live in on GitHub. */}
+      <DocsBrowser
+        docs={docs}
+        linkBase="https://github.com/smrtesy/mrtesy-app/blob/main/docs/"
+      />
     </div>
   );
 }
