@@ -322,3 +322,96 @@ export async function probeAudio(endpointId: string, falCategory = ""): Promise<
 export function isVideoCategory(category: string): boolean {
   return VIDEO_CATEGORIES.has(category);
 }
+
+/** One input field of a model, as its official schema declares it. */
+export type SchemaField = {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  /** The closed set of accepted values, when the schema constrains it. This is
+   *  the field that matters most for duration: it is an ENUM per model, not a
+   *  free number, which is why the pipeline plans an intent and derives the cut
+   *  per tool rather than assuming one length everywhere. */
+  enum: string[] | null;
+  default: string | null;
+};
+
+export type ModelSchema = {
+  endpoint_id: string;
+  /** null when fal has no schema for this endpoint — reported rather than
+   *  rendered as "no fields", which would read as "takes no input". */
+  available: boolean;
+  fields: SchemaField[];
+};
+
+function asText(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/**
+ * Read a model's INPUT contract live from fal's official OpenAPI schema.
+ *
+ * Deliberately not cached in our own tables: a stored copy of someone else's
+ * contract is a contract that can go stale without anyone noticing, and this
+ * program has already been bitten by acting on an inferred field. Free — the
+ * schema endpoint is not a billed inference call.
+ */
+export async function fetchModelSchema(endpointId: string): Promise<ModelSchema> {
+  let doc: {
+    components?: {
+      schemas?: Record<
+        string,
+        { properties?: Record<string, unknown>; required?: string[] }
+      >;
+    };
+  };
+  try {
+    doc = (await getJson(
+      `${SCHEMA_URL}?endpoint_id=${encodeURIComponent(endpointId)}`,
+    )) as typeof doc;
+  } catch {
+    return { endpoint_id: endpointId, available: false, fields: [] };
+  }
+
+  // The input schema is the one named *Input; a model can expose several, and
+  // the first is the one the queue endpoint accepts.
+  const entry = Object.entries(doc.components?.schemas ?? {}).find(([name]) =>
+    /input/i.test(name),
+  );
+  if (!entry) return { endpoint_id: endpointId, available: false, fields: [] };
+
+  const [, schema] = entry;
+  const required = new Set(schema.required ?? []);
+  const fields: SchemaField[] = Object.entries(schema.properties ?? {}).map(
+    ([name, propRaw]) => {
+      const p = (propRaw ?? {}) as {
+        type?: string;
+        description?: string;
+        title?: string;
+        enum?: unknown[];
+        default?: unknown;
+        anyOf?: { type?: string }[];
+      };
+      const type =
+        p.type ?? p.anyOf?.map((a) => a.type).filter(Boolean).join(" | ") ?? "";
+      return {
+        name,
+        type: String(type),
+        required: required.has(name),
+        description: String(p.description ?? p.title ?? ""),
+        enum: Array.isArray(p.enum) ? p.enum.map((v) => String(v)) : null,
+        default: asText(p.default),
+      };
+    },
+  );
+
+  // Required fields first, then alphabetical: what you must send before what you
+  // may tune.
+  fields.sort((a, b) =>
+    a.required === b.required ? a.name.localeCompare(b.name) : a.required ? -1 : 1,
+  );
+  return { endpoint_id: endpointId, available: true, fields };
+}
