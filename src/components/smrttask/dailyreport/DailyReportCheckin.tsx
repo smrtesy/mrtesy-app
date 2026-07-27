@@ -92,11 +92,16 @@ export function DailyReportCheckin({
     if (!data) return;
     setSaving(true);
     try {
+      // Only CHANGED selections are posted. The server re-snapshots the option's
+      // current label + score on every write, so re-posting an untouched
+      // pre-filled answer would silently rewrite a past day's score_snapshot —
+      // and with it the averages of reports that already covered that day.
       const answers = data.sections.flatMap((sec) =>
         sec.items
           .map((it) => {
             const optionId = selected[`${sec.entry_date}:${it.id}`];
-            return optionId ? { item_id: it.id, option_id: optionId, entry_date: sec.entry_date } : null;
+            if (!optionId || optionId === it.selected_option_id) return null;
+            return { item_id: it.id, option_id: optionId, entry_date: sec.entry_date };
           })
           .filter((a): a is { item_id: string; option_id: string; entry_date: string } => a != null),
       );

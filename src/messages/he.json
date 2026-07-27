@@ -1159,6 +1159,11 @@
     "editPastTitle": "עריכת ימים קודמים",
     "editPastNote": "בחר יום כדי לערוך את התשובות שלו. דוח שכבר נוצר לא משתנה — צור דוח מחדש כדי לרענן אותו.",
     "editPastEmpty": "אין ימים לעריכה.",
+    "dismissDay": "הסתר את היום הזה",
+    "restoreDay": "החזר את היום",
+    "dayDismissed": "מוסתר",
+    "dayDismissedToast": "היום הוסתר — אפשר להחזיר אותו כאן בכל עת",
+    "dayRestoredToast": "היום הוחזר",
     "dayComplete": "מלא",
     "dayProgress": "{answered}/{total} תשובות",
     "dayIsToday": "{date} · היום"
@@ -1867,7 +1872,13 @@
     "addDirectNotFound": "משתמש לא נמצא — שלח הזמנה במקום",
     "addDirectAlreadyMember": "המשתמש כבר רשום בארגון",
     "appParametersTitle": "פרמטרים של מערכת",
-    "appParametersDesc": "מודלים, גדלי מקבץ, חלון יומן וחיתוכי גוף הודעה"
+    "appParametersDesc": "מודלים, גדלי מקבץ, חלון יומן וחיתוכי גוף הודעה",
+    "docsRendered": "תצוגה מעוצבת",
+    "docsSource": "מקור Markdown",
+    "docsDownload": "הורד ‎.md",
+    "docsCreated": "נוצר",
+    "docsUpdated": "עודכן",
+    "docsEmpty": "אין מסמכים."
   },
   "adminParameters": {
     "title": "פרמטרי מערכת",
@@ -4180,7 +4191,9 @@
       "updatedAt": "עודכן {when}",
       "never": "עוד לא נשמרו הוראות",
       "repoCopy": "העותק שברפו",
-      "hint": "הטקסט הזה נשלח לפני כל בקשה, בכל הרצה. עריכה כאן משנה את מה שקלוד מקבל מיד."
+      "hint": "הטקסט הזה נשלח לפני כל בקשה, בכל הרצה. עריכה כאן משנה את מה שקלוד מקבל מיד.",
+      "edit": "עריכת המקור",
+      "preview": "תצוגה מעוצבת"
     },
     "github": {
       "pick": "בחר ריפו",
@@ -4192,5 +4205,10 @@
       "branchPlaceholder": "ענף",
       "notConnected": "אין חיבור לגיטהאב. שמור טוקן גיטהאב עם הרשאת repo בשם {key} במסך {where}."
     }
+  },
+  "markdown": {
+    "anchor": "קישור לסעיף {title}",
+    "copyCode": "העתק קוד",
+    "copied": "הועתק"
   }
 }

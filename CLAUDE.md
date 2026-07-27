@@ -593,6 +593,68 @@ All product names follow the pattern **`smrt` + English word**:
   null and no explicit folder is passed, return `[]` and skip — never
   fall back to a hardcoded folder ID.
 
+## A model may propose; only code may confirm a checkable fact
+
+**Never let a model verdict be the only gate on a destructive or
+irreversible write.** When an AI decision leads to something the user
+can't easily undo — merging two tasks, closing/dismissing a task,
+overwriting a title or description, binding a thread to a task — every
+part of that decision which is *checkable in data* must be re-checked in
+code, and the model's claim about it discarded.
+
+The model's job is **semantics** ("is this the same matter?"). It must
+never be the authority on **facts** ("is this the same person / number /
+address / invoice / date / amount?"). Those are lookups, and a model that
+wants to say yes will invent them: the T1804 case (2026-07-27) was Haiku
+asserting `3475848008 = 972584146670` to justify a merge, which fused
+מענדי's message into לאה's task. Another one said the numbers "match,
+probably a typo" — and still returned `high` confidence.
+
+**A prompt sentence is NOT a fix for this class of bug.** That is the
+lesson to take, because it is what kept this exact complaint coming back:
+"חיבר הודעות שלא קשורות" was "fixed" on 2026-06-01, 06-08, 06-12 and
+06-25, and every one of those fixes was another instruction added to a
+prompt ("NEVER match on person alone", "A shared chat is NOT a shared
+matter", "Do not staple an unrelated new message onto an old
+suggestion"). A prompt is a request; it reduces the frequency and removes
+nothing. If you catch yourself fixing a wrong-merge / wrong-attachment
+bug by adding a sentence to a prompt, stop: write the code check instead,
+and keep the prompt line only as a cheap first filter.
+
+The shape that works, in `ai-process`:
+1. **Verify in code, from the data.** `partiesConflict()` compares the
+   incoming message's channel counterparty (sender address / chat phone —
+   never numbers scraped from the body) against the candidate task's, and
+   the task's identity includes the message it was born from.
+2. **Downgrade, don't drop.** A verified mismatch costs one tier: `high`
+   becomes a suggestion the user accepts from the existing "כפילות
+   אפשרית" banner, `medium` disappears. Nothing is lost and nothing is
+   silently rewritten.
+3. **Fail closed.** A lookup that errors must report the unsafe answer as
+   unproven — never "no conflict found".
+4. **Leave the non-verdicts explicit.** One side anonymous (calendar,
+   Drive, a task with no contact) or nothing comparable (a chat phone vs
+   an email-only task) is *unverifiable*, not *proven different* — those
+   still merge, which is what keeps genuine cross-source links working.
+
+**Then add a detector, because code can regress too.** The invariant is
+checked hourly in the DB by `public.check_cross_party_merges()` (pg_cron
+job `cross-party-merge-monitor`, migration `20260727220000`): any task
+carrying an update from a different chat, where the phone is not
+verifiably the same party, writes a `log_entries` row with
+`level='error'`, `category='dupe_cross_party'` plus a notification. The
+daily health-check Routine already reports every `level='error'` category
+over 24h, so a regression surfaces in the next morning's inbox report
+instead of six weeks later. It was validated against 120 days of history:
+it flags all 23 real incidents and produces zero false alarms. When you
+change the merge logic, re-run the detector's query over recent history —
+if it starts flagging legitimate merges, the code veto and the detector
+have drifted apart (`phone_keys_8` in SQL mirrors `phoneKeys` in TS).
+
+Generalise this: **code check + downgrade + fail closed + a detector on
+the invariant.** Any place a model decision writes something the user
+can't cheaply undo deserves the same four.
+
 ## Migration discipline
 
 When you write SQL DDL (CREATE/ALTER/DROP) or DML that the user wants
