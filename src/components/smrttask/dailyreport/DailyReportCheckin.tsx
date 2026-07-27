@@ -22,29 +22,44 @@ type SelKey = string;
  * headed by its Hebrew + Gregorian date. Save writes each answer with its own
  * entry_date (server snapshots label + score) and calls onSaved so the pinned
  * row for this fill-day disappears.
+ *
+ * It doubles as the editor for a PAST day: the server pre-fills the answers
+ * already on record, so re-choosing an option overwrites it. In that mode
+ * `allowPartialSave` lets a partial edit through — a back-filled day may
+ * legitimately stay incomplete, and blocking save would be a dead end.
  */
 export function DailyReportCheckin({
   open,
   fillDate,
   onClose,
   onSaved,
+  allowPartialSave = false,
 }: {
   open: boolean;
   /** The fill-day this check-in covers (YYYY-MM-DD). */
   fillDate: string | null;
   onClose: () => void;
   onSaved: () => void;
+  /** Enable save once ANY question is answered (past-day editing). */
+  allowPartialSave?: boolean;
 }) {
   const t = useTranslations("dailyReport");
   const [data, setData] = useState<CheckinData | null>(null);
   const [selected, setSelected] = useState<Record<SelKey, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (!open || !fillDate) return;
     let alive = true;
     setLoading(true);
+    setFailed(false);
+    // Drop the previous day's payload up front: this dialog stays mounted, so a
+    // failed load would otherwise leave the PREVIOUS day's sections + selections
+    // on screen and a save would post that day's entry_dates.
+    setData(null);
+    setSelected({});
     api<CheckinData>(`/api/daily-report/checkin?fillDate=${fillDate}`)
       .then((res) => {
         if (!alive) return;
@@ -58,7 +73,9 @@ export function DailyReportCheckin({
         setSelected(pre);
       })
       .catch(() => {
-        if (alive) toast.error(t("loadError"));
+        if (!alive) return;
+        setFailed(true);
+        toast.error(t("loadError"));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -96,9 +113,11 @@ export function DailyReportCheckin({
 
   const sections = data?.sections ?? [];
   const totalItems = sections.reduce((n, s) => n + s.items.length, 0);
-  const allAnswered =
-    totalItems > 0 &&
-    sections.every((s) => s.items.every((it) => selected[`${s.entry_date}:${it.id}`]));
+  const answeredCount = sections.reduce(
+    (n, s) => n + s.items.filter((it) => selected[`${s.entry_date}:${it.id}`]).length,
+    0,
+  );
+  const canSave = totalItems > 0 && (allowPartialSave ? answeredCount > 0 : answeredCount === totalItems);
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -111,6 +130,9 @@ export function DailyReportCheckin({
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> {t("loading")}
           </div>
+        ) : failed ? (
+          // A failed load must not read as "you never configured questions".
+          <p className="py-6 text-center text-sm text-muted-foreground" dir="auto">{t("loadError")}</p>
         ) : totalItems === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground" dir="auto">{t("noQuestions")}</p>
         ) : (
@@ -156,7 +178,7 @@ export function DailyReportCheckin({
           <Button
             size="sm"
             onClick={save}
-            disabled={saving || loading || totalItems === 0 || !allAnswered}
+            disabled={saving || loading || !canSave}
             className="gap-1"
           >
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
