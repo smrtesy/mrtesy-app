@@ -35,6 +35,14 @@ export interface AiUsageGroup {
   outTok: number;
   cacheReadTok: number;
   cacheWriteTok: number;
+  /**
+   * Rows in this group with no cost recorded at all. Non-zero means the group's
+   * cost is a floor, not a total — fal runs are logged by the video-lab harness
+   * and a third of them currently arrive without a cost. Summing those as zero
+   * and printing a clean figure would misrepresent it, so the count travels with
+   * the data and the page says so.
+   */
+  missingCost: number;
 }
 
 export interface AiUsageSummary {
@@ -73,6 +81,7 @@ interface RpcRow {
   output_tokens: number | string;
   cache_read_tokens: number | string;
   cache_write_tokens: number | string;
+  missing_cost: number | string | null;
 }
 
 // Postgres bigint/numeric arrive as strings over PostgREST — Number() them, or
@@ -107,6 +116,7 @@ export async function fetchAiUsageSummary(
       outTok: n(r.output_tokens),
       cacheReadTok: n(r.cache_read_tokens),
       cacheWriteTok: n(r.cache_write_tokens),
+      missingCost: n(r.missing_cost),
     }));
     return {
       groups,
@@ -130,24 +140,23 @@ export async function fetchAiUsageSummary(
   return paginatedSummary(db, since, until);
 }
 
-/** Exact but chatty: read every row in the window in 1000-row pages. */
-async function paginatedSummary(
+type GroupWithRefs = AiUsageGroup & { _refs?: Set<string> };
+
+/**
+ * Read every row of a table in the window, in explicit 1000-row pages.
+ * Returns `truncated: true` if the safety ceiling was hit, so the caller can
+ * say the total is partial instead of presenting it as complete.
+ */
+async function readAllRows(
   db: SupabaseClient,
+  table: string,
+  columns: string,
   since: Date,
   until?: Date,
-): Promise<AiUsageSummary> {
-  const byKey = new Map<string, AiUsageGroup>();
-  let totalCost = 0;
-  let totalCalls = 0;
-  let truncated = false;
-
+): Promise<{ rows: Record<string, unknown>[]; truncated: boolean; error: string | null }> {
+  const out: Record<string, unknown>[] = [];
   for (let from = 0; from < MAX_FALLBACK_ROWS; from += PAGE_SIZE) {
-    let q = db
-      .from("ai_usage")
-      .select(
-        "provider, component, model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, ref_id",
-      )
-      .gte("created_at", since.toISOString());
+    let q = db.from(table).select(columns).gte("created_at", since.toISOString());
     if (until) q = q.lt("created_at", until.toISOString());
     // A stable total order is required: without it PostgREST may repeat or skip
     // rows across pages, so the "exact" fallback would not be exact. created_at
@@ -156,69 +165,121 @@ async function paginatedSummary(
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
+    if (error) return { rows: out, truncated: false, error: error.message };
+    // Double cast: `table` is a runtime string, so the client cannot resolve it
+    // against the generated schema types and infers GenericStringError[]. The
+    // rows are read defensively field-by-field below, so an untyped shape here
+    // costs nothing.
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) return { rows: out, truncated: false, error: null };
+  }
+  return { rows: out, truncated: true, error: null };
+}
 
-    if (error) {
-      return { ...EMPTY, source: "paginated", warning: null, error: error.message };
+/**
+ * Exact but chatty fallback for when ai_usage_summary() is missing. Covers the
+ * SAME sources the function does — ai_usage plus fal from experiment_runs —
+ * because a fallback that quietly drops a provider would reintroduce the exact
+ * defect this module exists to prevent.
+ */
+async function paginatedSummary(
+  db: SupabaseClient,
+  since: Date,
+  until?: Date,
+): Promise<AiUsageSummary> {
+  const byKey = new Map<string, GroupWithRefs>();
+  let totalCost = 0;
+  let totalCalls = 0;
+
+  const group = (provider: string, component: string, model: string): GroupWithRefs => {
+    const key = `${provider}|${component}|${model}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = {
+        provider, component, model,
+        calls: 0, items: 0, cost: 0,
+        inTok: 0, outTok: 0, cacheReadTok: 0, cacheWriteTok: 0,
+        missingCost: 0,
+      };
+      byKey.set(key, g);
     }
-    const rows = data ?? [];
-    for (const r of rows as Record<string, unknown>[]) {
-      const provider = String(r.provider ?? "unknown");
-      const component = String(r.component ?? "unknown");
-      const model = (r.model as string | null) ?? "—";
-      const key = `${provider}|${component}|${model}`;
-      let g = byKey.get(key);
-      if (!g) {
-        g = {
-          provider,
-          component,
-          model,
-          calls: 0,
-          items: 0,
-          cost: 0,
-          inTok: 0,
-          outTok: 0,
-          cacheReadTok: 0,
-          cacheWriteTok: 0,
-        };
-        byKey.set(key, g);
-      }
-      const cost = n(r.cost_usd as number | string | null);
-      g.calls += 1;
-      g.cost += cost;
-      g.inTok += n(r.input_tokens as number | string | null);
-      g.outTok += n(r.output_tokens as number | string | null);
-      g.cacheReadTok += n(r.cache_read_tokens as number | string | null);
-      g.cacheWriteTok += n(r.cache_write_tokens as number | string | null);
-      totalCost += cost;
-      totalCalls += 1;
-      if (r.ref_id) {
-        // Distinct-ref counting needs the set only while paging; it is dropped
-        // into a count below so the returned shape matches the RPC's.
-        (g as AiUsageGroup & { _refs?: Set<string> })._refs ??= new Set();
-        (g as AiUsageGroup & { _refs?: Set<string> })._refs!.add(String(r.ref_id));
-      }
+    return g;
+  };
+
+  const api = await readAllRows(
+    db,
+    "ai_usage",
+    "provider, component, model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, ref_id",
+    since,
+    until,
+  );
+  if (api.error) return { ...EMPTY, source: "paginated", warning: null, error: api.error };
+
+  for (const r of api.rows) {
+    const g = group(
+      String(r.provider ?? "unknown"),
+      String(r.component ?? "unknown"),
+      (r.model as string | null) ?? "—",
+    );
+    const cost = n(r.cost_usd as number | string | null);
+    g.calls += 1;
+    g.cost += cost;
+    g.inTok += n(r.input_tokens as number | string | null);
+    g.outTok += n(r.output_tokens as number | string | null);
+    g.cacheReadTok += n(r.cache_read_tokens as number | string | null);
+    g.cacheWriteTok += n(r.cache_write_tokens as number | string | null);
+    if (r.cost_usd === null || r.cost_usd === undefined) g.missingCost += 1;
+    totalCost += cost;
+    totalCalls += 1;
+    if (r.ref_id) {
+      g._refs ??= new Set();
+      g._refs.add(String(r.ref_id));
     }
-    if (rows.length < PAGE_SIZE) break; // last page
-    if (from + PAGE_SIZE >= MAX_FALLBACK_ROWS) truncated = true;
   }
 
-  const groups = [...byKey.values()]
+  // fal.ai generation lives in experiment_runs, not ai_usage. Model names are
+  // withheld ("—") to preserve blind scoring, matching what the RPC does.
+  const fal = await readAllRows(
+    db,
+    "experiment_runs",
+    "stage, code, cost_usd",
+    since,
+    until,
+  );
+  if (fal.error) return { ...EMPTY, source: "paginated", warning: null, error: fal.error };
+
+  for (const r of fal.rows) {
+    const g = group("fal", `fal.${(r.stage as string | null) ?? "other"}`, "—");
+    const cost = n(r.cost_usd as number | string | null);
+    g.calls += 1;
+    g.cost += cost;
+    if (r.cost_usd === null || r.cost_usd === undefined) g.missingCost += 1;
+    totalCost += cost;
+    totalCalls += 1;
+    if (r.code) {
+      g._refs ??= new Set();
+      g._refs.add(String(r.code));
+    }
+  }
+
+  const groups: AiUsageGroup[] = [...byKey.values()]
     .map((g) => {
-      const withRefs = g as AiUsageGroup & { _refs?: Set<string> };
-      const items = withRefs._refs?.size ?? 0;
-      delete withRefs._refs;
+      const items = g._refs?.size ?? 0;
+      delete g._refs;
       return { ...g, items };
     })
     .sort((a, b) => b.cost - a.cost);
 
+  const truncated = api.truncated || fal.truncated;
   return {
     groups,
     totalCost,
     totalCalls,
     source: "paginated",
     warning: truncated
-      ? `Read the ${MAX_FALLBACK_ROWS.toLocaleString()}-row ceiling — this total is INCOMPLETE. Apply migration 20260727161500_ai_usage_summary_rpc.sql.`
-      : "Aggregated client-side because ai_usage_summary() is missing. Totals are exact but the page is slow — apply migration 20260727161500_ai_usage_summary_rpc.sql.",
+      ? `Read the ${MAX_FALLBACK_ROWS.toLocaleString()}-row ceiling — this total is INCOMPLETE. Apply migration 20260727170000_ai_usage_summary_include_fal.sql.`
+      : "Aggregated client-side because ai_usage_summary() is missing. Totals are exact but the page is slow — apply migration 20260727170000_ai_usage_summary_include_fal.sql.",
     error: null,
   };
 }
