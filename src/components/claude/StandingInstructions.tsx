@@ -15,15 +15,28 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
-import { Eye, ExternalLink, Loader2, Pencil } from "lucide-react";
+import { Code2, ExternalLink, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
-import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api/client";
+
+/**
+ * The rich editor drags in ProseMirror (~110 kB) and this panel is collapsed
+ * by default, so it must not sit in the runs screen's first load. It also
+ * needs a DOM to construct, hence no SSR.
+ */
+const MarkdownEditor = dynamic(
+  () => import("@/components/common/MarkdownEditor").then((m) => m.MarkdownEditor),
+  {
+    ssr: false,
+    loading: () => <p className="text-xs text-muted-foreground">…</p>,
+  },
+);
 
 const REPO_DOC_URL =
   "https://github.com/smrtesy/mrtesy-app/blob/main/docs/claude-console/standing-instructions.md";
@@ -51,11 +64,14 @@ export function StandingInstructions({ locale }: { locale: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   /**
-   * The document is a *document* — read it rendered by default (headings,
-   * tables, links), and drop into the raw editor only on demand. Compact-UI
-   * convention: the editor is behind one quiet icon button.
+   * Two views, both editable, one toggle:
+   *   false → the document as it reads (headings, tables, links) — and you
+   *           type straight into it. This is the default.
+   *   true  → the markdown source, for when the formatting itself is the
+   *           thing being fixed.
+   * Compact-UI convention: the second view hides behind one quiet icon.
    */
-  const [editing, setEditing] = useState(false);
+  const [codeView, setCodeView] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -109,11 +125,11 @@ export function StandingInstructions({ locale }: { locale: string }) {
           </a>
           {!loading && (
             <IconButton
-              label={editing ? t("preview") : t("edit")}
+              label={codeView ? t("richView") : t("codeView")}
               color="primary"
-              onClick={() => setEditing((v) => !v)}
+              onClick={() => setCodeView((v) => !v)}
             >
-              {editing ? <Eye className="size-4" /> : <Pencil className="size-4" />}
+              {codeView ? <Pencil className="size-4" /> : <Code2 className="size-4" />}
             </IconButton>
           )}
         </div>
@@ -123,36 +139,35 @@ export function StandingInstructions({ locale }: { locale: string }) {
         <p className="text-xs text-muted-foreground">…</p>
       ) : (
         <>
-          {editing ? (
+          {codeView ? (
+            /* dir=ltr on purpose, even for a Hebrew document: this is source,
+               and it reads like source only when the structural markers
+               (`#`, `-`, `|`, `>`) stay in the left gutter where every code
+               editor puts them. The rich view is where text reads as text. */
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={t("placeholder")}
               rows={16}
               className="font-mono text-xs"
-              dir="auto"
+              dir="ltr"
             />
-          ) : body.trim() ? (
-            <div className="max-h-[60vh] overflow-y-auto rounded-lg border bg-card p-4">
-              <Markdown>{body}</Markdown>
-            </div>
           ) : (
-            <p className="rounded-lg border border-dashed p-4 text-xs text-muted-foreground">
-              {t("placeholder")}
-            </p>
+            <div className="max-h-[60vh] overflow-y-auto rounded-lg border bg-card p-4 focus-within:ring-1 focus-within:ring-ring">
+              {/* Uncontrolled by design — it reads `body` once and then owns
+                  the document. Toggling to the code view unmounts it, so
+                  coming back re-seeds it with whatever the source edit left. */}
+              <MarkdownEditor value={body} onChange={setBody} placeholder={t("placeholder")} />
+            </div>
           )}
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground">
               {updatedAt ? t("updatedAt", { when: fmtWhen(updatedAt, locale) }) : t("never")}
             </p>
-            {/* Only meaningful while editing, but stays mounted when the edit
-                has unsaved changes so a stray toggle can't strand them. */}
-            {(editing || dirty) && (
-              <Button size="sm" onClick={save} disabled={saving || !dirty}>
-                {saving && <Loader2 className="me-1 size-4 animate-spin" />}
-                {dirty ? t("save") : t("noChanges")}
-              </Button>
-            )}
+            <Button size="sm" onClick={save} disabled={saving || !dirty}>
+              {saving && <Loader2 className="me-1 size-4 animate-spin" />}
+              {dirty ? t("save") : t("noChanges")}
+            </Button>
           </div>
           <p className="text-[11px] leading-snug text-muted-foreground">{t("hint")}</p>
         </>
