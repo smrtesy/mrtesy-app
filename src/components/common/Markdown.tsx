@@ -30,6 +30,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -43,7 +44,10 @@ import { cn } from "@/lib/utils";
 /** Hebrew, Arabic, Syriac, Thaana + the Arabic presentation-form blocks. */
 const RTL_FIRST = /[\u0590-\u05FF\u0600-\u06FF\u0700-\u074F\u0780-\u07BF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
 /** Latin, including the accented ranges. */
-const LTR_FIRST = /[A-Za-z\u00C0-\u024F]/;
+// Latin-1 Supplement carries \u00D7 (\u00D7) and \u00F7 (\u00F7) mid-range; they are math
+// symbols, not letters, and counting them flipped short Hebrew cells like
+// "3 \u00D7 4" to LTR.
+const LTR_FIRST = /[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F]/;
 const RTL_LETTERS = new RegExp(RTL_FIRST.source, "g");
 const LTR_LETTERS = new RegExp(LTR_FIRST.source, "g");
 
@@ -130,6 +134,44 @@ function slugify(text: string): string {
   );
 }
 
+/** The handful of strings this renderer owns. Supplied by the caller's i18n. */
+interface Labels {
+  /** aria-label for a heading's anchor. `{title}` = the heading text. */
+  anchor: (title: string) => string;
+  copyCode: string;
+  copied: string;
+}
+
+const ABSOLUTE_HREF = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i;
+
+/** Physical text-align for a known direction; `undefined` keeps inheritance. */
+function alignFor(dir: Dir | undefined): string | undefined {
+  return dir === "rtl" ? "text-right" : dir === "ltr" ? "text-left" : undefined;
+}
+
+/**
+ * Resolve a link the way the *document's* reader expects.
+ *
+ * Markdown docs cross-reference each other relatively (`./feasibility.md`).
+ * Rendered inside the app those used to resolve against the app origin and
+ * 404 — a link that promises navigation and delivers a dead tab. So a caller
+ * that knows where the document actually lives passes `linkBase` and we
+ * rebuild the real deep link; a caller that doesn't gets inert text instead
+ * of a broken link. Absolute/mailto/anchor hrefs are never touched.
+ *
+ * `null` = do not render this as a link.
+ */
+function resolveHref(href: string | undefined, linkBase?: string): string | null {
+  if (!href) return null;
+  if (ABSOLUTE_HREF.test(href)) return href;
+  if (!linkBase) return null;
+  try {
+    return new URL(href, linkBase).toString();
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* pieces                                                              */
 /* ------------------------------------------------------------------ */
@@ -139,20 +181,25 @@ function Heading({
   level,
   children,
   className,
+  labels,
 }: {
   level: 1 | 2 | 3 | 4 | 5 | 6;
   children: ReactNode;
   className: string;
+  labels: Labels;
 }) {
   const Tag = `h${level}` as const;
-  const id = slugify(toText(children));
+  const text = toText(children);
+  const id = slugify(text);
   return (
     <Tag id={id} dir={leafDir(children)} className={cn("group/h scroll-mt-16", className)}>
       {children}
       <a
         href={`#${encodeURIComponent(id)}`}
-        aria-label={`קישור לסעיף ${toText(children)}`}
-        className="ms-2 align-middle text-muted-foreground opacity-0 transition-opacity group-hover/h:opacity-100 touch:opacity-60"
+        aria-label={labels.anchor(text)}
+        // Revealed on hover, but a keyboard tab must not land on something
+        // invisible — hence focus-visible alongside the hover reveal.
+        className="ms-2 align-middle text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/h:opacity-100 touch:opacity-60"
       >
         #
       </a>
@@ -161,9 +208,11 @@ function Heading({
 }
 
 /** Fenced code block: horizontal scroll, forced LTR, quiet copy button. */
-function CodeBlock({ children }: { children: ReactNode }) {
+function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }) {
   const [copied, setCopied] = useState(false);
-  const text = toText(children);
+  // Same trailing-newline strip the <code> renderer applies, so what lands on
+  // the clipboard matches what the user sees in the box.
+  const text = toText(children).replace(/\n$/, "");
 
   async function copy() {
     try {
@@ -192,11 +241,11 @@ function CodeBlock({ children }: { children: ReactNode }) {
       <button
         type="button"
         onClick={copy}
-        aria-label={copied ? "הועתק" : "העתק קוד"}
-        title={copied ? "הועתק" : "העתק קוד"}
+        aria-label={copied ? labels.copied : labels.copyCode}
+        title={copied ? labels.copied : labels.copyCode}
         className={cn(
           "absolute end-2 top-2 rounded-md border bg-background/90 p-1.5 text-muted-foreground",
-          "opacity-0 transition-opacity hover:text-foreground group-hover/code:opacity-100 touch:opacity-100",
+          "opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 touch:opacity-100",
         )}
       >
         {copied ? <Check className="size-3.5 text-status-ok" /> : <Copy className="size-3.5" />}
@@ -221,155 +270,187 @@ function Table({ children }: { children: ReactNode }) {
 /* renderer                                                            */
 /* ------------------------------------------------------------------ */
 
-const components: Components = {
-  h1: ({ children }) => (
-    <Heading level={1} className="mb-3 mt-6 border-b pb-1.5 text-2xl font-bold first:mt-0">
-      {children}
-    </Heading>
-  ),
-  h2: ({ children }) => (
-    <Heading level={2} className="mb-2.5 mt-6 border-b pb-1.5 text-xl font-bold first:mt-0">
-      {children}
-    </Heading>
-  ),
-  h3: ({ children }) => (
-    <Heading level={3} className="mb-2 mt-5 text-base font-semibold first:mt-0">
-      {children}
-    </Heading>
-  ),
-  h4: ({ children }) => (
-    <Heading level={4} className="mb-1.5 mt-4 text-sm font-semibold first:mt-0">
-      {children}
-    </Heading>
-  ),
-  h5: ({ children }) => (
-    <Heading level={5} className="mb-1.5 mt-4 text-sm font-semibold text-foreground/90 first:mt-0">
-      {children}
-    </Heading>
-  ),
-  h6: ({ children }) => (
-    <Heading level={6} className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground first:mt-0">
-      {children}
-    </Heading>
-  ),
+/**
+ * The component map is built per (linkBase, labels) pair rather than declared
+ * once at module scope, because both are caller-supplied. `Markdown` memoizes
+ * the result so element identity stays stable across re-renders and nothing
+ * remounts (which would drop a code block's "copied" state).
+ */
+function buildComponents(labels: Labels, linkBase?: string): Components {
+  return {
+    h1: ({ children }) => (
+      <Heading level={1} labels={labels} className="mb-3 mt-6 border-b pb-1.5 text-2xl font-bold first:mt-0">
+        {children}
+      </Heading>
+    ),
+    h2: ({ children }) => (
+      <Heading level={2} labels={labels} className="mb-2.5 mt-6 border-b pb-1.5 text-xl font-bold first:mt-0">
+        {children}
+      </Heading>
+    ),
+    h3: ({ children }) => (
+      <Heading level={3} labels={labels} className="mb-2 mt-5 text-base font-semibold first:mt-0">
+        {children}
+      </Heading>
+    ),
+    h4: ({ children }) => (
+      <Heading level={4} labels={labels} className="mb-1.5 mt-4 text-sm font-semibold first:mt-0">
+        {children}
+      </Heading>
+    ),
+    h5: ({ children }) => (
+      <Heading level={5} labels={labels} className="mb-1.5 mt-4 text-sm font-semibold text-foreground/90 first:mt-0">
+        {children}
+      </Heading>
+    ),
+    h6: ({ children }) => (
+      <Heading level={6} labels={labels} className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground first:mt-0">
+        {children}
+      </Heading>
+    ),
 
-  p: ({ children }) => (
-    <p dir={leafDir(children)} className="my-2.5 leading-relaxed first:mt-0 last:mb-0">
-      {children}
-    </p>
-  ),
+    p: ({ children }) => (
+      <p dir={leafDir(children)} className="my-2.5 leading-relaxed first:mt-0 last:mb-0">
+        {children}
+      </p>
+    ),
 
-  a: ({ href, children }) => (
-    <a
-      // Verbatim href — deep links keep their path, query and fragment.
-      href={href}
-      target={href?.startsWith("#") ? undefined : "_blank"}
-      rel="noopener noreferrer"
-      className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary [overflow-wrap:anywhere]"
-    >
-      {children}
-    </a>
-  ),
+    a: ({ href, children }) => {
+      // Verbatim href — an absolute deep link keeps its path, query and
+      // fragment. A relative one is rebuilt against linkBase, or rendered as
+      // plain text when there is no base to rebuild it from.
+      const resolved = resolveHref(href, linkBase);
+      if (!resolved) return <>{children}</>;
+      return (
+        <a
+          href={resolved}
+          target={resolved.startsWith("#") ? undefined : "_blank"}
+          rel="noopener noreferrer"
+          className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary [overflow-wrap:anywhere]"
+        >
+          {children}
+        </a>
+      );
+    },
 
-  ul: ({ children }) => (
-    <ul
-      dir={boxDir(children)}
-      className={cn(
-        "my-2.5 list-disc space-y-1 ps-6 leading-relaxed marker:text-muted-foreground",
-        // Task-list items ("- [ ] …") carry their own checkbox — drop the bullet.
-        // The checkbox (not the <li>) hangs into the marker gutter, so a
-        // nested list under a task keeps its own indentation.
-        "[&_li:has(>input[type=checkbox])]:list-none",
-      )}
-    >
-      {children}
-    </ul>
-  ),
-  ol: ({ children, start }) => (
-    <ol
-      dir={boxDir(children)}
-      start={start}
-      className="my-2.5 list-decimal space-y-1 ps-6 leading-relaxed marker:text-muted-foreground"
-    >
-      {children}
-    </ol>
-  ),
-  li: ({ children }) => <li className="[&>ul]:my-1 [&>ol]:my-1">{children}</li>,
-  input: ({ checked, type }) =>
-    type === "checkbox" ? (
-      <input
-        type="checkbox"
-        checked={!!checked}
-        readOnly
-        disabled
-        className="-ms-5 me-2 align-middle accent-primary"
-      />
-    ) : null,
+    ul: ({ children }) => (
+      <ul
+        dir={boxDir(children)}
+        className={cn(
+          "my-2.5 list-disc space-y-1 ps-6 leading-relaxed marker:text-muted-foreground",
+          // Explicit left/right, not `start`: the items below are
+          // `unicode-bidi: plaintext`, under which `start` re-resolves per
+          // ITEM and would fling a Hebrew line to the far side of an
+          // English-majority list, away from its own bullet.
+          alignFor(boxDir(children)),
+          // Task-list items ("- [ ] …") carry their own checkbox — drop the
+          // bullet. Keyed on the class remark-gfm emits, NOT on `:has(> input)`:
+          // in a loose list mdast keeps the <p> wrapper, so the checkbox is a
+          // grandchild and the :has() rule silently missed, leaving a bullet
+          // under the checkbox. The checkbox (not the <li>) hangs into the
+          // marker gutter, so a nested list under a task keeps its indentation.
+          "[&_li.task-list-item]:list-none",
+        )}
+      >
+        {children}
+      </ul>
+    ),
+    ol: ({ children, start }) => (
+      <ol
+        dir={boxDir(children)}
+        start={start}
+        className={cn(
+          "my-2.5 list-decimal space-y-1 ps-6 leading-relaxed marker:text-muted-foreground",
+          alignFor(boxDir(children)),
+        )}
+      >
+        {children}
+      </ol>
+    ),
+    li: ({ children, className }) => (
+      // `unicode-bidi: plaintext` (not dir="auto") so a lone English item in a
+      // Hebrew list reads left-to-right while the bullet stays on the list's
+      // side — a real `dir` here would drag the marker across the gutter.
+      <li className={cn("[unicode-bidi:plaintext] [&>ul]:my-1 [&>ol]:my-1", className)}>
+        {children}
+      </li>
+    ),
+    input: ({ checked, type }) =>
+      type === "checkbox" ? (
+        <input
+          type="checkbox"
+          checked={!!checked}
+          readOnly
+          disabled
+          className="-ms-5 me-2 align-middle accent-primary"
+        />
+      ) : null,
 
-  blockquote: ({ children }) => (
-    <blockquote
-      dir={boxDir(children)}
-      className="my-3 border-s-4 border-border bg-muted/30 py-1 ps-3 text-muted-foreground [&>p]:my-1.5"
-    >
-      {children}
-    </blockquote>
-  ),
+    blockquote: ({ children }) => (
+      <blockquote
+        dir={boxDir(children)}
+        className="my-3 border-s-4 border-border bg-muted/30 py-1 ps-3 text-muted-foreground [&>p]:my-1.5"
+      >
+        {children}
+      </blockquote>
+    ),
 
-  hr: () => <hr className="my-5 border-border" />,
+    hr: () => <hr className="my-5 border-border" />,
 
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  code: ({ children, className }) => (
-    <code
-      dir="ltr"
-      className={cn(
-        "rounded border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]",
-        className,
-      )}
-    >
-      {/* A fenced block's value always ends in "\n"; rendering it leaves a
-          blank last line inside the box, which GitHub does not show. */}
-      {typeof children === "string" ? children.replace(/\n$/, "") : children}
-    </code>
-  ),
+    pre: ({ children }) => <CodeBlock labels={labels}>{children}</CodeBlock>,
+    code: ({ children, className }) => (
+      <code
+        dir="ltr"
+        className={cn(
+          "rounded border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]",
+          className,
+        )}
+      >
+        {/* A fenced block's value always ends in "\n"; rendering it leaves a
+            blank last line inside the box, which GitHub does not show. */}
+        {typeof children === "string" ? children.replace(/\n$/, "") : children}
+      </code>
+    ),
 
-  table: ({ children }) => <Table>{children}</Table>,
-  thead: ({ children }) => <thead className="bg-muted/60">{children}</thead>,
-  tbody: ({ children }) => <tbody>{children}</tbody>,
-  tr: ({ children }) => <tr className="border-b last:border-b-0 even:bg-muted/20">{children}</tr>,
-  // `style` carries the GFM column alignment (`:---:`) and, being inline,
-  // overrides `text-start` — so an explicitly aligned column stays aligned.
-  th: ({ children, style }) => (
-    <th
-      dir={leafDir(children)}
-      style={style}
-      className="border px-3 py-1.5 text-start align-top font-semibold"
-    >
-      {children}
-    </th>
-  ),
-  td: ({ children, style }) => (
-    <td dir={leafDir(children)} style={style} className="border px-3 py-1.5 text-start align-top">
-      {children}
-    </td>
-  ),
+    table: ({ children }) => <Table>{children}</Table>,
+    thead: ({ children }) => <thead className="bg-muted/60">{children}</thead>,
+    tbody: ({ children }) => <tbody>{children}</tbody>,
+    tr: ({ children }) => <tr className="border-b last:border-b-0 even:bg-muted/20">{children}</tr>,
+    // `style` carries the GFM column alignment (`:---:`) and, being inline,
+    // overrides `text-start` — so an explicitly aligned column stays aligned.
+    th: ({ children, style }) => (
+      <th
+        dir={leafDir(children)}
+        style={style}
+        className="border px-3 py-1.5 text-start align-top font-semibold"
+      >
+        {children}
+      </th>
+    ),
+    td: ({ children, style }) => (
+      <td dir={leafDir(children)} style={style} className="border px-3 py-1.5 text-start align-top">
+        {children}
+      </td>
+    ),
 
-  img: ({ src, alt }) => (
-    // eslint-disable-next-line @next/next/no-img-element -- arbitrary doc-authored URLs, not app assets
-    <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} className="my-3 max-w-full rounded-lg border" />
-  ),
+    img: ({ src, alt }) => (
+      // eslint-disable-next-line @next/next/no-img-element -- arbitrary doc-authored URLs, not app assets
+      <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} className="my-3 max-w-full rounded-lg border" />
+    ),
 
-  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-  del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
-  // GFM footnotes land in a <section class="footnotes"> at the end.
-  section: ({ children, className }) => (
-    <section
-      dir={boxDir(children)}
-      className={cn(className === "footnotes" && "mt-6 border-t pt-3 text-xs text-muted-foreground")}
-    >
-      {children}
-    </section>
-  ),
-};
+    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+    del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
+    // GFM footnotes land in a <section class="footnotes"> at the end.
+    section: ({ children, className }) => (
+      <section
+        dir={boxDir(children)}
+        className={cn(className === "footnotes" && "mt-6 border-t pt-3 text-xs text-muted-foreground")}
+      >
+        {children}
+      </section>
+    ),
+  };
+}
 
 const PLUGINS = [remarkGfm];
 
@@ -378,14 +459,35 @@ export interface MarkdownProps {
   className?: string;
   /**
    * Direction of the document shell. Defaults to the majority script of the
-   * content; individual blocks still self-align via `dir="auto"`.
+   * content; every block still resolves its own direction from its own text.
    */
-  dir?: "auto" | "rtl" | "ltr";
+  dir?: "rtl" | "ltr";
+  /**
+   * Absolute URL of the directory the document lives in, used to turn its
+   * relative cross-references (`./plan.md`) back into real deep links. Omit
+   * it and relative links render as plain text rather than as links that
+   * 404 against the app's own origin.
+   */
+  linkBase?: string;
 }
 
-export function Markdown({ children, className, dir }: MarkdownProps) {
+export function Markdown({ children, className, dir, linkBase }: MarkdownProps) {
+  const t = useTranslations("markdown");
   const text = children ?? "";
+
   const rootDir = useMemo(() => dir ?? majorityDir(text) ?? "ltr", [dir, text]);
+  const components = useMemo(
+    () =>
+      buildComponents(
+        {
+          anchor: (title: string) => t("anchor", { title }),
+          copyCode: t("copyCode"),
+          copied: t("copied"),
+        },
+        linkBase,
+      ),
+    [t, linkBase],
+  );
 
   if (!text.trim()) return null;
 
