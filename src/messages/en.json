@@ -4060,7 +4060,7 @@
       "other": "Other",
       "video_audio": "Video+audio"
     },
-    "modelsShelfNote": "The sweep is free — it reads only fal's catalog and schemas, never a billed endpoint. Ordered by pipeline stage: characters → voices → motion → motion driven by our audio → lip-sync.",
+    "modelsShelfNote": "Two tiers. **Shelf** = fal offers the model, and everything known about it comes from fal's catalog: kind, vendor, price. **Verified** = someone here opened the official spec, checked every input field, and wrote a recipe — when to use it, how to feed it, what breaks. The difference is not the model's quality but how much we know about it: a shelf model must not be relied on in a run, a verified one may be. Ordered by pipeline stage: characters → voices → motion → motion driven by our audio → lip-sync.",
     "modelsAudioDriving": "Accept our audio",
     "colAudio": "Our audio",
     "audioNone": "No audio input",
@@ -4105,7 +4105,8 @@
       "lipsync": "Lip-sync",
       "assembly": "Assembly",
       "market": "Distribution"
-    }
+    },
+    "shelfMeaningTitle": "Shelf versus verified"
   },
   "claudeRuns": {
     "title": "Claude runs",

@@ -345,7 +345,15 @@ export function StudioModels() {
         <StudioModelDetail endpointId={openModel} onClose={() => setOpenModel(null)} />
       )}
 
-      <p className="text-[11px] leading-relaxed text-muted-foreground">{t("modelsShelfNote")}</p>
+      {/* The two words the whole screen turns on, defined where they are used. */}
+      <details className="rounded-lg border bg-secondary/30 px-3 py-2">
+        <summary className="cursor-pointer text-[11.5px] font-semibold">
+          {t("shelfMeaningTitle")}
+        </summary>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          {t("modelsShelfNote").replace(/\*\*/g, "")}
+        </p>
+      </details>
 
       {data && data.returned < data.matched && (
         <p className="text-[11px] text-muted-foreground">
