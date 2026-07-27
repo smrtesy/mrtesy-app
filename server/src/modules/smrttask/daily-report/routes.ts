@@ -22,6 +22,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
@@ -110,7 +111,8 @@ router.get("/daily-report/config", async (req: Request, res: Response) => {
     .from("daily_report_options")
     .select("id, item_id, label, score, position")
     .eq("user_id", userId)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
   if (oErr) return res.status(500).json({ error: oErr.message });
 
   const byItem = new Map<string, unknown[]>();
@@ -142,11 +144,15 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
 
   // Existing active items — anything not present in the payload gets archived
   // (never hard-deleted, so past runs stay reconstructable).
-  const { data: existing } = await db
+  // A swallowed error here would be silently destructive: an empty existingIds
+  // makes every payload item look new, so the whole question set is re-inserted
+  // as duplicates while the originals are never archived.
+  const { data: existing, error: existingErr } = await db
     .from("daily_report_items")
     .select("id")
     .eq("user_id", userId)
     .eq("active", true);
+  if (existingErr) return res.status(500).json({ error: existingErr.message });
   const existingIds = new Set((existing ?? []).map((r) => r.id as string));
   const keptIds = new Set<string>();
 
@@ -177,28 +183,65 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
     }
     keptIds.add(itemId);
 
-    // Replace this item's options wholesale. Entries snapshot label+score, so
-    // deleting an option only nulls entries.option_id — history is preserved.
-    const { error: delErr } = await db
+    // Reconcile this item's options IN PLACE — update the ones the payload still
+    // carries an id for, insert the new ones, delete only what was removed.
+    //
+    // This used to delete every option and re-insert it, which nulled
+    // entries.option_id on ALL history (ON DELETE SET NULL) on every settings
+    // save. Entries do snapshot label + score, so the report stayed correct, but
+    // an answer that lost its option_id could no longer be pre-selected in the
+    // check-in, and anything testing option_id read the day as never filled.
+    const { data: existingOpts, error: exOptErr } = await db
       .from("daily_report_options")
-      .delete()
+      .select("id")
       .eq("user_id", userId)
       .eq("item_id", itemId);
-    if (delErr) return res.status(500).json({ error: delErr.message });
+    if (exOptErr) return res.status(500).json({ error: exOptErr.message });
+    const existingOptIds = new Set((existingOpts ?? []).map((r) => r.id as string));
+    const keptOptIds = new Set<string>();
 
+    // Every row gets an explicit id — a kept one keeps its own (so entries stay
+    // linked), a new one gets a fresh uuid — which lets the whole set go in a
+    // SINGLE upsert. Two statements per item instead of 1+N means a failure can't
+    // leave the item holding both the removed and the new options (which would
+    // render duplicate answer buttons and double-count in the report).
+    // A repeated id is treated as a NEW row: passing the same id twice in one
+    // upsert is a Postgres error ("cannot affect row a second time").
     const rows = opts
-      .map((o, j) => ({
-        item_id: itemId as string,
-        user_id: userId,
-        org_id: orgId,
-        label: clampLabel(o.label),
-        score: parseScore(o.score),
-        position: j,
-      }))
-      .filter((r) => r.label);
+      .map((o) => ({ id: typeof o.id === "string" ? o.id : null, label: clampLabel(o.label), score: parseScore(o.score) }))
+      .filter((r) => r.label)
+      .map((r, j) => {
+        const reuse = r.id && existingOptIds.has(r.id) && !keptOptIds.has(r.id) ? r.id : null;
+        if (reuse) keptOptIds.add(reuse);
+        return {
+          id: reuse ?? randomUUID(),
+          item_id: itemId as string,
+          user_id: userId,
+          org_id: orgId,
+          label: r.label,
+          score: r.score,
+          position: j,
+        };
+      });
+
     if (rows.length) {
-      const { error: insErr } = await db.from("daily_report_options").insert(rows);
-      if (insErr) return res.status(500).json({ error: insErr.message });
+      const { error: upErr } = await db
+        .from("daily_report_options")
+        .upsert(rows, { onConflict: "id" });
+      if (upErr) return res.status(500).json({ error: upErr.message });
+    }
+
+    // Only options the user actually removed get deleted (their entries keep the
+    // label + score snapshot and simply lose the pointer).
+    const staleOptIds = [...existingOptIds].filter((id) => !keptOptIds.has(id));
+    if (staleOptIds.length) {
+      const { error: delErr } = await db
+        .from("daily_report_options")
+        .delete()
+        .eq("user_id", userId)
+        .eq("item_id", itemId)
+        .in("id", staleOptIds);
+      if (delErr) return res.status(500).json({ error: delErr.message });
     }
   }
 
@@ -230,11 +273,15 @@ async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsBy
     .eq("user_id", userId)
     .eq("active", true)
     .order("position", { ascending: true });
+  // created_at is the tie-break so two options sharing a position resolve in a
+  // stable order — the label fallback below and the repair migration must agree
+  // on WHICH option a duplicate label maps to.
   const { data: options, error: optsErr } = await db
     .from("daily_report_options")
     .select("id, item_id, label, score, position")
     .eq("user_id", userId)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
   const err = itemsErr?.message ?? optsErr?.message ?? null;
   const optsByItem = new Map<string, OptionLite[]>();
   for (const o of (options as OptionLite[] | null) ?? []) {
@@ -280,27 +327,40 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
   const sec = dueSections(items, fillDate);
   const entryDates = [sec.end.entry_date, sec.start.entry_date];
 
-  // Saved answers for the two entry-dates this fill covers.
+  // Saved answers for the two entry-dates this fill covers. option_label comes
+  // along because option_id is NOT a reliable handle on the answer: editing the
+  // question set replaces the option rows, and the FK nulls option_id on every
+  // historical entry (ON DELETE SET NULL). The label snapshot is the durable
+  // record, so we fall back to it to re-select the answer.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id, option_id, option_label")
     .eq("user_id", userId)
     .in("entry_date", entryDates);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
-  const savedByKey = new Map<string, string | null>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    savedByKey.set(`${e.entry_date}:${e.item_id}`, e.option_id);
+  type SavedEntry = { option_id: string | null; option_label: string };
+  const savedByKey = new Map<string, SavedEntry>();
+  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null; option_label: string }[] | null) ?? []) {
+    savedByKey.set(`${e.entry_date}:${e.item_id}`, { option_id: e.option_id, option_label: e.option_label });
   }
 
   const buildSection = (segment: "end" | "start", entry_date: string, secItems: ActiveItem[]) => ({
     segment,
     entry_date,
-    items: secItems.map((it) => ({
-      id: it.id,
-      label: it.label,
-      options: (optsByItem.get(it.id) ?? []).map((o) => ({ id: o.id, label: o.label, score: o.score })),
-      selected_option_id: savedByKey.get(`${entry_date}:${it.id}`) ?? null,
-    })),
+    items: secItems.map((it) => {
+      const opts = optsByItem.get(it.id) ?? [];
+      const saved = savedByKey.get(`${entry_date}:${it.id}`);
+      // Prefer the live id; if it was nulled by an option rewrite, re-resolve by
+      // the snapshotted label so the user's own answer is still pre-selected.
+      const selected =
+        saved?.option_id ?? (saved ? opts.find((o) => o.label === saved.option_label)?.id ?? null : null);
+      return {
+        id: it.id,
+        label: it.label,
+        options: opts.map((o) => ({ id: o.id, label: o.label, score: o.score })),
+        selected_option_id: selected,
+      };
+    }),
   });
 
   const sections = [
@@ -309,8 +369,10 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
   ].filter((s) => s.items.length > 0);
 
   const totalDue = sec.end.items.length + sec.start.items.length;
-  const answered = sections.reduce(
-    (n, s) => n + s.items.filter((i) => i.selected_option_id).length,
+  // An answer counts as given when its entry row exists — same rule /pending and
+  // /days use, so a day never reads "filled" in one place and "missed" in another.
+  const answered = [sec.end, sec.start].reduce(
+    (n, s) => n + s.items.filter((it) => savedByKey.has(`${s.entry_date}:${it.id}`)).length,
     0,
   );
   const done = totalDue === 0 || answered >= totalDue;
@@ -399,16 +461,23 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
   const floor = addDays(today, -(MISSED_LOOKBACK_DAYS - 1));
 
   // All answers in the covered range (floor−1 .. today), one query.
+  //
+  // The existence of the ROW is what makes a question answered — never
+  // `option_id != null`. Saving the question editor deletes and recreates the
+  // option rows, and the FK nulls option_id on every historical entry
+  // (ON DELETE SET NULL, by design: label + score are snapshotted on the entry).
+  // Testing option_id made every day before the last settings save look
+  // untouched, which collapsed earliestEngaged to today and hid every missed day.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id")
     .eq("user_id", userId)
     .gte("entry_date", addDays(floor, -1))
     .lte("entry_date", today);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
   const answeredSet = new Set<string>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    if (e.option_id) answeredSet.add(`${e.entry_date}:${e.item_id}`);
+  for (const e of (entries as { entry_date: string; item_id: string }[] | null) ?? []) {
+    answeredSet.add(`${e.entry_date}:${e.item_id}`);
   }
 
   // Enumerate fill-days floor..today (newest first) with their due/answered counts.
@@ -464,17 +533,18 @@ router.get("/daily-report/days", async (req: Request, res: Response) => {
   const floor = addDays(today, -(limit - 1));
 
   // One query for every answer the enumerated fill-days could touch (an 'end'
-  // answer of the oldest fill-day lands on floor−1).
+  // answer of the oldest fill-day lands on floor−1). Row existence = answered,
+  // for the same reason spelled out in /pending — option_id is not durable.
   const { data: entries, error: entriesErr } = await db
     .from("daily_report_entries")
-    .select("entry_date, item_id, option_id")
+    .select("entry_date, item_id")
     .eq("user_id", userId)
     .gte("entry_date", addDays(floor, -1))
     .lte("entry_date", today);
   if (entriesErr) return res.status(500).json({ error: entriesErr.message });
   const answeredSet = new Set<string>();
-  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
-    if (e.option_id) answeredSet.add(`${e.entry_date}:${e.item_id}`);
+  for (const e of (entries as { entry_date: string; item_id: string }[] | null) ?? []) {
+    answeredSet.add(`${e.entry_date}:${e.item_id}`);
   }
 
   type Row = { fill_date: string; total_due: number; answered: number; complete: boolean; is_today: boolean };
