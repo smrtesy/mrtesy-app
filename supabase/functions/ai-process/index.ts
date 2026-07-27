@@ -1290,8 +1290,11 @@ ${renderInfoProfile(infoProfile)}`;
   // (only when not already on the override) and no-ops when the escalation
   // model equals the model we just used. callClaude logs both calls to the
   // ai_usage ledger, so escalation cost is captured automatically.
+  // The haystack includes the thread memory + linked title the model also saw:
+  // wording that legitimately entered the summary on an earlier message must
+  // not re-trigger a paid escalation on every follow-up in the same thread.
   const sensitiveWording = summaryAssertsCommitmentOrFailure(parsed)
-    && !SENSITIVE_WORDING_RE.test(`${msg.subject || ""}\n${bodyForClassify(msg, sys.body_truncate_classify)}`);
+    && !SENSITIVE_WORDING_RE.test(`${msg.subject || ""}\n${memory?.summary ?? ""}\n${linkedTitle ?? ""}\n${bodyForClassify(msg, sys.body_truncate_classify)}`);
   if (
     !modelOverride &&
     sys.escalation_model &&
