@@ -1867,7 +1867,13 @@
     "slugPlaceholder": "e.g. crm",
     "namePlaceholder": "e.g. CRM",
     "appParametersTitle": "System Parameters",
-    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits"
+    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits",
+    "docsRendered": "Rendered view",
+    "docsSource": "Markdown source",
+    "docsDownload": "Download .md",
+    "docsCreated": "Created",
+    "docsUpdated": "Updated",
+    "docsEmpty": "No documents."
   },
   "adminParameters": {
     "title": "System Parameters",
@@ -4181,7 +4187,9 @@
       "updatedAt": "Updated {when}",
       "never": "No instructions saved yet",
       "repoCopy": "Repo copy",
-      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately."
+      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately.",
+      "edit": "Edit source",
+      "preview": "Rendered view"
     },
     "github": {
       "pick": "Pick a repo",
@@ -4193,5 +4201,10 @@
       "branchPlaceholder": "Branch",
       "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
+  },
+  "markdown": {
+    "anchor": "Link to section {title}",
+    "copyCode": "Copy code",
+    "copied": "Copied"
   }
 }

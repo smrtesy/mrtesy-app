@@ -442,6 +442,18 @@ function stripLoneSurrogates(s: string): string {
 // The cached prefix must be byte-identical across calls to hit, so anything
 // volatile (current time, thread memory, message body) must live in the user
 // message, never here.
+//
+// MINIMUM CACHEABLE PREFIX — check this before wrapping a new prompt. A
+// cache_control block shorter than the model's minimum is silently IGNORED:
+// Anthropic bills every token at full price and reports zero cache reads and
+// zero writes, so the code *reads* as cached while nothing ever is. Haiku 4.5
+// needs 4096 tokens; Sonnet 4.6 and Opus need 1024. Six call sites here
+// (wa_route, checkFollowup, cross_link x2, dupe_match, material_change) wrapped
+// 266-801-token prompts on the Haiku classification_model and so never cached
+// once across ~2700 calls/30d; they now pass their prompt as a plain string.
+// Padding a prompt up to 4096 just to make it cacheable is a LOSS, not a win —
+// the 1h write alone costs 2x input — so a short prompt on Haiku is correctly
+// left uncached. Only classify (~5k) and task clear the bar. Keep it that way.
 function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
 }
@@ -1597,7 +1609,7 @@ Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that ma
 An [open] matter is the right home ONLY when the latest message is about the SAME specific topic/action that matter tracks — the same question, deal, document, payment, or event. A shared chat is NOT a shared matter: if the latest message raises a clearly DIFFERENT topic, return NEW even though the same contact has an open matter. Do not staple an unrelated new message onto an old suggestion just because they share a chat (the recurring "חיבר להצעה ישנה שלא קשורה להודעות החדשות" bug).
 Judge by the LAST message in the transcript. When the latest message is genuinely the next turn of an [open] matter, pick it; when it is a different topic, prefer NEW; when the only fit is a [DONE/closed], [SNOOZED], or [DISMISSED] matter, prefer NEW unless it unmistakably continues that exact matter.`;
   const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
-  const result = await callClaude(sys.classification_model, cachedSystem(system), user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
@@ -1976,7 +1988,7 @@ When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
 
 Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
-  const result = await callClaude(model, cachedSystem(system), `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -2358,7 +2370,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `EMAIL:\nSubject: ${msg.subject || ""}\nBody:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ OPEN TASKS (last 90 days) ═══\n${taskList}`;
 
-    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2399,7 +2411,7 @@ async function checkCrossSourceLink(
 
     const userMessage = `DRIVE DOCUMENT:\nTitle: ${msg.subject || ""}\nContent:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ PAST CONFIRMATION EMAILS (last 90 days) ═══\n${emailList}`;
 
-    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
@@ -2887,7 +2899,7 @@ async function findDuplicateOpenTask(
 
   const userMessage = `NEW ITEM (about to become a task):\nTitle: ${probe.title}\nDate: ${probe.dueDate || "—"}\nContact emails: ${[...probe.emails].join(", ") || "—"}\nContact phones: ${[...probe.phones].join(", ") || "—"}\nBody:\n${probe.description.substring(0, 900)}\n\n═══ OPEN TASK CANDIDATES ═══\n${candList}`;
 
-  const result = await callClaude(sys.classification_model, cachedSystem(DUPE_MATCH_PROMPT), userMessage, 300,
+  const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
     { component: "ai_process.dupe_match", userId, refId });
 
   try {
@@ -3001,7 +3013,7 @@ async function detectMaterialChanges(
     const userMessage =
       `EXISTING TASK:\nTitle: ${existing.title_he || "—"}\nDescription: ${String(existing.description || "—").slice(0, 1200)}\nCurrent due_date: ${existing.due_date || "—"}\n\n` +
       `NEW RELATED DOCUMENT:\n${msgBody.slice(0, 3000)}`;
-    const result = await callClaude(sys.classification_model, cachedSystem(MATERIAL_CHANGE_PROMPT), userMessage, 500,
+    const result = await callClaude(sys.classification_model, MATERIAL_CHANGE_PROMPT, userMessage, 500,
       { component: "ai_process.material_change", userId, refId });
     const m = result.text.match(/\{[\s\S]*\}/);
     if (!m) return null;
