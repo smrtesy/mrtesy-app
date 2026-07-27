@@ -104,6 +104,18 @@ export type StudioModel = {
   recipe_path: string;
   flags: string[];
   source_url: string;
+  /** null = no audio input at all. Otherwise the ROLE our audio plays:
+   *  driving = drives lips/motion (what the series needs) · reference = guides
+   *  generation, sync unproven · mux = pasted onto the output, lips do NOT sync. */
+  audio_input: "driving" | "reference" | "mux" | null;
+  audio_field: string | null;
+  /** fal's own wording for that field — the evidence behind the role. */
+  audio_note: string | null;
+  audio_probed: boolean;
+  fal_category: string;
+  stage_slug: string | null;
+  stage_order: number;
+  indexed_at: string | null;
 };
 
 export type ModelsResponse = {
@@ -112,8 +124,14 @@ export type ModelsResponse = {
   returned: number;
   limit: number;
   counts: Record<string, number>;
+  /** Exact catalog size for the org. `tallied` is how many rows the count
+   *  breakdown below was computed from — smaller than `total` only if the page
+   *  was capped, which is why both are reported rather than one. */
   total: number;
+  tallied: number;
   verified_total: number;
+  audio_counts: Record<string, number>;
+  audio_probed_total: number;
 };
 
 export type InvestmentRow = {
