@@ -6,6 +6,8 @@
  *   GET  /daily-report/checkin?fillDate=  the two-section check-in for a fill date
  *   PUT  /daily-report/checkin          save answers (each carries its own entry_date)
  *   GET  /daily-report/pending         incomplete fill-dates in the recent window
+ *   GET  /daily-report/days?limit=     recent fill-dates with their fill status
+ *                                      (all of them — powers editing a past day)
  *   POST /daily-report/generate        generate + deliver a report now → { report }
  *   GET  /daily-report/preview?period= compute a report without delivering
  *   GET  /daily-report/runs            recent generated reports
@@ -41,6 +43,8 @@ const MAX_LABEL = 200;
 const MAX_ITEMS = 100;
 const MAX_OPTIONS = 40;
 const MISSED_LOOKBACK_DAYS = 14; // how far back incomplete fill-days surface
+const EDIT_WINDOW_DAYS = 60;     // how far back a past fill-day may be edited
+const DEFAULT_DAYS_LIMIT = 14;   // default span of GET /daily-report/days
 
 /** The caller's display timezone (defaults to New York). */
 async function userTz(userId: string): Promise<string> {
@@ -79,6 +83,15 @@ function parseWeekdays(v: unknown): number[] | null {
 function appliesOn(weekdays: number[] | null, ymd: string): boolean {
   if (!weekdays || weekdays.length === 0) return true;
   return weekdays.includes(weekdayNum(ymd));
+}
+/** Oldest fill-day that may still be opened/edited (inclusive). */
+function oldestFillDate(today: string): string {
+  return addDays(today, -(EDIT_WINDOW_DAYS - 1));
+}
+/** Oldest entry_date a save may touch: the 'end' section of the oldest fill-day
+ *  belongs to the day BEFORE it, so the entry window is one day wider. */
+function oldestEntryDate(today: string): string {
+  return addDays(today, -EDIT_WINDOW_DAYS);
 }
 
 // ── config (questions + options + segment + weekdays) ────────────────────────
@@ -251,9 +264,16 @@ function dueSections(items: ActiveItem[], fillDate: string): {
 router.get("/daily-report/checkin", async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const tz = await userTz(userId);
+  const today = ymdInTz(new Date(), tz);
   const fillDate = typeof req.query.fillDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.fillDate)
     ? req.query.fillDate
-    : ymdInTz(new Date(), tz);
+    : today;
+  // A past day may be opened for editing, but only inside the edit window (and
+  // never a future day) — the same bounds PUT enforces, so the check-in screen
+  // can never offer a day whose save would be rejected.
+  if (fillDate > today || fillDate < oldestFillDate(today)) {
+    return res.status(400).json({ error: "fillDate outside the edit window" });
+  }
 
   const { items, optsByItem, error: loadErr } = await loadActive(userId);
   if (loadErr) return res.status(500).json({ error: loadErr });
@@ -303,20 +323,36 @@ interface AnswerInput { item_id: string; option_id: string; entry_date: string }
 router.put("/daily-report/checkin", async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const orgId = req.org!.id;
+  const tz = await userTz(userId);
+  const today = ymdInTz(new Date(), tz);
+  const oldest = oldestEntryDate(today);
   const answers = Array.isArray(req.body?.answers) ? (req.body.answers as AnswerInput[]) : [];
+
+  // Bounds-check every date BEFORE writing anything, so one bad date can't leave
+  // a half-written batch. A past day is editable inside the window; the future
+  // never is (its answers would silently pre-fill days that haven't happened).
+  for (const a of answers) {
+    if (typeof a.entry_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(a.entry_date)) continue;
+    if (a.entry_date > today) return res.status(400).json({ error: "entry_date in the future" });
+    if (a.entry_date < oldest) return res.status(400).json({ error: "entry_date outside the edit window" });
+  }
 
   for (const a of answers) {
     if (typeof a.item_id !== "string" || typeof a.option_id !== "string") continue;
     if (typeof a.entry_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(a.entry_date)) continue;
     // Resolve the chosen option (must belong to the caller + item) to snapshot
     // its label + score at answer time.
-    const { data: opt } = await db
+    const { data: opt, error: optErr } = await db
       .from("daily_report_options")
       .select("label, score")
       .eq("user_id", userId)
       .eq("item_id", a.item_id)
       .eq("id", a.option_id)
       .maybeSingle();
+    // A DB failure here must not be mistaken for "option not found" — silently
+    // dropping the answer would still return ok:true and the client would toast
+    // success for an answer that was never stored.
+    if (optErr) return res.status(500).json({ error: optErr.message });
     if (!opt) continue;
 
     const { error } = await db
@@ -394,6 +430,74 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
   }
 
   // Keep today (if pending) + any incomplete day at/after the first engaged day.
+  const days = rows.filter((r) => r.is_today || (earliestEngaged != null && r.fill_date >= earliestEngaged));
+
+  res.json({ today, days });
+});
+
+/**
+ * Recent fill-days with their fill status, newest first — the list behind
+ * "עריכת ימים קודמים". Unlike /pending this returns FILLED days too — that's the
+ * point: reopening a finished day to change an answer. Days on which nothing was
+ * ever due (weekday-restricted questions only) are skipped, and days older than
+ * the earliest one the user actually engaged with are dropped the same way
+ * /pending drops them: due counts come from the CURRENTLY active questions, so
+ * every day before the tool was used would otherwise list as "0/N" and invite
+ * back-filling days those questions never existed on. Today always stays.
+ *
+ * `limit` = how many days back to enumerate, capped at the edit window, so every
+ * day returned is one PUT /checkin will accept.
+ */
+router.get("/daily-report/days", async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const tz = await userTz(userId);
+  const today = ymdInTz(new Date(), tz);
+  const rawLimit = Number(req.query.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(Math.trunc(rawLimit), EDIT_WINDOW_DAYS)
+    : DEFAULT_DAYS_LIMIT;
+
+  const { items, error: loadErr } = await loadActive(userId);
+  if (loadErr) return res.status(500).json({ error: loadErr });
+  if (items.length === 0) return res.json({ today, days: [] });
+
+  const floor = addDays(today, -(limit - 1));
+
+  // One query for every answer the enumerated fill-days could touch (an 'end'
+  // answer of the oldest fill-day lands on floor−1).
+  const { data: entries, error: entriesErr } = await db
+    .from("daily_report_entries")
+    .select("entry_date, item_id, option_id")
+    .eq("user_id", userId)
+    .gte("entry_date", addDays(floor, -1))
+    .lte("entry_date", today);
+  if (entriesErr) return res.status(500).json({ error: entriesErr.message });
+  const answeredSet = new Set<string>();
+  for (const e of (entries as { entry_date: string; item_id: string; option_id: string | null }[] | null) ?? []) {
+    if (e.option_id) answeredSet.add(`${e.entry_date}:${e.item_id}`);
+  }
+
+  type Row = { fill_date: string; total_due: number; answered: number; complete: boolean; is_today: boolean };
+  const rows: Row[] = [];
+  let earliestEngaged: string | null = null; // oldest enumerated fill-day with any answer
+  for (let F = today; F >= floor; F = addDays(F, -1)) {
+    const sec = dueSections(items, F);
+    const due = [
+      ...sec.end.items.map((it) => ({ entry_date: sec.end.entry_date, id: it.id })),
+      ...sec.start.items.map((it) => ({ entry_date: sec.start.entry_date, id: it.id })),
+    ];
+    if (due.length === 0) continue;
+    const answered = due.filter((d) => answeredSet.has(`${d.entry_date}:${d.id}`)).length;
+    if (answered > 0) earliestEngaged = F; // keeps moving back as we go older
+    rows.push({
+      fill_date: F,
+      total_due: due.length,
+      answered,
+      complete: answered >= due.length,
+      is_today: F === today,
+    });
+  }
+
   const days = rows.filter((r) => r.is_today || (earliestEngaged != null && r.fill_date >= earliestEngaged));
 
   res.json({ today, days });
