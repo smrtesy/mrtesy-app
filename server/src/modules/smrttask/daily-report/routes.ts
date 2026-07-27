@@ -50,11 +50,14 @@ const DEFAULT_DAYS_LIMIT = 14;   // default span of GET /daily-report/days
 
 /** The caller's display timezone (defaults to New York). */
 async function userTz(userId: string): Promise<string> {
-  const { data } = await db
+  const { data, error } = await db
     .from("user_settings")
     .select("timezone")
     .eq("user_id", userId)
     .maybeSingle();
+  // A transient failure silently falls back to New York. Not fatal (both sides of
+  // every date comparison use the same tz), but it must not be invisible.
+  if (error) console.warn("[daily-report] timezone lookup failed:", error.message);
   const tz = (data?.timezone as string | null)?.trim();
   return tz || DEFAULT_TZ;
 }
@@ -298,30 +301,42 @@ async function loadActive(userId: string, tz: string): Promise<{ items: ActiveIt
     optsByItem.set(o.item_id, arr);
   }
   const list = ((items as { id: string; label: string; segment: string | null; weekdays: number[] | null; created_at: string }[] | null) ?? [])
-    .map((it) => ({
-      id: it.id,
-      label: it.label,
-      segment: it.segment ?? "start",
-      weekdays: it.weekdays ?? null,
-      created_ymd: ymdInTz(new Date(it.created_at), tz),
-    }));
+    .map((it) => {
+      // created_at is NOT NULL in the schema, but Intl.DateTimeFormat THROWS on
+      // an invalid date and Express 4 does not route an async throw to the error
+      // middleware — the request would hang instead of 500ing. Fall back to the
+      // epoch, i.e. "always due", which is the safe direction.
+      const created = it.created_at ? new Date(it.created_at) : null;
+      return {
+        id: it.id,
+        label: it.label,
+        segment: it.segment ?? "start",
+        weekdays: it.weekdays ?? null,
+        created_ymd: created && !Number.isNaN(created.getTime()) ? ymdInTz(created, tz) : "1970-01-01",
+      };
+    });
   return { items: list, optsByItem, error: err };
 }
 
 /**
- * Is a question due on a calendar date? Two gates:
- *  • its weekday restriction, and
- *  • the date is not BEFORE the question was created.
+ * Could this question have been asked on a given FILL-DAY? A question is not due
+ * on a fill-day earlier than the day it was created.
  *
- * The second gate matters because "due" is computed from the question set as it
- * stands NOW, against historical days. Without it, adding a question makes every
- * past day retroactively incomplete — the day gets pinned as "missed" for a
- * question that did not exist then, and the user cannot possibly clear it
- * (real case, 2026-07-27: one question added that morning re-opened four days
- * the user had actually filled).
+ * This gate exists because "due" is computed from the question set as it stands
+ * NOW, against historical days. Without it, adding a question makes every past
+ * day retroactively incomplete — the day pins as "missed" for a question that
+ * did not exist then, and the user cannot possibly clear it (real case,
+ * 2026-07-27: one question added that morning re-opened four days the user had
+ * actually filled).
+ *
+ * The gate is on the FILL-DAY, not on the answer's entry_date. An 'end' question
+ * stores entry_date = fillDate−1, so gating on entry_date would delay a new
+ * question's first appearance by a day — and on setup day it would leave a
+ * question set made only of 'end' questions with NOTHING due, which reads as
+ * "no questions configured" and makes the tool look broken on day one.
  */
-function dueOn(item: ActiveItem, ymd: string): boolean {
-  return ymd >= item.created_ymd && appliesOn(item.weekdays, ymd);
+function dueOnFillDay(item: ActiveItem, fillDate: string, belongsTo: string): boolean {
+  return fillDate >= item.created_ymd && appliesOn(item.weekdays, belongsTo);
 }
 
 /** The items due for a given fill date, split into the two sections. */
@@ -330,8 +345,8 @@ function dueSections(items: ActiveItem[], fillDate: string): {
   start: { entry_date: string; items: ActiveItem[] };
 } {
   const yesterday = addDays(fillDate, -1);
-  const end = items.filter((it) => it.segment === "end" && dueOn(it, yesterday));
-  const start = items.filter((it) => it.segment === "start" && dueOn(it, fillDate));
+  const end = items.filter((it) => it.segment === "end" && dueOnFillDay(it, fillDate, yesterday));
+  const start = items.filter((it) => it.segment === "start" && dueOnFillDay(it, fillDate, fillDate));
   return {
     end: { entry_date: yesterday, items: end },
     start: { entry_date: fillDate, items: start },
