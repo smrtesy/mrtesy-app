@@ -22,6 +22,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
@@ -110,7 +111,8 @@ router.get("/daily-report/config", async (req: Request, res: Response) => {
     .from("daily_report_options")
     .select("id, item_id, label, score, position")
     .eq("user_id", userId)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
   if (oErr) return res.status(500).json({ error: oErr.message });
 
   const byItem = new Map<string, unknown[]>();
@@ -142,11 +144,15 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
 
   // Existing active items — anything not present in the payload gets archived
   // (never hard-deleted, so past runs stay reconstructable).
-  const { data: existing } = await db
+  // A swallowed error here would be silently destructive: an empty existingIds
+  // makes every payload item look new, so the whole question set is re-inserted
+  // as duplicates while the originals are never archived.
+  const { data: existing, error: existingErr } = await db
     .from("daily_report_items")
     .select("id")
     .eq("user_id", userId)
     .eq("active", true);
+  if (existingErr) return res.status(500).json({ error: existingErr.message });
   const existingIds = new Set((existing ?? []).map((r) => r.id as string));
   const keptIds = new Set<string>();
 
@@ -194,36 +200,35 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
     const existingOptIds = new Set((existingOpts ?? []).map((r) => r.id as string));
     const keptOptIds = new Set<string>();
 
-    const incoming = opts
-      .map((o, j) => ({
-        id: typeof o.id === "string" && existingOptIds.has(o.id) ? o.id : null,
-        label: clampLabel(o.label),
-        score: parseScore(o.score),
-        position: j,
-      }))
-      .filter((r) => r.label);
-
-    for (const o of incoming) {
-      if (o.id) {
-        const { error } = await db
-          .from("daily_report_options")
-          .update({ label: o.label, score: o.score, position: o.position })
-          .eq("user_id", userId)
-          .eq("item_id", itemId)
-          .eq("id", o.id);
-        if (error) return res.status(500).json({ error: error.message });
-        keptOptIds.add(o.id);
-      } else {
-        const { error } = await db.from("daily_report_options").insert({
+    // Every row gets an explicit id — a kept one keeps its own (so entries stay
+    // linked), a new one gets a fresh uuid — which lets the whole set go in a
+    // SINGLE upsert. Two statements per item instead of 1+N means a failure can't
+    // leave the item holding both the removed and the new options (which would
+    // render duplicate answer buttons and double-count in the report).
+    // A repeated id is treated as a NEW row: passing the same id twice in one
+    // upsert is a Postgres error ("cannot affect row a second time").
+    const rows = opts
+      .map((o) => ({ id: typeof o.id === "string" ? o.id : null, label: clampLabel(o.label), score: parseScore(o.score) }))
+      .filter((r) => r.label)
+      .map((r, j) => {
+        const reuse = r.id && existingOptIds.has(r.id) && !keptOptIds.has(r.id) ? r.id : null;
+        if (reuse) keptOptIds.add(reuse);
+        return {
+          id: reuse ?? randomUUID(),
           item_id: itemId as string,
           user_id: userId,
           org_id: orgId,
-          label: o.label,
-          score: o.score,
-          position: o.position,
-        });
-        if (error) return res.status(500).json({ error: error.message });
-      }
+          label: r.label,
+          score: r.score,
+          position: j,
+        };
+      });
+
+    if (rows.length) {
+      const { error: upErr } = await db
+        .from("daily_report_options")
+        .upsert(rows, { onConflict: "id" });
+      if (upErr) return res.status(500).json({ error: upErr.message });
     }
 
     // Only options the user actually removed get deleted (their entries keep the
@@ -268,11 +273,15 @@ async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsBy
     .eq("user_id", userId)
     .eq("active", true)
     .order("position", { ascending: true });
+  // created_at is the tie-break so two options sharing a position resolve in a
+  // stable order — the label fallback below and the repair migration must agree
+  // on WHICH option a duplicate label maps to.
   const { data: options, error: optsErr } = await db
     .from("daily_report_options")
     .select("id, item_id, label, score, position")
     .eq("user_id", userId)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
   const err = itemsErr?.message ?? optsErr?.message ?? null;
   const optsByItem = new Map<string, OptionLite[]>();
   for (const o of (options as OptionLite[] | null) ?? []) {
