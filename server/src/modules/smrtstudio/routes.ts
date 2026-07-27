@@ -441,6 +441,21 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     if (error) return res.status(500).json({ error: `refresh failed: ${error.message}` });
   }
 
+  // Pass 1 rebuilt `kind` from fal's category, which UNDOES what pass 2 decided
+  // on an earlier sweep: an endpoint filed by fal as `image-to-video` but probed
+  // as audio-driven goes back to plain `video`, and pass 2 then skips it because
+  // it is already probed. The result was a `video_audio` count that shrank every
+  // time the sweep ran. Re-assert the probe's verdict for shelf rows before pass
+  // 2 begins — the probe is the stronger evidence, and this is self-healing.
+  const { error: reassertErr } = await db
+    .from("studio_models")
+    .update({ kind: "video_audio", stage_slug: "motion", stage_order: 7 })
+    .eq("org_id", orgId)
+    .eq("verified_schema", false)
+    .eq("audio_input", "driving")
+    .neq("kind", "video_audio");
+  if (reassertErr) return res.status(500).json({ error: `re-assert failed: ${reassertErr.message}` });
+
   // ── pass 2: the audio probe ──
   const videoModels = catalog.models.filter((m) => isVideoCategory(m.fal_category));
   const videoIds = videoModels.map((m) => m.endpoint_id);

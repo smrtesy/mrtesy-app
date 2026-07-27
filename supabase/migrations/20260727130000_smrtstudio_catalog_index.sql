@@ -116,3 +116,15 @@ update public.studio_models
      'fal-ai/bytedance/omnihuman/v1.5',
      'veed/lipsync/v2'
    );
+
+-- Pass 1 of the sweep rebuilds `kind` from fal's category, which reverted what
+-- the audio probe had decided on an earlier sweep: an endpoint fal files as
+-- image-to-video but which we probed as audio-driven went back to plain `video`,
+-- and pass 2 skipped it because it was already probed. So the video+audio count
+-- shrank on every re-run. The route now re-asserts the probe's verdict before
+-- pass 2; this repairs the rows the earlier runs reverted.
+update public.studio_models
+   set kind = 'video_audio', stage_slug = 'motion', stage_order = 7
+ where verified_schema = false
+   and audio_input = 'driving'
+   and kind <> 'video_audio';
