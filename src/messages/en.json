@@ -1159,6 +1159,11 @@
     "editPastTitle": "Edit previous days",
     "editPastNote": "Pick a day to edit its answers. An already-generated report does not change — generate it again to refresh it.",
     "editPastEmpty": "No days to edit.",
+    "dismissDay": "Hide this day",
+    "restoreDay": "Restore this day",
+    "dayDismissed": "Hidden",
+    "dayDismissedToast": "Day hidden — you can restore it here any time",
+    "dayRestoredToast": "Day restored",
     "dayComplete": "Complete",
     "dayProgress": "{answered}/{total} answered",
     "dayIsToday": "{date} · today"

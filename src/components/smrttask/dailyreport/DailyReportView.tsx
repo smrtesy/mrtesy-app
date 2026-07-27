@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { CalendarDays, Check, Loader2, Play, RefreshCw, X } from "lucide-react";
+import { CalendarDays, Check, EyeOff, Loader2, Play, RefreshCw, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api/client";
 import { useDayTool } from "@/hooks/useDayTools";
 import { dayLabel, rangeLabel } from "@/lib/smrttask/dailyreport-dates";
@@ -121,6 +122,8 @@ export function DailyReportView() {
   const [days, setDays] = useState<ReportDay[]>([]);
   const [daysLoading, setDaysLoading] = useState(false);
   const [editDate, setEditDate] = useState<string | null>(null);
+  /** fill_date currently being dismissed/restored (disables just that row). */
+  const [skipping, setSkipping] = useState<string | null>(null);
 
   /** `silent` refreshes without swapping the whole view for the spinner (used
    *  after a past-day edit, so the expanded day list doesn't flicker away). */
@@ -164,6 +167,23 @@ export function DailyReportView() {
     setDaysOpen(true);
     loadDays();
   }, [daysOpen, loadDays]);
+
+  /** Dismiss a missed day (it stops pinning to the task list) or restore it.
+   *  Answers are never touched — the day stays open for editing either way. */
+  const toggleSkip = useCallback(async (fillDate: string, skip: boolean) => {
+    setSkipping(fillDate);
+    // Optimistic: the row's badge flips immediately, and loadDays reconciles.
+    setDays((prev) => prev.map((d) => (d.fill_date === fillDate ? { ...d, skipped: skip } : d)));
+    try {
+      await api("/api/daily-report/skip", { method: "POST", body: { fill_date: fillDate, skipped: skip } });
+      toast.success(skip ? t("dayDismissedToast") : t("dayRestoredToast"));
+    } catch {
+      toast.error(t("saveError"));
+    } finally {
+      setSkipping(null);
+      loadDays();
+    }
+  }, [t, loadDays]);
 
   /** After editing a past day: refresh the day list AND the preview (an edited
    *  day inside the current period changes the tallies). */
@@ -259,26 +279,55 @@ export function DailyReportView() {
               ) : (
                 <div className="max-h-64 space-y-1 overflow-y-auto">
                   {days.map((d) => (
-                    <button
+                    // Row = the day (opens the check-in) + a dismiss/restore
+                    // toggle. Two separate buttons, never nested.
+                    <div
                       key={d.fill_date}
-                      type="button"
-                      onClick={() => setEditDate(d.fill_date)}
-                      className="flex w-full items-center justify-between gap-2 rounded-md border bg-background px-2.5 py-1.5 text-start text-xs transition-colors hover:bg-accent"
+                      className="flex items-center gap-1 rounded-md border bg-background ps-2.5 pe-1"
                     >
-                      <span className="truncate" dir="auto">
-                        {d.is_today ? t("dayIsToday", { date: dayLabel(d.fill_date) }) : dayLabel(d.fill_date)}
-                      </span>
-                      {d.complete ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-status-ok">
-                          <Check className="h-3 w-3" />
-                          {t("dayComplete")}
+                      <button
+                        type="button"
+                        onClick={() => setEditDate(d.fill_date)}
+                        className="flex flex-1 items-center justify-between gap-2 py-1.5 text-start text-xs"
+                      >
+                        <span className={cn("truncate", d.skipped && "text-muted-foreground line-through")} dir="auto">
+                          {d.is_today ? t("dayIsToday", { date: dayLabel(d.fill_date) }) : dayLabel(d.fill_date)}
                         </span>
-                      ) : (
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
-                          {t("dayProgress", { answered: d.answered, total: d.total_due })}
-                        </span>
+                        {d.complete ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-status-ok">
+                            <Check className="h-3 w-3" />
+                            {t("dayComplete")}
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {d.skipped
+                              ? t("dayDismissed")
+                              : t("dayProgress", { answered: d.answered, total: d.total_due })}
+                          </span>
+                        )}
+                      </button>
+                      {/* A complete day never pins anyway — nothing to dismiss. */}
+                      {!d.complete && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0 p-0"
+                          disabled={skipping === d.fill_date}
+                          onClick={() => toggleSkip(d.fill_date, !d.skipped)}
+                          aria-label={d.skipped ? t("restoreDay") : t("dismissDay")}
+                          title={d.skipped ? t("restoreDay") : t("dismissDay")}
+                        >
+                          {skipping === d.fill_date ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : d.skipped ? (
+                            <Undo2 className="h-3 w-3" />
+                          ) : (
+                            <EyeOff className="h-3 w-3" />
+                          )}
+                        </Button>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
