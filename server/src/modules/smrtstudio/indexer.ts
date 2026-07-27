@@ -148,53 +148,69 @@ export function classifyAudioRole(
 ): AudioRole {
   const d = description.toLowerCase();
 
-  // Checked FIRST, before any positive signal: a field can name lip-sync only
-  // to deny it — "Audio track to attach to the output. No lip-sync is
-  // performed." Without this, that string reads as driving.
-  if (/\bno lip[- ]?sync|not? sync|without lip[- ]?sync|does not sync/.test(d)) return "mux";
+  // 1. A field that names lip-sync only to DENY it is decisive, and beats every
+  //    positive signal below: "Audio track to attach to the output. No lip-sync
+  //    is performed."
+  if (/\bno lip[- ]?sync|\bnot? sync|without lip[- ]?sync|does not sync/.test(d)) return "mux";
 
-  // Pasted onto the output. Lips do not move to it — the trap.
+  // 2. An explicit statement that THIS field drives generation. Checked before
+  //    the mux wording because a driving field often also mentions background
+  //    music while describing what happens when it is OMITTED — e.g. Wan 2.7:
+  //    "URL of driving audio … If not provided, the model auto-generates
+  //    matching background music." That is a fallback, not this field's role,
+  //    and reading it as mux hid a genuinely audio-driven model.
   if (
-    /background music|background audio|use (it )?as the audio|will be muxed|added to the (output|video)|soundtrack|attach to the output/.test(
+    /driving audio|drives? (the )?(generation|video|avatar|animation)|to drive|articulate|lip[- ]?sync(ing)? (the|to|from|audio)|for the avatar to lip/.test(
+      d,
+    )
+  ) {
+    return "driving";
+  }
+
+  // 3. Pasted onto the output. Lips do not move to it — the trap that catches
+  //    anyone selecting by field name.
+  if (
+    /background music|background audio|use (it )?as the audio|will be muxed|added to the (output|video)|soundtrack|attach to the output|as the audio track/.test(
       d,
     )
   ) {
     return "mux";
   }
-  // Explicitly a reference/guide rather than a driver.
-  if (/reference audio|to guide|guidance|style of the audio/.test(d)) return "reference";
-  // Drives lips/motion.
+
+  // 4. Explicitly a reference/guide rather than a driver.
+  if (/reference audio|to guide|guidance|style of the audio|as a reference/.test(d)) return "reference";
+
+  // 5. Weaker driving phrasings.
   if (/driving|drive[sn]?\b|lip[- ]?sync|talking|speech to animate|animate.*audio/.test(d)) {
     return "driving";
   }
-  // A field literally named for driving.
   if (/driv/.test(field)) return "driving";
-  // "The URL of the audio to generate the video from" — the audio IS the input
-  // the video is built from, which is the driving case.
-  if (/generate the video from|from the audio|audio to video/.test(d)) return "driving";
+  if (/generate the video from|generate a video from|from the audio|audio to video|to dub/.test(d)) {
+    return "driving";
+  }
 
-  // An `audio-to-video` endpoint takes audio as its PREMISE — the whole category
-  // means "make a video from this audio". Many such schemas describe the field
-  // as flatly as "The URL of the audio file.", which carries no verb to match on.
-  // Measured: without this rule 14 of 24 avatar / audio-to-video endpoints fell
-  // through, including the program's own first-choice lip-sync model.
+  // 6. An `audio-to-video` endpoint takes audio as its PREMISE — the category
+  //    means "make a video from this audio". Many such schemas describe the field
+  //    as flatly as "The URL of the audio file.", with no verb to match on.
   if (falCategory === "audio-to-video") return "driving";
-  // Avatar and lip-sync FAMILIES are audio-driven by construction, and fal files
-  // them under plain image-to-video / video-to-video. The signal lives in the
-  // endpoint id — `.../ai-avatar/...`, `.../lipsync/...`, `.../omnihuman/...` —
-  // which is why the id is matched here and not just the category.
+
+  // 7. Avatar and lip-sync FAMILIES are audio-driven by construction, and fal
+  //    files them under plain image-to-video / video-to-video. The signal lives
+  //    in the endpoint id, which is why the id is matched and not just the
+  //    category. Measured: without rules 6-7, 14 of 24 such endpoints fell
+  //    through — including the program's own first-choice lip-sync model.
   if (
-    /avatar|lipsync|lip-sync|talking|omnihuman|infinitalk|echomimic|latentsync|musetalk|flashtalk/.test(
+    /avatar|lipsync|lip-sync|talking|omnihuman|infinitalk|echomimic|latentsync|musetalk|flashtalk|sadtalker|dubbing/.test(
       `${endpointId} ${field}`.toLowerCase(),
     )
   ) {
     return "driving";
   }
 
-  // A bare `reference_audio_*` name with no wording either way.
+  // 8. A bare `reference_audio_*` name with no wording either way.
   if (/^reference_audio/.test(field)) return "reference";
-  // Present but unexplained. Treat as reference: the weaker claim, so an
-  // unverified endpoint never gets promoted into the category we act on.
+  // 9. Present but unexplained. `reference` is the weaker claim, so an
+  //    unverified endpoint is never promoted into the category we act on.
   return "reference";
 }
 
