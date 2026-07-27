@@ -44,6 +44,7 @@ import { useDayTool } from "@/hooks/useDayTools";
 import { useWorkClock } from "@/hooks/useWorkClock";
 import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
 import { dayLabel as reportDayLabel } from "@/lib/smrttask/dailyreport-dates";
+import { setDaySkipped } from "@/lib/smrttask/dailyreport-skip";
 import type { DailyReportPending, PendingDay } from "@/types/daily-report";
 import {
   sittingWorkdays,
@@ -57,7 +58,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer, ClipboardList } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer, ClipboardList, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -194,6 +195,17 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       .then((r) => setReportPendingDays(r.days ?? []))
       .catch(() => setReportPendingDays([]));
   }, [dailyReportEnabled]);
+  /** Dismiss a missed report day — it unpins here but stays editable on the
+   *  daily-report screen (nothing is deleted). Optimistic: the row leaves at once. */
+  const dismissReportDay = useCallback(async (fillDate: string) => {
+    setReportPendingDays((prev) => prev.filter((d) => d.fill_date !== fillDate));
+    try {
+      await setDaySkipped(fillDate, true);
+    } catch {
+      toast.error(tDaily("saveError"));
+      refreshReportPending(); // put the row back — the dismissal did not stick
+    }
+  }, [tDaily, refreshReportPending]);
   useEffect(() => {
     if (!dailyReportEnabled) { setReportPendingDays([]); return; }
     refreshReportPending();
@@ -1043,17 +1055,34 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
                   Not a real task row — it never enters rollover or the counts. */}
               {dailyReportEnabled &&
                 reportPendingDays.map((d) => (
-                  <button
+                  // Row = open the check-in + dismiss. Two sibling buttons, never
+                  // nested. Dismiss keeps every answer — it only unpins the day.
+                  <div
                     key={d.fill_date}
-                    type="button"
-                    onClick={() => setReportFillDate(d.fill_date)}
-                    className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-start text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                    className="mb-1.5 flex items-center gap-1 rounded-md border border-dashed border-primary/40 bg-primary/5 ps-3 pe-1 transition-colors hover:bg-primary/10"
                   >
-                    <ClipboardList className="h-4 w-4 shrink-0" />
-                    <span className="truncate">
-                      {d.is_today ? tDaily("pinnedRow") : tDaily("pinnedRowDated", { date: reportDayLabel(d.fill_date) })}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setReportFillDate(d.fill_date)}
+                      className="flex flex-1 items-center gap-2 py-2 text-start text-sm font-medium text-primary"
+                    >
+                      <ClipboardList className="h-4 w-4 shrink-0" />
+                      <span className="truncate">
+                        {d.is_today ? tDaily("pinnedRow") : tDaily("pinnedRowDated", { date: reportDayLabel(d.fill_date) })}
+                      </span>
+                    </button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 w-6 shrink-0 p-0 text-primary"
+                      onClick={() => dismissReportDay(d.fill_date)}
+                      aria-label={tDaily("dismissDay")}
+                      title={tDaily("dismissDay")}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 ))}
               {renderList(LIST_QUICK, deskQuick, "desk", t("desk.emptyQuick"), true)}
             </div>

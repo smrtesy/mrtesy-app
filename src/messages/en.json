@@ -1159,6 +1159,11 @@
     "editPastTitle": "Edit previous days",
     "editPastNote": "Pick a day to edit its answers. An already-generated report does not change — generate it again to refresh it.",
     "editPastEmpty": "No days to edit.",
+    "dismissDay": "Hide this day",
+    "restoreDay": "Restore this day",
+    "dayDismissed": "Hidden",
+    "dayDismissedToast": "Day hidden — you can restore it here any time",
+    "dayRestoredToast": "Day restored",
     "dayComplete": "Complete",
     "dayProgress": "{answered}/{total} answered",
     "dayIsToday": "{date} · today"
@@ -1867,7 +1872,13 @@
     "slugPlaceholder": "e.g. crm",
     "namePlaceholder": "e.g. CRM",
     "appParametersTitle": "System Parameters",
-    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits"
+    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits",
+    "docsRendered": "Rendered view",
+    "docsSource": "Markdown source",
+    "docsDownload": "Download .md",
+    "docsCreated": "Created",
+    "docsUpdated": "Updated",
+    "docsEmpty": "No documents."
   },
   "adminParameters": {
     "title": "System Parameters",
@@ -4181,7 +4192,9 @@
       "updatedAt": "Updated {when}",
       "never": "No instructions saved yet",
       "repoCopy": "Repo copy",
-      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately."
+      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately.",
+      "edit": "Edit source",
+      "preview": "Rendered view"
     },
     "github": {
       "pick": "Pick a repo",
@@ -4201,7 +4214,7 @@
     "stopped": "Turn stopped",
     "attach": "Attach a file",
     "removeAttachment": "Remove",
-    "fileTooLarge": "{name} is too large (25MB max)",
+    "fileTooLarge": "{name} is too large (7MB max)",
     "newChat": "New chat",
     "noThreads": "No chats yet",
     "untitled": "Untitled",
@@ -4225,5 +4238,10 @@
     "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
     "taskRouter": "Free-text task update",
     "contextLost": "This turn started a new session — it does not know the earlier messages"
+  },
+  "markdown": {
+    "anchor": "Link to section {title}",
+    "copyCode": "Copy code",
+    "copied": "Copied"
   }
 }

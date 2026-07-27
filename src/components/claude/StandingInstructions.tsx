@@ -16,10 +16,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { Eye, ExternalLink, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
+import { Markdown } from "@/components/common/Markdown";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api/client";
 
@@ -48,6 +50,12 @@ export function StandingInstructions({ locale }: { locale: string }) {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  /**
+   * The document is a *document* — read it rendered by default (headings,
+   * tables, links), and drop into the raw editor only on demand. Compact-UI
+   * convention: the editor is behind one quiet icon button.
+   */
+  const [editing, setEditing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -89,36 +97,62 @@ export function StandingInstructions({ locale }: { locale: string }) {
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-medium">{t("title")}</p>
-        <a
-          href={REPO_DOC_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-        >
-          <ExternalLink className="size-3.5" />
-          {t("repoCopy")}
-        </a>
+        <div className="flex items-center gap-1">
+          <a
+            href={REPO_DOC_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="size-3.5" />
+            {t("repoCopy")}
+          </a>
+          {!loading && (
+            <IconButton
+              label={editing ? t("preview") : t("edit")}
+              color="primary"
+              onClick={() => setEditing((v) => !v)}
+            >
+              {editing ? <Eye className="size-4" /> : <Pencil className="size-4" />}
+            </IconButton>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <p className="text-xs text-muted-foreground">…</p>
       ) : (
         <>
-          <Textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder={t("placeholder")}
-            rows={16}
-            className="font-mono text-xs"
-          />
+          {editing ? (
+            <Textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder={t("placeholder")}
+              rows={16}
+              className="font-mono text-xs"
+              dir="auto"
+            />
+          ) : body.trim() ? (
+            <div className="max-h-[60vh] overflow-y-auto rounded-lg border bg-card p-4">
+              <Markdown>{body}</Markdown>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed p-4 text-xs text-muted-foreground">
+              {t("placeholder")}
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground">
               {updatedAt ? t("updatedAt", { when: fmtWhen(updatedAt, locale) }) : t("never")}
             </p>
-            <Button size="sm" onClick={save} disabled={saving || !dirty}>
-              {saving && <Loader2 className="me-1 size-4 animate-spin" />}
-              {dirty ? t("save") : t("noChanges")}
-            </Button>
+            {/* Only meaningful while editing, but stays mounted when the edit
+                has unsaved changes so a stray toggle can't strand them. */}
+            {(editing || dirty) && (
+              <Button size="sm" onClick={save} disabled={saving || !dirty}>
+                {saving && <Loader2 className="me-1 size-4 animate-spin" />}
+                {dirty ? t("save") : t("noChanges")}
+              </Button>
+            )}
           </div>
           <p className="text-[11px] leading-snug text-muted-foreground">{t("hint")}</p>
         </>

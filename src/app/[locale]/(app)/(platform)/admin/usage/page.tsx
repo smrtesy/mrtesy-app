@@ -6,33 +6,70 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { fetchAiUsageSummary, type AiUsageGroup } from "@/lib/ai-usage/summary";
 
-type Range = "24h" | "7d" | "30d" | "mtd" | "lastmonth";
+/**
+ * How many calendar months to offer, counting the current one back. The
+ * provider invoices are cut by CALENDAR month, so these are the only ranges
+ * that can be compared against a console figure line-for-line; the rolling
+ * windows are for "what is it doing right now".
+ */
+const MONTHS_OFFERED = 6;
 
-const RANGES: { key: Range; label: string }[] = [
-  { key: "24h", label: "24h" },
-  { key: "7d", label: "7 days" },
-  { key: "30d", label: "30 days" },
-  // The provider invoices are cut by CALENDAR month in UTC. A rolling 30-day
-  // window can never equal the console's month-to-date figure, which is the
-  // single most common reason a ledger "doesn't match the bill" even when every
-  // row in it is right. These two ranges are the ones to reconcile against.
-  { key: "mtd", label: "This month" },
-  { key: "lastmonth", label: "Last month" },
-];
+interface RangeDef {
+  key: string;
+  /** Text on the button. */
+  label: string;
+  /** Longer form for the total card, e.g. "Jun 2026 (UTC)". */
+  title: string;
+  since: Date;
+  /** Exclusive upper bound; undefined means "up to now". */
+  until?: Date;
+  /** Rolling windows and calendar months are shown as two separate groups. */
+  kind: "rolling" | "month";
+}
 
-const RANGE_LABEL: Record<Range, string> = {
-  "24h": "last 24h",
-  "7d": "last 7 days",
-  "30d": "last 30 days",
-  mtd: "this calendar month (UTC)",
-  lastmonth: "last calendar month (UTC)",
-};
+/**
+ * Month labels are formatted in UTC, matching the boundaries the window itself
+ * uses. This screen is the one deliberate exception to the app-wide
+ * America/New_York display rule (see CLAUDE.md): the providers bill on UTC month
+ * boundaries, so cutting a month at New York midnight would move 4–5 hours of
+ * spend into the neighbouring month and reintroduce exactly the mismatch this
+ * page exists to resolve. Every month label therefore carries "(UTC)".
+ */
+const monthFmt = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** Build the range list for this request. `now` is passed in so it is evaluated once. */
+function buildRanges(now: Date): RangeDef[] {
+  const rolling: RangeDef[] = [
+    { key: "24h", label: "24h", title: "last 24h", since: new Date(now.getTime() - 24 * 3600_000), kind: "rolling" },
+    { key: "7d", label: "7 days", title: "last 7 days", since: new Date(now.getTime() - 7 * 24 * 3600_000), kind: "rolling" },
+    { key: "30d", label: "30 days", title: "last 30 days", since: new Date(now.getTime() - 30 * 24 * 3600_000), kind: "rolling" },
+  ];
+
+  // `m0` is the current month, `m1` the previous one, and so on. Keys are
+  // relative rather than absolute (e.g. "2026-06") so a bookmarked link keeps
+  // meaning "last month" instead of freezing on one specific month.
+  const months: RangeDef[] = Array.from({ length: MONTHS_OFFERED }, (_, i) => {
+    // Date.UTC normalises a negative month index into the previous year, so
+    // going back past January needs no special case.
+    const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const until = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i + 1, 1));
+    const label = monthFmt.format(since);
+    return { key: `m${i}`, label, title: `${label} (UTC)`, since, until, kind: "month" as const };
+  });
+
+  return [...rolling, ...months];
+}
 
 const PROVIDER_LABEL: Record<string, string> = {
   anthropic: "Anthropic (Claude)",
   google: "Google (Gemini)",
   resemble: "Resemble (TTS)",
   voyage: "Voyage AI (Embeddings)",
+  fal: "fal.ai (image/video)",
 };
 
 const PROVIDER_URL: Record<string, string> = {
@@ -40,6 +77,7 @@ const PROVIDER_URL: Record<string, string> = {
   google:    "https://aistudio.google.com/app/apikey",
   resemble:  "https://app.resemble.ai/billing",
   voyage:    "https://dash.voyageai.com/",
+  fal:       "https://fal.ai/dashboard/usage",
 };
 
 function usd(n: number): string {
@@ -50,33 +88,21 @@ function tok(n: number): string {
   return n === 0 ? "—" : n.toLocaleString();
 }
 
-/**
- * Resolve a range key to a half-open [since, until) window.
- *
- * The calendar ranges are built in UTC on purpose. Everything the user reads in
- * this app is New York time (see CLAUDE.md), but this screen exists to be
- * compared against the Anthropic/Google consoles, and those bill on UTC month
- * boundaries — cutting the month at New York midnight would shift 4–5 hours of
- * spend into the wrong month and reintroduce the very mismatch being fixed. The
- * range labels say "UTC" so the choice is visible rather than surprising.
- */
-function windowFor(range: Range): { since: Date; until?: Date } {
-  const now = new Date();
-  switch (range) {
-    case "24h":
-      return { since: new Date(now.getTime() - 24 * 3600_000) };
-    case "7d":
-      return { since: new Date(now.getTime() - 7 * 24 * 3600_000) };
-    case "30d":
-      return { since: new Date(now.getTime() - 30 * 24 * 3600_000) };
-    case "mtd":
-      return { since: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) };
-    case "lastmonth":
-      return {
-        since: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)),
-        until: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
-      };
-  }
+function RangeButton({ range, activeKey }: { range: RangeDef; activeKey: string }) {
+  const isActive = range.key === activeKey;
+  return (
+    <Link
+      href={`?range=${range.key}`}
+      aria-current={isActive ? "page" : undefined}
+      className={`px-3 py-1.5 text-xs font-medium rounded-md border whitespace-nowrap ${
+        isActive
+          ? "border-primary text-primary"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {range.label}
+    </Link>
+  );
 }
 
 export default async function AdminUsagePage({
@@ -85,10 +111,10 @@ export default async function AdminUsagePage({
   searchParams: Promise<{ range?: string }>;
 }) {
   const { range: rangeParam } = await searchParams;
-  const range: Range = RANGES.some((r) => r.key === rangeParam)
-    ? (rangeParam as Range)
-    : "7d";
-  const { since, until } = windowFor(range);
+  const ranges = buildRanges(new Date());
+  // Unknown / absent key falls back to the 7-day window rather than erroring.
+  const active = ranges.find((r) => r.key === rangeParam) ?? ranges.find((r) => r.key === "7d")!;
+  const { since, until } = active;
 
   // ai_usage RLS only lets a super_admins-table row read it; service-role keeps
   // this consistent with the rest of /admin (e.g. an ADMIN_EMAIL-only admin).
@@ -117,32 +143,40 @@ export default async function AdminUsagePage({
   const providerRows = [...byProvider.entries()].sort((a, b) => b[1].cost - a[1].cost);
   const componentRows = [...summary.groups].sort((a, b) => b.cost - a.cost);
 
+  // Rows that carry no cost at all make the total a FLOOR, not a total. Saying
+  // so is the difference between an estimate and a number that can be trusted;
+  // fal runs in particular reach experiment_runs without a cost about a third of
+  // the time, and silently treating those as $0 is how a total starts lying.
+  const missingCost = summary.groups.reduce((s, g) => s + g.missingCost, 0);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">AI Usage &amp; Cost</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Unified ledger of every paid AI call across all services (edge functions, server,
-            voice-engine). Reconcile against the Anthropic / Google / Resemble consoles using{" "}
-            <span className="font-medium">This month</span> — the providers bill by calendar
-            month (UTC), so a rolling window will never match the invoice.
+            Every paid AI call across the edge functions, server, voice-engine and smrtStudio.
+            To reconcile against the Anthropic / Google / Resemble / fal consoles, pick a{" "}
+            <span className="font-medium">month</span> — the providers bill by calendar month
+            (UTC), so a rolling window will never match an invoice.
           </p>
         </div>
-        <div className="flex gap-1 flex-wrap">
-          {RANGES.map((r) => (
-            <Link
-              key={r.key}
-              href={`?range=${r.key}`}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md border ${
-                r.key === range
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {r.label}
-            </Link>
-          ))}
+        {/* Two groups: rolling windows, then the calendar months to reconcile
+            against. The divider is what tells them apart at a glance — without
+            it "30 days" and "Jul 2026" read as the same kind of thing, and
+            picking the wrong one is how the numbers stop matching the invoice. */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {ranges
+            .filter((r) => r.kind === "rolling")
+            .map((r) => (
+              <RangeButton key={r.key} range={r} activeKey={active.key} />
+            ))}
+          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+          {ranges
+            .filter((r) => r.kind === "month")
+            .map((r) => (
+              <RangeButton key={r.key} range={r} activeKey={active.key} />
+            ))}
         </div>
       </div>
 
@@ -158,12 +192,20 @@ export default async function AdminUsagePage({
         </div>
       )}
 
+      {missingCost > 0 && (
+        <div className="rounded-lg border border-status-warn bg-status-warn-bg p-3 text-sm text-status-warn">
+          {missingCost.toLocaleString()} run{missingCost === 1 ? "" : "s"} in this window recorded
+          no cost, so the totals below are a <span className="font-medium">lower bound</span>. See
+          the &ldquo;no cost&rdquo; column for which components.
+        </div>
+      )}
+
       {/* Grand total + per-provider summary */}
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total ({RANGE_LABEL[range]})
+              Total ({active.title})
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -228,6 +270,7 @@ export default async function AdminUsagePage({
                         input rate. Without them on screen the cost column looks
                         unreconcilable against the token counts next to it. */}
                     <th className="py-2 pr-4 font-medium text-right">Cache r/w</th>
+                    <th className="py-2 pr-4 font-medium text-right">No cost</th>
                     <th className="py-2 font-medium text-right">Cost</th>
                   </tr>
                 </thead>
@@ -251,6 +294,13 @@ export default async function AdminUsagePage({
                           ? "—"
                           : `${tok(c.cacheReadTok)} / ${tok(c.cacheWriteTok)}`}
                       </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {c.missingCost > 0 ? (
+                          <span className="text-status-warn font-medium">{c.missingCost}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="py-2 text-right tabular-nums font-medium">{usd(c.cost)}</td>
                     </tr>
                   ))}
@@ -258,13 +308,28 @@ export default async function AdminUsagePage({
               </table>
             </div>
           )}
-          <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
-            Cost is computed from the token counts the API returned, at list prices
-            (Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7–5 $5/$25 per 1M; cache read 0.1×
-            input, cache write 1.25× at 5m TTL / 2× at 1h). It excludes anything not billed
-            through these API keys — Claude Code agent runs, which bill to the Claude
-            subscription, are tracked separately under /claude.
-          </p>
+          {/* Stating the exclusions is load-bearing, not boilerplate. The page's
+              number is only trustworthy if what it does NOT cover is explicit —
+              a total that silently omits a provider is how this screen lost
+              credibility in the first place. */}
+          <div className="text-xs text-muted-foreground mt-4 leading-relaxed space-y-1">
+            <p>
+              Cost is computed from the token counts the API returned, at list prices
+              (Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7–5 $5/$25 per 1M; cache read 0.1×
+              input, cache write 1.25× at 5m TTL / 2× at 1h). Expect small deltas against an
+              invoice from rounding and from the provider&apos;s own billing cut-off.
+            </p>
+            <p>
+              fal.ai rows come from <code className="font-mono">experiment_runs</code> (the
+              video-lab harness records cost per run there, not through an API-token ledger), so
+              they carry no token counts. Their model names are withheld to keep smrtStudio&apos;s
+              blind scoring intact — cost does not depend on knowing which model produced a run.
+            </p>
+            <p>
+              <span className="font-medium">Not included here:</span> Claude Code agent runs,
+              which bill to the Claude subscription rather than to an API key (see /claude).
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>
