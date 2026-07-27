@@ -15,7 +15,8 @@
  * Two-day model: a question's `segment` decides which calendar day its answer
  * belongs to. Filling on day F, an 'end' question closes F−1 (stored with
  * entry_date=F−1) and a 'start' question opens F (entry_date=F). A question's
- * `weekdays` restricts it to certain weekdays OF THE DAY IT BELONGS TO.
+ * `weekdays` restricts it to certain weekdays OF THE DAY IT BELONGS TO, and a
+ * question is never due before the day it was created (see `dueOn`).
  *
  * All personal (user-scoped within the org). See docs/daily-report-plan.md.
  */
@@ -261,15 +262,22 @@ router.put("/daily-report/config", async (req: Request, res: Response) => {
 
 // ── check-in (two sections keyed by fill date) ───────────────────────────────
 
-interface ActiveItem { id: string; label: string; segment: string; weekdays: number[] | null }
+interface ActiveItem {
+  id: string;
+  label: string;
+  segment: string;
+  weekdays: number[] | null;
+  /** The question's creation date in the caller's tz — it is not due before it. */
+  created_ymd: string;
+}
 interface OptionLite { id: string; item_id: string; label: string; score: number | null; position: number }
 
 /** Load the caller's active questions + their options. `error` set on failure
  *  so callers can 500 instead of silently treating a DB error as "no data". */
-async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsByItem: Map<string, OptionLite[]>; error: string | null }> {
+async function loadActive(userId: string, tz: string): Promise<{ items: ActiveItem[]; optsByItem: Map<string, OptionLite[]>; error: string | null }> {
   const { data: items, error: itemsErr } = await db
     .from("daily_report_items")
-    .select("id, label, segment, weekdays, position")
+    .select("id, label, segment, weekdays, position, created_at")
     .eq("user_id", userId)
     .eq("active", true)
     .order("position", { ascending: true });
@@ -289,9 +297,31 @@ async function loadActive(userId: string): Promise<{ items: ActiveItem[]; optsBy
     arr.push(o);
     optsByItem.set(o.item_id, arr);
   }
-  const list = ((items as { id: string; label: string; segment: string | null; weekdays: number[] | null }[] | null) ?? [])
-    .map((it) => ({ id: it.id, label: it.label, segment: it.segment ?? "start", weekdays: it.weekdays ?? null }));
+  const list = ((items as { id: string; label: string; segment: string | null; weekdays: number[] | null; created_at: string }[] | null) ?? [])
+    .map((it) => ({
+      id: it.id,
+      label: it.label,
+      segment: it.segment ?? "start",
+      weekdays: it.weekdays ?? null,
+      created_ymd: ymdInTz(new Date(it.created_at), tz),
+    }));
   return { items: list, optsByItem, error: err };
+}
+
+/**
+ * Is a question due on a calendar date? Two gates:
+ *  • its weekday restriction, and
+ *  • the date is not BEFORE the question was created.
+ *
+ * The second gate matters because "due" is computed from the question set as it
+ * stands NOW, against historical days. Without it, adding a question makes every
+ * past day retroactively incomplete — the day gets pinned as "missed" for a
+ * question that did not exist then, and the user cannot possibly clear it
+ * (real case, 2026-07-27: one question added that morning re-opened four days
+ * the user had actually filled).
+ */
+function dueOn(item: ActiveItem, ymd: string): boolean {
+  return ymd >= item.created_ymd && appliesOn(item.weekdays, ymd);
 }
 
 /** The items due for a given fill date, split into the two sections. */
@@ -300,8 +330,8 @@ function dueSections(items: ActiveItem[], fillDate: string): {
   start: { entry_date: string; items: ActiveItem[] };
 } {
   const yesterday = addDays(fillDate, -1);
-  const end = items.filter((it) => it.segment === "end" && appliesOn(it.weekdays, yesterday));
-  const start = items.filter((it) => it.segment === "start" && appliesOn(it.weekdays, fillDate));
+  const end = items.filter((it) => it.segment === "end" && dueOn(it, yesterday));
+  const start = items.filter((it) => it.segment === "start" && dueOn(it, fillDate));
   return {
     end: { entry_date: yesterday, items: end },
     start: { entry_date: fillDate, items: start },
@@ -322,7 +352,7 @@ router.get("/daily-report/checkin", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "fillDate outside the edit window" });
   }
 
-  const { items, optsByItem, error: loadErr } = await loadActive(userId);
+  const { items, optsByItem, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   const sec = dueSections(items, fillDate);
   const entryDates = [sec.end.entry_date, sec.start.entry_date];
@@ -454,7 +484,7 @@ router.get("/daily-report/pending", async (req: Request, res: Response) => {
   const tz = await userTz(userId);
   const today = ymdInTz(new Date(), tz);
 
-  const { items, error: loadErr } = await loadActive(userId);
+  const { items, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   if (items.length === 0) return res.json({ today, days: [] });
 
@@ -526,7 +556,7 @@ router.get("/daily-report/days", async (req: Request, res: Response) => {
     ? Math.min(Math.trunc(rawLimit), EDIT_WINDOW_DAYS)
     : DEFAULT_DAYS_LIMIT;
 
-  const { items, error: loadErr } = await loadActive(userId);
+  const { items, error: loadErr } = await loadActive(userId, tz);
   if (loadErr) return res.status(500).json({ error: loadErr });
   if (items.length === 0) return res.json({ today, days: [] });
 
