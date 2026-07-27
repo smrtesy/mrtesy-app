@@ -1,5 +1,10 @@
 -- Migration: ai_usage_summary() — aggregate the AI cost ledger IN THE DATABASE.
 --
+-- APPLIED to the Smrtesy production project on 2026-07-27, with the user's
+-- explicit go-ahead. The filename version matches the row recorded in
+-- supabase_migrations.schema_migrations, so `supabase db push` treats it as
+-- already applied. CREATE OR REPLACE makes a re-run harmless regardless.
+--
 -- THE BUG THIS FIXES
 -- /admin/usage read raw ai_usage rows and summed them in JavaScript. PostgREST
 -- caps any response at `db-max-rows` (1000 on this project) and that cap is
