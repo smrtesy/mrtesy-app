@@ -2515,12 +2515,18 @@ interface PartyIds {
   phones: Set<string>;
 }
 
-// +1-347-584-8008, 3475848008 and 13475848008 all key to 475848008; +972-58-414-6670
-// and 058-414-6670 both key to 584146670 — while two genuinely different numbers
-// stay different (475848008 ≠ 584146670, the exact pair the model called equal).
+// Key on the last EIGHT digits, which is what survives every form the same
+// number is written in here: +1-347-584-8008 / 3475848008 / 13475848008 → 75848008,
+// +972-58-414-6670 / 058-414-6670 → 84146670, and — the reason it is 8 and not 9
+// — an Israeli 9-digit landline written locally (03-123-4567) vs internationally
+// (+972-3-123-4567), which extractPhones truncates to 7231234567: only the last
+// 8 digits agree. Two genuinely different numbers still differ (75848008 ≠
+// 84146670, the exact pair the model declared equal on T1804); a collision needs
+// the same 7-digit subscriber number AND the same final area-code digit, and it
+// would only cost a veto, never cause a wrong one.
 function phoneKeys(...vals: (string | null | undefined)[]): Set<string> {
   const out = new Set<string>();
-  for (const p of extractPhones(...vals)) if (p.length >= 9) out.add(p.slice(-9));
+  for (const p of extractPhones(...vals)) if (p.length >= 9) out.add(p.slice(-8));
   return out;
 }
 
@@ -2590,11 +2596,15 @@ function partiesConflict(incoming: PartyIds, task: PartyIds): boolean {
   const comparable =
     (incoming.phones.size > 0 && task.phones.size > 0) ||
     (incoming.emails.size > 0 && task.emails.size > 0);
-  if (!comparable) return false;
-  for (const p of incoming.phones) if (task.phones.has(p)) return false;
-  for (const e of incoming.emails) if (task.emails.has(e)) return false;
-  for (const d of incoming.domains) for (const d2 of task.domains) if (domainsRelated(d, d2)) return false;
-  return true;
+  return comparable && !partiesMatch(incoming, task);
+}
+
+/** A POSITIVE identity match — a shared phone, address, or related domain. */
+function partiesMatch(a: PartyIds, b: PartyIds): boolean {
+  for (const p of a.phones) if (b.phones.has(p)) return true;
+  for (const e of a.emails) if (b.emails.has(e)) return true;
+  for (const d of a.domains) for (const d2 of b.domains) if (domainsRelated(d, d2)) return true;
+  return false;
 }
 
 /**
@@ -2609,8 +2619,13 @@ function partiesConflict(incoming: PartyIds, task: PartyIds): boolean {
 function taskTextNamesParty(task: any, incoming: PartyIds): boolean {
   const blob = `${task?.title_he ?? ""} ${task?.title ?? ""} ${String(task?.description ?? "")}`;
   const ids = partyIdsFrom([blob], [blob]);
-  for (const p of incoming.phones) if (ids.phones.has(p)) return true;
-  for (const e of incoming.emails) if (ids.emails.has(e)) return true;
+  if (partiesMatch(incoming, ids)) return true;
+  // Domain named in the text, even without a full address: covers a vendor that
+  // rotates sending domains (billing@x.com → notices@x-mail.net) where the task
+  // itself says who it is about. Generic consumer domains are already filtered
+  // out of PartyIds.domains, so "gmail.com" can never rescue a merge.
+  const lower = blob.toLowerCase();
+  for (const d of incoming.domains) if (lower.includes(d)) return true;
   return false;
 }
 
@@ -2629,11 +2644,17 @@ function describeParty(p: PartyIds): string {
  * crosses, so genuine cross-source bindings still register.
  */
 async function threadCrossesTask(taskId: string, tkey: string): Promise<boolean> {
-  const { data: t } = await supabase
+  // Fails CLOSED: a lookup that errors reports "crosses", because a query blip
+  // must not license a cross-party binding — that is how the T276 damage
+  // persisted. Cost of a false "crosses" is one lost auto-attach, which the next
+  // message on the thread re-establishes.
+  const { data: t, error: taskErr } = await supabase
     .from("tasks").select("source_message_id").eq("id", taskId).maybeSingle();
+  if (taskErr) return true;
   if (!t?.source_message_id) return false;
-  const { data: origin } = await supabase
+  const { data: origin, error: originErr } = await supabase
     .from("source_messages").select("source_type, metadata").eq("id", t.source_message_id).maybeSingle();
+  if (originErr) return true;
   const originKey = origin ? threadKey(origin) : null;
   return originKey !== null && originKey !== tkey;
 }
@@ -2913,15 +2934,24 @@ async function findDuplicateOpenTask(
       let confidence: "high" | "medium" = parsed.confidence;
       let reason = String(parsed.reason_he ?? "");
       let taskParty = taskPartyIds(chosen);
+      let originUnknown = false;
       if (chosen.source_message_id) {
-        const { data: origin } = await supabase
+        const { data: origin, error: originErr } = await supabase
           .from("source_messages")
           .select("sender, sender_email, source_type, metadata")
           .eq("id", chosen.source_message_id)
           .maybeSingle();
-        if (origin) taskParty = mergeParties(taskParty, msgPartyIds(origin));
+        if (originErr) originUnknown = true;
+        else if (origin) taskParty = mergeParties(taskParty, msgPartyIds(origin));
       }
-      if (partiesConflict(probe.party, taskParty) && !taskTextNamesParty(chosen, probe.party)) {
+      // A failed origin lookup may have hidden the task's ONLY identity (a chat
+      // task whose related_contact is null), and "no verdict" is exactly the hole
+      // this veto exists to close. So when the origin is unknown, auto-merging
+      // requires a POSITIVE identity match rather than merely the absence of a
+      // provable conflict.
+      const partyConflict = partiesConflict(probe.party, taskParty)
+        || (originUnknown && !partiesMatch(probe.party, taskParty));
+      if (partyConflict && !taskTextNamesParty(chosen, probe.party)) {
         if (confidence !== "high") return null;
         confidence = "medium";
         reason = `⚠️ זהות הצדדים לא אומתה (${describeParty(probe.party)} ≠ ${describeParty(taskParty)}) — לא מוזג אוטומטית, הצעה בלבד: ${reason}`;
