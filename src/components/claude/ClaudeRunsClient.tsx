@@ -28,7 +28,6 @@ import { BarChart3, BookOpen, ChevronDown, ChevronRight, Loader2, Play, Plus, Sp
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { DictationButton } from "./DictationButton";
 import { PlaybookList } from "./PlaybookList";
 import { RepoPicker } from "./RepoPicker";
 import { StandingInstructions } from "./StandingInstructions";
@@ -147,10 +146,6 @@ export function ClaudeRunsClient() {
   const [playbookId, setPlaybookId] = useState<string | null>(null);
   const [repo, setRepo] = useState<string | null>(null);
   const [branch, setBranch] = useState<string | null>(null);
-  /** Dictation: speak, pause 3s, and it launches. On by default because that is
-   *  the behaviour asked for; a toggle exists because a long prompt deserves a
-   *  read-through before it runs. */
-  const [autoSend, setAutoSend] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -259,21 +254,6 @@ export function ClaudeRunsClient() {
     [prompt, launching, title, model, effort, playbookId, repo, branch, t, loadRuns],
   );
 
-  /** Dictation result. With auto-send on, the transcript launches immediately —
-   *  speak, pause, done. With it off it lands in the box for review. */
-  const handleDictated = useCallback(
-    (text: string) => {
-      // Combined once and used for both the box and the launch: launching with the
-      // transcript alone would silently drop anything already typed.
-      const combined = prompt.trim() ? `${prompt.trim()} ${text}` : text;
-      setPrompt(combined);
-      if (!autoSend) return;
-      setFormOpen(true);
-      void handleLaunch(combined);
-    },
-    [prompt, autoSend, handleLaunch],
-  );
-
   function toggleRun(runId: string) {
     if (openRun === runId) {
       setOpenRun(null);
@@ -290,9 +270,6 @@ export function ClaudeRunsClient() {
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">{t("title")}</h1>
         <div className="flex items-center gap-1">
-          {/* Dictation sits in the header, not only inside the form: the whole point
-              is that speaking is the fastest way in — no "open the form" step. */}
-          <DictationButton onText={handleDictated} disabled={launching} />
           <Button
             size="sm"
             variant={updateOpen ? "secondary" : "ghost"}
@@ -471,21 +448,8 @@ export function ClaudeRunsClient() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <DictationButton onText={handleDictated} disabled={launching} />
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={autoSend}
-                  onChange={(e) => setAutoSend(e.target.checked)}
-                  className="size-3.5"
-                />
-                {t("dictation.autoSend")}
-              </label>
-            </div>
             <p className="text-xs text-muted-foreground">{t("submitHint")}</p>
             <p className="text-xs text-muted-foreground">{t("costNote")}</p>
-            <p className="text-xs text-muted-foreground">{t("dictation.costNote")}</p>
             <Button size="sm" onClick={() => void handleLaunch()} disabled={launching || !prompt.trim()}>
               {launching ? (
                 <Loader2 className="size-4 animate-spin" />

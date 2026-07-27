@@ -2783,8 +2783,13 @@ ACTION GATE (mandatory — applies even when 2+ pillars above agree): a match AL
 
 DUNNING EXCEPTION (mandatory): a bill, its payment reminder, its overdue / past-due / "interest is accruing" notice, and a final/collection warning about the SAME account, invoice, or service address are the SAME obligation — the one debt escalating over time, NOT separate matters. Match them even though the wording and the amount differ (an overdue notice shows a different running balance than the original bill). Signals that it is the same debt: identical account number, invoice number, service address, or property. Example: "Your DEP water bill is available" (675 Rutland Rd) and "Let us help with your overdue balance — interest is accruing" (675 Rutland Rd) from NoReply@mail.dep.nyc.gov are the SAME obligation → match.
 
-Return ONLY valid JSON, no markdown:
-{"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew: name the 2+ matching specifics — date, party, subject>"}
+Return ONLY the JSON object — no markdown fence, and not one word before or
+after it. Do NOT write your reasoning outside the JSON: reason_he is the only
+explanation there is room for, and it must be 12 Hebrew words or fewer. A longer
+reply runs past the output limit, gets cut off mid-JSON, and is discarded — which
+silently loses the match you just found. Short and complete beats thorough and
+truncated.
+{"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew, MAX 12 words: name the 2+ matching specifics — date, party, subject>"}
 OR
 {"match": false}`;
 
@@ -2902,10 +2907,41 @@ async function findDuplicateOpenTask(
   const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
     { component: "ai_process.dupe_match", userId, refId });
 
+  // An unparseable reply used to die here in silence. The regex needs a closing
+  // brace and JSON.parse needs valid JSON; both failure paths just returned
+  // null, which is indistinguishable from an honest "no match". Over the 30 days
+  // to 2026-07-27, 993 of 1380 of these calls (72%) ended at exactly the
+  // 300-token ceiling — cut off mid-JSON — so duplicates were being dropped at a
+  // rate nobody could measure. Parse on its own now, and log when it fails, with
+  // the output-token count so a ceiling hit is obvious from the row.
+  let parsed: any = null;
+  let parseError = "";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]);
+    if (m) parsed = JSON.parse(m[0]);
+    else parseError = "no complete JSON object in the reply";
+  } catch (e) {
+    parseError = `JSON.parse failed: ${(e as Error).message}`;
+  }
+  if (!parsed) {
+    await supabase.from("log_entries").insert({
+      user_id: userId,
+      level: "warning",
+      category: "ai_process_dupe_match",
+      status: "failed",
+      source_message_id: refId,
+      ai_model_used: sys.classification_model,
+      ai_input_tokens: result.inputTokens,
+      ai_output_tokens: result.outputTokens,
+      error_message:
+        `dupe_match reply unparseable — ${parseError}. ${result.outputTokens} output tokens` +
+        (result.outputTokens >= 300 ? " (hit the max_tokens ceiling, so the reply was cut off)" : "") +
+        ". Treated as no match; a real duplicate may have been missed.",
+    });
+    return null;
+  }
+
+  try {
     if (parsed.match && parsed.matched_task_id && (parsed.confidence === "high" || parsed.confidence === "medium")) {
       let chosen = candidates.find((c) => c.id === parsed.matched_task_id);
       if (!chosen) return null; // guard against a hallucinated id
@@ -2981,7 +3017,8 @@ async function findDuplicateOpenTask(
         status: String(chosen.status),
       };
     }
-  } catch { /* ignore parse errors — treat as no match */ }
+  } catch { /* verdict processing / origin lookup failed — treat as no match. Parse
+               failures no longer land here; they are logged above. */ }
   return null;
 }
 
