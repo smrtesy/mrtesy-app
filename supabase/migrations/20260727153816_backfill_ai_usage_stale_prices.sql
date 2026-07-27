@@ -1,5 +1,10 @@
 -- Migration: re-price historical ai_usage rows that were logged at stale rates.
 --
+-- APPLIED to the Smrtesy production project on 2026-07-27, with the user's
+-- explicit go-ahead: 7,780 rows re-priced, all-time total $123.65 -> $129.22.
+-- The filename version matches the recorded migration row. The UPDATE below is
+-- the part that ran; the DO/NOTICE block is diagnostic and safe to re-run.
+--
 -- WHY
 -- Several call sites carried their own copy of the price table and were never
 -- updated when the rates changed (fixed in code alongside this migration):
