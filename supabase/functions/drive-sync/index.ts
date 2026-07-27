@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { extractText, getDocumentProxy } from "npm:unpdf@1.6.2";
+import { anthropicCostUsd } from "../_shared/ai-pricing.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -199,8 +200,16 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
 
 // Haiku $/MTok — matches the haiku branch of ai-process estimateCost so the
 // drive_ocr rows in ai_usage cost the same as everything else in the ledger.
-function estimateHaikuCost(inputTokens: number, outputTokens: number): number {
-  return (inputTokens * 0.80 + outputTokens * 4) / 1_000_000;
+// Prices come from _shared/ai-pricing.ts. This used to be a private
+// `estimateHaikuCost` hardcoded at $0.80/$4 — Haiku 3.5's rates — so every
+// drive_ocr row logged exactly 80% of its real cost, and it kept doing so after
+// the 2026-07-26 rate correction updated only ai-process and the server.
+// It also priced OCR as Haiku regardless of what OCR_MODEL actually points at.
+function estimateOcrCost(
+  model: string,
+  usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined,
+): number {
+  return anthropicCostUsd(model, usage);
 }
 
 // Scanned PDFs (ScanSnap and similar) and photos are image-only: they have no
@@ -296,7 +305,7 @@ async function ocrBinaryFile(
         output_tokens: data.usage?.output_tokens || 0,
         cache_read_tokens: data.usage?.cache_read_input_tokens || 0,
         cache_write_tokens: data.usage?.cache_creation_input_tokens || 0,
-        cost_usd: estimateHaikuCost(data.usage?.input_tokens || 0, data.usage?.output_tokens || 0),
+        cost_usd: estimateOcrCost(OCR_MODEL, data.usage),
         ref_id: fileId,
       });
       if (ocrUsageInsertError) console.error("ai_usage insert failed:", ocrUsageInsertError);

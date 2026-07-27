@@ -1155,7 +1155,13 @@
     "hoursOnly": "{h}h",
     "minutesOnly": "{m}m",
     "refresh": "Refresh",
-    "pinnedRowDated": "Daily report · {date}"
+    "pinnedRowDated": "Daily report · {date}",
+    "editPastTitle": "Edit previous days",
+    "editPastNote": "Pick a day to edit its answers. An already-generated report does not change — generate it again to refresh it.",
+    "editPastEmpty": "No days to edit.",
+    "dayComplete": "Complete",
+    "dayProgress": "{answered}/{total} answered",
+    "dayIsToday": "{date} · today"
   },
   "workclock": {
     "offerTitle": "Start the work clock?",

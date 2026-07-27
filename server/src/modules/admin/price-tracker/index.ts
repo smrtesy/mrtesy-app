@@ -668,28 +668,52 @@ router.put("/admin/price-tracker/prefs", requireAuth, requireSuperAdmin, async (
 // ai_usage ledger (today / 7-day / 30-day / all-time), for this operator.
 router.get("/admin/price-tracker/ai-cost", requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
   try {
-    const { data, error } = await db
-      .from("ai_usage")
-      .select("cost_usd, created_at")
-      .eq("user_id", req.user!.id)
-      .like("component", "server.price-tracker%");
-    if (error) return res.status(500).json({ error: error.message });
-
-    const now = Date.now();
+    // Aggregate in Postgres via ai_usage_summary(). Selecting the raw rows and
+    // summing them in JS (what this used to do) silently caps at PostgREST's
+    // db-max-rows = 1000, so every figure here would understate itself once the
+    // tool passed 1000 calls — the same defect that made /admin/usage report a
+    // 30-day total of $7.78 against an actual $62.19. Latent here only because
+    // no server.price-tracker rows exist yet; fixed before it can bite.
+    //
+    // Requires migration 20260727161500_ai_usage_summary_rpc.sql. If it hasn't
+    // been applied the rpc error propagates to the 500 below with Postgres's own
+    // "could not find function public.ai_usage_summary" message — deliberately
+    // loud, because the alternative (falling back to zeros) is a cost meter that
+    // reads $0.00 and looks fine.
     const DAY = 86_400_000;
-    const rows = (data ?? []) as Array<{ cost_usd: number | null; created_at: string }>;
-    const sumSince = (ms: number) =>
-      +rows
-        .filter((r) => now - new Date(r.created_at).getTime() <= ms)
-        .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0)
-        .toFixed(6);
+    const now = Date.now();
+
+    /** @param sinceMs epoch ms to sum from, or null for all-time. */
+    const sumWindow = async (sinceMs: number | null) => {
+      const { data, error: rpcError } = await db.rpc("ai_usage_summary", {
+        p_since: new Date(sinceMs ?? 0).toISOString(),
+        p_until: null,
+        p_user_id: req.user!.id,
+        p_component_prefix: "server.price-tracker",
+      });
+      if (rpcError) throw new Error(rpcError.message);
+      const rows = (data ?? []) as Array<{ cost_usd: number | string | null; calls: number | string }>;
+      return {
+        // bigint/numeric arrive as strings over PostgREST — Number() or the
+        // additions concatenate instead of summing.
+        cost: +rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0).toFixed(6),
+        calls: rows.reduce((s, r) => s + (Number(r.calls) || 0), 0),
+      };
+    };
+
+    const [today, week, month, all] = await Promise.all([
+      sumWindow(now - DAY),
+      sumWindow(now - 7 * DAY),
+      sumWindow(now - 30 * DAY),
+      sumWindow(null),
+    ]);
 
     return res.json({
-      today: sumSince(DAY),
-      week: sumSince(7 * DAY),
-      month: sumSince(30 * DAY),
-      allTime: +rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0).toFixed(6),
-      calls: rows.length,
+      today: today.cost,
+      week: week.cost,
+      month: month.cost,
+      allTime: all.cost,
+      calls: all.calls,
     });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

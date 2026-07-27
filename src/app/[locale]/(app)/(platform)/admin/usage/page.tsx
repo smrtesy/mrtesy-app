@@ -4,13 +4,29 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
+import { fetchAiUsageSummary, type AiUsageGroup } from "@/lib/ai-usage/summary";
 
-type Range = "24h" | "7d" | "30d";
-const RANGES: { key: Range; label: string; ms: number }[] = [
-  { key: "24h", label: "24h", ms: 24 * 3600_000 },
-  { key: "7d", label: "7 days", ms: 7 * 24 * 3600_000 },
-  { key: "30d", label: "30 days", ms: 30 * 24 * 3600_000 },
+type Range = "24h" | "7d" | "30d" | "mtd" | "lastmonth";
+
+const RANGES: { key: Range; label: string }[] = [
+  { key: "24h", label: "24h" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+  // The provider invoices are cut by CALENDAR month in UTC. A rolling 30-day
+  // window can never equal the console's month-to-date figure, which is the
+  // single most common reason a ledger "doesn't match the bill" even when every
+  // row in it is right. These two ranges are the ones to reconcile against.
+  { key: "mtd", label: "This month" },
+  { key: "lastmonth", label: "Last month" },
 ];
+
+const RANGE_LABEL: Record<Range, string> = {
+  "24h": "last 24h",
+  "7d": "last 7 days",
+  "30d": "last 30 days",
+  mtd: "this calendar month (UTC)",
+  lastmonth: "last calendar month (UTC)",
+};
 
 const PROVIDER_LABEL: Record<string, string> = {
   anthropic: "Anthropic (Claude)",
@@ -30,13 +46,37 @@ function usd(n: number): string {
   return `$${n.toFixed(n < 1 ? 4 : 2)}`;
 }
 
-interface Row {
-  provider: string;
-  component: string;
-  cost_usd: number | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  ref_id: string | null;
+function tok(n: number): string {
+  return n === 0 ? "—" : n.toLocaleString();
+}
+
+/**
+ * Resolve a range key to a half-open [since, until) window.
+ *
+ * The calendar ranges are built in UTC on purpose. Everything the user reads in
+ * this app is New York time (see CLAUDE.md), but this screen exists to be
+ * compared against the Anthropic/Google consoles, and those bill on UTC month
+ * boundaries — cutting the month at New York midnight would shift 4–5 hours of
+ * spend into the wrong month and reintroduce the very mismatch being fixed. The
+ * range labels say "UTC" so the choice is visible rather than surprising.
+ */
+function windowFor(range: Range): { since: Date; until?: Date } {
+  const now = new Date();
+  switch (range) {
+    case "24h":
+      return { since: new Date(now.getTime() - 24 * 3600_000) };
+    case "7d":
+      return { since: new Date(now.getTime() - 7 * 24 * 3600_000) };
+    case "30d":
+      return { since: new Date(now.getTime() - 30 * 24 * 3600_000) };
+    case "mtd":
+      return { since: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) };
+    case "lastmonth":
+      return {
+        since: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)),
+        until: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+      };
+  }
 }
 
 export default async function AdminUsagePage({
@@ -45,65 +85,37 @@ export default async function AdminUsagePage({
   searchParams: Promise<{ range?: string }>;
 }) {
   const { range: rangeParam } = await searchParams;
-  const range: Range = (["24h", "7d", "30d"] as const).includes(rangeParam as Range)
+  const range: Range = RANGES.some((r) => r.key === rangeParam)
     ? (rangeParam as Range)
     : "7d";
-  const since = new Date(Date.now() - RANGES.find((r) => r.key === range)!.ms).toISOString();
+  const { since, until } = windowFor(range);
 
   // ai_usage RLS only lets a super_admins-table row read it; service-role keeps
   // this consistent with the rest of /admin (e.g. an ADMIN_EMAIL-only admin).
   const admin = createAdminSupabaseClient();
-  let data: Row[] | null = null;
-  let error: { message: string } | null = null;
-  if (admin) {
-    const r = await admin
-      .from("ai_usage")
-      .select("provider, component, cost_usd, input_tokens, output_tokens, ref_id")
-      .gte("created_at", since)
-      .limit(100000);
-    data = (r.data ?? null) as Row[] | null;
-    error = r.error;
-  } else {
-    error = { message: "Service-role key not configured" };
-  }
+  const summary = admin
+    ? await fetchAiUsageSummary(admin, since, until)
+    : {
+        groups: [] as AiUsageGroup[],
+        totalCost: 0,
+        totalCalls: 0,
+        source: "rpc" as const,
+        warning: null,
+        error: "Service-role key not configured",
+      };
 
-  const rows = (data || []) as Row[];
-
-  // Aggregate by provider and by component.
+  // Roll the (provider, component, model) groups up two ways. Both are derived
+  // from the same server-side aggregate, so the cards and the table can never
+  // disagree — they used to be two independent passes over a truncated sample.
   const byProvider = new Map<string, { cost: number; calls: number }>();
-  const byComponent = new Map<
-    string,
-    { provider: string; cost: number; calls: number; inTok: number; outTok: number; refs: Set<string> }
-  >();
-  let grandCost = 0;
-
-  for (const r of rows) {
-    const cost = Number(r.cost_usd) || 0;
-    grandCost += cost;
-
-    const p = byProvider.get(r.provider) || { cost: 0, calls: 0 };
-    p.cost += cost;
-    p.calls += 1;
-    byProvider.set(r.provider, p);
-
-    const c = byComponent.get(r.component) || {
-      provider: r.provider,
-      cost: 0,
-      calls: 0,
-      inTok: 0,
-      outTok: 0,
-      refs: new Set<string>(),
-    };
-    c.cost += cost;
-    c.calls += 1;
-    c.inTok += Number(r.input_tokens) || 0;
-    c.outTok += Number(r.output_tokens) || 0;
-    if (r.ref_id) c.refs.add(r.ref_id);
-    byComponent.set(r.component, c);
+  for (const g of summary.groups) {
+    const p = byProvider.get(g.provider) ?? { cost: 0, calls: 0 };
+    p.cost += g.cost;
+    p.calls += g.calls;
+    byProvider.set(g.provider, p);
   }
-
   const providerRows = [...byProvider.entries()].sort((a, b) => b[1].cost - a[1].cost);
-  const componentRows = [...byComponent.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  const componentRows = [...summary.groups].sort((a, b) => b.cost - a.cost);
 
   return (
     <div className="space-y-6">
@@ -112,10 +124,12 @@ export default async function AdminUsagePage({
           <h1 className="text-2xl font-bold">AI Usage &amp; Cost</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Unified ledger of every paid AI call across all services (edge functions, server,
-            voice-engine). Reconcile against the Anthropic / Google / Resemble consoles.
+            voice-engine). Reconcile against the Anthropic / Google / Resemble consoles using{" "}
+            <span className="font-medium">This month</span> — the providers bill by calendar
+            month (UTC), so a rolling window will never match the invoice.
           </p>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-wrap">
           {RANGES.map((r) => (
             <Link
               key={r.key}
@@ -132,9 +146,15 @@ export default async function AdminUsagePage({
         </div>
       </div>
 
-      {error && (
+      {summary.error && (
         <div className="rounded-lg border border-status-late bg-status-late-bg p-3 text-sm text-status-late">
-          Failed to load usage: {error.message}
+          Failed to load usage: {summary.error}
+        </div>
+      )}
+
+      {summary.warning && (
+        <div className="rounded-lg border border-status-warn bg-status-warn-bg p-3 text-sm text-status-warn">
+          {summary.warning}
         </div>
       )}
 
@@ -143,12 +163,14 @@ export default async function AdminUsagePage({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total ({range})
+              Total ({RANGE_LABEL[range]})
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{usd(grandCost)}</div>
-            <p className="text-xs text-muted-foreground">{rows.length} calls</p>
+            <div className="text-2xl font-bold">{usd(summary.totalCost)}</div>
+            <p className="text-xs text-muted-foreground">
+              {summary.totalCalls.toLocaleString()} calls
+            </p>
           </CardContent>
         </Card>
         {providerRows.map(([provider, agg]) => {
@@ -174,7 +196,9 @@ export default async function AdminUsagePage({
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{usd(agg.cost)}</div>
-                <p className="text-xs text-muted-foreground">{agg.calls} calls</p>
+                <p className="text-xs text-muted-foreground">
+                  {agg.calls.toLocaleString()} calls
+                </p>
               </CardContent>
             </Card>
           );
@@ -195,32 +219,37 @@ export default async function AdminUsagePage({
                 <thead>
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="py-2 pr-4 font-medium">Component</th>
-                    <th className="py-2 pr-4 font-medium">Provider</th>
+                    <th className="py-2 pr-4 font-medium">Model</th>
                     <th className="py-2 pr-4 font-medium text-right">Calls</th>
                     <th className="py-2 pr-4 font-medium text-right">Items</th>
                     <th className="py-2 pr-4 font-medium text-right">In tok</th>
                     <th className="py-2 pr-4 font-medium text-right">Out tok</th>
+                    {/* Cached tokens bill at 0.1x (read) and 1.25-2x (write) of the
+                        input rate. Without them on screen the cost column looks
+                        unreconcilable against the token counts next to it. */}
+                    <th className="py-2 pr-4 font-medium text-right">Cache r/w</th>
                     <th className="py-2 font-medium text-right">Cost</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {componentRows.map(([component, c]) => (
-                    <tr key={component} className="border-b last:border-0">
-                      <td className="py-2 pr-4 font-mono text-xs">{component}</td>
+                  {componentRows.map((c) => (
+                    <tr key={`${c.provider}|${c.component}|${c.model}`} className="border-b last:border-0">
+                      <td className="py-2 pr-4 font-mono text-xs">{c.component}</td>
                       <td className="py-2 pr-4">
                         <Badge variant="outline" className="text-[10px]">
-                          {c.provider}
+                          {c.model}
                         </Badge>
                       </td>
-                      <td className="py-2 pr-4 text-right tabular-nums">{c.calls}</td>
                       <td className="py-2 pr-4 text-right tabular-nums">
-                        {c.refs.size || "—"}
+                        {c.calls.toLocaleString()}
                       </td>
-                      <td className="py-2 pr-4 text-right tabular-nums">
-                        {c.inTok.toLocaleString()}
-                      </td>
-                      <td className="py-2 pr-4 text-right tabular-nums">
-                        {c.outTok.toLocaleString()}
+                      <td className="py-2 pr-4 text-right tabular-nums">{c.items || "—"}</td>
+                      <td className="py-2 pr-4 text-right tabular-nums">{tok(c.inTok)}</td>
+                      <td className="py-2 pr-4 text-right tabular-nums">{tok(c.outTok)}</td>
+                      <td className="py-2 pr-4 text-right tabular-nums text-xs text-muted-foreground">
+                        {c.cacheReadTok === 0 && c.cacheWriteTok === 0
+                          ? "—"
+                          : `${tok(c.cacheReadTok)} / ${tok(c.cacheWriteTok)}`}
                       </td>
                       <td className="py-2 text-right tabular-nums font-medium">{usd(c.cost)}</td>
                     </tr>
@@ -229,6 +258,13 @@ export default async function AdminUsagePage({
               </table>
             </div>
           )}
+          <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
+            Cost is computed from the token counts the API returned, at list prices
+            (Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7–5 $5/$25 per 1M; cache read 0.1×
+            input, cache write 1.25× at 5m TTL / 2× at 1h). It excludes anything not billed
+            through these API keys — Claude Code agent runs, which bill to the Claude
+            subscription, are tracked separately under /claude.
+          </p>
         </CardContent>
       </Card>
     </div>

@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Loader2, Play, RefreshCw } from "lucide-react";
+import { CalendarDays, Check, Loader2, Play, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api/client";
 import { useDayTool } from "@/hooks/useDayTools";
-import { rangeLabel } from "@/lib/smrttask/dailyreport-dates";
-import type { DailyReport, DailyReportRun, ReportItemResult, ReportTasks } from "@/types/daily-report";
+import { dayLabel, rangeLabel } from "@/lib/smrttask/dailyreport-dates";
+import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
+import type {
+  DailyReport,
+  DailyReportDays,
+  DailyReportRun,
+  ReportDay,
+  ReportItemResult,
+  ReportTasks,
+} from "@/types/daily-report";
 
 /** Shared body: overall score + questions grouped by segment + tasks section. */
 function ReportBody({
@@ -90,9 +98,13 @@ function ReportBody({
   );
 }
 
+/** How many days back the "edit a previous day" list offers (server caps at 60). */
+const EDIT_DAYS_SPAN = 30;
+
 /**
  * The "דוחות" tab of the dedicated screen: a live preview of the current
- * period, a "generate now → inbox" action, and the history of generated runs.
+ * period, a "generate now → inbox" action, the history of generated runs, and a
+ * quiet (collapsed-by-default) editor for previous days' answers.
  */
 export function DailyReportView() {
   const t = useTranslations("dailyReport");
@@ -103,9 +115,17 @@ export function DailyReportView() {
   const [runs, setRuns] = useState<DailyReportRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  // Past-day editing: collapsed by default (CLAUDE.md compact-UI principle) —
+  // a calendar icon in the header expands the day list.
+  const [daysOpen, setDaysOpen] = useState(false);
+  const [days, setDays] = useState<ReportDay[]>([]);
+  const [daysLoading, setDaysLoading] = useState(false);
+  const [editDate, setEditDate] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  /** `silent` refreshes without swapping the whole view for the spinner (used
+   *  after a past-day edit, so the expanded day list doesn't flicker away). */
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [p, r] = await Promise.all([
         api<{ report: DailyReport }>(`/api/daily-report/preview?period=${period}`),
@@ -116,13 +136,41 @@ export function DailyReportView() {
     } catch {
       toast.error(t("loadError"));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [period, t]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadDays = useCallback(async () => {
+    setDaysLoading(true);
+    try {
+      const r = await api<DailyReportDays>(`/api/daily-report/days?limit=${EDIT_DAYS_SPAN}`);
+      setDays(r.days ?? []);
+    } catch {
+      toast.error(t("loadError"));
+    } finally {
+      setDaysLoading(false);
+    }
+  }, [t]);
+
+  const toggleDays = useCallback(() => {
+    if (daysOpen) {
+      setDaysOpen(false);
+      return;
+    }
+    setDaysOpen(true);
+    loadDays();
+  }, [daysOpen, loadDays]);
+
+  /** After editing a past day: refresh the day list AND the preview (an edited
+   *  day inside the current period changes the tallies). */
+  const onEditSaved = useCallback(() => {
+    loadDays();
+    load(true);
+  }, [loadDays, load]);
 
   const generateNow = useCallback(async () => {
     setGenerating(true);
@@ -159,7 +207,19 @@ export function DailyReportView() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button type="button" size="sm" variant="ghost" onClick={load} className="gap-1 text-xs" aria-label={t("refresh")}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={toggleDays}
+              className="gap-1 text-xs"
+              aria-label={t("editPastTitle")}
+              title={t("editPastTitle")}
+              aria-expanded={daysOpen}
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => load()} className="gap-1 text-xs" aria-label={t("refresh")}>
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
             <Button type="button" size="sm" onClick={generateNow} disabled={generating} className="gap-1 text-xs">
@@ -169,6 +229,62 @@ export function DailyReportView() {
           </div>
         </CardHeader>
         <CardContent>
+          {/* Past-day editor — expanded on demand from the calendar icon above.
+              Any day here is inside the server's edit window, so opening it and
+              saving always succeeds. */}
+          {daysOpen && (
+            <div className="mb-4 rounded-md border bg-muted/30 p-2.5">
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold">{t("editPastTitle")}</div>
+                  <p className="text-[11px] text-muted-foreground" dir="auto">{t("editPastNote")}</p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0 p-0"
+                  onClick={() => setDaysOpen(false)}
+                  aria-label={t("cancel")}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {daysLoading ? (
+                <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("loading")}
+                </div>
+              ) : days.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground" dir="auto">{t("editPastEmpty")}</p>
+              ) : (
+                <div className="max-h-64 space-y-1 overflow-y-auto">
+                  {days.map((d) => (
+                    <button
+                      key={d.fill_date}
+                      type="button"
+                      onClick={() => setEditDate(d.fill_date)}
+                      className="flex w-full items-center justify-between gap-2 rounded-md border bg-background px-2.5 py-1.5 text-start text-xs transition-colors hover:bg-accent"
+                    >
+                      <span className="truncate" dir="auto">
+                        {d.is_today ? t("dayIsToday", { date: dayLabel(d.fill_date) }) : dayLabel(d.fill_date)}
+                      </span>
+                      {d.complete ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-status-ok">
+                          <Check className="h-3 w-3" />
+                          {t("dayComplete")}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {t("dayProgress", { answered: d.answered, total: d.total_due })}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {preview && preview.items.length === 0 && preview.tasks.worked_seconds === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground" dir="auto">{t("emptyPeriod")}</p>
           ) : preview ? (
@@ -204,6 +320,16 @@ export function DailyReportView() {
           ))
         )}
       </div>
+
+      {/* The same check-in dialog the pinned row opens, here in edit mode: the
+          server pre-fills the day's saved answers and a partial save is allowed. */}
+      <DailyReportCheckin
+        open={editDate != null}
+        fillDate={editDate}
+        allowPartialSave
+        onClose={() => setEditDate(null)}
+        onSaved={onEditSaved}
+      />
     </div>
   );
 }

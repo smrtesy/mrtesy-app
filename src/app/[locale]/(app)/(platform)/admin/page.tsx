@@ -7,6 +7,7 @@ import { getTranslations } from "next-intl/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeployInfoCard } from "@/components/platform/settings/DeployInfoCard";
+import { fetchAiUsageTotal } from "@/lib/ai-usage/summary";
 import {
   Users, Building2, Layers, Crown, FileText, DollarSign, BookOpen,
 } from "lucide-react";
@@ -53,7 +54,12 @@ export default async function AdminDashboard({
       countRows(admin, "apps"),
       countRows(admin, "super_admins"),
       countRows(admin, "log_entries", (q) => q.eq("level", "error").gte("created_at", since24h)),
-      admin.from("ai_usage").select("cost_usd").gte("created_at", since24h).limit(100000),
+      // Aggregated server-side. Selecting raw rows and summing them here read at
+      // most 1000 rows (PostgREST's db-max-rows cap, applied silently after the
+      // filters and NOT overridable by .limit()), so this card under-reported
+      // itself on any busy day — the same bug that made /admin/usage show a
+      // 30-day total of $7.78 against an actual $62.19.
+      fetchAiUsageTotal(admin, new Date(since24h)),
     ]);
     totalUsers = uTotal;
     activeUsers = uActive;
@@ -61,7 +67,7 @@ export default async function AdminDashboard({
     apps = aCount;
     superAdmins = saCount;
     errors24h = errCount;
-    aiCost24h = (costRows.data ?? []).reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+    aiCost24h = costRows.cost;
   }
 
   let docs = 0;

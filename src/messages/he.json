@@ -1155,7 +1155,13 @@
     "hoursOnly": "{h} שע׳",
     "minutesOnly": "{m} דק׳",
     "refresh": "רענן",
-    "pinnedRowDated": "דוח יומי · {date}"
+    "pinnedRowDated": "דוח יומי · {date}",
+    "editPastTitle": "עריכת ימים קודמים",
+    "editPastNote": "בחר יום כדי לערוך את התשובות שלו. דוח שכבר נוצר לא משתנה — צור דוח מחדש כדי לרענן אותו.",
+    "editPastEmpty": "אין ימים לעריכה.",
+    "dayComplete": "מלא",
+    "dayProgress": "{answered}/{total} תשובות",
+    "dayIsToday": "{date} · היום"
   },
   "workclock": {
     "offerTitle": "להתחיל שעון עבודה?",

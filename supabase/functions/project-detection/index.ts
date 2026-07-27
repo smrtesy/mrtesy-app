@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { anthropicCostUsd } from "../_shared/ai-pricing.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -120,7 +121,11 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
         try {
           const inTok = data.usage?.input_tokens || 0;
           const outTok = data.usage?.output_tokens || 0;
-          const r = model.includes("opus") ? { i: 15, o: 75 } : model.includes("sonnet") ? { i: 3, o: 15 } : { i: 0.8, o: 4 };
+          // Rates come from _shared/ai-pricing.ts. The inline table here was
+          // stale on two rows — Haiku at $0.8/$4 (Haiku 3.5) and Opus at
+          // $15/$75 (Opus 4.1) — so Haiku runs under-reported 20% and Opus runs
+          // over-reported 3×. Cache counts are logged too: this call sends no
+          // cache_control today, but a future one would otherwise price at $0.
           const { error: usageInsertError } = await supabase.from("ai_usage").insert({
             user_id: userId,
             provider: "anthropic",
@@ -128,7 +133,9 @@ Be conservative — only suggest clear, distinct projects. NOT every sender is a
             model,
             input_tokens: inTok,
             output_tokens: outTok,
-            cost_usd: (inTok * r.i + outTok * r.o) / 1_000_000,
+            cache_read_tokens: data.usage?.cache_read_input_tokens || 0,
+            cache_write_tokens: data.usage?.cache_creation_input_tokens || 0,
+            cost_usd: anthropicCostUsd(model, data.usage),
           });
           if (usageInsertError) console.error("ai_usage insert failed:", usageInsertError);
         } catch (_e) { /* ledger insert must not break processing */ }
