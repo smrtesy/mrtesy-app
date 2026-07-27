@@ -346,10 +346,11 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const probeAudioFlag = body.probe_audio !== false && req.query.probe_audio !== "0";
   const rawLimit = Number(body.probe_limit ?? req.query.probe_limit);
-  // Each probe is a sequential HTTPS round trip; 35 catalog fetches plus a large
-  // batch runs past a typical proxy timeout. 25 keeps a call well inside it, and
-  // the probe is resumable, so pressing again walks the rest.
-  const probeLimit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 0), 200) : 25;
+  // Probes run through a small concurrency pool (below), so a batch of 150 is
+  // ~19 sequential rounds and stays inside a normal proxy timeout. The probe is
+  // resumable, so a full 513-endpoint sweep is a few presses rather than one
+  // request that outlives itself.
+  const probeLimit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 0), 400) : 150;
 
   // ── pass 1: the catalog ──
   let catalog;
@@ -438,31 +439,51 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     const todo = videoIds.filter((id) => !alreadyProbed.has(id));
     remaining = Math.max(0, todo.length - probeLimit);
 
-    for (const id of todo.slice(0, probeLimit)) {
-      const probe = await probeAudio(id, categoryOf.get(id) ?? "");
-      // A model that takes our audio as a DRIVING input is its own category:
-      // it can carry the motion stage and the lip-sync stage in one call, which
-      // no silent image-to-video model can do.
-      const patch: Record<string, unknown> = {
-        audio_probed: true,
-        audio_input: probe.audio_input,
-        audio_field: probe.audio_field,
-        audio_note: probe.audio_note,
-      };
-      if (probe.audio_input === "driving") {
-        patch.kind = "video_audio";
-        patch.stage_slug = "motion";
-        patch.stage_order = 7;
-        driving += 1;
-      }
-      const { error } = await db
-        .from("studio_models")
-        .update(patch)
-        .eq("org_id", orgId)
-        .eq("endpoint_id", id);
-      if (error) return res.status(500).json({ error: `probe write failed: ${error.message}` });
-      probed += 1;
-    }
+    const batch = todo.slice(0, probeLimit);
+    // A pool rather than a serial loop: each probe is an independent HTTPS round
+    // trip, and 8 in flight turns ~150 sequential waits into ~19. Each row is
+    // written as it lands, so a failure part-way leaves the rows already probed
+    // marked probed — the next press continues instead of redoing them.
+    const POOL = 8;
+    let cursor = 0;
+    let writeError: string | null = null;
+    await Promise.all(
+      Array.from({ length: Math.min(POOL, batch.length) }, async () => {
+        while (writeError === null) {
+          const i = cursor;
+          cursor += 1;
+          if (i >= batch.length) return;
+          const id = batch[i];
+          const probe = await probeAudio(id, categoryOf.get(id) ?? "");
+          // A model that takes our audio as a DRIVING input is its own category:
+          // it can carry the motion stage and the lip-sync stage in one call,
+          // which no silent image-to-video model can do.
+          const patch: Record<string, unknown> = {
+            audio_probed: true,
+            audio_input: probe.audio_input,
+            audio_field: probe.audio_field,
+            audio_note: probe.audio_note,
+          };
+          if (probe.audio_input === "driving") {
+            patch.kind = "video_audio";
+            patch.stage_slug = "motion";
+            patch.stage_order = 7;
+            driving += 1;
+          }
+          const { error } = await db
+            .from("studio_models")
+            .update(patch)
+            .eq("org_id", orgId)
+            .eq("endpoint_id", id);
+          if (error) {
+            writeError = error.message;
+            return;
+          }
+          probed += 1;
+        }
+      }),
+    );
+    if (writeError) return res.status(500).json({ error: `probe write failed: ${writeError}` });
   }
 
   res.json({
