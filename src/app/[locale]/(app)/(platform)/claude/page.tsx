@@ -1,4 +1,4 @@
-import { ClaudeRunsClient } from "@/components/claude/ClaudeRunsClient";
+import { ClaudeChat } from "@/components/claude/ClaudeChat";
 
 /**
  * /claude — Claude as a screen of the product, not a tool you leave the app for
@@ -15,5 +15,5 @@ export default async function ClaudePage({
   params: Promise<{ locale: string }>;
 }) {
   await params;
-  return <ClaudeRunsClient />;
+  return <ClaudeChat />;
 }

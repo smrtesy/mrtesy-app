@@ -24,8 +24,14 @@ CREATE TABLE IF NOT EXISTS claude_threads (
   org_id       uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   created_by   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
 
-  -- Shown in the thread list. Seeded from the first message and editable.
+  -- Shown in the thread list. NOT the first line of the first message: a short
+  -- analysis run on the subscription writes a title that describes what the
+  -- conversation is about (threads.ts maybeTitle).
   title        text NOT NULL DEFAULT '',
+
+  -- 'user' freezes the title: a name the user typed is never overwritten by the
+  -- automatic titling. Without this the machine would quietly undo their edit.
+  title_source text NOT NULL DEFAULT 'auto' CHECK (title_source IN ('auto', 'user')),
 
   -- The engine's own session id, captured from the first turn's stream and then
   -- passed as `--resume` on every later turn. THIS is what makes the thread a

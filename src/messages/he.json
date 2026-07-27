@@ -4192,5 +4192,36 @@
       "branchPlaceholder": "ענף",
       "notConnected": "אין חיבור לגיטהאב. שמור טוקן גיטהאב עם הרשאת repo בשם {key} במסך {where}."
     }
+  },
+  "claudeChat": {
+    "placeholder": "כתוב הודעה…",
+    "send": "שלח",
+    "stop": "עצור",
+    "stopped": "התור נעצר",
+    "attach": "צרף קובץ",
+    "removeAttachment": "הסר",
+    "fileTooLarge": "{name} גדול מדי (מקסימום 25MB)",
+    "newChat": "צ'אט חדש",
+    "noThreads": "אין צ'אטים",
+    "untitled": "ללא כותרת",
+    "showList": "הצג רשימת צ'אטים",
+    "hideList": "הסתר רשימת צ'אטים",
+    "rename": "שנה כותרת",
+    "delete": "מחק",
+    "confirmDelete": "למחוק את הצ'אט הזה וכל התורים שבו?",
+    "settings": "הגדרות השיחה",
+    "empty": "כתוב הודעה כדי להתחיל",
+    "thinking": "חושב…",
+    "toolCount": "{count} פעולות כלים",
+    "effortDefault": "חוזק: ברירת מחדל",
+    "effort": {
+      "low": "נמוך",
+      "medium": "בינוני",
+      "high": "גבוה",
+      "xhigh": "גבוה מאוד",
+      "max": "מקסימלי"
+    },
+    "firstTurnNote": "שיטת העבודה וההוראות הקבועות נשלחות בהודעה הראשונה בלבד — מכאן והלאה הסשן זוכר אותן.",
+    "taskRouter": "עדכון חופשי (משימות)"
   }
 }

@@ -56,12 +56,17 @@ export function DictationButton({
   onText,
   disabled,
   className,
+  iconOnly,
 }: {
-  /** Receives the transcript. The caller decides what to do with it (the Claude
-   *  screen appends it to the prompt and may launch immediately). */
+  /** Receives the transcript. The caller decides what to do with it (the composer
+   *  drops it into the message box and may send immediately). */
   onText: (text: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Icon and nothing else — the composer sits beside Send and has no room for a
+   *  word, and a label there would be permanent chrome for a control whose meaning
+   *  the icon already carries. The state still reads out via aria-label/title. */
+  iconOnly?: boolean;
 }) {
   const t = useTranslations("claudeRuns.dictation");
   const [recording, setRecording] = useState(false);
@@ -247,7 +252,7 @@ export function DictationButton({
       aria-label={label}
       title={label}
       aria-pressed={recording}
-      className={cn("gap-1.5", className)}
+      className={cn(iconOnly ? "h-9 w-9 p-0" : "gap-1.5", className)}
     >
       {busy ? (
         <Loader2 className="size-4 animate-spin" />
@@ -256,8 +261,10 @@ export function DictationButton({
       ) : (
         <Mic className="size-4" />
       )}
-      <span>{label}</span>
-      {remaining !== null && <span className="tabular-nums text-xs opacity-80">{remaining}</span>}
+      {!iconOnly && <span>{label}</span>}
+      {/* The silence countdown survives icon-only mode: it is the one piece of
+          state a static icon cannot convey, and it is why the mic stops by itself. */}
+      {remaining !== null && <span className="tabular-nums text-[10px] opacity-80">{remaining}</span>}
     </Button>
   );
 }

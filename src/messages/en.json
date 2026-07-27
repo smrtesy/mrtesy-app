@@ -4193,5 +4193,36 @@
       "branchPlaceholder": "Branch",
       "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
+  },
+  "claudeChat": {
+    "placeholder": "Write a message…",
+    "send": "Send",
+    "stop": "Stop",
+    "stopped": "Turn stopped",
+    "attach": "Attach a file",
+    "removeAttachment": "Remove",
+    "fileTooLarge": "{name} is too large (25MB max)",
+    "newChat": "New chat",
+    "noThreads": "No chats yet",
+    "untitled": "Untitled",
+    "showList": "Show chat list",
+    "hideList": "Hide chat list",
+    "rename": "Rename",
+    "delete": "Delete",
+    "confirmDelete": "Delete this chat and all of its turns?",
+    "settings": "Conversation settings",
+    "empty": "Write a message to begin",
+    "thinking": "Thinking…",
+    "toolCount": "{count} tool calls",
+    "effortDefault": "Effort: default",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Very high",
+      "max": "Max"
+    },
+    "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
+    "taskRouter": "Free-text task update"
   }
 }
