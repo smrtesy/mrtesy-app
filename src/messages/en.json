@@ -219,7 +219,8 @@
     "studio": "smrtStudio",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
-    "studioInvestor": "Investor page"
+    "studioInvestor": "Investor page",
+    "claude": "Claude"
   },
   "account": {
     "title": "Account",
@@ -4125,6 +4126,72 @@
       "duration": "Duration",
       "costEquivalent": "Equivalent value",
       "byModel": "By model"
+    },
+    "taskRouter": "Free-text task update",
+    "dictation": {
+      "start": "Dictate",
+      "stop": "Stop",
+      "transcribing": "Transcribing…",
+      "autoSend": "Send automatically after 3s of silence",
+      "empty": "Nothing was heard — try again",
+      "unsupported": "This browser cannot record audio",
+      "permission": "Microphone permission denied",
+      "noAutoStop": "No silence detection in this browser — stop manually when done",
+      "maxLength": "Recording hit the maximum length and stopped",
+      "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic."
+    },
+    "playbooks": {
+      "title": "Working methods",
+      "emptyHint": "No working methods yet. Use the download icon to load the repo defaults.",
+      "add": "Add a method",
+      "addTitle": "New working method",
+      "editTitle": "Edit working method",
+      "edit": "Edit",
+      "delete": "Delete",
+      "openDoc": "Open the document",
+      "seed": "Load repo defaults",
+      "seeded": "Added {count} methods",
+      "seededNone": "All defaults already exist",
+      "refresh": "Refresh update dates from GitHub",
+      "refreshed": "Refreshed {count} dates",
+      "refreshedPartial": "Refreshed {count} dates — some failed",
+      "save": "Save",
+      "saved": "Saved",
+      "cancel": "Cancel",
+      "confirmDelete": "Delete \"{name}\"?",
+      "namePlaceholder": "Method name",
+      "docUrlPlaceholder": "Document link (full deep link)",
+      "instructionsPlaceholder": "Instructions sent with the run…",
+      "instructionsHint": "This text is prepended to every run that picks this method. The full document stays behind the link.",
+      "kind": {
+        "research": "Research",
+        "planning": "Planning",
+        "build": "Build",
+        "review": "Review",
+        "content": "Content",
+        "other": "Other"
+      }
+    },
+    "instructions": {
+      "title": "Standing instructions",
+      "placeholder": "Instructions Claude receives on every run…",
+      "save": "Save",
+      "saved": "Instructions saved",
+      "noChanges": "No changes",
+      "updatedAt": "Updated {when}",
+      "never": "No instructions saved yet",
+      "repoCopy": "Repo copy",
+      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately."
+    },
+    "github": {
+      "pick": "Pick a repo",
+      "search": "Search repos…",
+      "loading": "Loading repos…",
+      "noRepos": "No repositories found",
+      "private": "private",
+      "clear": "Clear selection",
+      "branchPlaceholder": "Branch",
+      "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
   }
 }

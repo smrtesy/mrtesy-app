@@ -24,6 +24,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
+import { cloneWorkspace, getGitHubToken, redact, type Workspace } from "./github";
 
 /**
  * Where the subscription token is stored.
@@ -60,6 +61,8 @@ function resolveCli(): string {
 
 /** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+/** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
+const SIGKILL_GRACE_MS = 10_000;
 /** Events are flushed in batches — a write per event would serialize the stream. */
 const FLUSH_EVERY = 25;
 const FLUSH_INTERVAL_MS = 1000;
@@ -234,11 +237,44 @@ function usageFromResult(result: Record<string, unknown> | null) {
  * Execute a queued run to completion. Resolves once the run row reaches a
  * terminal status — it never throws at the caller, because the run's own
  * `status`/`error` columns are the report, and callers fire this and move on.
+ *
+ * This wrapper exists for ONE reason: the cloned workspace holds the GitHub token
+ * in its .git/config, so it must be deleted on every exit path — including an
+ * unexpected throw anywhere in the body. A `finally` here is the only structure
+ * that guarantees that; scattered cleanup calls cannot. The holder is what lets
+ * the finally reach a workspace the inner function created.
  */
 export async function executeRun(runId: string): Promise<void> {
+  const held: { ws: Workspace | null } = { ws: null };
+  try {
+    await executeRunBody(runId, held);
+  } catch (e) {
+    // An unexpected throw would otherwise leave the row 'running' — a live status
+    // the screen polls forever. Record it as the failure it is.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[claude/runner] unexpected failure:", message);
+    const { error } = await db
+      .from("claude_runs")
+      .update({
+        status: "failed",
+        error: truncate(message, 4000),
+        ended_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", runId)
+      // Only from a non-terminal state: a run that already finished must not be
+      // rewritten by a throw in the teardown that followed it.
+      .in("status", ["queued", "running"]);
+    if (error) console.error("[claude/runner] could not record failure:", error.message);
+  } finally {
+    await held.ws?.cleanup();
+  }
+}
+
+async function executeRunBody(runId: string, held: { ws: Workspace | null }): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort")
+    .select("id, prompt, cwd, status, model, effort, repo, git_branch")
     .eq("id", runId)
     .maybeSingle();
 
@@ -280,16 +316,57 @@ export async function executeRun(runId: string): Promise<void> {
     return;
   }
 
+  // A run that names a repo gets a real working copy of it. The clone happens
+  // BEFORE the run is marked running: a repo we cannot clone is a setup failure,
+  // and recording it as a failed run (rather than a run that started and died) is
+  // what makes the cause readable.
+  let workspace: Workspace | null = null;
+  // Held for the whole function, not just the clone: anything the run prints can
+  // echo the tokenised remote URL (a failed `git push` does exactly that), so the
+  // final error text has to be redacted with it too.
+  let ghToken: string | null = null;
+  if (run.repo) {
+    ghToken = await getGitHubToken();
+    if (!ghToken) {
+      await finish({
+        status: "failed",
+        error:
+          `This run targets ${run.repo} but GITHUB_TOKEN is not configured. Save a ` +
+          "GitHub personal access token with 'repo' scope under " +
+          "/admin/apps/smrttask/secrets (key: GITHUB_TOKEN).",
+      });
+      return;
+    }
+    try {
+      workspace = await cloneWorkspace(run.repo, run.git_branch, ghToken);
+      // Handed to the holder immediately: from here on the outer finally is what
+      // guarantees the tokenised clone is deleted, on every exit path.
+      held.ws = workspace;
+    } catch (e) {
+      await finish({
+        status: "failed",
+        error: truncate(redact(e instanceof Error ? e.message : String(e), ghToken), 4000),
+      });
+      return;
+    }
+  }
+
   const { error: startError } = await db
     .from("claude_runs")
     .update({
       status: "running",
       started_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      // Recorded so the run says where it actually worked, not where it was asked
+      // to. The directory itself is deleted when the run ends.
+      ...(workspace ? { cwd: workspace.dir } : {}),
     })
     .eq("id", runId);
   if (startError) {
     console.error("[claude/runner] could not mark running:", startError.message);
+    // Recorded as failed, not left as-is: 'queued' is a live status the screen polls
+    // forever, so a run that can never start would spin in the UI for good.
+    await finish({ status: "failed", error: truncate(startError.message, 4000) });
     return;
   }
 
@@ -305,6 +382,15 @@ export async function executeRun(runId: string): Promise<void> {
   // the CLI's current default instead of being pinned to a model that will age.
   if (run.model) args.push("--model", run.model);
   if (run.effort) args.push("--effort", run.effort);
+  // In a cloned workspace the run needs to be able to edit files, and print mode
+  // has no way to answer a permission prompt — an un-answerable prompt is a denial,
+  // so without this a repo run could only read. acceptEdits covers edits but NOT
+  // shell commands: pushing a branch requires the operator to opt into a stronger
+  // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
+  // operator already set a permission flag there, so their choice wins.
+  if (workspace && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
+    args.push("--permission-mode", "acceptEdits");
+  }
   args.push(...extra);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
@@ -324,14 +410,27 @@ export async function executeRun(runId: string): Promise<void> {
 
   const flush = async () => {
     if (buffer.length === 0) return;
-    const batch = buffer.map((e) => ({ ...e, run_id: runId }));
+    let batch: unknown[] = buffer.map((e) => ({ ...e, run_id: runId }));
     buffer = [];
+    // A run working in a cloned repo can print its tokenised remote URL (git does
+    // this on a failed push), and these rows are the permanent transcript — so the
+    // token is scrubbed from text AND payload before anything is stored. Done on
+    // the serialized batch because the token is alphanumeric and cannot survive
+    // JSON escaping in a different form.
+    if (ghToken) {
+      try {
+        batch = JSON.parse(redact(JSON.stringify(batch), ghToken)) as unknown[];
+      } catch {
+        // Unserializable batch: fall through with the mapped rows rather than
+        // dropping the events entirely.
+      }
+    }
     const { error } = await db.from("claude_run_events").insert(batch);
     if (error) console.error("[claude/runner] event insert failed:", error.message);
   };
 
   const child = spawn(bin, args, {
-    cwd: run.cwd || process.cwd(),
+    cwd: workspace?.dir || run.cwd || process.cwd(),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -340,8 +439,14 @@ export async function executeRun(runId: string): Promise<void> {
     void flush();
   }, FLUSH_INTERVAL_MS);
 
+  // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
+  // only SIGTERM, a child that ignores it never emits 'close' — the await below
+  // would never resolve, the run would sit in 'running' forever, and the cloned
+  // workspace (which holds the GitHub token in .git/config) would stay on disk.
+  let hardKillTimer: ReturnType<typeof setTimeout> | null = null;
   const killTimer = setTimeout(() => {
     child.kill("SIGTERM");
+    hardKillTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
   }, timeoutMs);
 
   let stdoutRest = "";
@@ -401,6 +506,7 @@ export async function executeRun(runId: string): Promise<void> {
 
   clearInterval(timer);
   clearTimeout(killTimer);
+  if (hardKillTimer) clearTimeout(hardKillTimer);
   if (stdoutRest.trim()) {
     buffer.push({
       seq: nextSeq(),
@@ -431,14 +537,17 @@ export async function executeRun(runId: string): Promise<void> {
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
-    result_summary: truncate(lastResult),
+    result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
-          `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+          redact(
+            `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+            ghToken,
+          ),
           4000,
         ),
   });

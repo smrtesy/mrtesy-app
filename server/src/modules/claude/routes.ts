@@ -4,20 +4,30 @@
  * Standard chain: requireAuth → requireOrg → requireSuperAdmin. This is an
  * operator console, not a per-app feature, so it follows the admin-route
  * exception to requireApp("<slug>") rather than inventing an app slug for it.
+ * The screen moved out of /admin (docs/claude-console/app-integration-plan.md)
+ * but the gate deliberately did NOT move with it: a run executes shell commands
+ * on our host with our GitHub token, which is not something to widen to every
+ * org member as a side effect of relocating a screen.
  *
- *   POST /api/claude/runs      launch a run (returns immediately; it executes async)
- *   GET  /api/claude/runs      list this org's runs
- *   GET  /api/claude/runs/:id  one run + its full event stream
+ *   POST /api/claude/runs        launch a run (returns immediately; executes async)
+ *   GET  /api/claude/runs        list this org's runs
+ *   GET  /api/claude/runs/:id    one run + its full event stream
+ *   GET  /api/claude/github      is a GitHub token configured
+ *   GET  /api/claude/github/repos  every repo that token can reach
+ *   POST /api/claude/transcribe  dictation → text (Gemini; see the cost note)
  */
 
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireSuperAdmin } from "../../middleware";
 import { executeRun } from "./runner";
+import { composePrompt } from "./playbooks";
+import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
+import { transcribeAudio } from "../../gemini";
 
+// The auth chain (requireAuth → requireOrg → requireSuperAdmin) is installed once
+// in index.ts for the whole module, so it is NOT repeated here.
 const router = Router();
-router.use(requireAuth, requireOrg, requireSuperAdmin);
 
 const MAX_PROMPT = 20_000;
 const MAX_TITLE = 200;
@@ -58,6 +68,33 @@ router.post("/claude/runs", async (req: Request, res: Response) => {
     return res.status(400).json({ error: `effort must be one of ${[...EFFORTS].join(", ")}` });
   }
 
+  // Validated here rather than in the runner: a bad repo/branch should fail the
+  // request the user is watching, not a background run they have to go read.
+  const repo = str(body.repo, 200);
+  if (repo && !isValidRepo(repo)) {
+    return res.status(400).json({ error: "repo must be owner/name" });
+  }
+  const gitBranch = str(body.git_branch, 200);
+  if (gitBranch && !isValidBranch(gitBranch)) {
+    return res.status(400).json({ error: "invalid branch name" });
+  }
+  if (gitBranch && !repo) {
+    return res.status(400).json({ error: "a branch needs a repo" });
+  }
+
+  const playbookId = str(body.playbook_id, 64) || null;
+  if (playbookId && !UUID_RE.test(playbookId)) {
+    return res.status(400).json({ error: "invalid playbook_id" });
+  }
+
+  // The standing instructions and the chosen method are prepended on the server so
+  // a caller cannot skip them. `prompt` stores what was really sent; `user_prompt`
+  // keeps what the human typed, which the composed text would otherwise bury.
+  const composed = await composePrompt(orgId, prompt, playbookId);
+  if (playbookId && !composed.playbook) {
+    return res.status(404).json({ error: "playbook not found" });
+  }
+
   const { data, error } = await db
     .from("claude_runs")
     .insert({
@@ -65,10 +102,13 @@ router.post("/claude/runs", async (req: Request, res: Response) => {
       created_by: req.user!.id,
       claude_account: str(body.claude_account, 320) || null,
       title,
-      prompt,
+      prompt: composed.prompt,
+      user_prompt: prompt,
+      playbook_id: playbookId,
       model: model || null,
       effort: effort || null,
-      repo: str(body.repo, 200) || null,
+      repo: repo || null,
+      git_branch: gitBranch || null,
       cwd: str(body.cwd, 500) || null,
       status: "queued",
     })
@@ -97,7 +137,7 @@ router.get("/claude/runs", async (req: Request, res: Response) => {
     .from("claude_runs")
     // Kept as a single string literal: supabase-js infers the row shape by parsing
     // this at the type level, and a concatenated string degrades it to an error type.
-    .select("id, title, status, claude_account, repo, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
+    .select("id, title, status, claude_account, repo, git_branch, playbook_id, user_prompt, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
     .eq("org_id", req.org!.id)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -219,6 +259,75 @@ router.get("/claude/runs/:id", async (req: Request, res: Response) => {
   }
 
   return res.json({ run, events: events ?? [] });
+});
+
+// ── GitHub ────────────────────────────────────────────────────────────────────
+
+/**
+ * Whether a repo can be picked at all. Answers a boolean and the exact place to
+ * put the token — never the token itself, and never a partial/masked copy of it
+ * (a prefix is still a leak).
+ */
+router.get("/claude/github", async (_req: Request, res: Response) => {
+  const token = await getGitHubToken();
+  return res.json({
+    connected: !!token,
+    secret_key: "GITHUB_TOKEN",
+    secret_location: "/admin/apps/smrttask/secrets",
+  });
+});
+
+router.get("/claude/github/repos", async (_req: Request, res: Response) => {
+  const token = await getGitHubToken();
+  if (!token) {
+    return res.status(400).json({
+      error:
+        "GITHUB_TOKEN is not configured. Save a GitHub personal access token with " +
+        "'repo' scope under /admin/apps/smrttask/secrets (key: GITHUB_TOKEN).",
+    });
+  }
+  try {
+    return res.json({ repos: await listRepos(token) });
+  } catch (e) {
+    // redact: a GitHub error body can echo the request, token included.
+    const msg = redact(e instanceof Error ? e.message : String(e), token);
+    console.error("[claude/github] repos failed:", msg);
+    return res.status(502).json({ error: msg });
+  }
+});
+
+// ── Dictation ─────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/claude/transcribe — { audio_base64, mime_type } → { text }
+ *
+ * Same Hebrew-aware Gemini transcription the WhatsApp composer uses, so dictation
+ * behaves identically in both places instead of being a second implementation.
+ *
+ * ⚠️ COST: this is a paid Gemini call per dictation (CLAUDE.md cost-approval rule).
+ * It is user-initiated — one call per press of the mic — and the screen states as
+ * much next to the button. Nothing here loops or batches.
+ */
+const MAX_AUDIO_BASE64 = 12_000_000; // ~9MB of audio: minutes of speech, not hours.
+
+router.post("/claude/transcribe", async (req: Request, res: Response) => {
+  const { audio_base64, mime_type } = (req.body ?? {}) as {
+    audio_base64?: string;
+    mime_type?: string;
+  };
+  if (!audio_base64 || typeof audio_base64 !== "string") {
+    return res.status(400).json({ error: "audio_base64 is required" });
+  }
+  if (audio_base64.length > MAX_AUDIO_BASE64) {
+    return res.status(413).json({ error: "recording is too long" });
+  }
+  const cleaned = audio_base64.replace(/^data:[^;]+;base64,/, "");
+  try {
+    const text = await transcribeAudio(cleaned, mime_type || "audio/webm");
+    return res.json({ text });
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 export default router;
