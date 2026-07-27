@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check, Copy, Edit2, Eye, EyeOff, Loader2, Webhook, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Edit2, Eye, EyeOff, Loader2, Plus, Webhook, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 
@@ -17,6 +17,9 @@ interface PlatformSecret {
   is_secret: boolean;
   value_text: string | null;
   is_set: boolean;
+  /** Added by an operator rather than listed in the server's catalog. Flagged in the
+   *  UI because a hand-added key only does something if code actually reads it. */
+  custom?: boolean;
 }
 
 interface WhatsAppConnection {
@@ -167,20 +170,125 @@ function PlatformSection({
   onSaved: () => void;
 }) {
   const t = useTranslations("adminSecrets");
+  const [adding, setAdding] = useState(false);
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{t("platformSection")}</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {editable ? t("platformHint") : t("envReadOnlyHint")}
-        </p>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-base">{t("platformSection")}</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              {editable ? t("platformHint") : t("envReadOnlyHint")}
+            </p>
+          </div>
+          {/* Collapsed behind one icon (CLAUDE.md compact convention): adding a key
+              is rare, and a permanent form would sit here taking space every visit. */}
+          {editable && (
+            <Button
+              size="sm"
+              variant={adding ? "secondary" : "outline"}
+              className="h-7 shrink-0"
+              onClick={() => setAdding((v) => !v)}
+              aria-label={t("addKey")}
+              title={t("addKey")}
+            >
+              {adding ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {adding && (
+          <AddKeyRow
+            slug={slug}
+            onDone={() => {
+              setAdding(false);
+              onSaved();
+            }}
+          />
+        )}
         {platform.map((p) => (
           <PlatformRow key={p.key} slug={slug} secret={p} editable={editable} onSaved={onSaved} />
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+/** UPPER_SNAKE_CASE — mirrors CUSTOM_KEY_RE on the server, so a bad name is caught
+ *  before the round trip instead of coming back as a 400. */
+const KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+function AddKeyRow({ slug, onDone }: { slug: string; onDone: () => void }) {
+  const t = useTranslations("adminSecrets");
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+  const [isSecret, setIsSecret] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  // Upper-cased as you type: the server normalises anyway, and showing the real
+  // stored name avoids "I typed github_token, why does it say GITHUB_TOKEN".
+  const cleanKey = key.trim().toUpperCase();
+  const keyValid = KEY_RE.test(cleanKey);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api(`/api/admin/apps/${slug}/secrets`, {
+        method: "POST",
+        body: { key: cleanKey, value, is_secret: isSecret },
+      });
+      toast.success(t("saved"));
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded border border-dashed p-2">
+      <Input
+        value={cleanKey}
+        onChange={(e) => setKey(e.target.value)}
+        dir="ltr"
+        className="font-mono text-xs"
+        placeholder={t("keyPlaceholder")}
+        autoComplete="off"
+      />
+      <Input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        type={isSecret ? "password" : "text"}
+        dir="ltr"
+        className="font-mono text-xs"
+        placeholder={t("newValuePlaceholder")}
+        autoComplete="off"
+      />
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={isSecret}
+          onChange={(e) => setIsSecret(e.target.checked)}
+          className="size-3.5"
+        />
+        {t("storeEncrypted")}
+      </label>
+      <p className="text-[11px] leading-snug text-muted-foreground">{t("addKeyHint")}</p>
+      <Button
+        size="sm"
+        onClick={save}
+        disabled={saving || !keyValid || !value}
+        className="h-7 w-full"
+      >
+        {saving ? <Loader2 className="h-3 w-3 me-1 animate-spin" /> : <Check className="h-3 w-3 me-1" />}
+        {t("save")}
+      </Button>
+      {!keyValid && cleanKey !== "" && (
+        <p className="text-[11px] text-destructive">{t("keyInvalid")}</p>
+      )}
+    </div>
   );
 }
 
@@ -231,6 +339,11 @@ function PlatformRow({
           {secret.is_secret && (
             <Badge variant="outline" className="text-[10px]">
               {t("encrypted")}
+            </Badge>
+          )}
+          {secret.custom && (
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              {t("customKey")}
             </Badge>
           )}
           {secret.is_set ? (

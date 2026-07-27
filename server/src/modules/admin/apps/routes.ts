@@ -197,6 +197,13 @@ const SMRTTASK_PLATFORM_KEYS = [
   // in modules/claude. Listed here so it can be set from this screen instead of a
   // hosting dashboard; getAppSecret still falls back to the same-named env var.
   { key: "CLAUDE_CODE_OAUTH_TOKEN", is_secret: true, default_value: null },
+  // GitHub personal access token ('repo' scope) — lets a Claude chat pick a
+  // repository and work in a clone of it (modules/claude/github.ts).
+  //
+  // This screen has no "add a key" button on purpose: it renders THIS catalog, so a
+  // key absent from here simply has no row and cannot be set at all. That is what
+  // made GITHUB_TOKEN unsettable even though the code read it.
+  { key: "GITHUB_TOKEN", is_secret: true, default_value: null },
 ] as const;
 
 /** Apps whose platform secrets live in app_secrets / Vault and are editable
@@ -265,7 +272,13 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
   // Merge catalog with stored rows so the UI always sees every expected key,
   // even before the operator has saved anything for it.
   const stored = new Map((rows as PlatformSecretRow[] ?? []).map((r) => [r.key, r]));
-  const platform = catalog.map((spec) => {
+  const platform: {
+    key: string;
+    is_secret: boolean;
+    value_text: string | null;
+    is_set: boolean;
+    custom: boolean;
+  }[] = catalog.map((spec) => {
     const row = stored.get(spec.key);
     return {
       key: spec.key,
@@ -274,8 +287,23 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
       is_set: spec.is_secret
         ? Boolean(row?.value_secret_id)
         : Boolean(row?.value_text || spec.default_value),
+      custom: false,
     };
   });
+
+  // Keys the operator added by hand. Returned explicitly because the merge above
+  // walks the CATALOG — so without this a key you just saved would disappear from
+  // the screen while sitting in the table, unreachable and un-editable.
+  for (const row of stored.values()) {
+    if (catalog.some((spec) => spec.key === row.key)) continue;
+    platform.push({
+      key: row.key,
+      is_secret: row.is_secret,
+      value_text: row.is_secret ? null : row.value_text,
+      is_set: row.is_secret ? Boolean(row.value_secret_id) : Boolean(row.value_text),
+      custom: true,
+    });
+  }
 
   const whatsapp = WHATSAPP_APPS.has(slug);
   if (!whatsapp) {
@@ -308,6 +336,147 @@ router.get("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
   res.json({ editable: true, whatsapp: true, platform, connections });
 });
 
+/**
+ * Shape required of an operator-added key.
+ *
+ * Deliberately strict: these become environment-style names read by code, and the
+ * screen is the only place they can be typed. Lowercase or spaces would produce a
+ * row no `getAppSecret(...)` call will ever match — a key that looks saved and does
+ * nothing, which is worse than a rejection.
+ */
+const CUSTOM_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/**
+ * Write one secret, encrypting through Vault when it is secret.
+ *
+ * Extracted so create (POST) and rotate (PUT) share one implementation — two copies
+ * of the vault_create/vault_update branch would eventually disagree about which
+ * path leaves value_text populated.
+ */
+async function writeAppSecret(
+  appId: string,
+  slug: string,
+  key: string,
+  value: string,
+  isSecret: boolean,
+): Promise<string | null> {
+  if (!isSecret) {
+    const { error } = await db
+      .from("app_secrets")
+      .upsert(
+        { app_id: appId, key, is_secret: false, value_text: value, value_secret_id: null },
+        { onConflict: "app_id,key" },
+      );
+    return error ? error.message : null;
+  }
+
+  // Rotate in place when a secret already exists — friendlier on the vault audit
+  // log than creating a second entry and orphaning the first.
+  //
+  // FAIL CLOSED on a read error. Treating a failed lookup as "no existing secret"
+  // would send us down the create branch, mint a second vault entry, and repoint the
+  // row at it — orphaning a value that was working a moment ago.
+  const { data: existing, error: lookupErr } = await db
+    .from("app_secrets")
+    .select("value_secret_id")
+    .eq("app_id", appId)
+    .eq("key", key)
+    .maybeSingle();
+  if (lookupErr) return `could not read the existing secret: ${lookupErr.message}`;
+
+  const existingId = (existing?.value_secret_id as string | null | undefined) ?? null;
+  let secretId: string | null = existingId;
+
+  if (existingId) {
+    const { error } = await db.rpc("vault_update_secret", {
+      secret_id: existingId,
+      new_secret: value,
+    });
+    if (error) return `vault update: ${error.message}`;
+  } else {
+    const { data: created, error } = await db.rpc("vault_create_secret", {
+      new_secret: value,
+      new_name: `app_secret:${slug}:${key}`,
+      new_description: `Platform-wide ${key} for ${slug}`,
+    });
+    if (error) return `vault create: ${error.message}`;
+    secretId = (created as string | null) ?? null;
+  }
+
+  const { error: upsertErr } = await db
+    .from("app_secrets")
+    .upsert(
+      { app_id: appId, key, is_secret: true, value_secret_id: secretId, value_text: null },
+      { onConflict: "app_id,key" },
+    );
+  return upsertErr ? upsertErr.message : null;
+}
+
+/**
+ * POST /admin/apps/:slug/secrets  body: { key, value, is_secret }
+ *
+ * Add a key the catalog does not list. The catalog stays the source of truth for
+ * keys the code expects; this is for anything added ahead of, or outside, it.
+ *
+ * NOTE, and it is a real limitation: there is no delete. Supabase exposes
+ * vault_create/read/update but no vault_delete, so removing a row would leave the
+ * encrypted value behind with nothing pointing at it. A wrong value is corrected by
+ * saving again, which rotates it in place.
+ */
+router.post("/admin/apps/:slug/secrets", async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const { key, value, is_secret } = (req.body ?? {}) as {
+    key?: string;
+    value?: string;
+    is_secret?: boolean;
+  };
+
+  const cleanKey = typeof key === "string" ? key.trim().toUpperCase() : "";
+  if (!CUSTOM_KEY_RE.test(cleanKey)) {
+    return res.status(400).json({ error: "key must be UPPER_SNAKE_CASE (A-Z, 0-9, _)" });
+  }
+  if (typeof value !== "string" || value === "") {
+    return res.status(400).json({ error: "value is required" });
+  }
+  if (ENV_PLATFORM_KEYS[slug]) {
+    return res
+      .status(400)
+      .json({ error: "secrets for this app are read-only (managed via environment variables)" });
+  }
+
+  const { data: app, error: appErr } = await db
+    .from("apps")
+    .select("id")
+    .eq("slug", slug)
+    .maybeSingle();
+  if (appErr) return res.status(500).json({ error: appErr.message });
+  if (!app) return res.status(404).json({ error: "app not found" });
+
+  // Already present — as a catalog entry or a row. Answering 409 rather than
+  // silently overwriting: an "add" that quietly replaced an existing token would
+  // destroy a working credential.
+  const catalog = EDITABLE_PLATFORM_KEYS[slug] ?? [];
+  if (catalog.some((spec) => spec.key === cleanKey)) {
+    return res.status(409).json({ error: `${cleanKey} is already listed on this screen` });
+  }
+  const { data: dup, error: dupErr } = await db
+    .from("app_secrets")
+    .select("key")
+    .eq("app_id", app.id)
+    .eq("key", cleanKey)
+    .maybeSingle();
+  // Fail closed: a duplicate check that errored has NOT proven the key is free, and
+  // proceeding would rotate a credential the operator meant to leave alone.
+  if (dupErr) return res.status(500).json({ error: dupErr.message });
+  if (dup) return res.status(409).json({ error: `${cleanKey} already exists` });
+
+  const failure = await writeAppSecret(app.id, slug, cleanKey, value, is_secret !== false);
+  if (failure) return res.status(500).json({ error: failure });
+
+  invalidateAppSecretCache(slug, cleanKey);
+  return res.status(201).json({ ok: true, key: cleanKey });
+});
+
 /** PUT /admin/apps/:slug/secrets/:key  body: { value: string } */
 router.put("/admin/apps/:slug/secrets/:key", async (req: Request, res: Response) => {
   const { slug, key } = req.params;
@@ -322,10 +491,6 @@ router.put("/admin/apps/:slug/secrets/:key", async (req: Request, res: Response)
     return res.status(400).json({ error: "secrets for this app are read-only (managed via environment variables)" });
   }
 
-  const catalog = EDITABLE_PLATFORM_KEYS[slug] ?? [];
-  const spec = catalog.find((s) => s.key === key);
-  if (!spec) return res.status(400).json({ error: `unknown key: ${key}` });
-
   const { data: app, error: appErr } = await db
     .from("apps")
     .select("id")
@@ -334,51 +499,26 @@ router.put("/admin/apps/:slug/secrets/:key", async (req: Request, res: Response)
   if (appErr) return res.status(500).json({ error: appErr.message });
   if (!app) return res.status(404).json({ error: "app not found" });
 
-  if (spec.is_secret) {
-    // Find existing row first to decide between vault_create_secret and
-    // vault_update_secret (rotate-in-place is friendlier on the audit log).
-    const { data: existing } = await db
+  // A key is settable if the catalog lists it OR the operator already added it.
+  // Without the second case an added key could never be edited again — the very
+  // next save would come back "unknown key".
+  const catalog = EDITABLE_PLATFORM_KEYS[slug] ?? [];
+  let spec: { key: string; is_secret: boolean } | undefined = catalog.find((s) => s.key === key);
+  if (!spec) {
+    const { data: existingRow } = await db
       .from("app_secrets")
-      .select("value_secret_id")
+      .select("key, is_secret")
       .eq("app_id", app.id)
       .eq("key", key)
       .maybeSingle();
-
-    const existingId = (existing?.value_secret_id as string | null | undefined) ?? null;
-    let secretId: string | null = existingId;
-
-    if (existingId) {
-      const { error } = await db.rpc("vault_update_secret", {
-        secret_id: existingId,
-        new_secret: value,
-      });
-      if (error) return res.status(500).json({ error: `vault update: ${error.message}` });
-    } else {
-      const { data: created, error } = await db.rpc("vault_create_secret", {
-        new_secret: value,
-        new_name: `app_secret:${req.params.slug}:${key}`,
-        new_description: `Platform-wide ${key} for ${req.params.slug}`,
-      });
-      if (error) return res.status(500).json({ error: `vault create: ${error.message}` });
-      secretId = (created as string | null) ?? null;
-    }
-
-    const { error: upsertErr } = await db
-      .from("app_secrets")
-      .upsert(
-        { app_id: app.id, key, is_secret: true, value_secret_id: secretId, value_text: null },
-        { onConflict: "app_id,key" },
-      );
-    if (upsertErr) return res.status(500).json({ error: upsertErr.message });
-  } else {
-    const { error: upsertErr } = await db
-      .from("app_secrets")
-      .upsert(
-        { app_id: app.id, key, is_secret: false, value_text: value, value_secret_id: null },
-        { onConflict: "app_id,key" },
-      );
-    if (upsertErr) return res.status(500).json({ error: upsertErr.message });
+    if (existingRow) spec = { key: existingRow.key, is_secret: existingRow.is_secret };
   }
+  if (!spec) return res.status(400).json({ error: `unknown key: ${key}` });
+
+  // Same write path as create — the vault branch lives in exactly one place, so the
+  // two routes cannot drift on which column a rotated value ends up in.
+  const failure = await writeAppSecret(app.id, slug, key, value, spec.is_secret);
+  if (failure) return res.status(500).json({ error: failure });
 
   // The webhook's getAppSecret cache holds a 10s TTL on each value; if we
   // didn't invalidate, an operator's save would only take effect after that
