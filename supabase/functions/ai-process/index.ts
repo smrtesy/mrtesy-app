@@ -332,7 +332,12 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
       return { result: "skip", skipReason: `to_rule: ${addr}` };
     }
   }
+  // The user's own outgoing mail must reach the check_followup routing below —
+  // a from= rule that happens to match one of the user's own addresses (e.g. a
+  // rule created on a shared domain) must never swallow it here.
+  const senderIsSelf = myEmails.some((e: string) => e && sender.includes(e));
   for (const addr of fromSkip) {
+    if (senderIsSelf) break;
     if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
   }
 
@@ -382,7 +387,10 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
-  if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
+  // A sender the user asked to skip is filtered noise, not read-and-keep info —
+  // route to "skip" so it gets the "דילוג" label and reads honestly in the log
+  // (same reasoning as the Gmail-category filter below).
+  if (skipSenders.some((e: string) => sender.includes(e))) return { result: "skip", skipReason: `skip_sender: ${sender}` };
 
   // Gmail categories the user filters out (promotions/social/forums by
   // default) are DROPPED, not kept — so they are a skip, not "informational".
@@ -671,6 +679,11 @@ function nowContextLine(tz: string): string {
 // (Sonnet), which follows those rules far better. Independent of
 // escalate_low_confidence — that flag governs CLASSIFICATION certainty; this is
 // about OUTPUT fidelity, so it fires whenever an escalation model is configured.
+// SCOPE (2026-07): the trigger only fires when the wording was INTRODUCED by
+// the model — i.e. it appears in the summary/reason but NOT in the source
+// subject/body. "Payment failed" mail legitimately yields a summary saying
+// נכשל; re-classifying every such billing notice would double-pay for the
+// most routine automated mail without any hallucination to fix.
 const SENSITIVE_WORDING_RE = /התחייב|הבטיח|מתחייב|מבטיח|נכשל|committed|promised|guarantee[ds]?|\bfailed\b/i;
 function summaryAssertsCommitmentOrFailure(parsed: any): boolean {
   return SENSITIVE_WORDING_RE.test(`${parsed?.new_summary ?? ""} ${parsed?.reason_he ?? ""}`);
@@ -869,10 +882,11 @@ async function analyzeWithMemory(
 
   const whatsappNote = isConversational(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
 
-  // Per-user correction rules + a self-note marker, both per-message so the
-  // cached static prefix stays warm. whatsapp_echo rows are the user's own
-  // self-chat (their own number), which grounds personal rules phrased as
-  // "from my number …".
+  // Per-user correction rules — folded into the CACHED per-user prefix below
+  // (they are user-invariant, so the cache stays warm) — plus a self-note
+  // marker, which IS per-message and stays in the user message. whatsapp_echo
+  // rows are the user's own self-chat (their own number), which grounds
+  // personal rules phrased as "from my number …".
   const personalRules: string = settings.__personalRules ?? "";
   const personalBlock = personalRules
     ? `\n\n═══ USER-SPECIFIC CORRECTION RULES (this user corrected the system on these; they OVERRIDE the general rules above on any conflict) ═══\n${personalRules}`
@@ -1140,8 +1154,8 @@ content under the rules above.`;
   // rules, and (for WhatsApp) the WA conversation rules. These were re-sent
   // FRESH at full price on EVERY message (~950 tokens on WhatsApp, the dominant
   // per-call cost). Folding them into the 1h-cached system block turns them
-  // into 0.1x cache reads. WhatsApp adds whatsappNote as a suffix, so email and
-  // WhatsApp share the leading prefix and each variant stays byte-stable.
+  // into 0.1x cache reads; each variant (email / WhatsApp) stays byte-stable
+  // across calls, so both cache independently.
   // FRESH user message = only the truly per-message parts: current time, thread
   // memory (changes per message), the self-note marker, and the body itself.
   // smrtInfo: instruct the SAME call to also emit durable facts (only for
@@ -1171,13 +1185,20 @@ Scope each fact using this profile (never guess; "unclassified" when unsure):
 ${renderInfoProfile(infoProfile)}`;
   }
 
-  const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + personalBlock + whatsappNote;
+  // ORDER MATTERS at the tail: the WhatsApp rules override the email-direction
+  // rules ABOVE them, and the user's personal correction rules come LAST so
+  // they outrank everything — including the WhatsApp rules — on any conflict
+  // (the user's explicit corrections are the highest authority). Each variant
+  // (email / WhatsApp / with-or-without corrections) is its own byte-stable
+  // cache entry.
+  const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + whatsappNote + personalBlock;
   const systemBlocks: SystemBlock[] = [{ type: "text", text: systemPrefix, cache_control: { type: "ephemeral", ttl: "1h" } }];
   const userMessage = `${nowContextLine(userTz(settings))}${memoryBlock}${selfNote}\n\nFrom: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
-  // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
-  // and truncate the JSON mid-object. JSON-only output (no prose preamble) is
-  // enforced by the OUTPUT FORMAT block in newMatterContract.
+  // max_tokens 3000: a long new_summary + reasons (plus the optional facts
+  // array) can overflow smaller caps and truncate the JSON mid-object.
+  // JSON-only output (no prose preamble) is enforced by the OUTPUT FORMAT
+  // block in newMatterContract.
   const result = await callClaude(model, systemBlocks, userMessage, 3000, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
@@ -1269,7 +1290,8 @@ ${renderInfoProfile(infoProfile)}`;
   // (only when not already on the override) and no-ops when the escalation
   // model equals the model we just used. callClaude logs both calls to the
   // ai_usage ledger, so escalation cost is captured automatically.
-  const sensitiveWording = summaryAssertsCommitmentOrFailure(parsed);
+  const sensitiveWording = summaryAssertsCommitmentOrFailure(parsed)
+    && !SENSITIVE_WORDING_RE.test(`${msg.subject || ""}\n${bodyForClassify(msg, sys.body_truncate_classify)}`);
   if (
     !modelOverride &&
     sys.escalation_model &&
@@ -1988,7 +2010,7 @@ When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
 
 Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
-  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100, { component: "ai_process.check_followup", userId: msg.user_id, refId: msg.id });
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
