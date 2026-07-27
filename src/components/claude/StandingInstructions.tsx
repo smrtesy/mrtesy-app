@@ -140,6 +140,10 @@ export function StandingInstructions({ locale }: { locale: string }) {
       ) : (
         <>
           {codeView ? (
+            /* dir=ltr on purpose, even for a Hebrew document: this is source,
+               and it reads like source only when the structural markers
+               (`#`, `-`, `|`, `>`) stay in the left gutter where every code
+               editor puts them. The rich view is where text reads as text. */
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}

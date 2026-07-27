@@ -26,13 +26,18 @@ import {
   editorViewOptionsCtx,
   remarkStringifyOptionsCtx,
 } from "@milkdown/kit/core";
-import { commonmark } from "@milkdown/kit/preset/commonmark";
+import { commonmark, remarkPreserveEmptyLinePlugin } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { cursor } from "@milkdown/kit/plugin/cursor";
 import { trailing } from "@milkdown/kit/plugin/trailing";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
+// ProseMirror's own base rules. Not optional: without `white-space: pre-wrap`
+// on .ProseMirror a typed run of spaces collapses, and the `cursor` plugin's
+// gap cursor has no styling at all and is invisible.
+import "@milkdown/kit/prose/view/style/prosemirror.css";
+import "@milkdown/kit/prose/gapcursor/style/gapcursor.css";
 
 import { majorityDir } from "@/components/common/Markdown";
 import { cn } from "@/lib/utils";
@@ -68,8 +73,16 @@ const PROSE = [
   "[&_.ProseMirror_ol]:my-2.5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:ps-6 [&_.ProseMirror_ol]:leading-relaxed",
   "[&_.ProseMirror_li]:my-1 [&_.ProseMirror_li_p]:my-0",
   "[&_.ProseMirror_li]:marker:text-muted-foreground",
-  // Task items carry their own checkbox — drop the bullet, same as the renderer.
-  "[&_.ProseMirror_li[data-item-type=task]]:list-none",
+  // Task items: drop the bullet like the renderer does, but draw the box
+  // ourselves. Milkdown's own checkbox lives in its theme CSS, which we do
+  // not load — without this, "- [x]" and "- [ ]" render identically.
+  "[&_.ProseMirror_li[data-item-type=task]]:list-none [&_.ProseMirror_li[data-item-type=task]]:relative",
+  "[&_.ProseMirror_li[data-item-type=task]]:before:absolute [&_.ProseMirror_li[data-item-type=task]]:before:-ms-5",
+  // Literal glyphs, not CSS `\2610` escapes — those need a backslash that does
+  // not survive the trip through a Tailwind arbitrary value, and the rule
+  // silently rendered an empty ::before.
+  "[&_.ProseMirror_li[data-item-type=task]]:before:text-muted-foreground [&_.ProseMirror_li[data-item-type=task]]:before:content-['☐']",
+  "[&_.ProseMirror_li[data-item-type=task][data-checked=true]]:before:content-['☑']",
 
   "[&_.ProseMirror_blockquote]:my-3 [&_.ProseMirror_blockquote]:border-s-4 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:bg-muted/30 [&_.ProseMirror_blockquote]:py-1 [&_.ProseMirror_blockquote]:ps-3 [&_.ProseMirror_blockquote]:text-muted-foreground",
 
@@ -96,6 +109,13 @@ const PROSE = [
   "[&_.ProseMirror_img]:my-3 [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:border",
   "[&_.ProseMirror_del]:text-muted-foreground",
 ].join(" ");
+
+/**
+ * `remarkPreserveEmptyLinePlugin` is a PAIR of plugins (the remark plugin and
+ * its ctx), both of which sit in the `commonmark` array — so removing it means
+ * filtering both out, not comparing against the wrapper.
+ */
+const EMPTY_LINE_PLUGINS: readonly unknown[] = remarkPreserveEmptyLinePlugin;
 
 /** A markdown table row — leading pipe, at least one more pipe. */
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
@@ -135,7 +155,7 @@ export interface MarkdownEditorProps {
   placeholder?: string;
 }
 
-function EditorSurface({ value, onChange }: Omit<MarkdownEditorProps, "className" | "placeholder">) {
+function EditorSurface({ value, onChange, placeholder }: Omit<MarkdownEditorProps, "className">) {
   /**
    * The editor owns the document once it is mounted. Routing `onChange`
    * through a ref keeps the callback fresh without the identity of a new
@@ -169,9 +189,14 @@ function EditorSurface({ value, onChange }: Omit<MarkdownEditorProps, "className
     const markTouched = () => {
       touched.current = true;
     };
+    // `keydown` and `mousedown` are in the list because not every edit
+    // produces a `beforeinput`: ProseMirror's history keymap preventDefaults
+    // undo/redo, and ticking a task checkbox or drag-reordering a block is a
+    // pointer gesture. Missing those left the editor showing changes while
+    // Save sat disabled saying "no changes".
     // Capture phase + `once`: fires before ProseMirror handles it, and
     // unregisters itself, so there is nothing to clean up on unmount.
-    for (const ev of ["beforeinput", "paste", "drop", "cut"] as const) {
+    for (const ev of ["beforeinput", "keydown", "mousedown", "paste", "drop", "cut"] as const) {
       root.addEventListener(ev, markTouched, { capture: true, once: true });
     }
 
@@ -196,14 +221,27 @@ function EditorSurface({ value, onChange }: Omit<MarkdownEditorProps, "className
         }));
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
-          attributes: { role: "textbox", "aria-multiline": "true" },
+          attributes: {
+            role: "textbox",
+            "aria-multiline": "true",
+            // An ARIA input field needs a name; the caller's placeholder is
+            // the only description this region has.
+            ...(placeholder ? { "aria-label": placeholder } : {}),
+          },
         }));
         ctx.get(listenerCtx).markdownUpdated((_, markdown) => {
           if (!touched.current) return;
           onChangeRef.current(repairSerialized(markdown));
         });
       })
-      .use(commonmark)
+      // Milkdown preserves blank lines by round-tripping them as literal
+      // `<br />` html nodes. That is markdown corruption for us: the renderer
+      // does not execute raw HTML, so pressing Enter twice in the rich view
+      // would put the characters "<br />" into the document — and into every
+      // Claude run that document is prepended to. Blank lines between blocks
+      // are already markdown's own paragraph separator; we do not need them
+      // preserved as nodes.
+      .use(commonmark.filter((plugin) => !EMPTY_LINE_PLUGINS.includes(plugin)))
       .use(gfm)
       .use(history)
       .use(listener)
@@ -215,9 +253,11 @@ function EditorSurface({ value, onChange }: Omit<MarkdownEditorProps, "className
 }
 
 export function MarkdownEditor({ value, onChange, className, placeholder }: MarkdownEditorProps) {
-  // Direction is fixed at mount for the same reason the document is: re-deriving
-  // it mid-typing would flip the whole surface under the user's cursor.
-  const dir = useRef(majorityDir(value) ?? "ltr").current;
+  // Fixed at mount for the same reason the document is: re-deriving it
+  // mid-typing would flip the whole surface under the user's cursor. Lazy
+  // initializer, not `useRef(fn())` — that scans the whole document on every
+  // render and throws the result away.
+  const [dir] = useState(() => majorityDir(value) ?? "ltr");
 
   // ProseMirror renders nothing for an empty document, so the placeholder is
   // an overlay rather than CSS on a node that does not exist.
@@ -230,12 +270,14 @@ export function MarkdownEditor({ value, onChange, className, placeholder }: Mark
   return (
     <div dir={dir} className={cn("relative", PROSE, className)}>
       {empty && placeholder && (
-        <p className="pointer-events-none absolute inset-x-0 top-0 text-sm text-muted-foreground">
+        // `my-2.5` matches the first paragraph's margin so the hint sits on
+        // the caret's line rather than floating above it.
+        <p className="pointer-events-none absolute inset-x-0 my-2.5 text-sm leading-relaxed text-muted-foreground">
           {placeholder}
         </p>
       )}
       <MilkdownProvider>
-        <EditorSurface value={value} onChange={handleChange} />
+        <EditorSurface value={value} onChange={handleChange} placeholder={placeholder} />
       </MilkdownProvider>
     </div>
   );
