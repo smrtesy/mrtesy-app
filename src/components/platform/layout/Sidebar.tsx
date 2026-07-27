@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
+  Bot,
   CheckSquare,
   Bell,
   Settings,
@@ -32,7 +33,7 @@ import {
   Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
@@ -496,10 +497,33 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
               <ListPlus className="h-4 w-4" />
               {t("newTask")}
             </Button>
-            <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
-              <Sparkles className="h-4 w-4" />
-              {t("update")}
-            </Button>
+            {/* This slot used to open the free-text task router ("עדכון"). It now
+                opens the Claude screen, which is the primary way into work — and
+                the router itself moved onto that screen, so nothing was lost.
+                Gated on isAdmin because /claude's Express routes require a
+                super-admin; a non-admin keeps the router here rather than getting
+                a button that leads to a 401. */}
+            {isAdmin ? (
+              <Link
+                href={`${basePath}/claude`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openTab(`${basePath}/claude`, t("claude"));
+                }}
+                className={cn(
+                  buttonVariants({ variant: "default" }),
+                  "w-full gap-2",
+                )}
+              >
+                <Bot className="h-4 w-4" />
+                {t("claude")}
+              </Link>
+            ) : (
+              <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
+                <Sparkles className="h-4 w-4" />
+                {t("update")}
+              </Button>
+            )}
           </div>
         )}
       </aside>
@@ -565,15 +589,34 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
           >
             <ListPlus className="h-6 w-6" />
           </Button>
-          <Button
-            size="icon"
-            data-task-fab
-            aria-label={t("update")}
-            className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-            onClick={() => setTaskInputOpen(true)}
-          >
-            <Sparkles className="h-6 w-6" />
-          </Button>
+          {/* Same swap as the sidebar button, so phone and desktop agree on what
+              the primary action is. */}
+          {isAdmin ? (
+            // A Link, not openTab: the tabs workspace only renders on desktop
+            // (TabsArea), so on a phone openTab would add an invisible tab and the
+            // tap would appear to do nothing.
+            <Link
+              href={`${basePath}/claude`}
+              data-task-fab
+              aria-label={t("claude")}
+              className={cn(
+                buttonVariants({ variant: "default", size: "icon" }),
+                "fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden",
+              )}
+            >
+              <Bot className="h-6 w-6" />
+            </Link>
+          ) : (
+            <Button
+              size="icon"
+              data-task-fab
+              aria-label={t("update")}
+              className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+              onClick={() => setTaskInputOpen(true)}
+            >
+              <Sparkles className="h-6 w-6" />
+            </Button>
+          )}
         </>
       )}
 

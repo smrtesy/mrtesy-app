@@ -24,6 +24,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
+import { cloneWorkspace, getGitHubToken, redact, type Workspace } from "./github";
 
 /**
  * Where the subscription token is stored.
@@ -238,7 +239,7 @@ function usageFromResult(result: Record<string, unknown> | null) {
 export async function executeRun(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort")
+    .select("id, prompt, cwd, status, model, effort, repo, git_branch")
     .eq("id", runId)
     .maybeSingle();
 
@@ -280,16 +281,52 @@ export async function executeRun(runId: string): Promise<void> {
     return;
   }
 
+  // A run that names a repo gets a real working copy of it. The clone happens
+  // BEFORE the run is marked running: a repo we cannot clone is a setup failure,
+  // and recording it as a failed run (rather than a run that started and died) is
+  // what makes the cause readable.
+  let workspace: Workspace | null = null;
+  // Held for the whole function, not just the clone: anything the run prints can
+  // echo the tokenised remote URL (a failed `git push` does exactly that), so the
+  // final error text has to be redacted with it too.
+  let ghToken: string | null = null;
+  if (run.repo) {
+    ghToken = await getGitHubToken();
+    if (!ghToken) {
+      await finish({
+        status: "failed",
+        error:
+          `This run targets ${run.repo} but GITHUB_TOKEN is not configured. Save a ` +
+          "GitHub personal access token with 'repo' scope under " +
+          "/admin/apps/smrttask/secrets (key: GITHUB_TOKEN).",
+      });
+      return;
+    }
+    try {
+      workspace = await cloneWorkspace(run.repo, run.git_branch, ghToken);
+    } catch (e) {
+      await finish({
+        status: "failed",
+        error: truncate(redact(e instanceof Error ? e.message : String(e), ghToken), 4000),
+      });
+      return;
+    }
+  }
+
   const { error: startError } = await db
     .from("claude_runs")
     .update({
       status: "running",
       started_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      // Recorded so the run says where it actually worked, not where it was asked
+      // to. The directory itself is deleted when the run ends.
+      ...(workspace ? { cwd: workspace.dir } : {}),
     })
     .eq("id", runId);
   if (startError) {
     console.error("[claude/runner] could not mark running:", startError.message);
+    await workspace?.cleanup();
     return;
   }
 
@@ -305,6 +342,15 @@ export async function executeRun(runId: string): Promise<void> {
   // the CLI's current default instead of being pinned to a model that will age.
   if (run.model) args.push("--model", run.model);
   if (run.effort) args.push("--effort", run.effort);
+  // In a cloned workspace the run needs to be able to edit files, and print mode
+  // has no way to answer a permission prompt — an un-answerable prompt is a denial,
+  // so without this a repo run could only read. acceptEdits covers edits but NOT
+  // shell commands: pushing a branch requires the operator to opt into a stronger
+  // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
+  // operator already set a permission flag there, so their choice wins.
+  if (workspace && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
+    args.push("--permission-mode", "acceptEdits");
+  }
   args.push(...extra);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
@@ -324,14 +370,27 @@ export async function executeRun(runId: string): Promise<void> {
 
   const flush = async () => {
     if (buffer.length === 0) return;
-    const batch = buffer.map((e) => ({ ...e, run_id: runId }));
+    let batch: unknown[] = buffer.map((e) => ({ ...e, run_id: runId }));
     buffer = [];
+    // A run working in a cloned repo can print its tokenised remote URL (git does
+    // this on a failed push), and these rows are the permanent transcript — so the
+    // token is scrubbed from text AND payload before anything is stored. Done on
+    // the serialized batch because the token is alphanumeric and cannot survive
+    // JSON escaping in a different form.
+    if (ghToken) {
+      try {
+        batch = JSON.parse(redact(JSON.stringify(batch), ghToken)) as unknown[];
+      } catch {
+        // Unserializable batch: fall through with the mapped rows rather than
+        // dropping the events entirely.
+      }
+    }
     const { error } = await db.from("claude_run_events").insert(batch);
     if (error) console.error("[claude/runner] event insert failed:", error.message);
   };
 
   const child = spawn(bin, args, {
-    cwd: run.cwd || process.cwd(),
+    cwd: workspace?.dir || run.cwd || process.cwd(),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -431,15 +490,23 @@ export async function executeRun(runId: string): Promise<void> {
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
-    result_summary: truncate(lastResult),
+    result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
-          `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+          redact(
+            `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+            ghToken,
+          ),
           4000,
         ),
   });
+
+  // Always last, and after `finish` so a cleanup failure cannot lose the run's
+  // outcome. The clone's .git/config holds the GitHub token in its remote URL —
+  // deleting the workspace is part of how that token stays on this host.
+  await workspace?.cleanup();
 }

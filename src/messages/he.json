@@ -219,7 +219,8 @@
     "studio": "smrtStudio",
     "studioModels": "קטלוג מודלים",
     "studioResearch": "מרכז מחקרים",
-    "studioInvestor": "דף משקיע"
+    "studioInvestor": "דף משקיע",
+    "claude": "קלוד"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -4118,6 +4119,72 @@
       "duration": "משך",
       "costEquivalent": "שווי-ערך",
       "byModel": "לפי מודל"
+    },
+    "taskRouter": "עדכון חופשי (משימות)",
+    "dictation": {
+      "start": "הכתבה",
+      "stop": "עצור",
+      "transcribing": "מתמלל…",
+      "autoSend": "שלח אוטומטית אחרי 3 שניות שקט",
+      "empty": "לא נשמע טקסט — נסה שוב",
+      "unsupported": "הדפדפן הזה לא תומך בהקלטה",
+      "permission": "אין הרשאה למיקרופון",
+      "noAutoStop": "אין זיהוי שקט בדפדפן הזה — עצור בלחיצה כשתסיים",
+      "maxLength": "ההקלטה הגיעה למקסימום ונעצרה",
+      "costNote": "הכתבה מתמללת דרך ג'מיני — קריאה אחת בתשלום לכל לחיצה על המיקרופון."
+    },
+    "playbooks": {
+      "title": "שיטות עבודה",
+      "emptyHint": "אין שיטות עבודה. לחץ על חץ ההורדה כדי לטעון את ברירות המחדל מהריפו.",
+      "add": "הוסף שיטה",
+      "addTitle": "שיטת עבודה חדשה",
+      "editTitle": "עריכת שיטת עבודה",
+      "edit": "ערוך",
+      "delete": "מחק",
+      "openDoc": "פתח את המסמך",
+      "seed": "טען ברירות מחדל מהריפו",
+      "seeded": "נוספו {count} שיטות",
+      "seededNone": "כל ברירות המחדל כבר קיימות",
+      "refresh": "רענן תאריכי עדכון מגיטהאב",
+      "refreshed": "עודכנו {count} תאריכים",
+      "refreshedPartial": "עודכנו {count} תאריכים — חלק נכשלו",
+      "save": "שמור",
+      "saved": "נשמר",
+      "cancel": "ביטול",
+      "confirmDelete": "למחוק את \"{name}\"?",
+      "namePlaceholder": "שם השיטה (למשל: פרוטוקול מחקר דו-שלבי)",
+      "docUrlPlaceholder": "קישור למסמך (לינק עמוק מלא)",
+      "instructionsPlaceholder": "ההוראות שיישלחו עם ההרצה…",
+      "instructionsHint": "הטקסט הזה נוסף לפני הבקשה בכל הרצה שבוחרים בה את השיטה. המסמך המלא נשאר בקישור.",
+      "kind": {
+        "research": "מחקר",
+        "planning": "תכנון",
+        "build": "בנייה",
+        "review": "סקירה",
+        "content": "תוכן",
+        "other": "אחר"
+      }
+    },
+    "instructions": {
+      "title": "הוראות קבועות",
+      "placeholder": "הוראות שקלוד יקבל בכל הרצה…",
+      "save": "שמור",
+      "saved": "ההוראות נשמרו",
+      "noChanges": "אין שינויים",
+      "updatedAt": "עודכן {when}",
+      "never": "עוד לא נשמרו הוראות",
+      "repoCopy": "העותק שברפו",
+      "hint": "הטקסט הזה נשלח לפני כל בקשה, בכל הרצה. עריכה כאן משנה את מה שקלוד מקבל מיד."
+    },
+    "github": {
+      "pick": "בחר ריפו",
+      "search": "חפש ריפו…",
+      "loading": "טוען ריפואים…",
+      "noRepos": "לא נמצאו ריפואים",
+      "private": "פרטי",
+      "clear": "נקה בחירה",
+      "branchPlaceholder": "ענף",
+      "notConnected": "אין חיבור לגיטהאב. שמור טוקן גיטהאב עם הרשאת repo בשם {key} במסך {where}."
     }
   }
 }

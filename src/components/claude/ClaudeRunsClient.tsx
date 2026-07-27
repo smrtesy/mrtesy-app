@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,9 +24,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BarChart3, ChevronDown, ChevronRight, Loader2, Play, Plus, X } from "lucide-react";
+import { BarChart3, BookOpen, ChevronDown, ChevronRight, Loader2, Play, Plus, Sparkles, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
+import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
+import { DictationButton } from "./DictationButton";
+import { PlaybookList } from "./PlaybookList";
+import { RepoPicker } from "./RepoPicker";
+import { StandingInstructions } from "./StandingInstructions";
 
 interface Run {
   id: string;
@@ -34,6 +39,11 @@ interface Run {
   status: "queued" | "running" | "done" | "failed" | "canceled";
   claude_account: string | null;
   repo: string | null;
+  git_branch: string | null;
+  playbook_id: string | null;
+  /** What the human typed, before the standing instructions and the method were
+   *  prepended server-side. */
+  user_prompt: string | null;
   session_id: string | null;
   result_summary: string | null;
   error: string | null;
@@ -118,15 +128,29 @@ function fmtDuration(ms: number | null | undefined): string {
 
 export function ClaudeRunsClient() {
   const t = useTranslations("claudeRuns");
+  const locale = useLocale();
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  /** The free-text task router ("עדכון"), which used to be its own sidebar button.
+   *  It kept its place in the product by moving here rather than being deleted. */
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<string>(DEFAULT_OPT);
   const [effort, setEffort] = useState<string>(DEFAULT_OPT);
+  /** Which working method the next run follows (claude_playbooks.id) — the backend
+   *  prepends its instructions to the prompt. */
+  const [playbookId, setPlaybookId] = useState<string | null>(null);
+  const [repo, setRepo] = useState<string | null>(null);
+  const [branch, setBranch] = useState<string | null>(null);
+  /** Dictation: speak, pause 3s, and it launches. On by default because that is
+   *  the behaviour asked for; a toggle exists because a long prompt deserves a
+   *  read-through before it runs. */
+  const [autoSend, setAutoSend] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -195,30 +219,60 @@ export function ClaudeRunsClient() {
     if (next && !usage) void loadUsage();
   }
 
-  async function handleLaunch() {
-    if (!prompt.trim() || launching) return;
-    setLaunching(true);
-    try {
-      await api("/api/claude/runs", {
-        method: "POST",
-        body: {
-          title: title.trim() || undefined,
-          prompt: prompt.trim(),
-          model: model === DEFAULT_OPT ? undefined : model,
-          effort: effort === DEFAULT_OPT ? undefined : effort,
-        },
-      });
-      toast.success(t("launched"));
-      setPrompt("");
-      setTitle("");
-      setFormOpen(false);
-      await loadRuns();
-    } catch (e) {
-      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
-    } finally {
-      setLaunching(false);
-    }
-  }
+  /**
+   * `override` exists for dictation: the transcript arrives in a callback, and
+   * reading `prompt` here would use the value from before setPrompt — launching an
+   * empty run. The text that was heard is passed in explicitly instead.
+   *
+   * The method and the standing instructions are NOT composed here: the backend
+   * prepends them, so a run can never quietly go out without them.
+   */
+  const handleLaunch = useCallback(
+    async (override?: string) => {
+      const text = (override ?? prompt).trim();
+      if (!text || launching) return;
+      setLaunching(true);
+      try {
+        await api("/api/claude/runs", {
+          method: "POST",
+          body: {
+            title: title.trim() || undefined,
+            prompt: text,
+            model: model === DEFAULT_OPT ? undefined : model,
+            effort: effort === DEFAULT_OPT ? undefined : effort,
+            playbook_id: playbookId ?? undefined,
+            repo: repo ?? undefined,
+            git_branch: repo ? branch ?? undefined : undefined,
+          },
+        });
+        toast.success(t("launched"));
+        setPrompt("");
+        setTitle("");
+        setFormOpen(false);
+        await loadRuns();
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+      } finally {
+        setLaunching(false);
+      }
+    },
+    [prompt, launching, title, model, effort, playbookId, repo, branch, t, loadRuns],
+  );
+
+  /** Dictation result. With auto-send on, the transcript launches immediately —
+   *  speak, pause, done. With it off it lands in the box for review. */
+  const handleDictated = useCallback(
+    (text: string) => {
+      // Combined once and used for both the box and the launch: launching with the
+      // transcript alone would silently drop anything already typed.
+      const combined = prompt.trim() ? `${prompt.trim()} ${text}` : text;
+      setPrompt(combined);
+      if (!autoSend) return;
+      setFormOpen(true);
+      void handleLaunch(combined);
+    },
+    [prompt, autoSend, handleLaunch],
+  );
 
   function toggleRun(runId: string) {
     if (openRun === runId) {
@@ -236,6 +290,27 @@ export function ClaudeRunsClient() {
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">{t("title")}</h1>
         <div className="flex items-center gap-1">
+          {/* Dictation sits in the header, not only inside the form: the whole point
+              is that speaking is the fastest way in — no "open the form" step. */}
+          <DictationButton onText={handleDictated} disabled={launching} />
+          <Button
+            size="sm"
+            variant={updateOpen ? "secondary" : "ghost"}
+            onClick={() => setUpdateOpen(true)}
+            aria-label={t("taskRouter")}
+            title={t("taskRouter")}
+          >
+            <Sparkles className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant={instructionsOpen ? "secondary" : "ghost"}
+            onClick={() => setInstructionsOpen((v) => !v)}
+            aria-label={t("instructions.title")}
+            title={t("instructions.title")}
+          >
+            <BookOpen className="size-4" />
+          </Button>
           <Button
             size="sm"
             variant={usageOpen ? "secondary" : "ghost"}
@@ -255,6 +330,14 @@ export function ClaudeRunsClient() {
           </Button>
         </div>
       </div>
+
+      {instructionsOpen && (
+        <Card>
+          <CardContent className="pt-4">
+            <StandingInstructions locale={locale} />
+          </CardContent>
+        </Card>
+      )}
 
       {usageOpen && (
         <Card>
@@ -327,7 +410,21 @@ export function ClaudeRunsClient() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">{t("newRun")}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-3">
+            {/* Choosing the method comes FIRST: "I want to open a research" is the
+                decision, and the prompt is what to research within it. */}
+            <PlaybookList locale={locale} selectedId={playbookId} onSelect={setPlaybookId} />
+
+            <RepoPicker
+              locale={locale}
+              repo={repo}
+              branch={branch}
+              onChange={(next) => {
+                setRepo(next.repo);
+                setBranch(next.branch);
+              }}
+            />
+
             <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -374,9 +471,22 @@ export function ClaudeRunsClient() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <DictationButton onText={handleDictated} disabled={launching} />
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={autoSend}
+                  onChange={(e) => setAutoSend(e.target.checked)}
+                  className="size-3.5"
+                />
+                {t("dictation.autoSend")}
+              </label>
+            </div>
             <p className="text-xs text-muted-foreground">{t("submitHint")}</p>
             <p className="text-xs text-muted-foreground">{t("costNote")}</p>
-            <Button size="sm" onClick={handleLaunch} disabled={launching || !prompt.trim()}>
+            <p className="text-xs text-muted-foreground">{t("dictation.costNote")}</p>
+            <Button size="sm" onClick={() => void handleLaunch()} disabled={launching || !prompt.trim()}>
               {launching ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -412,6 +522,15 @@ export function ClaudeRunsClient() {
                     <ChevronRight className="size-4 shrink-0" />
                   )}
                   <span className="flex-1 truncate text-sm">{run.title}</span>
+                  {run.repo && (
+                    <span
+                      dir="ltr"
+                      className="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline"
+                    >
+                      {run.repo}
+                      {run.git_branch ? `@${run.git_branch}` : ""}
+                    </span>
+                  )}
                   {run.model && (
                     <span className="hidden shrink-0 font-mono text-xs text-muted-foreground sm:inline">
                       {run.model}
@@ -423,6 +542,11 @@ export function ClaudeRunsClient() {
 
                 {isOpen && (
                   <CardContent className="space-y-2 border-t pt-3">
+                    {run.user_prompt && (
+                      <p className="whitespace-pre-wrap rounded bg-muted/50 p-2 text-xs" dir="auto">
+                        {run.user_prompt}
+                      </p>
+                    )}
                     {run.error && (
                       <p className="text-xs text-destructive whitespace-pre-wrap">{run.error}</p>
                     )}
@@ -471,6 +595,15 @@ export function ClaudeRunsClient() {
           })}
         </div>
       )}
+
+      {/* The free-text task router, kept reachable after it lost its sidebar button.
+          onApplied only closes it: a reload here would throw away an in-flight run
+          list and the prompt being written. */}
+      <UpdateInput
+        open={updateOpen}
+        onClose={() => setUpdateOpen(false)}
+        onApplied={() => setUpdateOpen(false)}
+      />
     </div>
   );
 }

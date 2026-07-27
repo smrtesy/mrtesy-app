@@ -27,6 +27,7 @@ import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
+import { ClaudeRunsClient } from "@/components/claude/ClaudeRunsClient";
 import { LogPageClient } from "@/app/[locale]/(app)/(smrttask)/log/LogPageClient";
 import { TasksPageClient } from "@/components/smrttask/tasks/TasksPageClient";
 import { WhatsAppPageClient } from "@/components/smrttask/whatsapp/WhatsAppPageClient";
@@ -272,6 +273,9 @@ const PANE_SCREENS: PaneScreen[] = [
     render: (locale) => <PlanRepositoryClient locale={locale} />,
   },
   { match: (p) => p === "/whatsapp/autoreply", render: () => <AutoReplyManager /> },
+  // Claude. The component owns its own heading and padding, so the wrapper mirrors
+  // the route page 1:1 by rendering it bare.
+  { match: (p) => p === "/claude", render: () => <ClaudeRunsClient /> },
   // smrtStudio. Each wrapper mirrors its route page 1:1 — the page components
   // own their own headings, so there is nothing extra to replicate here.
   { match: (p) => p === "/studio", render: () => <StudioConsole /> },
