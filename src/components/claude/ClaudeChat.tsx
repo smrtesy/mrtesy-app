@@ -96,6 +96,9 @@ interface Turn {
   user_prompt: string | null;
   result_summary: string | null;
   error: string | null;
+  /** The session this turn resumed into. Null on a turn past the first means it
+   *  started a NEW session — the conversation lost its earlier context. */
+  resumed_session: string | null;
   created_at: string;
   events: TurnEvent[];
   attachments: { id: string; filename: string }[];
@@ -117,10 +120,20 @@ export function ClaudeChat() {
    *  so it lives here — inside the collapsed panel, not as new permanent chrome. */
   const [updateOpen, setUpdateOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  /** Settings chosen BEFORE the thread exists. patchThread cannot persist them yet,
+   *  and without holding them the thread was created on the default model — so
+   *  picking Sonnet and sending ran Opus with no error shown. */
+  const [pending, setPending] = useState<Record<string, unknown>>({});
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
+   *  during render — a render-phase write is unsafe under StrictMode's double
+   *  invocation. ensureThread also sets it directly, which is fine: that happens
+   *  inside a callback, not during rendering. */
   const activeIdRef = useRef<string | null>(null);
-  activeIdRef.current = activeId;
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -173,7 +186,9 @@ export function ClaudeChat() {
   }, [hasLive, activeId, loadThread, loadThreads]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
+    // nearest, not the default: scrollIntoView on a pane-embedded screen otherwise
+    // scrolls the ancestor pane too, yanking the whole workspace.
+    bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
   }, [turns.length, hasLive]);
 
   /** Create the thread on demand — on the first send, or the moment a file is
@@ -184,8 +199,9 @@ export function ClaudeChat() {
     try {
       const { thread: created } = await api<{ thread: Thread }>("/api/claude/threads", {
         method: "POST",
-        body: { model: DEFAULT_MODEL },
+        body: { model: DEFAULT_MODEL, ...pending },
       });
+      setPending({});
       setThreads((prev) => [created, ...prev]);
       setThread(created);
       setActiveId(created.id);
@@ -195,7 +211,7 @@ export function ClaudeChat() {
       toast.error(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [activeId]);
+  }, [activeId, pending]);
 
   const send = useCallback(
     async (message: string, attachmentIds: string[]) => {
@@ -211,6 +227,7 @@ export function ClaudeChat() {
         user_prompt: message,
         result_summary: null,
         error: null,
+        resumed_session: null,
         created_at: new Date().toISOString(),
         events: [],
         attachments: [],
@@ -221,12 +238,21 @@ export function ClaudeChat() {
           method: "POST",
           body: { message, attachment_ids: attachmentIds },
         });
-        await loadThread(id);
       } catch (e) {
         setTurns((prev) => prev.filter((x) => x.id !== optimistic.id));
         toast.error(e instanceof Error ? e.message : String(e));
-      } finally {
         setSending(false);
+        // Rethrown so the composer puts the text and the attachment chips back.
+        throw e;
+      }
+      setSending(false);
+      // Outside the try on purpose: the turn IS running by now. A blip on this
+      // refresh used to remove the optimistic bubble and show a send error, leaving
+      // the screen with nothing live to poll while the turn ran on regardless.
+      try {
+        await loadThread(id);
+      } catch {
+        // The poll picks it up.
       }
     },
     [ensureThread, turns.length, loadThread],
@@ -245,7 +271,12 @@ export function ClaudeChat() {
   }
 
   async function patchThread(patch: Record<string, unknown>) {
-    if (!activeId) return;
+    if (!activeId) {
+      // No thread yet — remember the choice and apply it at creation, instead of
+      // dropping it on the floor.
+      setPending((prev) => ({ ...prev, ...patch }));
+      return;
+    }
     try {
       const { thread: updated } = await api<{ thread: Thread }>(`/api/claude/threads/${activeId}`, {
         method: "PATCH",
@@ -405,7 +436,7 @@ export function ClaudeChat() {
           <div className="max-h-72 space-y-3 overflow-y-auto border-b bg-muted/20 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Select
-                value={thread?.model ?? DEFAULT_MODEL}
+                value={(thread?.model ?? (pending.model as string | undefined)) ?? DEFAULT_MODEL}
                 onValueChange={(v) => void patchThread({ model: v })}
               >
                 <SelectTrigger className="h-8 w-64 text-xs">
@@ -426,7 +457,7 @@ export function ClaudeChat() {
               </Select>
 
               <Select
-                value={thread?.effort ?? EFFORT_DEFAULT}
+                value={(thread?.effort ?? (pending.effort as string | undefined)) ?? EFFORT_DEFAULT}
                 onValueChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
               >
                 <SelectTrigger className="h-8 w-32 text-xs">
@@ -445,14 +476,14 @@ export function ClaudeChat() {
 
             <RepoPicker
               locale={locale}
-              repo={thread?.repo ?? null}
-              branch={thread?.git_branch ?? null}
+              repo={thread?.repo ?? ((pending.repo as string | null) ?? null)}
+              branch={thread?.git_branch ?? ((pending.git_branch as string | null) ?? null)}
               onChange={(next) => void patchThread({ repo: next.repo, git_branch: next.branch })}
             />
 
             <PlaybookList
               locale={locale}
-              selectedId={thread?.playbook_id ?? null}
+              selectedId={thread?.playbook_id ?? ((pending.playbook_id as string | null) ?? null)}
               onSelect={(id) => void patchThread({ playbook_id: id })}
             />
 
@@ -597,6 +628,13 @@ function TurnView({ turn }: { turn: Turn }) {
           )}
           {turn.status === "canceled" && (
             <p className="text-xs text-muted-foreground">{t("stopped")}</p>
+          )}
+
+          {/* Said out loud rather than hidden: a turn past the first that resumed
+              nothing began a fresh session, so it does not know what came before —
+              and the screen would otherwise show one seamless conversation. */}
+          {turn.turn_index > 1 && turn.status === "done" && !turn.resumed_session && (
+            <p className="text-[11px] text-status-warn">{t("contextLost")}</p>
           )}
         </div>
       </div>

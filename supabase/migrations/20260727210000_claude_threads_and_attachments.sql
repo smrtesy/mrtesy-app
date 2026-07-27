@@ -29,10 +29,6 @@ CREATE TABLE IF NOT EXISTS claude_threads (
   -- conversation is about (threads.ts maybeTitle).
   title        text NOT NULL DEFAULT '',
 
-  -- 'user' freezes the title: a name the user typed is never overwritten by the
-  -- automatic titling. Without this the machine would quietly undo their edit.
-  title_source text NOT NULL DEFAULT 'auto' CHECK (title_source IN ('auto', 'user')),
-
   -- The engine's own session id, captured from the first turn's stream and then
   -- passed as `--resume` on every later turn. THIS is what makes the thread a
   -- conversation instead of a list of unrelated runs. Null until the first turn
@@ -55,6 +51,28 @@ CREATE TABLE IF NOT EXISTS claude_threads (
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
+
+-- Separate ALTER, deliberately: an earlier version of this file shipped without
+-- title_source, and CREATE TABLE IF NOT EXISTS is a NO-OP once the table exists —
+-- so a column declared only inside it would silently never appear, and every
+-- thread insert would then fail on an unknown column.
+--
+-- 'user' freezes the title: a name the user typed is never overwritten by the
+-- automatic titling. Without this the machine would quietly undo their edit.
+ALTER TABLE claude_threads
+  ADD COLUMN IF NOT EXISTS title_source text NOT NULL DEFAULT 'auto';
+ALTER TABLE claude_threads
+  DROP CONSTRAINT IF EXISTS claude_threads_title_source_check;
+ALTER TABLE claude_threads
+  ADD CONSTRAINT claude_threads_title_source_check
+  CHECK (title_source IN ('auto', 'user'));
+
+-- Where a thread's working directory lives. Reused across turns, because engine
+-- sessions are stored PER PROJECT DIRECTORY: a fresh temp dir per turn would make
+-- `--resume` unable to find the session it was given, and the conversation would
+-- silently lose its memory.
+ALTER TABLE claude_threads
+  ADD COLUMN IF NOT EXISTS workspace_dir text;
 
 CREATE INDEX IF NOT EXISTS idx_claude_threads_org_recent
   ON claude_threads (org_id, last_message_at DESC);
@@ -79,6 +97,14 @@ ALTER TABLE claude_runs
 
 CREATE INDEX IF NOT EXISTS idx_claude_runs_thread
   ON claude_runs (thread_id, created_at);
+
+-- The real guard against two concurrent turns. The application also checks for a
+-- live run first, but that is a check-then-insert race: two requests milliseconds
+-- apart both see none, both compute the same turn_index, and two engine processes
+-- then resume the SAME session — two writers on one transcript. This index makes
+-- the second insert fail instead.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_claude_runs_thread_turn
+  ON claude_runs (thread_id, turn_index) WHERE thread_id IS NOT NULL;
 
 -- Which turn this is, 1-based. Kept explicitly rather than derived from
 -- created_at: two turns can share a timestamp to the millisecond, and the order

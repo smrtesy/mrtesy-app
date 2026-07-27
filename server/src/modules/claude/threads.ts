@@ -27,7 +27,8 @@ import { db } from "../../db";
 import { executeRun, cancelRun, runOneShot } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
-import { saveAttachment, MAX_BASE64_CHARS } from "./attachments";
+import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS } from "./attachments";
+import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
 
 const router = Router();
 
@@ -50,9 +51,26 @@ function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
 }
 
+/**
+ * Housekeeping hook for stale thread directories.
+ *
+ * Attached to the list route rather than a timer: it runs when someone is actually
+ * using the screen, needs no scheduler, and cannot fire on a container that is idle.
+ * Rate-limited in memory and fire-and-forget, so it never delays the response.
+ */
+let lastSweep = 0;
+const SWEEP_EVERY_MS = 60 * 60 * 1000;
+function maybeSweep(): void {
+  const now = Date.now();
+  if (now - lastSweep < SWEEP_EVERY_MS) return;
+  lastSweep = now;
+  void sweepWorkspaces().catch(() => {});
+}
+
 // ── list / create ─────────────────────────────────────────────────────────────
 
 router.get("/claude/threads", async (req: Request, res: Response) => {
+  maybeSweep();
   const includeArchived = req.query.archived === "1";
   let q = db
     .from("claude_threads")
@@ -130,7 +148,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   const { data: runs, error: rErr } = await db
     .from("claude_runs")
     .select(
-      "id, turn_index, status, user_prompt, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, ended_at",
+      "id, turn_index, status, user_prompt, result_summary, error, model, effort, resumed_session, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, ended_at",
     )
     .eq("thread_id", thread.id)
     .order("turn_index", { ascending: true })
@@ -149,6 +167,10 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
       .from("claude_run_events")
       .select("run_id, seq, kind, text, tool_name, created_at")
       .in("run_id", ids)
+      // Ordered by run FIRST: with a global seq order, one 400-event turn consumed
+      // the whole budget and an older turn came back empty — rendering a blank
+      // answer for a turn that had answered perfectly well.
+      .order("run_id", { ascending: true })
       .order("seq", { ascending: true })
       .limit(EVENT_CAP * ids.length);
     if (eErr) console.error("[claude/threads] events failed:", eErr.message);
@@ -237,15 +259,34 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
 
 router.delete("/claude/threads/:id", async (req: Request, res: Response) => {
   if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+
+  // Ownership first: the storage and disk cleanup below are not row-scoped, so they
+  // must never run for an id belonging to another tenant.
+  const { data: owned, error: oErr } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (oErr) return res.status(500).json({ error: "could not verify thread" });
+  if (!owned) return res.status(404).json({ error: "thread not found" });
+
+  // Bytes BEFORE rows: the rows are what name the objects, so deleting them first
+  // would orphan every file in the bucket with nothing left pointing at it.
+  await removeThreadAttachments(owned.id);
+
   const { error } = await db
     .from("claude_threads")
     .delete()
-    .eq("id", req.params.id)
+    .eq("id", owned.id)
     .eq("org_id", req.org!.id);
   if (error) {
     console.error("[claude/threads] delete failed:", error.message);
     return res.status(500).json({ error: "could not delete thread" });
   }
+
+  // The conversation's working directory — a checkout and any downloaded files.
+  await removeThreadWorkspace(owned.id);
   return res.json({ ok: true });
 });
 
@@ -365,6 +406,12 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
     .single();
 
   if (error) {
+    // 23505 on uniq_claude_runs_thread_turn: another request won the race for this
+    // turn index. The check above is advisory; THIS is what actually prevents two
+    // engine processes resuming the same session.
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "a turn is still running" });
+    }
     console.error("[claude/threads] turn insert failed:", error.message);
     return res.status(500).json({ error: "could not send message" });
   }
@@ -408,7 +455,11 @@ router.post("/claude/runs/:id/cancel", async (req: Request, res: Response) => {
   // or the screen would poll it forever. The runner's own finish() writes the
   // terminal row when a signalled child exits, so only the un-started case is
   // written here.
-  if (!signalled && run.status === "queued") {
+  if (!signalled && (run.status === "queued" || run.status === "running")) {
+    // 'running' matters as much as 'queued': a backend restart mid-turn leaves the
+    // row running with no process behind it, and that row keeps the screen polling
+    // forever and the composer disabled — the thread becomes unusable. Nothing else
+    // will ever write it, because the process that would have is gone.
     const { error: uErr } = await db
       .from("claude_runs")
       .update({
@@ -417,7 +468,7 @@ router.post("/claude/runs/:id/cancel", async (req: Request, res: Response) => {
         updated_at: new Date().toISOString(),
       })
       .eq("id", run.id)
-      .eq("status", "queued");
+      .in("status", ["queued", "running"]);
     if (uErr) console.error("[claude/runs] cancel update failed:", uErr.message);
   }
 
@@ -449,18 +500,23 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
       .maybeSingle();
     if (!thread || thread.title_source === "user") return;
 
+    // The REAL turn count, not the length of the capped slice below: with
+    // `.limit(12)` the length saturates at 12, so TITLE_AT_TURNS.has(12) stayed
+    // true forever and every later message spawned another titling run.
+    const { count: total } = await db
+      .from("claude_runs")
+      .select("id", { count: "exact", head: true })
+      .eq("thread_id", threadId);
+    const count = total ?? 0;
+    if (count === 0) return;
+    if (!TITLE_AT_TURNS.has(count)) return;
+
     const { data: turns } = await db
       .from("claude_runs")
       .select("turn_index, user_prompt, result_summary")
       .eq("thread_id", threadId)
       .order("turn_index", { ascending: true })
       .limit(12);
-    const count = turns?.length ?? 0;
-    if (count === 0) return;
-    // Re-titled only at the checkpoints, so a long conversation doesn't spend a
-    // run on a new title after every single message.
-    if (!TITLE_AT_TURNS.has(count)) return;
-
     const transcript = (turns ?? [])
       .map((t) => {
         const q = (t.user_prompt ?? "").slice(0, 600);

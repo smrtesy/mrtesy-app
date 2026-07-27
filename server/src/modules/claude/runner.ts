@@ -25,8 +25,9 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
-import { cloneWorkspace, getGitHubToken, redact, type Workspace } from "./github";
-import { materializeAttachments, scratchWorkspace } from "./attachments";
+import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { materializeAttachments } from "./attachments";
+import { threadWorkspace } from "./workspace";
 
 /**
  * Where the subscription token is stored.
@@ -271,9 +272,8 @@ function usageFromResult(result: Record<string, unknown> | null) {
  * the finally reach a workspace the inner function created.
  */
 export async function executeRun(runId: string): Promise<void> {
-  const held: { ws: Workspace | null } = { ws: null };
   try {
-    await executeRunBody(runId, held);
+    await executeRunBody(runId);
   } catch (e) {
     // An unexpected throw would otherwise leave the row 'running' — a live status
     // the screen polls forever. Record it as the failure it is.
@@ -292,12 +292,10 @@ export async function executeRun(runId: string): Promise<void> {
       // rewritten by a throw in the teardown that followed it.
       .in("status", ["queued", "running"]);
     if (error) console.error("[claude/runner] could not record failure:", error.message);
-  } finally {
-    await held.ws?.cleanup();
   }
 }
 
-async function executeRunBody(runId: string, held: { ws: Workspace | null }): Promise<void> {
+async function executeRunBody(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
     .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id")
@@ -361,11 +359,20 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
     resumeSession = thread?.session_id ?? null;
   }
 
-  let workspace: Workspace | null = null;
+  // ── the working directory ──
+  //
+  // STABLE PER THREAD, not per run. Engine sessions are stored per project
+  // directory, so a fresh temp dir on every turn would make `--resume <id>` unable
+  // to find the session it was handed — the conversation would silently lose its
+  // memory. Reusing the directory is also what lets turn 2 see the files turn 1
+  // edited. It is NOT deleted at the end of a turn; it is deleted when the thread
+  // is deleted, and swept by age.
+  //
   // Held for the whole function, not just the clone: anything the run prints can
-  // echo the tokenised remote URL (a failed `git push` does exactly that), so the
-  // final error text has to be redacted with it too.
+  // echo a tokenised remote URL, so the final error text has to be redacted too.
   let ghToken: string | null = null;
+  const workDir = run.thread_id ? await threadWorkspace(run.thread_id) : null;
+
   if (run.repo) {
     ghToken = await getGitHubToken();
     if (!ghToken) {
@@ -378,11 +385,17 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
       });
       return;
     }
+    if (!workDir) {
+      await finish({
+        status: "failed",
+        error: "a run against a repo must belong to a thread (it needs a stable working directory)",
+      });
+      return;
+    }
     try {
-      workspace = await cloneWorkspace(run.repo, run.git_branch, ghToken);
-      // Handed to the holder immediately: from here on the outer finally is what
-      // guarantees the tokenised clone is deleted, on every exit path.
-      held.ws = workspace;
+      // Idempotent: clones on the thread's first repo turn, reuses the checkout
+      // after that.
+      await ensureClone(path.join(workDir, run.repo.split("/")[1]), run.repo, run.git_branch, ghToken);
     } catch (e) {
       await finish({
         status: "failed",
@@ -392,18 +405,10 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
     }
   }
 
-  // Attachments need somewhere on disk to land. With a repo that is the clone;
-  // without one, a scratch directory — never the backend's own cwd, which is the
-  // deployed application directory.
-  const { count: attachCount, error: attachErr } = await db
-    .from("claude_attachments")
-    .select("id", { count: "exact", head: true })
-    .eq("run_id", runId);
-  if (attachErr) console.error("[claude/runner] attachment count failed:", attachErr.message);
-  if (!workspace && (attachCount ?? 0) > 0) {
-    workspace = await scratchWorkspace();
-    held.ws = workspace;
-  }
+  // Where the turn actually runs: the repo checkout when there is one, otherwise
+  // the thread's own directory. Never process.cwd() — that is the deployed source
+  // tree, which a chat turn has no business reading or touching.
+  const cwd = run.repo && workDir ? path.join(workDir, run.repo.split("/")[1]) : workDir;
 
   const { error: startError } = await db
     .from("claude_runs")
@@ -411,9 +416,8 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
       status: "running",
       started_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      // Recorded so the run says where it actually worked, not where it was asked
-      // to. The directory itself is deleted when the run ends.
-      ...(workspace ? { cwd: workspace.dir } : {}),
+      // Recorded so the run says where it actually worked, not where it was asked to.
+      ...(cwd ? { cwd } : {}),
       resumed_session: resumeSession,
     })
     .eq("id", runId);
@@ -425,8 +429,10 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
     return;
   }
 
-  // Subscription auth must win — see the billing note in this file's header.
-  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
+  // Subscription auth must win — see the billing note in this file's header. The
+  // git credential helper rides along so a `git push` inside the turn authenticates
+  // without the token ever being written into the checkout.
+  const env: NodeJS.ProcessEnv = { ...gitEnvForRun(ghToken), CLAUDE_CODE_OAUTH_TOKEN: token };
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
@@ -435,8 +441,8 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
   // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
   // the path is the correct contract here, not a workaround.
   let promptText = run.prompt;
-  if (workspace) {
-    const { paths, failures } = await materializeAttachments(runId, workspace.dir);
+  if (cwd) {
+    const { paths, failures } = await materializeAttachments(runId, cwd);
     if (paths.length > 0) {
       promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
     }
@@ -471,7 +477,7 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
   // shell commands: pushing a branch requires the operator to opt into a stronger
   // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
   // operator already set a permission flag there, so their choice wins.
-  if (workspace && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
+  if (run.repo && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
     args.push("--permission-mode", "acceptEdits");
   }
   args.push(...extra);
@@ -513,7 +519,7 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
   };
 
   const child = spawn(bin, args, {
-    cwd: workspace?.dir || run.cwd || process.cwd(),
+    cwd: cwd || run.cwd || process.cwd(),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -650,7 +656,11 @@ async function executeRunBody(runId: string, held: { ws: Workspace | null }): Pr
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    if (!resumeSession && sessionId) patch.session_id = sessionId;
+    // Written on EVERY turn, not only the first. `--resume` continues the
+    // transcript under a NEW session id, so keeping the turn-1 id would make turn 3
+    // resume a transcript that ends at turn 1 — turn 2 silently lost. Guarded on a
+    // successful turn so a failure cannot replace a working session with nothing.
+    if (ok && sessionId && sessionId !== resumeSession) patch.session_id = sessionId;
     const { error: tErr } = await db.from("claude_threads").update(patch).eq("id", run.thread_id);
     if (tErr) console.error("[claude/runner] thread update failed:", tErr.message);
   }

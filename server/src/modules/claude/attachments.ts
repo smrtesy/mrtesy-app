@@ -16,14 +16,22 @@
  * end up committed. A dot-directory keeps them out of the way and out of a diff.
  */
 
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "../../db";
 
 export const BUCKET = "claude-attachments";
-/** Matches the bucket's own file_size_limit in the migration (25 MB). */
-export const MAX_BYTES = 25 * 1024 * 1024;
+/**
+ * The REAL ceiling, and it is not the bucket's 25 MB.
+ *
+ * Uploads arrive as base64 in a JSON body, and express.json is capped at 10mb
+ * globally (server/src/index.ts). base64 inflates by 4/3, so ~7 MB of file is the
+ * largest that can reach this code — anything bigger is rejected by the body parser
+ * as an opaque 500 before any check here runs. Raising the global limit for every
+ * route to serve one screen is the wrong trade, so the limit is stated truthfully
+ * here and in the UI instead.
+ */
+export const MAX_BYTES = 7 * 1024 * 1024;
 /** base64 inflates by 4/3; this bounds the request body before decoding. */
 export const MAX_BASE64_CHARS = Math.ceil((MAX_BYTES * 4) / 3) + 1024;
 
@@ -107,13 +115,6 @@ export async function saveAttachment(params: {
   return data;
 }
 
-/** A scratch directory for a run that has attachments but no cloned repo — the
- *  backend's own cwd is not a place to write user files. */
-export async function scratchWorkspace(): Promise<{ dir: string; cleanup: () => Promise<void> }> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "claude-chat-"));
-  return { dir, cleanup: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
-}
-
 /**
  * Download this run's attachments into `dir` and return their local paths.
  *
@@ -143,11 +144,13 @@ export async function materializeAttachments(
 
   const paths: string[] = [];
   const failures: string[] = [];
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
     try {
       const { data: blob, error: dlErr } = await db.storage.from(BUCKET).download(row.storage_path);
       if (dlErr || !blob) throw new Error(dlErr?.message || "download returned nothing");
-      const full = path.join(target, safeFilename(row.filename));
+      // Index-prefixed: two files named screenshot.png in one turn would otherwise
+      // overwrite each other and the prompt would list the same path twice.
+      const full = path.join(target, `${i + 1}-${safeFilename(row.filename)}`);
       await writeFile(full, Buffer.from(await blob.arrayBuffer()));
       paths.push(full);
     } catch (e) {
@@ -155,4 +158,26 @@ export async function materializeAttachments(
     }
   }
   return { paths, failures };
+}
+
+/**
+ * Delete every stored object for a thread.
+ *
+ * Rows cascade with the thread, bytes do not — without this the bucket would keep
+ * the files of every deleted conversation forever, while the UI said "deleted".
+ * Also clears uploads that were staged and never sent (run_id still null).
+ */
+export async function removeThreadAttachments(threadId: string): Promise<void> {
+  const { data: rows, error } = await db
+    .from("claude_attachments")
+    .select("storage_path")
+    .eq("thread_id", threadId);
+  if (error) {
+    console.error("[claude/attachments] list for delete failed:", error.message);
+    return;
+  }
+  const paths = (rows ?? []).map((r) => r.storage_path).filter(Boolean);
+  if (paths.length === 0) return;
+  const { error: rmErr } = await db.storage.from(BUCKET).remove(paths);
+  if (rmErr) console.error("[claude/attachments] object removal failed:", rmErr.message);
 }

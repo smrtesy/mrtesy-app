@@ -24,7 +24,11 @@ import { DictationButton } from "./DictationButton";
 
 /** Mirrors the bucket's own limit (25 MB) so the file is rejected here rather than
  *  after a slow upload. */
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
+// 7MB, not the bucket's 25MB: uploads are base64 inside a JSON body and the global
+// express.json limit is 10mb, so anything larger is rejected by the body parser
+// before any handler sees it. Promising 25MB here would be a lie the user only
+// discovers as an opaque error.
+const MAX_FILE_BYTES = 7 * 1024 * 1024;
 const MAX_ROWS_PX = 200;
 
 export interface StagedAttachment {
@@ -82,11 +86,19 @@ export function ChatComposer({
   const send = useCallback(async () => {
     const message = text.trim();
     if ((!message && staged.length === 0) || busy) return;
-    // Cleared before awaiting, so a slow round trip can't be double-sent by a
-    // second Enter — and restored by the caller's error toast if it fails.
+    const sentStaged = staged;
+    // Cleared before awaiting so a second Enter cannot double-send — but PUT BACK
+    // if the send fails. Losing what the user typed to a dropped connection or a
+    // 409 is the worst outcome here; the attachment ids are unrecoverable once the
+    // chips are gone.
     setText("");
     setStaged([]);
-    await onSend(message, staged.map((s) => s.id));
+    try {
+      await onSend(message, sentStaged.map((x) => x.id));
+    } catch {
+      setText((current) => (current ? current : message));
+      setStaged((current) => (current.length > 0 ? current : sentStaged));
+    }
   }, [text, staged, busy, onSend]);
 
   async function upload(files: FileList | null) {
