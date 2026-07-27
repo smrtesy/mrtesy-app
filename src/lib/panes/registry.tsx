@@ -49,6 +49,10 @@ import { BudgetIndicator } from "@/components/smrtvoice/BudgetIndicator";
 import { CharactersList } from "@/components/smrtvoice/CharactersList";
 import { BotsClient } from "@/components/smrtbot/BotsClient";
 import { CampaignsClient } from "@/components/smrtreach/CampaignsClient";
+import { StudioConsole } from "@/components/smrtstudio/StudioConsole";
+import { StudioInvestor } from "@/components/smrtstudio/StudioInvestor";
+import { StudioModels } from "@/components/smrtstudio/StudioModels";
+import { StudioResearchScreen } from "@/components/smrtstudio/StudioResearchScreen";
 
 export type PaneScreen = {
   /** Matched against the locale-stripped pane pathname, e.g. "/plan/team". */
@@ -268,6 +272,12 @@ const PANE_SCREENS: PaneScreen[] = [
     render: (locale) => <PlanRepositoryClient locale={locale} />,
   },
   { match: (p) => p === "/whatsapp/autoreply", render: () => <AutoReplyManager /> },
+  // smrtStudio. Each wrapper mirrors its route page 1:1 — the page components
+  // own their own headings, so there is nothing extra to replicate here.
+  { match: (p) => p === "/studio", render: () => <StudioConsole /> },
+  { match: (p) => p === "/studio/investor", render: () => <StudioInvestor /> },
+  { match: (p) => p === "/studio/models", render: () => <StudioModels /> },
+  { match: (p) => p === "/studio/research", render: () => <StudioResearchScreen /> },
   { match: (p) => p === "/voice", render: (locale) => <VoicePane locale={locale} /> },
   { match: (p) => p === "/voice/characters", render: () => <VoiceCharactersPane /> },
   { match: (p) => p === "/bots", render: () => <BotsPane /> },

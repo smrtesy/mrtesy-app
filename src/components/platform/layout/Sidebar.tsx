@@ -13,6 +13,9 @@ import {
   MessageCircle,
   MessageSquare,
   FlaskConical,
+  Clapperboard,
+  Layers,
+  Presentation,
   PanelRightClose,
   PanelRightOpen,
   Mic,
@@ -92,6 +95,13 @@ const smrtInfoItems = [
   { key: "info", href: "/info", icon: Info },
 ] as const;
 
+const smrtStudioItems = [
+  { key: "studio",         href: "/studio",          icon: Clapperboard },
+  { key: "studioModels",   href: "/studio/models",   icon: Layers       },
+  { key: "studioResearch", href: "/studio/research", icon: FlaskConical },
+  { key: "studioInvestor", href: "/studio/investor", icon: Presentation },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
@@ -110,6 +120,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtPlan = enabledApps.includes("smrtplan");
   const hasSmrtVault = enabledApps.includes("smrtvault");
   const hasSmrtInfo = enabledApps.includes("smrtinfo");
+  const hasSmrtStudio = enabledApps.includes("smrtstudio");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -296,6 +307,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtVault) moreSections.push({ app: APPS.smrtvault, items: [...smrtVaultItems] });
   if (hasSmrtInfo) moreSections.push({ app: APPS.smrtinfo, items: [...smrtInfoItems] });
+  if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
@@ -409,6 +421,16 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             <>
               <AppSectionHeader app={APPS.smrtplan} />
               {smrtPlanItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtStudio && (
+            <>
+              <AppSectionHeader app={APPS.smrtstudio} />
+              {smrtStudioItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

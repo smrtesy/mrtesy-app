@@ -7,6 +7,7 @@ import { SmrtBotIcon } from "@/components/icons/SmrtBotIcon";
 import { SmrtPlanIcon } from "@/components/icons/SmrtPlanIcon";
 import { SmrtVaultIcon } from "@/components/icons/SmrtVaultIcon";
 import { SmrtInfoIcon } from "@/components/icons/SmrtInfoIcon";
+import { SmrtStudioIcon } from "@/components/icons/SmrtStudioIcon";
 
 /**
  * The built-in admin section cards an app exposes on its
@@ -94,6 +95,13 @@ export const APPS: Record<string, AppDef> = {
     guideHref: "/info/guide",
     settingsHref: "/settings/apps/smrtinfo",
   },
+  smrtstudio: {
+    slug: "smrtstudio",
+    word: "Studio",
+    Icon: SmrtStudioIcon,
+    guideHref: "/studio",
+    settingsHref: "/settings/apps/smrtstudio",
+  },
 };
 
 export function getApp(slug: string): AppDef | undefined {
@@ -121,6 +129,7 @@ const ADMIN_SECTIONS: Record<string, AdminSectionKey[]> = {
   smrtplan: ["documents"],
   smrtvault: ["documents"],
   smrtinfo: ["documents"],
+  smrtstudio: ["documents"],
 };
 
 export function getAdminSections(slug: string): AdminSectionKey[] {
