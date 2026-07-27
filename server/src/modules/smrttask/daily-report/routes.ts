@@ -675,11 +675,13 @@ router.post("/daily-report/skip", async (req: Request, res: Response) => {
   if (fillDate > today || fillDate < oldestFillDate(today)) {
     return res.status(400).json({ error: "fill_date outside the edit window" });
   }
-  const skip = req.body?.skipped !== false; // default: dismiss
+  // Explicit false (in either JSON or form-encoded shape) restores; anything else
+  // dismisses. `!== false` alone made "false"/0/null dismiss too.
+  const skip = req.body?.skipped !== false && req.body?.skipped !== "false";
 
   const { data: row, error: readErr } = await db
     .from("user_settings")
-    .select("day_tools")
+    .select("id, day_tools")
     .eq("user_id", userId)
     .maybeSingle();
   if (readErr) return res.status(500).json({ error: readErr.message });
@@ -694,10 +696,12 @@ router.post("/daily-report/skip", async (req: Request, res: Response) => {
   const nextDays = [...set].filter((d) => d >= floor).sort().reverse();
   cfg.skipped_days = nextDays;
 
-  const { error: writeErr } = await db
-    .from("user_settings")
-    .update({ day_tools: { ...dayTools, dailyreport: cfg } })
-    .eq("user_id", userId);
+  const nextDayTools = { ...dayTools, dailyreport: cfg };
+  // A user with no settings row yet must not get a silent ok:true — an update
+  // matching zero rows reports no error (same defensive pattern as /me/settings).
+  const { error: writeErr } = row
+    ? await db.from("user_settings").update({ day_tools: nextDayTools }).eq("user_id", userId)
+    : await db.from("user_settings").insert({ user_id: userId, day_tools: nextDayTools });
   if (writeErr) return res.status(500).json({ error: writeErr.message });
 
   res.json({ ok: true, fill_date: fillDate, skipped: skip, skipped_days: nextDays });

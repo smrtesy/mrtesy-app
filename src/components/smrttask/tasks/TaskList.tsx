@@ -44,6 +44,7 @@ import { useDayTool } from "@/hooks/useDayTools";
 import { useWorkClock } from "@/hooks/useWorkClock";
 import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
 import { dayLabel as reportDayLabel } from "@/lib/smrttask/dailyreport-dates";
+import { setDaySkipped } from "@/lib/smrttask/dailyreport-skip";
 import type { DailyReportPending, PendingDay } from "@/types/daily-report";
 import {
   sittingWorkdays,
@@ -199,7 +200,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const dismissReportDay = useCallback(async (fillDate: string) => {
     setReportPendingDays((prev) => prev.filter((d) => d.fill_date !== fillDate));
     try {
-      await api("/api/daily-report/skip", { method: "POST", body: { fill_date: fillDate, skipped: true } });
+      await setDaySkipped(fillDate, true);
     } catch {
       toast.error(tDaily("saveError"));
       refreshReportPending(); // put the row back — the dismissal did not stick

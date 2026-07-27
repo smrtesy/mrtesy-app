@@ -11,6 +11,7 @@ import { api, ApiError } from "@/lib/api/client";
 import { useDayTool } from "@/hooks/useDayTools";
 import { dayLabel, rangeLabel } from "@/lib/smrttask/dailyreport-dates";
 import { DailyReportCheckin } from "@/components/smrttask/dailyreport/DailyReportCheckin";
+import { setDaySkipped } from "@/lib/smrttask/dailyreport-skip";
 import type {
   DailyReport,
   DailyReportDays,
@@ -147,15 +148,17 @@ export function DailyReportView() {
     load();
   }, [load]);
 
-  const loadDays = useCallback(async () => {
-    setDaysLoading(true);
+  /** `silent` reloads without swapping the list for a spinner (keeps the
+   *  optimistic row state and the scroll position after a dismiss/restore). */
+  const loadDays = useCallback(async (silent = false) => {
+    if (!silent) setDaysLoading(true);
     try {
       const r = await api<DailyReportDays>(`/api/daily-report/days?limit=${EDIT_DAYS_SPAN}`);
       setDays(r.days ?? []);
     } catch {
       toast.error(t("loadError"));
     } finally {
-      setDaysLoading(false);
+      if (!silent) setDaysLoading(false);
     }
   }, [t]);
 
@@ -175,13 +178,13 @@ export function DailyReportView() {
     // Optimistic: the row's badge flips immediately, and loadDays reconciles.
     setDays((prev) => prev.map((d) => (d.fill_date === fillDate ? { ...d, skipped: skip } : d)));
     try {
-      await api("/api/daily-report/skip", { method: "POST", body: { fill_date: fillDate, skipped: skip } });
+      await setDaySkipped(fillDate, skip);
       toast.success(skip ? t("dayDismissedToast") : t("dayRestoredToast"));
     } catch {
       toast.error(t("saveError"));
     } finally {
       setSkipping(null);
-      loadDays();
+      loadDays(true);
     }
   }, [t, loadDays]);
 
@@ -306,8 +309,10 @@ export function DailyReportView() {
                           </span>
                         )}
                       </button>
-                      {/* A complete day never pins anyway — nothing to dismiss. */}
-                      {!d.complete && (
+                      {/* A complete day never pins anyway — nothing to dismiss.
+                          A day that is BOTH dismissed and complete still needs
+                          its restore button, or the flag could never be cleared. */}
+                      {(!d.complete || d.skipped) && (
                         <Button
                           type="button"
                           size="sm"
